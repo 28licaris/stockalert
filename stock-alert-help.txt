@@ -1,0 +1,163 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                     STOCKALERT DOCKER COMMANDS                             ║
+╔════════════════════════════════════════════════════════════════════════════╗
+
+📦 START SERVICES
+════════════════════════════════════════════════════════════════════════════
+
+# Start only database + adminer (recommended for local development)
+docker-compose --profile db up -d
+
+# Start everything (API + DB + Adminer)
+docker-compose --profile full up -d
+
+# Start with logs (foreground)
+docker-compose --profile db up
+docker-compose --profile full up
+
+
+🛑 STOP SERVICES
+════════════════════════════════════════════════════════════════════════════
+
+# Stop only the API (keeps DB running)
+docker-compose stop api
+
+# Stop all services (keeps containers and data)
+docker-compose --profile full stop
+
+# Stop and remove containers (keeps volumes/data)
+docker-compose --profile full down
+
+# Stop and remove EVERYTHING including data volumes ⚠️
+docker-compose --profile full down -v
+
+
+🔍 VIEW & DEBUG
+════════════════════════════════════════════════════════════════════════════
+
+# View running containers
+docker-compose ps
+
+# View logs for specific service
+docker-compose logs db
+docker-compose logs api
+docker-compose logs adminer
+
+# Follow logs in real-time
+docker-compose logs -f api
+docker-compose logs -f db
+
+# View all logs
+docker-compose --profile full logs
+
+# Execute commands in running container
+docker exec -it stockalert_postgres psql -U admin -d stockalerts
+docker exec -it stockalert_api bash
+
+
+🔄 REBUILD & RESTART
+════════════════════════════════════════════════════════════════════════════
+
+# Rebuild API container (after code changes)
+docker-compose build api
+
+# Rebuild and restart
+docker-compose --profile full up -d --build
+
+# Restart specific service
+docker-compose restart api
+docker-compose restart db
+
+
+💾 DATABASE OPERATIONS
+════════════════════════════════════════════════════════════════════════════
+
+# Connect to PostgreSQL
+docker exec -it stockalert_postgres psql -U admin -d stockalerts
+
+# Backup database
+docker exec stockalert_postgres pg_dump -U admin stockalerts > backup.sql
+
+# Restore database
+docker exec -i stockalert_postgres psql -U admin -d stockalerts < backup.sql
+
+# Access Adminer UI
+open http://localhost:8080
+# Server: db
+# Username: admin
+# Password: password
+# Database: stockalerts
+
+
+🧹 CLEANUP
+════════════════════════════════════════════════════════════════════════════
+
+# Remove stopped containers
+docker-compose --profile full rm
+
+# Remove all unused containers, networks, images
+docker system prune
+
+# Remove everything including volumes ⚠️
+docker system prune -a --volumes
+
+
+📊 TYPICAL WORKFLOW
+════════════════════════════════════════════════════════════════════════════
+
+1. Start database for local development:
+   docker-compose --profile db up -d
+
+2. Run FastAPI locally via VS Code (F5)
+   Database URL: postgresql+asyncpg://admin:password@localhost:5432/stockalerts
+
+3. Access Adminer to view data:
+   open http://localhost:8080
+
+4. When done developing, stop only API (keep DB):
+   docker-compose stop api
+
+5. Or test full Docker stack:
+   docker-compose --profile full up -d
+
+
+🔧 TROUBLESHOOTING
+════════════════════════════════════════════════════════════════════════════
+
+# Port already in use
+docker-compose --profile full down
+lsof -ti:5432 | xargs kill -9  # Kill process on port 5432
+lsof -ti:8000 | xargs kill -9  # Kill process on port 8000
+
+# Database connection issues
+docker-compose logs db
+docker-compose restart db
+
+# Clear everything and start fresh ⚠️
+docker-compose --profile full down -v
+docker-compose --profile db up -d
+
+# Check environment variables
+docker-compose config
+
+
+🌐 URLS
+════════════════════════════════════════════════════════════════════════════
+
+API:              http://localhost:8000
+API Docs:         http://localhost:8000/docs
+API ReDoc:        http://localhost:8000/redoc
+Adminer:          http://localhost:8080
+PostgreSQL:       localhost:5432
+
+
+📝 NOTES
+════════════════════════════════════════════════════════════════════════════
+
+- Data persists in 'pgdata' volume even after containers are removed
+- Use --profile db for local development (API runs via VS Code)
+- Use --profile full to test complete Docker setup
+- Adminer credentials: admin/password
+- DB automatically restarts unless explicitly stopped
+
+════════════════════════════════════════════════════════════════════════════

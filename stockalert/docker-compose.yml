@@ -1,0 +1,55 @@
+services:
+  db:
+    image: postgres:16
+    container_name: stockalert_postgres
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: stockalerts
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    profiles:
+      - db
+      - full
+      
+  adminer:
+    image: adminer
+    container_name: stockalert_adminer
+    restart: unless-stopped
+    ports: ["8080:8080"]
+    profiles:
+      - db
+      - full
+    depends_on:
+      - db
+      
+  api:
+    build: .
+    container_name: stockalert_api
+    environment:
+      DATA_PROVIDER: ${DATA_PROVIDER:-alpaca}
+      ALPACA_API_KEY: ${ALPACA_API_KEY}
+      ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY}
+      ALPACA_FEED: ${ALPACA_FEED:-iex}
+      POLYGON_API_KEY: ${POLYGON_API_KEY:-}
+      DATABASE_URL: postgresql+asyncpg://admin:password@db:5432/stockalerts
+      USE_TREND_FILTER: ${USE_TREND_FILTER:-true}
+      EMA_PERIOD: ${EMA_PERIOD:-50}
+      LOOKBACK_BARS: ${LOOKBACK_BARS:-60}
+      PIVOT_K: ${PIVOT_K:-3}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      ALERT_MIN_SEPARATION_MIN: ${ALERT_MIN_SEPARATION_MIN:-15}
+      TICKERS: ${TICKERS:-QQQ,SPY}
+      INDICATOR: ${INDICATOR:-rsi}
+      SIGNAL_TYPE: ${SIGNAL_TYPE:-hidden_bullish_divergence}
+    command: ["uvicorn", "app.main_api:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports: ["8000:8000"]
+    profiles:
+      - full
+    depends_on:
+      - db
+      
+volumes:
+  pgdata:
