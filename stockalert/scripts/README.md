@@ -9,7 +9,7 @@
 | `DATA_PROVIDER` | Yes | Set to `schwab` or `thinkorswim` so the app uses Schwab. |
 | `SCHWAB_CLIENT_ID` | Yes | App key (Client ID) from Schwab Developer Portal. |
 | `SCHWAB_CLIENT_SECRET` | Yes | App secret from the same app. |
-| `SCHWAB_CALLBACK_URL` | Yes | Must match a callback URL in the portal (HTTPS only), e.g. `https://127.0.0.1:8080/oauth/callback`. |
+| `SCHWAB_CALLBACK_URL` | Yes | HTTPS callback: **Option A** use a local URL (e.g. `https://127.0.0.1:8080/oauth/callback`) and paste the redirect URL; **Option B** use your ngrok URL + `/callback` for automatic callback. |
 | `SCHWAB_REFRESH_TOKEN` | Optional* | From the one-time OAuth flow; or leave unset and use the token file (see below). |
 | `SCHWAB_REFRESH_TOKEN_FILE` | No | Where to read/write the refresh token (default `data/.schwab_refresh_token`). App reads token from env first, then from this file. |
 | `SCHWAB_BASE_URL` | No | Default `https://api.schwabapi.com`; only set if using a different base. |
@@ -18,31 +18,28 @@
 
 ### 1. Get a refresh token (one-time, then ~every 7 days)
 
-The Schwab API uses OAuth. You need a **refresh token** before the app can get access tokens and fetch data. **Schwab requires callback URLs to be HTTPS** — that’s why `http://localhost:8765/callback` is rejected.
+The Schwab API uses OAuth. You need a **refresh token** before the app can get access tokens and fetch data. Schwab requires an **HTTPS** callback URL. You can use either option below.
 
-**You don’t have to manually paste the token into `.env`.** Run the script below; it writes the refresh token to `data/.schwab_refresh_token`. The app loads the token from that file automatically. Schwab refresh tokens last about **7 days**; when yours expires, run the script again (one browser sign-in) and the script will overwrite the file.
+**Option A – Paste URL (no ngrok)**
 
-**You only need one callback URL.** If you already have `https://127.0.0.1:8080/oauth/callback` in the Developer Portal, use that. You do **not** need to add a second one (and you should not add `http://localhost:...` because it’s not HTTPS).
+No extra tools. Use a local callback URL; after sign-in you paste the redirect URL into the script.
 
-**Option A – Use your existing callback** (`https://127.0.0.1:8080/oauth/callback`)
+1. In the [Schwab Developer Portal](https://developer.schwab.com/), add callback URL: **`https://127.0.0.1:8080/oauth/callback`**
+2. In `.env` set: `DATA_PROVIDER=schwab`, `SCHWAB_CLIENT_ID`, `SCHWAB_CLIENT_SECRET`, **`SCHWAB_CALLBACK_URL=https://127.0.0.1:8080/oauth/callback`**
+3. Run: **`poetry run python scripts/schwab_get_refresh_token.py`**
+4. Sign in when the browser opens. The browser will redirect and show "site can't be reached" — **copy the full URL from the address bar** (it contains `?code=...`).
+5. Paste that URL when the script asks. The script will exchange the code and save the token to `data/.schwab_refresh_token`.
 
-1. In `.env` set:
-   - `DATA_PROVIDER=schwab`
-   - `SCHWAB_CLIENT_ID` (your app key)
-   - `SCHWAB_CLIENT_SECRET` (your app secret)
-   - `SCHWAB_CALLBACK_URL=https://127.0.0.1:8080/oauth/callback`
-2. When you run the OAuth flow, something must be serving **HTTPS** on `127.0.0.1:8080` and handling `/oauth/callback` (e.g. your FastAPI app). That handler should exchange the `?code=...` for tokens and save or print the refresh token. If your app already does that, just open the authorize URL (with `redirect_uri=https://127.0.0.1:8080/oauth/callback`), sign in, and use the token your app receives.
+**Option B – Ngrok (automatic callback)**
 
-**Option B – Use ngrok** (no app or local HTTPS needed)
+The redirect loads a success page and the script receives the token without pasting.
 
-Use this if you don’t have an app on 8080 or don’t want to run it for this step:
-
-1. Install [ngrok](https://ngrok.com/) and run: `ngrok http 8765`
-2. Copy the **HTTPS** URL (e.g. `https://abc123.ngrok-free.app`).
-3. In the [Schwab Developer Portal](https://developer.schwab.com/), add: `https://YOUR_NGROK_SUBDOMAIN.ngrok-free.app/callback` (you can have both this and `https://127.0.0.1:8080/oauth/callback` in the list; use whichever you prefer for this one-time flow).
-4. In `.env` set `SCHWAB_CALLBACK_URL=https://YOUR_NGROK_SUBDOMAIN.ngrok-free.app/callback` (and `SCHWAB_CLIENT_ID`, `SCHWAB_CLIENT_SECRET`).
-5. Leave ngrok running and run: `poetry run python scripts/schwab_get_refresh_token.py`
-6. Open the URL printed, sign in, approve. The script saves the refresh token to `data/.schwab_refresh_token`; the app will use it automatically. You can add `SCHWAB_REFRESH_TOKEN` to `.env` only if you prefer.
+1. Install [ngrok](https://ngrok.com/) and run: **`ngrok http 8765`**
+2. Copy the **HTTPS** URL ngrok shows (e.g. `https://abc123.ngrok-free.app`).
+3. In the [Schwab Developer Portal](https://developer.schwab.com/), add: **`https://YOUR_NGROK_URL/callback`**
+4. In `.env` set: `DATA_PROVIDER=schwab`, `SCHWAB_CLIENT_ID`, `SCHWAB_CLIENT_SECRET`, **`SCHWAB_CALLBACK_URL=https://YOUR_NGROK_URL/callback`**
+5. Leave ngrok running and run: **`poetry run python scripts/schwab_get_refresh_token.py`**
+6. Sign in when the browser opens. You'll see "Authorization successful" and the script will save the token.
 
 ### 2. Test the API with real data
 
