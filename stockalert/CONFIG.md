@@ -1,6 +1,6 @@
 # Configuration and environment variables
 
-All settings can be overridden via a `.env` file or environment variables. **Never commit `.env`** (ensure it is in `.gitignore`).
+All settings can be overridden via a `.env` file or environment variables. **Never commit `.env`** (ensure it is in `.gitignore`). To get started, copy `.env.example` to `.env` and fill in your values: `cp .env.example .env`.
 
 ## Data provider
 
