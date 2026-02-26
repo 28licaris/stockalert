@@ -21,6 +21,42 @@
             "cwd": "${workspaceFolder}/stockalert"
         },
         {
+            "name": "Detect Divergence: SPY (30 days, RSI, Hidden Bullish)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "app.detect_divergence",
+            "args": [
+                "--tickers", "SPY",
+                "--days", "30",
+                "--indicator", "rsi",
+                "--signal-type", "hidden_bullish_divergence"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/stockalert",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/stockalert"
+            },
+            "justMyCode": false
+        },
+        {
+            "name": "Detect Divergence: Multiple Tickers (7 days)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "app.detect_divergence",
+            "args": [
+                "--tickers", "SPY", "QQQ", "AAPL",
+                "--days", "7",
+                "--indicator", "rsi",
+                "--signal-type", "hidden_bullish_divergence"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/stockalert",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/stockalert"
+            },
+            "justMyCode": false
+        },
+        {
             "name": "Test: Historical Data",
             "type": "debugpy",
             "request": "launch",
@@ -105,6 +141,40 @@
                 "PYTHONPATH": "${workspaceFolder}"
             },
             "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Test: Schwab Provider",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "${workspaceFolder}/tests/test_schwab_provider.py",
+                "-v",
+                "-s"
+            ],
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+        {
+            "name": "Test: Current File (pytest)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "${file}",
+                "-v",
+                "-s"
+            ],
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
         },
         {
             "name": "Run All Tests",
