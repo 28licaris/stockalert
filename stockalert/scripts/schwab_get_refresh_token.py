@@ -2,12 +2,16 @@
 """
 One-time setup: get a Schwab refresh token via OAuth in the browser.
 
-1. Add http://localhost:8765/callback to your app's Callback URL(s) in the Schwab Developer Portal.
-2. Set in .env: SCHWAB_CLIENT_ID, SCHWAB_CLIENT_SECRET.
-3. Run: poetry run python scripts/schwab_get_refresh_token.py
-4. Open the URL printed; sign in to Schwab and approve the app.
-5. You'll be redirected to localhost; the script will exchange the code for tokens and print SCHWAB_REFRESH_TOKEN.
-6. Add SCHWAB_REFRESH_TOKEN=... to your .env and use it for test_schwab_live.py and the app.
+Schwab requires callback URLs to be HTTPS. For local dev, use ngrok:
+
+1. Run: ngrok http 8765
+2. Copy the HTTPS URL (e.g. https://abc123.ngrok-free.app).
+3. In Schwab Developer Portal, add: https://abc123.ngrok-free.app/callback
+4. In .env set: SCHWAB_CALLBACK_URL=https://abc123.ngrok-free.app/callback
+   (and SCHWAB_CLIENT_ID, SCHWAB_CLIENT_SECRET)
+5. Run: poetry run python scripts/schwab_get_refresh_token.py
+6. Open the URL printed; sign in and approve. The script will print SCHWAB_REFRESH_TOKEN.
+7. Add SCHWAB_REFRESH_TOKEN=... to .env.
 """
 import webbrowser
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -22,7 +26,8 @@ load_dotenv()
 import os
 CLIENT_ID = os.getenv("SCHWAB_CLIENT_ID", "")
 CLIENT_SECRET = os.getenv("SCHWAB_CLIENT_SECRET", "")
-REDIRECT_URI = "http://localhost:8765/callback"
+# Schwab requires HTTPS for callback URL. Use ngrok and set SCHWAB_CALLBACK_URL to e.g. https://xxx.ngrok-free.app/callback
+REDIRECT_URI = os.getenv("SCHWAB_CALLBACK_URL", "").strip()
 BASE_URL = os.getenv("SCHWAB_BASE_URL", "https://api.schwabapi.com").rstrip("/")
 AUTHORIZE_URL = f"{BASE_URL}/v1/oauth/authorize"
 TOKEN_URL = f"{BASE_URL}/v1/oauth/token"
@@ -70,8 +75,19 @@ def main():
     if not CLIENT_ID or not CLIENT_SECRET:
         print("Set SCHWAB_CLIENT_ID and SCHWAB_CLIENT_SECRET in .env")
         return
-    url = f"{AUTHORIZE_URL}?client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&response_type=code"
-    print("1. Add this callback URL to your app in the Schwab Developer Portal:")
+    if not REDIRECT_URI or not REDIRECT_URI.startswith("https://"):
+        print("Schwab requires an HTTPS callback URL.")
+        print("Set SCHWAB_CALLBACK_URL in .env to your HTTPS callback (e.g. from ngrok).")
+        print()
+        print("Example with ngrok:")
+        print("  1. Run: ngrok http 8765")
+        print("  2. Copy the https URL (e.g. https://abc123.ngrok-free.app)")
+        print("  3. In Schwab Developer Portal, add: https://abc123.ngrok-free.app/callback")
+        print("  4. In .env set: SCHWAB_CALLBACK_URL=https://abc123.ngrok-free.app/callback")
+        return
+    query = urlencode({"client_id": CLIENT_ID, "redirect_uri": REDIRECT_URI, "response_type": "code"})
+    url = f"{AUTHORIZE_URL}?{query}"
+    print("1. Callback URL (must be added in Schwab Developer Portal):")
     print(f"   {REDIRECT_URI}")
     print()
     print("2. Open this URL in your browser (or we'll try to open it):")
@@ -81,7 +97,7 @@ def main():
         webbrowser.open(url)
     except Exception:
         pass
-    print("3. After you sign in and authorize, waiting for callback on http://localhost:8765/callback ...")
+    print("3. After you sign in and authorize, waiting for callback...")
     code = run_server()
     if not code:
         print("No authorization code received.")
