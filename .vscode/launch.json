@@ -160,6 +160,19 @@
             "justMyCode": false
         },
         {
+            "name": "Schwab: Live API test (real keys)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/test_schwab_live.py",
+            "args": ["--symbol", "SPY", "--days", "1"],
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+        {
             "name": "Test: Current File (pytest)",
             "type": "debugpy",
             "request": "launch",
