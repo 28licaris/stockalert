@@ -1,6 +1,5 @@
 import os
 from pydantic import BaseModel, Field
-from alpaca.data.enums import DataFeed
 from dotenv import load_dotenv
 
 load_dotenv()  # Load .env file if present
@@ -21,6 +20,13 @@ class Settings(BaseModel):
     alpaca_feed: str = os.getenv("ALPACA_FEED", "iex")
     polygon_api_key: str = os.getenv("POLYGON_API_KEY", "")
     data_provider: str = os.getenv("DATA_PROVIDER", "alpaca")
+
+    # Schwab (Think or Swim) – store credentials in .env only; never commit
+    schwab_client_id: str = os.getenv("SCHWAB_CLIENT_ID", "")
+    schwab_client_secret: str = os.getenv("SCHWAB_CLIENT_SECRET", "")
+    schwab_refresh_token: str = os.getenv("SCHWAB_REFRESH_TOKEN", "")
+    schwab_callback_url: str = os.getenv("SCHWAB_CALLBACK_URL", "")
+    schwab_base_url: str = os.getenv("SCHWAB_BASE_URL", "https://api.schwabapi.com")
     
     # ─────────────────────────────────────────────────────────
     # Database Settings
@@ -31,12 +37,17 @@ class Settings(BaseModel):
     )
     
     # ─────────────────────────────────────────────────────────
-    # Technical Analysis Settings
+    # Technical Analysis Settings (RELAXED for 1-min bars)
     # ─────────────────────────────────────────────────────────
-    pivot_k: int = int(os.getenv("PIVOT_K", "3"))
-    lookback_bars: int = int(os.getenv("LOOKBACK_BARS", "60"))
+    pivot_k: int = int(os.getenv("PIVOT_K", "4"))  # Changed from 3 to 4
+    lookback_bars: int = int(os.getenv("LOOKBACK_BARS", "80"))  # Increased from 60
     ema_period: int = int(os.getenv("EMA_PERIOD", "50"))
-    use_trend_filter: bool = os.getenv("USE_TREND_FILTER", "true").lower() == "true"
+    use_trend_filter: bool = os.getenv("USE_TREND_FILTER", "false").lower() == "true"  # DISABLED by default
+    
+    # Quality thresholds (relaxed for 1-minute data)
+    min_price_change_pct: float = float(os.getenv("MIN_PRICE_CHANGE_PCT", "0.003"))  # 0.3%
+    min_indicator_change_pct: float = float(os.getenv("MIN_INDICATOR_CHANGE_PCT", "0.02"))  # 2%
+    min_pivot_separation: int = int(os.getenv("MIN_PIVOT_SEPARATION", "12"))  # 12 minutes
     
     # ─────────────────────────────────────────────────────────
     # Historical Data Loading Settings
@@ -74,17 +85,14 @@ class Settings(BaseModel):
     # ─────────────────────────────────────────────────────────
     heartbeat_interval_seconds: int = int(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "600"))
     max_idle_time_seconds: int = int(os.getenv("MAX_IDLE_TIME_SECONDS", "3600"))
-    
+
     @property
-    def alpaca_feed_enum(self) -> DataFeed:
-        """Convert string feed to DataFeed enum"""
-        feed_map = {
-            "iex": DataFeed.IEX,
-            "sip": DataFeed.SIP,
-            "otc": DataFeed.OTC
-        }
+    def alpaca_feed_enum(self):
+        """Convert string feed to DataFeed enum. Lazy-imports Alpaca so Schwab-only deploys don't require alpaca-py at import."""
+        from alpaca.data.enums import DataFeed
+        feed_map = {"iex": DataFeed.IEX, "sip": DataFeed.SIP, "otc": DataFeed.OTC}
         return feed_map.get(self.alpaca_feed.lower(), DataFeed.IEX)
-    
+
     def get_config_summary(self) -> dict:
         """
         Get a summary of current configuration (for debugging/logging).
@@ -102,6 +110,9 @@ class Settings(BaseModel):
             "lookback_bars": self.lookback_bars,
             "pivot_k": self.pivot_k,
             "use_trend_filter": self.use_trend_filter,
+            "min_price_change_pct": self.min_price_change_pct,
+            "min_indicator_change_pct": self.min_indicator_change_pct,
+            "min_pivot_separation": self.min_pivot_separation,
         }
 
 
@@ -124,10 +135,19 @@ def get_provider():
         return AlpacaProvider(
             settings.alpaca_api_key,
             settings.alpaca_secret_key,
-            settings.alpaca_feed_enum
+            settings.alpaca_feed_enum,
         )
     elif settings.data_provider == "polygon":
         from app.providers.polygon_provider import PolygonProvider
         return PolygonProvider(settings.polygon_api_key)
+    elif settings.data_provider in ("schwab", "thinkorswim"):
+        from app.providers.schwab_provider import SchwabProvider
+        return SchwabProvider(
+            client_id=settings.schwab_client_id,
+            client_secret=settings.schwab_client_secret,
+            refresh_token=settings.schwab_refresh_token,
+            callback_url=settings.schwab_callback_url or None,
+            base_url=settings.schwab_base_url,
+        )
     else:
         raise ValueError(f"Unsupported provider: {settings.data_provider}")
