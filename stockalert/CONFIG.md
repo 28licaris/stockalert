@@ -17,8 +17,9 @@ Store these in `.env` only; never commit.
 
 - **`SCHWAB_CLIENT_ID`** – App key (client ID) from Charles Schwab Developer Portal → Create App.
 - **`SCHWAB_CLIENT_SECRET`** – App secret from the same app.
-- **`SCHWAB_REFRESH_TOKEN`** – Obtained after completing the OAuth authorization-code flow once (user signs in and app receives refresh token). Required for background streaming.
-- **`SCHWAB_CALLBACK_URL`** – Must match exactly the callback URL(s) registered in the Schwab Developer Portal for your app (e.g. `http://localhost:8080/oauth/callback` for local dev).
+- **`SCHWAB_REFRESH_TOKEN`** – Obtained after completing the OAuth authorization-code flow once (user signs in and app receives refresh token). Can be set in `.env` or omitted and read from the token file instead.
+- **`SCHWAB_REFRESH_TOKEN_FILE`** – Optional; path to file where the refresh token is read/written (default `data/.schwab_refresh_token`). The app uses the token from env first, then from this file. Running `scripts/schwab_get_refresh_token.py` writes the token here so you don’t have to edit `.env`. Refresh tokens last about 7 days; re-run the script when it expires.
+- **`SCHWAB_CALLBACK_URL`** – Must match exactly the callback URL(s) registered in the Schwab Developer Portal for your app (e.g. `https://127.0.0.1:8080/oauth/callback` for local dev). Required only for the one-time OAuth script.
 - **`SCHWAB_BASE_URL`** – Optional; default `https://api.schwabapi.com`.
 
 The provider uses the Trader API for OAuth token exchange and price history, and the Streamer API (WebSocket) for real-time bars. Rate limits: market data (e.g. 120 requests/min); respect limits when backfilling.

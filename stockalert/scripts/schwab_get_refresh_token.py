@@ -29,6 +29,7 @@ CLIENT_SECRET = os.getenv("SCHWAB_CLIENT_SECRET", "")
 # Schwab requires HTTPS for callback URL. Use ngrok and set SCHWAB_CALLBACK_URL to e.g. https://xxx.ngrok-free.app/callback
 REDIRECT_URI = os.getenv("SCHWAB_CALLBACK_URL", "").strip()
 BASE_URL = os.getenv("SCHWAB_BASE_URL", "https://api.schwabapi.com").rstrip("/")
+TOKEN_FILE = os.getenv("SCHWAB_REFRESH_TOKEN_FILE", "data/.schwab_refresh_token")
 AUTHORIZE_URL = f"{BASE_URL}/v1/oauth/authorize"
 TOKEN_URL = f"{BASE_URL}/v1/oauth/token"
 
@@ -122,13 +123,23 @@ def main():
     if not refresh:
         print("Response missing refresh_token:", data.keys())
         return
-    print()
-    print("Success. Add this to your .env file:")
-    print()
-    print(f"SCHWAB_REFRESH_TOKEN={refresh}")
-    print()
+    # Write to token file so the app can use it without editing .env
+    try:
+        os.makedirs(os.path.dirname(TOKEN_FILE) or ".", exist_ok=True)
+        with open(TOKEN_FILE, "w") as f:
+            f.write(refresh)
+        print()
+        print(f"Refresh token saved to {TOKEN_FILE}")
+        print("The app will use this file automatically; you do not need to add SCHWAB_REFRESH_TOKEN to .env.")
+        print()
+    except OSError as e:
+        print(f"Could not write token file: {e}")
+        print()
+        print("Add this to your .env file instead:")
+        print(f"SCHWAB_REFRESH_TOKEN={refresh}")
+        print()
     if access:
-        print("(Access token also received; use SCHWAB_REFRESH_TOKEN for ongoing use.)")
+        print("(Access token also received; the app will use the refresh token for ongoing access.)")
 
 
 if __name__ == "__main__":

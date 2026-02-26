@@ -25,6 +25,7 @@ class Settings(BaseModel):
     schwab_client_id: str = os.getenv("SCHWAB_CLIENT_ID", "")
     schwab_client_secret: str = os.getenv("SCHWAB_CLIENT_SECRET", "")
     schwab_refresh_token: str = os.getenv("SCHWAB_REFRESH_TOKEN", "")
+    schwab_refresh_token_file: str = os.getenv("SCHWAB_REFRESH_TOKEN_FILE", "data/.schwab_refresh_token")
     schwab_callback_url: str = os.getenv("SCHWAB_CALLBACK_URL", "")
     schwab_base_url: str = os.getenv("SCHWAB_BASE_URL", "https://api.schwabapi.com")
     
@@ -86,6 +87,25 @@ class Settings(BaseModel):
     heartbeat_interval_seconds: int = int(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "600"))
     max_idle_time_seconds: int = int(os.getenv("MAX_IDLE_TIME_SECONDS", "3600"))
 
+    def get_schwab_refresh_token(self) -> str:
+        """
+        Effective Schwab refresh token: from SCHWAB_REFRESH_TOKEN env, or from
+        token file (SCHWAB_REFRESH_TOKEN_FILE) so you don't have to edit .env
+        after running the one-time OAuth script.
+        """
+        if self.schwab_refresh_token:
+            return self.schwab_refresh_token.strip()
+        path = self.schwab_refresh_token_file
+        if not path:
+            return ""
+        if os.path.isfile(path):
+            try:
+                with open(path, "r") as f:
+                    return f.read().strip()
+            except OSError:
+                pass
+        return ""
+
     @property
     def alpaca_feed_enum(self):
         """Convert string feed to DataFeed enum. Lazy-imports Alpaca so Schwab-only deploys don't require alpaca-py at import."""
@@ -145,9 +165,10 @@ def get_provider():
         return SchwabProvider(
             client_id=settings.schwab_client_id,
             client_secret=settings.schwab_client_secret,
-            refresh_token=settings.schwab_refresh_token,
+            refresh_token=settings.get_schwab_refresh_token(),
             callback_url=settings.schwab_callback_url or None,
             base_url=settings.schwab_base_url,
+            refresh_token_file=settings.schwab_refresh_token_file or None,
         )
     else:
         raise ValueError(f"Unsupported provider: {settings.data_provider}")

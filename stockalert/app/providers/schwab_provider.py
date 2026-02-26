@@ -7,6 +7,7 @@ OAuth2 and streamer connection details come from Trader API (GET User Preference
 import asyncio
 import json
 import logging
+import os
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -46,12 +47,14 @@ class SchwabProvider(DataProvider):
         refresh_token: str = "",
         callback_url: Optional[str] = None,
         base_url: str = "https://api.schwabapi.com",
+        refresh_token_file: Optional[str] = None,
     ):
         self._client_id = client_id
         self._client_secret = client_secret
         self._refresh_token = refresh_token
         self._callback_url = callback_url
         self._base_url = base_url.rstrip("/")
+        self._refresh_token_file = refresh_token_file
         self._access_token: Optional[str] = None
         self._streamer_url: Optional[str] = None
         self._user_prefs: Optional[dict] = None
@@ -94,6 +97,17 @@ class SchwabProvider(DataProvider):
                 data = await resp.json()
         with self._token_refresh_lock:
             self._access_token = data.get("access_token")
+            new_refresh = data.get("refresh_token")
+            if new_refresh:
+                self._refresh_token = new_refresh
+                if self._refresh_token_file:
+                    try:
+                        os.makedirs(os.path.dirname(self._refresh_token_file) or ".", exist_ok=True)
+                        with open(self._refresh_token_file, "w") as f:
+                            f.write(new_refresh)
+                        logger.info("Schwab refresh token persisted to %s", self._refresh_token_file)
+                    except OSError as e:
+                        logger.warning("Could not persist Schwab refresh token: %s", e)
         if not self._access_token:
             raise RuntimeError("Schwab token response missing access_token")
         logger.info("Schwab access token obtained")

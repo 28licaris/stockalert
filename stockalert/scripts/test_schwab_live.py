@@ -2,11 +2,10 @@
 """
 Test the real Schwab API with your credentials.
 
-Requires in .env (or environment):
-  SCHWAB_CLIENT_ID
-  SCHWAB_CLIENT_SECRET
-  SCHWAB_REFRESH_TOKEN   <-- from one-time OAuth (see scripts/schwab_get_refresh_token.py)
-  SCHWAB_CALLBACK_URL    (only needed for getting the refresh token)
+Requires in .env: SCHWAB_CLIENT_ID, SCHWAB_CLIENT_SECRET.
+Refresh token: in SCHWAB_REFRESH_TOKEN or in token file (data/.schwab_refresh_token).
+  Run scripts/schwab_get_refresh_token.py once; it writes the token to the file so you don't need to add it to .env.
+  SCHWAB_CALLBACK_URL is only needed when running the get-refresh-token script.
 
 Run from project root (stockalert/stockalert):
   poetry run python scripts/test_schwab_live.py
@@ -30,17 +29,18 @@ async def main(symbol: str, days: int) -> None:
     if not settings.schwab_client_id or not settings.schwab_client_secret:
         print("Missing SCHWAB_CLIENT_ID or SCHWAB_CLIENT_SECRET in .env")
         return
-    if not settings.schwab_refresh_token:
-        print("Missing SCHWAB_REFRESH_TOKEN in .env")
-        print("Run scripts/schwab_get_refresh_token.py once to get a refresh token, then add it to .env")
+    refresh_token = settings.get_schwab_refresh_token()
+    if not refresh_token:
+        print("Missing Schwab refresh token (set SCHWAB_REFRESH_TOKEN in .env or run scripts/schwab_get_refresh_token.py to write token file)")
         return
 
     provider = SchwabProvider(
         client_id=settings.schwab_client_id,
         client_secret=settings.schwab_client_secret,
-        refresh_token=settings.schwab_refresh_token,
+        refresh_token=refresh_token,
         callback_url=settings.schwab_callback_url or None,
         base_url=settings.schwab_base_url,
+        refresh_token_file=settings.schwab_refresh_token_file or None,
     )
 
     print("1. Getting access token (refresh_token exchange)...")
