@@ -5,6 +5,7 @@ Implements DataProvider for Charles Schwab Trader API and Streamer API.
 OAuth2 and streamer connection details come from Trader API (GET User Preference).
 """
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -21,14 +22,38 @@ from app.providers.base import DataProvider
 
 logger = logging.getLogger(__name__)
 
-# Trader API paths
+# Trader API (auth + user preference for streamer). Per Schwab docs: "GET User Preference" for streamer info.
 TOKEN_PATH = "/v1/oauth/token"
-USER_PRINCIPALS_PATH = "/v1/userprincipals"
-PRICE_HISTORY_PATH = "/v1/marketdata/{symbol}/pricehistory"
+USER_PREFERENCE_PATH = "/trader/v1/userpreference"
 
-# Streamer services
+# Market Data API - server https://api.schwabapi.com/marketdata/v1 (per Schwab Market Data spec)
+MARKET_DATA_BASE = "/marketdata/v1"
+PRICE_HISTORY_PATH = "/pricehistory"
+QUOTES_PATH = "/quotes"
+QUOTE_SINGLE_PATH = "/{symbol_id}/quotes"
+CHAINS_PATH = "/chains"
+EXPIRATION_CHAIN_PATH = "/expirationchain"
+MOVERS_PATH = "/movers/{symbol_id}"
+MARKETS_PATH = "/markets"
+MARKET_SINGLE_PATH = "/markets/{market_id}"
+INSTRUMENTS_PATH = "/instruments"
+INSTRUMENT_CUSIP_PATH = "/instruments/{cusip_id}"
+
+# Streamer services (per Schwab Streamer API doc; same request shape: service, command, SchwabClientCustomerId, SchwabClientCorrelId, parameters)
 SERVICE_ADMIN = "ADMIN"
 SERVICE_CHART_EQUITY = "CHART_EQUITY"
+SERVICE_CHART_FUTURES = "CHART_FUTURES"
+SERVICE_LEVELONE_EQUITIES = "LEVELONE_EQUITIES"
+SERVICE_LEVELONE_OPTIONS = "LEVELONE_OPTIONS"
+SERVICE_LEVELONE_FUTURES = "LEVELONE_FUTURES"
+SERVICE_LEVELONE_FUTURES_OPTIONS = "LEVELONE_FUTURES_OPTIONS"
+SERVICE_LEVELONE_FOREX = "LEVELONE_FOREX"
+SERVICE_NYSE_BOOK = "NYSE_BOOK"
+SERVICE_NASDAQ_BOOK = "NASDAQ_BOOK"
+SERVICE_OPTIONS_BOOK = "OPTIONS_BOOK"
+SERVICE_SCREENER_EQUITY = "SCREENER_EQUITY"
+SERVICE_SCREENER_OPTION = "SCREENER_OPTION"
+SERVICE_ACCT_ACTIVITY = "ACCT_ACTIVITY"
 CHART_EQUITY_FIELDS = "0,1,2,3,4,5,7"  # key, open, high, low, close, volume, chartTime
 
 
@@ -78,17 +103,20 @@ class SchwabProvider(DataProvider):
             if not self._refresh_token:
                 raise ValueError("SCHWAB_REFRESH_TOKEN is required for Schwab provider")
         url = f"{self._base_url}{TOKEN_PATH}"
+        # Schwab token endpoint requires client credentials via Basic auth (RFC 6749 2.3.1), not body.
+        credentials = base64.b64encode(f"{self._client_id}:{self._client_secret}".encode()).decode()
         payload = {
             "grant_type": "refresh_token",
             "refresh_token": self._refresh_token,
-            "client_id": self._client_id,
-            "client_secret": self._client_secret,
         }
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 url,
                 data=payload,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Authorization": f"Basic {credentials}",
+                },
             ) as resp:
                 if resp.status != 200:
                     text = await resp.text()
@@ -115,11 +143,11 @@ class SchwabProvider(DataProvider):
 
     async def _get_user_principals(self) -> dict:
         """
-        GET user principals (streamer connection info, subscription keys).
-        Required for Streamer API LOGIN and SUBS.
+        GET User Preference (streamer connection info, subscription keys).
+        Per Schwab Streamer doc: "Streamer information ... can be found on the GET User Preference endpoint."
         """
         token = await self._ensure_token()
-        url = f"{self._base_url}{USER_PRINCIPALS_PATH}"
+        url = f"{self._base_url}{USER_PREFERENCE_PATH}"
         params = {"fields": "streamerSubscriptionKeys,streamerConnectionInfo"}
         headers = {"Authorization": f"Bearer {token}"}
         async with aiohttp.ClientSession() as session:
@@ -129,8 +157,8 @@ class SchwabProvider(DataProvider):
                     return await self._get_user_principals()
                 if resp.status != 200:
                     text = await resp.text()
-                    logger.error("Schwab user principals failed: %s %s", resp.status, text)
-                    raise RuntimeError(f"Schwab user principals failed: {resp.status} {text}")
+                    logger.error("Schwab user preference failed: %s %s", resp.status, text)
+                    raise RuntimeError(f"Schwab user preference failed: {resp.status} {text}")
                 data = await resp.json()
         self._user_prefs = data
         # Resolve streamer WebSocket URL from connection info (structure may vary)
@@ -149,8 +177,28 @@ class SchwabProvider(DataProvider):
                         break
             if not self._streamer_url:
                 self._streamer_url = conn_info.get("uri") or conn_info.get("streamerSocketUrl")
-        logger.info("Schwab user principals loaded, streamer_url=%s", bool(self._streamer_url))
+        logger.info("Schwab user preference loaded, streamer_url=%s", bool(self._streamer_url))
         return data
+
+    async def _market_data_get(self, path: str, params: Optional[dict] = None) -> dict:
+        """
+        Authenticated GET to Market Data API. Path is appended to base + MARKET_DATA_BASE.
+        Caller may pass path with placeholders already formatted (e.g. /pricehistory or /AAPL/quotes).
+        On 401 clears token and retries once. On non-2xx returns {}. Response shape follows Schwab schemas.
+        """
+        token = await self._ensure_token()
+        url = f"{self._base_url}{MARKET_DATA_BASE}{path}"
+        headers = {"Authorization": f"Bearer {token}"}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params or {}, headers=headers) as resp:
+                if resp.status == 401:
+                    self._access_token = None
+                    return await self._market_data_get(path, params)
+                if resp.status != 200:
+                    text = await resp.text()
+                    logger.error("Schwab market data %s failed: %s %s", path, resp.status, text[:200])
+                    return {}
+                return await resp.json()
 
     def _streamer_ids(self) -> dict:
         """Return SchwabClientCustomerId and SchwabClientCorrelId for Streamer requests."""
@@ -266,7 +314,9 @@ class SchwabProvider(DataProvider):
                             continue
                     if not login_ok:
                         return
-                    # Subscribe to CHART_EQUITY for current tickers
+                    # Subscribe to CHART_EQUITY for current tickers. Other services (LEVELONE_EQUITIES, etc.)
+                    # use the same request format (service, command, SchwabClientCustomerId, SchwabClientCorrelId, parameters)
+                    # and can be added by sending additional requests here after LOGIN.
                     tickers = list(self._subscribed_tickers)
                     if tickers and self._bar_callback:
                         subs_req = {
@@ -367,12 +417,7 @@ class SchwabProvider(DataProvider):
         end: datetime,
         timeframe: str = "1Min",
     ) -> pd.DataFrame:
-        """Fetch historical bars from Trader API price history endpoint."""
-        token = await self._ensure_token()
-        path = PRICE_HISTORY_PATH.format(symbol=symbol.upper())
-        url = f"{self._base_url}{path}"
-
-        # Schwab uses periodType (day/month/year), period (count), frequencyType (minute/daily), frequency (1,5,10 etc)
+        """Fetch historical bars from Market Data API price history endpoint."""
         if timeframe == "1Min":
             period_type, period, freq_type, freq = "day", 10, "minute", 1
         elif timeframe == "5Min":
@@ -390,6 +435,7 @@ class SchwabProvider(DataProvider):
         end_ms = int(end.timestamp() * 1000) if end.tzinfo else int(end.replace(tzinfo=timezone.utc).timestamp() * 1000)
 
         params = {
+            "symbol": symbol.upper(),
             "periodType": period_type,
             "period": period,
             "frequencyType": freq_type,
@@ -397,18 +443,9 @@ class SchwabProvider(DataProvider):
             "startTime": start_ms,
             "endTime": end_ms,
         }
-        headers = {"Authorization": f"Bearer {token}"}
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params, headers=headers) as resp:
-                if resp.status == 401:
-                    self._access_token = None
-                    return await self.historical_df(symbol, start, end, timeframe)
-                if resp.status != 200:
-                    text = await resp.text()
-                    logger.error("Schwab price history failed: %s %s", resp.status, text)
-                    return pd.DataFrame()
-                data = await resp.json()
+        data = await self._market_data_get(PRICE_HISTORY_PATH, params)
+        if not data:
+            return pd.DataFrame()
 
         candles = data.get("candles") or []
         if not candles:
@@ -438,3 +475,48 @@ class SchwabProvider(DataProvider):
         df.set_index("timestamp", inplace=True)
         df.sort_index(inplace=True)
         return df
+
+    # ----- Market Data REST (server: .../marketdata/v1) -----
+    # Return shapes follow Schwab API response schemas (QuoteResponse, OptionChain, etc.).
+
+    async def get_quotes(self, symbols: list[str], **kwargs: Any) -> dict:
+        """GET /quotes by list of symbols. Optional: fields, indicative. Returns raw QuoteResponse dict."""
+        params = {"symbols": ",".join(s.upper() for s in symbols), **kwargs}
+        return await self._market_data_get(QUOTES_PATH, params)
+
+    async def get_quote(self, symbol_id: str, **kwargs: Any) -> dict:
+        """GET /{symbol_id}/quotes for a single symbol. Optional: fields. Returns raw quote dict."""
+        path = QUOTE_SINGLE_PATH.format(symbol_id=symbol_id.upper())
+        return await self._market_data_get(path, kwargs if kwargs else None)
+
+    async def get_option_chains(self, symbol: str, **kwargs: Any) -> dict:
+        """GET /chains for an optionable symbol. Pass-through: strikeCount, contractType, fromDate, toDate, etc."""
+        params = {"symbol": symbol.upper(), **kwargs}
+        return await self._market_data_get(CHAINS_PATH, params)
+
+    async def get_expiration_chain(self, symbol: str, **kwargs: Any) -> dict:
+        """GET /expirationchain for an optionable symbol. Returns expiration chain dict."""
+        params = {"symbol": symbol.upper(), **kwargs}
+        return await self._market_data_get(EXPIRATION_CHAIN_PATH, params)
+
+    async def get_movers(self, symbol_id: str, **kwargs: Any) -> dict:
+        """GET /movers/{symbol_id} for a specific index. Optional query params per doc."""
+        path = MOVERS_PATH.format(symbol_id=symbol_id.upper())
+        return await self._market_data_get(path, kwargs if kwargs else None)
+
+    async def get_market_hours(self, market_id: Optional[str] = None) -> dict:
+        """GET /markets or GET /markets/{market_id}. Returns hours dict per Schwab schema."""
+        if market_id:
+            path = MARKET_SINGLE_PATH.format(market_id=market_id)
+            return await self._market_data_get(path, None)
+        return await self._market_data_get(MARKETS_PATH, None)
+
+    async def get_instruments(self, symbols: list[str], projection: str, **kwargs: Any) -> dict:
+        """GET /instruments by symbols and projection. Pass-through kwargs. Returns InstrumentResponse dict."""
+        params = {"symbol": ",".join(s.upper() for s in symbols), "projection": projection, **kwargs}
+        return await self._market_data_get(INSTRUMENTS_PATH, params)
+
+    async def get_instrument(self, cusip_id: str) -> dict:
+        """GET /instruments/{cusip_id} by CUSIP. Returns instrument dict."""
+        path = INSTRUMENT_CUSIP_PATH.format(cusip_id=cusip_id)
+        return await self._market_data_get(path, None)

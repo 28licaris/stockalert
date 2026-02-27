@@ -11,7 +11,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
-from app.providers.schwab_provider import SchwabProvider
+from app.providers.schwab_provider import (
+    MARKET_DATA_BASE,
+    PRICE_HISTORY_PATH,
+    SchwabProvider,
+)
 
 
 # ---- Helpers for mocking aiohttp ----
@@ -250,6 +254,161 @@ class TestHistoricalDf:
             df = await p.historical_df("AAPL", start, end)
         assert len(df) == 1
         assert df["close"].iloc[0] == 1
+
+    @pytest.mark.asyncio
+    async def test_uses_market_data_base_url_and_symbol_param(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        p._access_token = "tok"
+        session = make_session(get_resp=make_resp(200, {"candles": []}))
+        start = datetime.now(timezone.utc) - timedelta(days=1)
+        end = datetime.now(timezone.utc)
+        with patch("app.providers.schwab_provider.aiohttp.ClientSession", return_value=make_session_cm(session)):
+            await p.historical_df("AAPL", start, end)
+        session.get.assert_called_once()
+        call_args, call_kwargs = session.get.call_args
+        (url,) = call_args
+        assert MARKET_DATA_BASE in url
+        assert PRICE_HISTORY_PATH in url
+        assert call_kwargs.get("params", {}).get("symbol") == "AAPL"
+
+
+class TestMarketDataGet:
+    """Test _market_data_get with mocked HTTP."""
+
+    @pytest.mark.asyncio
+    async def test_returns_json_on_200(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        p._access_token = "tok"
+        session = make_session(get_resp=make_resp(200, {"key": "value"}))
+        with patch("app.providers.schwab_provider.aiohttp.ClientSession", return_value=make_session_cm(session)):
+            out = await p._market_data_get("/quotes", {"symbols": "AAPL"})
+        assert out == {"key": "value"}
+        session.get.assert_called_once()
+        call_args, call_kwargs = session.get.call_args
+        assert MARKET_DATA_BASE in call_args[0]
+        assert call_kwargs["params"] == {"symbols": "AAPL"}
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_dict_on_non_200(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        p._access_token = "tok"
+        session = make_session(get_resp=make_resp(404, None, "Not Found"))
+        with patch("app.providers.schwab_provider.aiohttp.ClientSession", return_value=make_session_cm(session)):
+            out = await p._market_data_get("/quotes", {"symbols": "X"})
+        assert out == {}
+
+    @pytest.mark.asyncio
+    async def test_clears_token_and_retries_on_401(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        p._access_token = "tok"
+        first_get = make_resp(401, None, "Unauthorized")
+        second_get = make_resp(200, {"data": 1})
+        session = MagicMock()
+        session.get = MagicMock(
+            side_effect=[
+                make_async_cm(first_get),
+                make_async_cm(second_get),
+            ]
+        )
+        session.post = MagicMock(return_value=make_async_cm(make_resp(200, {"access_token": "new_tok"})))
+        with patch("app.providers.schwab_provider.aiohttp.ClientSession", return_value=make_session_cm(session)):
+            out = await p._market_data_get("/quotes", {})
+        assert out == {"data": 1}
+        assert session.get.call_count == 2
+        assert p._access_token == "new_tok"
+
+
+class TestMarketDataMethods:
+    """Test get_quotes, get_quote, get_option_chains, etc. call _market_data_get with correct path/params."""
+
+    @pytest.mark.asyncio
+    async def test_get_quotes(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        with patch.object(p, "_market_data_get", new_callable=AsyncMock, return_value={"AAPL": {}}) as mock_get:
+            out = await p.get_quotes(["AAPL", "SPY"])
+        assert out == {"AAPL": {}}
+        mock_get.assert_called_once()
+        args = mock_get.call_args[0]
+        assert args[0] == "/quotes"
+        assert args[1]["symbols"] == "AAPL,SPY"
+
+    @pytest.mark.asyncio
+    async def test_get_quote(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        with patch.object(p, "_market_data_get", new_callable=AsyncMock, return_value={"lastPrice": 150}) as mock_get:
+            out = await p.get_quote("AAPL")
+        assert out == {"lastPrice": 150}
+        mock_get.assert_called_once()
+        path = mock_get.call_args[0][0]
+        assert "AAPL" in path and "quotes" in path
+
+    @pytest.mark.asyncio
+    async def test_get_option_chains(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        with patch.object(p, "_market_data_get", new_callable=AsyncMock, return_value={}) as mock_get:
+            await p.get_option_chains("AAPL", strikeCount=5)
+        mock_get.assert_called_once()
+        args = mock_get.call_args[0]
+        assert args[0] == "/chains"
+        assert args[1]["symbol"] == "AAPL"
+        assert args[1]["strikeCount"] == 5
+
+    @pytest.mark.asyncio
+    async def test_get_expiration_chain(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        with patch.object(p, "_market_data_get", new_callable=AsyncMock, return_value={}) as mock_get:
+            await p.get_expiration_chain("SPY")
+        mock_get.assert_called_once()
+        args = mock_get.call_args[0]
+        assert args[0] == "/expirationchain"
+        assert args[1]["symbol"] == "SPY"
+
+    @pytest.mark.asyncio
+    async def test_get_movers(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        with patch.object(p, "_market_data_get", new_callable=AsyncMock, return_value=[]) as mock_get:
+            await p.get_movers("$SPX")
+        mock_get.assert_called_once()
+        assert "$SPX" in mock_get.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_get_market_hours_all(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        with patch.object(p, "_market_data_get", new_callable=AsyncMock, return_value={}) as mock_get:
+            await p.get_market_hours()
+        mock_get.assert_called_once()
+        assert mock_get.call_args[0][0] == "/markets"
+        assert mock_get.call_args[0][1] is None
+
+    @pytest.mark.asyncio
+    async def test_get_market_hours_single(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        with patch.object(p, "_market_data_get", new_callable=AsyncMock, return_value={}) as mock_get:
+            await p.get_market_hours("equity")
+        mock_get.assert_called_once()
+        path = mock_get.call_args[0][0]
+        assert "markets" in path and "equity" in path
+
+    @pytest.mark.asyncio
+    async def test_get_instruments(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        with patch.object(p, "_market_data_get", new_callable=AsyncMock, return_value={}) as mock_get:
+            await p.get_instruments(["AAPL", "MSFT"], "symbol-search")
+        mock_get.assert_called_once()
+        args = mock_get.call_args[0]
+        assert args[0] == "/instruments"
+        assert args[1]["symbol"] == "AAPL,MSFT"
+        assert args[1]["projection"] == "symbol-search"
+
+    @pytest.mark.asyncio
+    async def test_get_instrument(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        with patch.object(p, "_market_data_get", new_callable=AsyncMock, return_value={"cusip": "037833100"}) as mock_get:
+            out = await p.get_instrument("037833100")
+        assert out == {"cusip": "037833100"}
+        mock_get.assert_called_once()
+        path = mock_get.call_args[0][0]
+        assert "instruments" in path and "037833100" in path
 
 
 class TestStreamLifecycle:
