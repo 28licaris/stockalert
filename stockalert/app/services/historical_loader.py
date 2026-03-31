@@ -4,31 +4,34 @@ Historical Data Loader Service
 Handles loading historical price data with multiple sources and fallback logic.
 """
 import logging
+import asyncio
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from app.db import SessionLocal
-from app.models import Bar
 from app.providers.base import DataProvider
 from app.config import settings
-from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert
+from app.db import queries
 
 logger = logging.getLogger(__name__)
+
+
+def _source_tag() -> str:
+    tag = (settings.data_source_tag or "").strip()
+    return tag if tag else settings.data_provider
 
 
 class HistoricalDataLoader:
     """
     Loads historical price data with intelligent fallback logic.
-    
+
     Priority:
     1. Database (if sufficient recent data exists)
     2. Parquet cache (if enabled)
     3. Provider API (with automatic save to DB/cache)
     """
-    
+
     def __init__(
         self,
         provider: DataProvider,
@@ -36,16 +39,15 @@ class HistoricalDataLoader:
         use_parquet_cache: Optional[bool] = None
     ):
         self.provider = provider
-        self.parquet_dir = parquet_dir or Path(settings.parquet_cache_dir)
+        self.parquet_dir = parquet_dir or Path("data/parquet")
         self.use_parquet_cache = (
-            use_parquet_cache 
-            if use_parquet_cache is not None 
-            else settings.use_parquet_cache
+            use_parquet_cache if use_parquet_cache is not None
+            else getattr(settings, 'use_parquet_cache', False)
         )
-        
+
         if self.use_parquet_cache:
             self.parquet_dir.mkdir(parents=True, exist_ok=True)
-    
+
     async def load_bars(
         self,
         symbol: str,
@@ -53,104 +55,65 @@ class HistoricalDataLoader:
         start: Optional[datetime] = None,
         end: Optional[datetime] = None,
         days_lookback: Optional[int] = None,
-        purpose: str = "monitor"  # "monitor", "backfill", or "research"
+        purpose: str = "monitor"
     ) -> pd.DataFrame:
         """
-        Load historical bars with smart defaults based on purpose.
-        
+        Load bars with smart fallback: DB → Parquet → API.
+
         Args:
             symbol: Stock symbol
-            limit: Number of bars needed (None = use purpose default)
-            start: Start date (None = auto-calculate)
-            end: End date (None = now)
-            days_lookback: Days to fetch (None = use purpose default)
-            purpose: Usage context - affects defaults
-                - "monitor": Fast startup, recent data
-                - "backfill": Historical analysis
-                - "research": Custom range
-        
+            limit: Maximum number of bars
+            start: Start datetime
+            end: End datetime
+            days_lookback: Alternative to start (goes back N days from end)
+            purpose: What the data is for (logging only)
+
         Returns:
-            DataFrame with OHLCV data, indexed by timestamp
+            DataFrame with columns: timestamp, open, high, low, close, volume
         """
-        # Set defaults based on purpose
-        if limit is None:
-            limit = {
-                "monitor": settings.monitor_preload_bars,
-                "backfill": settings.monitor_preload_bars,
-                "research": 1000
-            }.get(purpose, settings.monitor_preload_bars)
-        
-        if days_lookback is None:
-            days_lookback = {
-                "monitor": settings.monitor_preload_days,
-                "backfill": settings.backfill_default_days,
-                "research": 30
-            }.get(purpose, settings.monitor_preload_days)
-        
-        # Calculate date range
         if end is None:
             end = datetime.now(timezone.utc)
-        
+
         if start is None:
-            start = end - timedelta(days=days_lookback)
-        
+            if days_lookback:
+                start = end - timedelta(days=days_lookback)
+            else:
+                start = end - timedelta(days=30)
+
         logger.info(
-            f"Loading {symbol} [{purpose}]: "
-            f"{start.date()} to {end.date()} "
-            f"(target: {limit} bars, {days_lookback} days)"
+            f"Loading {symbol} [{purpose}]: {start.date()} to {end.date()} "
+            f"(target: {limit or 'all'} bars, {(end-start).days} days)"
         )
-        
-        # Try database first
-        df = await self._load_from_database(symbol, limit, start, end)
-        
-        # Check if sufficient data
-        required_bars = int(limit * settings.data_sufficiency_threshold)
-        if not df.empty and len(df) >= required_bars:
-            logger.info(
-                f"✅ Database: {len(df)} bars for {symbol} "
-                f"(needed {required_bars})"
-            )
-            return df.iloc[-limit:]  # Return only what was requested
-        
+
+        df = await self._load_from_database(symbol, limit or 10000, start, end)
+        if not df.empty and len(df) >= (limit or 0) * 0.8:
+            logger.info(f"✅ Database: {len(df)} bars")
+            return df
+
         if not df.empty:
             logger.warning(
-                f"⚠️  Database: Only {len(df)}/{required_bars} bars for {symbol}"
+                f"⚠️  Database: Only {len(df)}/{limit or 10000} bars for {symbol}"
             )
-        
-        # Try parquet cache
+
         if self.use_parquet_cache:
             df = await self._load_from_parquet(symbol, start, end)
-            if not df.empty and len(df) >= required_bars:
-                logger.info(f"✅ Parquet: {len(df)} bars for {symbol}")
-                await self._save_to_database(symbol, df)
-                return df.iloc[-limit:]
-        
-        # Fetch from API
-        logger.info(f"🌐 Fetching {symbol} from API...")
-        
-        # Apply safety margin to ensure we get enough bars
-        extended_start = start - timedelta(
-            days=int(days_lookback * (settings.fetch_safety_margin - 1))
-        )
-        
-        df = await self._fetch_from_provider(symbol, extended_start, end)
-        
+            if not df.empty:
+                logger.info(f"✅ Parquet: {len(df)} bars")
+                return df
+
+        df = await self._fetch_from_provider(symbol, start, end)
+
         if df.empty:
             logger.warning(f"⚠️  No data available for {symbol}")
             return df
-        
-        # Save to storage
-        await self._save_to_database(symbol, df)
+
+        asyncio.create_task(self._save_to_database(symbol, df))
+
         if self.use_parquet_cache:
-            await self._save_to_parquet(symbol, df)
-        
-        # Return requested amount
-        if len(df) > limit:
-            df = df.iloc[-limit:]
-        
-        logger.info(f"✅ Loaded {len(df)} bars for {symbol}")
+            asyncio.create_task(self._save_to_parquet(symbol, df))
+
         return df
-    
+
     async def _load_from_database(
         self,
         symbol: str,
@@ -158,140 +121,98 @@ class HistoricalDataLoader:
         start: datetime,
         end: datetime
     ) -> pd.DataFrame:
-        """Load bars from database."""
+        """Load bars from ClickHouse."""
         try:
-            async with SessionLocal() as session:
-                # Fetch more than limit to account for gaps
-                fetch_limit = int(limit * 1.2)
-                
-                result = await session.execute(
-                    select(Bar)
-                    .where(
-                        Bar.symbol == symbol,
-                        Bar.ts >= start,
-                        Bar.ts <= end
-                    )
-                    .order_by(Bar.ts.desc())
-                    .limit(fetch_limit)
-                )
-                bars = result.scalars().all()
-                
-                if not bars:
-                    return pd.DataFrame()
-                
-                data = [{
-                    'timestamp': bar.ts,
-                    'open': float(bar.open),
-                    'high': float(bar.high),
-                    'low': float(bar.low),
-                    'close': float(bar.close),
-                    'volume': int(bar.volume),
-                } for bar in reversed(bars)]
-                
-                df = pd.DataFrame(data)
-                df.set_index('timestamp', inplace=True)
-                return df
-                
+            return await asyncio.to_thread(
+                queries.fetch_bars, symbol, start, end, limit
+            )
         except Exception as e:
-            logger.error(f"Database error: {e}")
+            logger.error(f"❌ Database error for {symbol}: {e}")
             return pd.DataFrame()
-    
-    async def _load_from_parquet(
-        self,
-        symbol: str,
-        start: datetime,
-        end: datetime
-    ) -> pd.DataFrame:
-        """Load bars from parquet cache."""
-        try:
-            parquet_file = self.parquet_dir / f"{symbol}_1min.parquet"
-            if not parquet_file.exists():
-                return pd.DataFrame()
-            
-            df = pd.read_parquet(parquet_file)
-            
-            # Filter date range
-            mask = (df.index >= start) & (df.index <= end)
-            df = df[mask]
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"Parquet error: {e}")
-            return pd.DataFrame()
-    
+
     async def _fetch_from_provider(
         self,
         symbol: str,
         start: datetime,
         end: datetime
     ) -> pd.DataFrame:
-        """Fetch bars from API provider."""
+        """Fetch data from provider with timeout."""
         try:
-            df = await self.provider.historical_df(
-                symbol,
-                start,
-                end,
-                timeframe="1Min"
+            logger.info(f"🌐 Fetching {symbol} from API...")
+
+            df = await asyncio.wait_for(
+                self.provider.historical_df(symbol, start, end, timeframe="1Min"),
+                timeout=30.0
             )
+
+            if df.empty:
+                logger.warning(f"⚠️  Provider returned empty data for {symbol}")
+            else:
+                logger.info(f"✅ Fetched {len(df)} bars from API")
+
             return df
-        except Exception as e:
-            logger.error(f"API fetch error: {e}", exc_info=True)
+
+        except asyncio.TimeoutError:
+            logger.error(f"❌ API timeout after 30s for {symbol}")
             return pd.DataFrame()
-    
+        except Exception as e:
+            logger.error(f"❌ API error for {symbol}: {e}")
+            return pd.DataFrame()
+
     async def _save_to_database(self, symbol: str, df: pd.DataFrame):
-        """Save bars to database with duplicate handling."""
+        """Save bars to ClickHouse with batch inserts."""
         if df.empty:
             return
-        
+
         try:
-            async with SessionLocal() as session:
-                bars_data = [{
-                    'symbol': symbol,
-                    'ts': ts,
-                    'open': float(row['open']),
-                    'high': float(row['high']),
-                    'low': float(row['low']),
-                    'close': float(row['close']),
-                    'volume': int(row.get('volume', 0) or 0)
-                } for ts, row in df.iterrows()]
-                
-                stmt = insert(Bar).values(bars_data)
-                stmt = stmt.on_conflict_do_nothing(
-                    index_elements=['symbol', 'ts']
+            batch_size = 1000
+            total_records = len(df)
+            src = _source_tag()
+
+            logger.info(f"💾 Saving {total_records} bars to ClickHouse (batches of {batch_size})...")
+
+            for batch_num, start_idx in enumerate(range(0, total_records, batch_size), 1):
+                end_idx = min(start_idx + batch_size, total_records)
+                batch_df = df.iloc[start_idx:end_idx]
+
+                records = []
+                for ts, row in batch_df.iterrows():
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    records.append({
+                        'symbol': symbol,
+                        'timestamp': ts,
+                        'open': float(row['open']),
+                        'high': float(row['high']),
+                        'low': float(row['low']),
+                        'close': float(row['close']),
+                        'volume': float(row['volume']),
+                        'vwap': float(row.get('vwap', 0) or 0),
+                        'trade_count': int(row.get('trade_count', 0) or 0),
+                        'source': src,
+                    })
+
+                await queries.insert_bars_batch_async(records)
+
+                logger.info(
+                    f"   💾 Batch {batch_num}/{(total_records + batch_size - 1) // batch_size}: "
+                    f"Saved {end_idx}/{total_records} bars"
                 )
-                
-                result = await session.execute(stmt)
-                await session.commit()
-                
-                inserted = result.rowcount or 0
-                duplicates = len(bars_data) - inserted
-                
-                if inserted > 0:
-                    logger.info(f"💾 Saved {inserted} bars to DB ({symbol})")
-                if duplicates > 0:
-                    logger.debug(f"⏭️  Skipped {duplicates} duplicates ({symbol})")
-                    
+
+            logger.info(f"✅ Successfully saved all {total_records} bars")
+
         except Exception as e:
-            logger.error(f"DB save error: {e}", exc_info=True)
-    
+            logger.error(f"❌ Failed to save to ClickHouse: {e}")
+
+    async def _load_from_parquet(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime
+    ) -> pd.DataFrame:
+        """Load from parquet cache (not implemented yet)."""
+        return pd.DataFrame()
+
     async def _save_to_parquet(self, symbol: str, df: pd.DataFrame):
-        """Save bars to parquet cache (append mode)."""
-        if df.empty:
-            return
-        
-        try:
-            parquet_file = self.parquet_dir / f"{symbol}_1min.parquet"
-            
-            # Merge with existing data
-            if parquet_file.exists():
-                existing = pd.read_parquet(parquet_file)
-                df = pd.concat([existing, df])
-                df = df[~df.index.duplicated(keep='last')]
-                df.sort_index(inplace=True)
-            
-            df.to_parquet(parquet_file, compression='snappy')
-            logger.info(f"💾 Saved {len(df)} bars to parquet ({symbol})")
-            
-        except Exception as e:
-            logger.error(f"Parquet save error: {e}")
+        """Save to parquet cache (not implemented yet)."""
+        pass

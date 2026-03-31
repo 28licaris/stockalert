@@ -1,5 +1,5 @@
 import os
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from dotenv import load_dotenv
 
 load_dotenv()  # Load .env file if present
@@ -30,12 +30,15 @@ class Settings(BaseModel):
     schwab_base_url: str = os.getenv("SCHWAB_BASE_URL", "https://api.schwabapi.com")
     
     # ─────────────────────────────────────────────────────────
-    # Database Settings
+    # ClickHouse (time-series)
     # ─────────────────────────────────────────────────────────
-    database_url: str = os.getenv(
-        "DATABASE_URL",
-        "postgresql+asyncpg://admin:password@localhost:5432/stockalerts"
-    )
+    clickhouse_host: str = os.getenv("CLICKHOUSE_HOST", "localhost")
+    clickhouse_port: int = int(os.getenv("CLICKHOUSE_PORT", "8123"))
+    clickhouse_user: str = os.getenv("CLICKHOUSE_USER", "default")
+    clickhouse_password: str = os.getenv("CLICKHOUSE_PASSWORD", "")
+    clickhouse_database: str = os.getenv("CLICKHOUSE_DATABASE", "stocks")
+    # Optional tag stored on OHLCV rows (e.g. matches DATA_PROVIDER)
+    data_source_tag: str = os.getenv("DATA_SOURCE_TAG", "")
     
     # ─────────────────────────────────────────────────────────
     # Technical Analysis Settings (RELAXED for 1-min bars)

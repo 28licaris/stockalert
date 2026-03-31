@@ -1,30 +1,21 @@
 services:
-  db:
-    image: postgres:16
-    container_name: stockalert_postgres
-    environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: stockalerts
-    ports: ["5432:5432"]
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: stockalert_clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - chdata:/var/lib/clickhouse
+    environment:
+      CLICKHOUSE_DB: stocks
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     restart: unless-stopped
     profiles:
-      - db
+      - ch
       - full
-      
-  adminer:
-    image: adminer
-    container_name: stockalert_adminer
-    restart: unless-stopped
-    ports: ["8080:8080"]
-    profiles:
-      - db
-      - full
-    depends_on:
-      - db
-      
+
   api:
     build: .
     container_name: stockalert_api
@@ -34,7 +25,12 @@ services:
       ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY}
       ALPACA_FEED: ${ALPACA_FEED:-iex}
       POLYGON_API_KEY: ${POLYGON_API_KEY:-}
-      DATABASE_URL: postgresql+asyncpg://admin:password@db:5432/stockalerts
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-stocks}
+      DATA_SOURCE_TAG: ${DATA_PROVIDER:-alpaca}
       USE_TREND_FILTER: ${USE_TREND_FILTER:-true}
       EMA_PERIOD: ${EMA_PERIOD:-50}
       LOOKBACK_BARS: ${LOOKBACK_BARS:-60}
@@ -49,7 +45,7 @@ services:
     profiles:
       - full
     depends_on:
-      - db
-      
+      - clickhouse
+
 volumes:
-  pgdata:
+  chdata:

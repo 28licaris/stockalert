@@ -10,8 +10,9 @@ import pandas as pd
 from datetime import timezone, datetime
 from typing import Optional, Callable
 
-from app.db import SessionLocal
-from app.models import Bar, Signal
+from app.db import get_bar_batcher
+from app.db import queries
+from app.config import settings
 from app.indicators.rsi import RSI
 from app.indicators.macd import MACD
 from app.indicators.tsi import TSI
@@ -21,7 +22,6 @@ from app.divergence import (
     detect_regular_bullish,
     detect_regular_bearish
 )
-from app.config import settings
 from app.providers.base import DataProvider
 from app.services.historical_loader import HistoricalDataLoader
 
@@ -300,60 +300,50 @@ class MonitorService:
     
     async def _persist_bar(self, symbol: str, ts, bar):
         """
-        Save bar to database asynchronously.
-        
+        Enqueue bar for batched insert into ClickHouse.
+
         Args:
             symbol: Stock symbol
             ts: Timestamp of bar
             bar: Price bar object
         """
-        async with SessionLocal() as session:
-            try:
-                db_bar = Bar(
-                    symbol=symbol,
-                    ts=ts,
-                    open=float(bar.open),
-                    high=float(bar.high),
-                    low=float(bar.low),
-                    close=float(bar.close),
-                    volume=int(getattr(bar, 'volume', 0) or 0)
-                )
-                session.add(db_bar)
-                await session.commit()
-                logger.debug(f"💾 Saved bar: {symbol} @ {ts}")
-            except Exception as e:
-                await session.rollback()
-                # Ignore duplicate key errors (bar already exists)
-                if "duplicate key" not in str(e).lower():
-                    logger.error(f"Error saving bar: {e}")
-    
+        src = (settings.data_source_tag or "").strip() or settings.data_provider
+        try:
+            await get_bar_batcher().add({
+                "symbol": symbol,
+                "timestamp": ts,
+                "open": float(bar.open),
+                "high": float(bar.high),
+                "low": float(bar.low),
+                "close": float(bar.close),
+                "volume": float(getattr(bar, "volume", 0) or 0),
+                "vwap": float(getattr(bar, "vwap", 0) or 0),
+                "trade_count": int(getattr(bar, "trade_count", 0) or 0),
+                "source": src,
+            })
+            logger.debug(f"💾 Queued bar: {symbol} @ {ts}")
+        except Exception as e:
+            logger.error(f"Error queueing bar: {e}")
+
     async def _persist_signal(self, symbol: str, result: dict):
         """
-        Save detected signal to database.
-        
+        Save detected signal to ClickHouse.
+
         Args:
             symbol: Stock symbol
             result: Divergence detection result dictionary
         """
-        async with SessionLocal() as session:
-            try:
-                signal = Signal(
-                    symbol=symbol,
-                    signal_type=self.signal_type,
-                    indicator=self.indicator_name,
-                    ts_signal=result['p2_ts'],
-                    price_at_signal=float(result['price']),
-                    indicator_value=float(result['indicator_value']),
-                    p1_ts=result['p1_ts'],
-                    p2_ts=result['p2_ts']
-                )
-                session.add(signal)
-                await session.commit()
-                logger.warning("💾 Signal saved to database")
-            except Exception as e:
-                await session.rollback()
-                # Log error unless it's a duplicate
-                if "duplicate key" not in str(e).lower():
-                    logger.error(f"Error saving signal: {e}")
-                else:
-                    logger.debug("Signal already exists in database")
+        try:
+            await queries.insert_signals_batch_async([{
+                "symbol": symbol,
+                "signal_type": self.signal_type,
+                "indicator": self.indicator_name,
+                "ts_signal": result["p2_ts"],
+                "price_at_signal": float(result["price"]),
+                "indicator_value": float(result["indicator_value"]),
+                "p1_ts": result["p1_ts"],
+                "p2_ts": result["p2_ts"],
+            }])
+            logger.warning("💾 Signal saved to ClickHouse")
+        except Exception as e:
+            logger.error(f"Error saving signal: {e}")
