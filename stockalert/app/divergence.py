@@ -281,9 +281,10 @@ def detect_hidden_bullish(
     close: pd.Series, 
     ind: pd.Series, 
     lookback: int, 
-    k: int
+    k: int,
+    min_pivot_separation: int = 20
 ) -> Optional[Dict]:
-    """
+    r"""
     Detect Hidden Bullish Divergence (Trend Continuation).
     
     Hidden bullish divergence occurs during pullbacks in an uptrend and
@@ -334,6 +335,12 @@ def detect_hidden_bullish(
         >>> if div:
         >>>     print(f"Hidden bullish at {div['p2_ts']}: ${div['price']:.2f}")
     """
+    from app.config import settings
+    
+    # Use config defaults if not provided
+    if min_pivot_separation is None:
+        min_pivot_separation = settings.min_pivot_separation
+    
     # Get recent data window
     sub_close = close.tail(lookback)
     sub_ind = ind.reindex(sub_close.index)
@@ -348,13 +355,28 @@ def detect_hidden_bullish(
     # Get last two pivot points
     p1, p2 = piv[-2], piv[-1]
     
-    # Check divergence conditions:
-    # 1. Price: Higher low (p2 > p1) - bullish price structure
-    # 2. Indicator: Lower low (p2 < p1) - momentum weakening
+    # Check minimum separation
+    p1_idx = sub_close.index.get_loc(p1)
+    p2_idx = sub_close.index.get_loc(p2)
+    if p2_idx - p1_idx < min_pivot_separation:
+        return None
+    
+    # Check divergence conditions
     if sub_close.loc[p2] > sub_close.loc[p1] and sub_ind.loc[p2] < sub_ind.loc[p1]:
-        # Apply trend filter (ensure we're in uptrend)
-        if not _bull_trend_ok(sub_close):
+        # Use config thresholds (RELAXED for 1-minute data)
+        price_change_pct = abs(sub_close.loc[p2] - sub_close.loc[p1]) / sub_close.loc[p1]
+        ind_change_pct = abs(sub_ind.loc[p2] - sub_ind.loc[p1]) / abs(sub_ind.loc[p1] + 0.01)
+        
+        if price_change_pct < settings.min_price_change_pct:
             return None
+        
+        if ind_change_pct < settings.min_indicator_change_pct:
+            return None
+        
+        # Trend filter (DISABLED by default in config)
+        if settings.use_trend_filter:
+            if not _bull_trend_ok(sub_close):
+                return None
         
         return {
             "p1_ts": p1,
@@ -372,7 +394,7 @@ def detect_hidden_bearish(
     lookback: int, 
     k: int
 ) -> Optional[Dict]:
-    """
+    r"""
     Detect Hidden Bearish Divergence (Trend Continuation).
     
     Hidden bearish divergence occurs during rallies in a downtrend and
@@ -461,7 +483,7 @@ def detect_regular_bullish(
     lookback: int, 
     k: int
 ) -> Optional[Dict]:
-    """
+    r"""
     Detect Regular Bullish Divergence (Trend Reversal).
     
     Regular bullish divergence occurs at the end of a downtrend and
@@ -543,7 +565,7 @@ def detect_regular_bearish(
     lookback: int, 
     k: int
 ) -> Optional[Dict]:
-    """
+    r"""
     Detect Regular Bearish Divergence (Trend Reversal).
     
     Regular bearish divergence occurs at the end of an uptrend and

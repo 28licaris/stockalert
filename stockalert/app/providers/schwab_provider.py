@@ -22,11 +22,12 @@ from app.providers.base import DataProvider
 
 logger = logging.getLogger(__name__)
 
-# Trader API (auth + user preference for streamer). Per Schwab docs: "GET User Preference" for streamer info.
+# Trader API (auth + user preference, accounts, orders, transactions). Base per api_docs/account_access_api.md.
 TOKEN_PATH = "/v1/oauth/token"
-USER_PREFERENCE_PATH = "/trader/v1/userpreference"
+TRADER_API_BASE = "/trader/v1"
+USER_PREFERENCE_PATH = "/trader/v1/userPreference"
 
-# Market Data API - server https://api.schwabapi.com/marketdata/v1 (per Schwab Market Data spec)
+# Market Data API - https://api.schwabapi.com/marketdata/v1 (see api_docs/market_data_api.md: quotes, chains, pricehistory, movers, markets, instruments)
 MARKET_DATA_BASE = "/marketdata/v1"
 PRICE_HISTORY_PATH = "/pricehistory"
 QUOTES_PATH = "/quotes"
@@ -144,7 +145,7 @@ class SchwabProvider(DataProvider):
     async def _get_user_principals(self) -> dict:
         """
         GET User Preference (streamer connection info, subscription keys).
-        Per Schwab Streamer doc: "Streamer information ... can be found on the GET User Preference endpoint."
+        Supports both streamerConnectionInfo/streamerSubscriptionKeys and streamerInfo (api_docs/account_access_api.md).
         """
         token = await self._ensure_token()
         url = f"{self._base_url}{USER_PREFERENCE_PATH}"
@@ -161,7 +162,7 @@ class SchwabProvider(DataProvider):
                     raise RuntimeError(f"Schwab user preference failed: {resp.status} {text}")
                 data = await resp.json()
         self._user_prefs = data
-        # Resolve streamer WebSocket URL from connection info (structure may vary)
+        # Resolve streamer WebSocket URL: streamerConnectionInfo (Streamer doc) or streamerInfo (Account Access doc)
         conn_info = data.get("streamerConnectionInfo")
         if isinstance(conn_info, list):
             for node in conn_info:
@@ -177,6 +178,11 @@ class SchwabProvider(DataProvider):
                         break
             if not self._streamer_url:
                 self._streamer_url = conn_info.get("uri") or conn_info.get("streamerSocketUrl")
+        if not self._streamer_url:
+            streamer_info = data.get("streamerInfo")
+            if isinstance(streamer_info, list) and streamer_info:
+                node = streamer_info[0]
+                self._streamer_url = node.get("streamerSocketUrl") or node.get("uri") or node.get("websocketUrl")
         logger.info("Schwab user preference loaded, streamer_url=%s", bool(self._streamer_url))
         return data
 
@@ -200,10 +206,31 @@ class SchwabProvider(DataProvider):
                     return {}
                 return await resp.json()
 
+    async def _trader_get(self, path: str, params: Optional[dict] = None) -> dict:
+        """
+        Authenticated GET to Trader API (Account Access). Path is appended to base + TRADER_API_BASE.
+        On 401 clears token and retries once. On non-2xx returns {}. Uses Schwab-Client-CorrelID header per doc.
+        """
+        token = await self._ensure_token()
+        url = f"{self._base_url}{TRADER_API_BASE}{path}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Schwab-Client-CorrelID": str(uuid.uuid4()),
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params or {}, headers=headers) as resp:
+                if resp.status == 401:
+                    self._access_token = None
+                    return await self._trader_get(path, params)
+                if resp.status != 200:
+                    text = await resp.text()
+                    logger.error("Schwab trader %s failed: %s %s", path, resp.status, text[:200])
+                    return {}
+                return await resp.json()
+
     def _streamer_ids(self) -> dict:
-        """Return SchwabClientCustomerId and SchwabClientCorrelId for Streamer requests."""
+        """Return SchwabClientCustomerId and SchwabClientCorrelId for Streamer requests (streamerSubscriptionKeys or streamerInfo)."""
         keys = (self._user_prefs or {}).get("streamerSubscriptionKeys") or {}
-        # Handle both direct keys and nested "keys" array (TD/Schwab variants)
         customer_id = keys.get("schwabClientCustomerId")
         correl_id = keys.get("schwabClientCorrelId")
         if not customer_id and isinstance(keys.get("keys"), list) and keys["keys"]:
@@ -211,17 +238,31 @@ class SchwabProvider(DataProvider):
             if isinstance(first, dict):
                 customer_id = first.get("schwabClientCustomerId") or first.get("key")
                 correl_id = first.get("schwabClientCorrelId")
+        if not customer_id:
+            streamer_info = (self._user_prefs or {}).get("streamerInfo")
+            if isinstance(streamer_info, list) and streamer_info:
+                node = streamer_info[0]
+                customer_id = node.get("schwabClientCustomerId")
+                correl_id = node.get("schwabClientCorrelId")
         return {
             "SchwabClientCustomerId": customer_id or "",
             "SchwabClientCorrelId": correl_id or str(uuid.uuid4()),
         }
 
     def _channel_function_ids(self) -> dict:
-        """Return SchwabClientChannel and SchwabClientFunctionId for LOGIN (from prefs or defaults)."""
+        """Return SchwabClientChannel and SchwabClientFunctionId for LOGIN (preferences or streamerInfo)."""
         prefs = (self._user_prefs or {}).get("preferences") or {}
+        ch = prefs.get("streamerChannel")
+        fn = prefs.get("streamerFunctionId")
+        if not ch or not fn:
+            streamer_info = (self._user_prefs or {}).get("streamerInfo")
+            if isinstance(streamer_info, list) and streamer_info:
+                node = streamer_info[0]
+                ch = ch or node.get("schwabClientChannel")
+                fn = fn or node.get("schwabClientFunctionId")
         return {
-            "SchwabClientChannel": prefs.get("streamerChannel") or "N9",
-            "SchwabClientFunctionId": prefs.get("streamerFunctionId") or "APIAPP",
+            "SchwabClientChannel": ch or "N9",
+            "SchwabClientFunctionId": fn or "APIAPP",
         }
 
     @staticmethod
@@ -520,3 +561,32 @@ class SchwabProvider(DataProvider):
         """GET /instruments/{cusip_id} by CUSIP. Returns instrument dict."""
         path = INSTRUMENT_CUSIP_PATH.format(cusip_id=cusip_id)
         return await self._market_data_get(path, None)
+
+    # ----- Trader API (Account Access) – data only, no order entry -----
+    # See api_docs/account_access_api.md. Use hashValue from get_account_numbers() for accountNumber if API requires.
+
+    async def get_account_numbers(self) -> dict:
+        """GET /accounts/accountNumbers. Returns list of {accountNumber, hashValue} for use in subsequent account calls."""
+        return await self._trader_get("/accounts/accountNumbers")
+
+    async def get_accounts(self) -> dict:
+        """GET /accounts. Returns linked account(s) with balances and positions for the logged-in user."""
+        return await self._trader_get("/accounts")
+
+    async def get_account(self, account_number: str) -> dict:
+        """GET /accounts/{accountNumber}. Returns balance and positions for one account. Use hashValue if API requires."""
+        path = f"/accounts/{account_number}"
+        return await self._trader_get(path)
+
+    async def get_orders(self, account_number: Optional[str] = None) -> dict:
+        """GET /accounts/{accountNumber}/orders or GET /orders. Returns orders for one account or all accounts."""
+        if account_number:
+            path = f"/accounts/{account_number}/orders"
+        else:
+            path = "/orders"
+        return await self._trader_get(path)
+
+    async def get_transactions(self, account_number: str) -> dict:
+        """GET /accounts/{accountNumber}/transactions. Returns transaction history for the account."""
+        path = f"/accounts/{account_number}/transactions"
+        return await self._trader_get(path)

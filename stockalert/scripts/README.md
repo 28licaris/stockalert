@@ -54,10 +54,6 @@ Optional arguments:
 - `--symbol AAPL` (default: SPY)
 - `--days 2` (default: 1)
 
-This checks:
+This checks token exchange, user principals (streamer), historical bars, all Market Data REST endpoints (quotes, option chains, movers, market hours, instruments), and Trader API account/order data. If user preference fails (e.g. 404), the script continues so Market Data and historical tests still run.
 
-1. Token exchange (refresh token → access token)
-2. User principals (streamer connection info)
-3. Historical 1-min bars for the symbol
-
-You can also run **"Schwab: Live API test (real keys)"** from the VS Code Run and Debug panel (uses SPY, 1 day).
+**TOS/Schwab integration scope (data only):** The integration uses the API specs in `api_docs/` (Account Access, Market Data, Streamer, Security). It covers Market Data REST (quotes, price history, chains, movers, markets, instruments), Trader API (user preference, accounts, orders, transactions), and Streamer (real-time bars). Trading is manual; no order entry is implemented in this phase.

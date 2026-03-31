@@ -59,8 +59,7 @@ async def main(symbol: str, days: int) -> None:
         if ids.get("SchwabClientCustomerId"):
             print(f"   SchwabClientCustomerId: {ids['SchwabClientCustomerId'][:8]}...")
     except Exception as e:
-        print(f"   FAILED: {e}")
-        return
+        print(f"   WARNING: User preference unavailable ({e}); streamer will be skipped. Continuing with Market Data and historical tests.")
 
     print(f"3. Fetching historical bars for {symbol} (last {days} day(s), 1-min)...")
     end = datetime.now(timezone.utc)
@@ -78,7 +77,98 @@ async def main(symbol: str, days: int) -> None:
         print(f"   FAILED: {e}")
         return
 
-    print("\nAll checks passed. Your Schwab keys and refresh token are working.")
+    # 4–11: Market Data REST endpoints (each step logs OK/FAILED, script continues)
+    print("4. GET /quotes (list)...")
+    try:
+        data = await provider.get_quotes([symbol])
+        n = len(data) if isinstance(data, dict) else 0
+        print(f"   OK – {n} quote(s)" if n else "   OK – empty response")
+    except Exception as e:
+        print(f"   FAILED: {e}")
+
+    print("5. GET /{symbol_id}/quotes (single)...")
+    try:
+        data = await provider.get_quote(symbol)
+        has_quote = isinstance(data, dict) and (data.get("quote") or data.get("symbol") or len(data) > 0)
+        print(f"   OK – single quote" if has_quote else "   OK – empty response")
+    except Exception as e:
+        print(f"   FAILED: {e}")
+
+    print("6. GET /chains (option chain)...")
+    try:
+        data = await provider.get_option_chains(symbol, strikeCount=2)
+        has_chain = isinstance(data, dict) and (data.get("callExpDateMap") or data.get("putExpDateMap") or len(data) > 0)
+        print(f"   OK – option chain" if has_chain else "   OK – empty response")
+    except Exception as e:
+        print(f"   FAILED: {e}")
+
+    print("7. GET /expirationchain...")
+    try:
+        data = await provider.get_expiration_chain(symbol)
+        has_exp = isinstance(data, dict) and (data.get("expirationList") or data.get("symbol") or len(data) > 0)
+        print(f"   OK – expiration chain" if has_exp else "   OK – empty response")
+    except Exception as e:
+        print(f"   FAILED: {e}")
+
+    print("8. GET /movers/{symbol_id} ($SPX)...")
+    try:
+        data = await provider.get_movers("$SPX")
+        has_movers = isinstance(data, list) or (isinstance(data, dict) and len(data) > 0)
+        n = len(data) if isinstance(data, list) else (len(data) if isinstance(data, dict) else 0)
+        print(f"   OK – movers (n={n})" if has_movers else "   OK – empty response")
+    except Exception as e:
+        print(f"   FAILED: {e}")
+
+    print("9. GET /markets (all market hours)...")
+    try:
+        data = await provider.get_market_hours()
+        has_hours = isinstance(data, dict) and len(data) > 0
+        print(f"   OK – market hours" if has_hours else "   OK – empty response")
+    except Exception as e:
+        print(f"   FAILED: {e}")
+
+    print("10. GET /markets/equity (single market)...")
+    try:
+        data = await provider.get_market_hours("equity")
+        has_hours = isinstance(data, dict) and len(data) > 0
+        print(f"   OK – equity hours" if has_hours else "   OK – empty response")
+    except Exception as e:
+        print(f"   FAILED: {e}")
+
+    print("11. GET /instruments (symbol-search)...")
+    try:
+        data = await provider.get_instruments([symbol], "symbol-search")
+        has_instr = isinstance(data, dict) and (data.get(symbol) or data.get("instruments") or len(data) > 0)
+        print(f"   OK – instruments" if has_instr else "   OK – empty response")
+    except Exception as e:
+        print(f"   FAILED: {e}")
+
+    print("12. GET /instruments/{cusip} (AAPL CUSIP 037833100)...")
+    try:
+        data = await provider.get_instrument("037833100")
+        has_instr = isinstance(data, dict) and (data.get("cusip") or data.get("symbol") or len(data) > 0)
+        print(f"   OK – instrument by CUSIP" if has_instr else "   OK – empty response")
+    except Exception as e:
+        print(f"   FAILED: {e}")
+
+    print("13. Trader API – GET /accounts/accountNumbers...")
+    try:
+        data = await provider.get_account_numbers()
+        items = data if isinstance(data, list) else (data.get("accountNumbers") or data.get("accounts") or [])
+        n = len(items) if isinstance(items, list) else 0
+        print(f"   OK – {n} account number(s)" if n else "   OK – empty response")
+    except Exception as e:
+        print(f"   FAILED: {e}")
+
+    print("14. Trader API – GET /accounts (balances/positions)...")
+    try:
+        data = await provider.get_accounts()
+        has_accounts = isinstance(data, dict) and (data.get("accounts") or data.get("securitiesAccount") or len(data) > 0)
+        print(f"   OK – accounts data" if has_accounts else "   OK – empty response")
+    except Exception as e:
+        print(f"   FAILED: {e}")
+
+    print("\nAll steps completed. Review any FAILED lines above.")
 
 
 if __name__ == "__main__":

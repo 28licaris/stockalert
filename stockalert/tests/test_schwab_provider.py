@@ -125,6 +125,28 @@ class TestStreamerIdsAndChannel:
         assert ch["SchwabClientChannel"] == "CH1"
         assert ch["SchwabClientFunctionId"] == "FUN1"
 
+    def test_streamer_ids_from_streamer_info(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        p._user_prefs = {
+            "streamerInfo": [
+                {"schwabClientCustomerId": "si_cust", "schwabClientCorrelId": "si_correl"}
+            ]
+        }
+        ids = p._streamer_ids()
+        assert ids["SchwabClientCustomerId"] == "si_cust"
+        assert ids["SchwabClientCorrelId"] == "si_correl"
+
+    def test_channel_function_from_streamer_info(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        p._user_prefs = {
+            "streamerInfo": [
+                {"schwabClientChannel": "S9", "schwabClientFunctionId": "TICKET"}
+            ]
+        }
+        ch = p._channel_function_ids()
+        assert ch["SchwabClientChannel"] == "S9"
+        assert ch["SchwabClientFunctionId"] == "TICKET"
+
 
 class TestEnsureToken:
     """Test _ensure_token with mocked HTTP."""
@@ -194,6 +216,33 @@ class TestGetUserPrincipals:
         with patch("app.providers.schwab_provider.aiohttp.ClientSession", return_value=make_session_cm(session)):
             await p._get_user_principals()
         assert p._streamer_url == "wss://nested.example.com"
+
+    @pytest.mark.asyncio
+    async def test_sets_streamer_url_from_streamer_info(self):
+        """Account Access API returns streamerInfo array (streamerSocketUrl, schwabClientCustomerId, etc.)."""
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        p._access_token = "tok"
+        principals = {
+            "streamerInfo": [
+                {
+                    "streamerSocketUrl": "wss://streamer.schwab.com",
+                    "schwabClientCustomerId": "cust99",
+                    "schwabClientCorrelId": "correl99",
+                    "schwabClientChannel": "N9",
+                    "schwabClientFunctionId": "APIAPP",
+                }
+            ],
+        }
+        session = make_session(get_resp=make_resp(200, principals))
+        with patch("app.providers.schwab_provider.aiohttp.ClientSession", return_value=make_session_cm(session)):
+            await p._get_user_principals()
+        assert p._streamer_url == "wss://streamer.schwab.com"
+        ids = p._streamer_ids()
+        assert ids["SchwabClientCustomerId"] == "cust99"
+        assert ids["SchwabClientCorrelId"] == "correl99"
+        ch = p._channel_function_ids()
+        assert ch["SchwabClientChannel"] == "N9"
+        assert ch["SchwabClientFunctionId"] == "APIAPP"
 
 
 class TestHistoricalDf:
@@ -409,6 +458,58 @@ class TestMarketDataMethods:
         mock_get.assert_called_once()
         path = mock_get.call_args[0][0]
         assert "instruments" in path and "037833100" in path
+
+
+class TestTraderApiMethods:
+    """Test Trader API (Account Access) data methods call _trader_get with correct path."""
+
+    @pytest.mark.asyncio
+    async def test_get_account_numbers(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        with patch.object(p, "_trader_get", new_callable=AsyncMock, return_value=[{"accountNumber": "123", "hashValue": "abc"}]) as mock_get:
+            out = await p.get_account_numbers()
+        assert out == [{"accountNumber": "123", "hashValue": "abc"}]
+        mock_get.assert_called_once_with("/accounts/accountNumbers")
+
+    @pytest.mark.asyncio
+    async def test_get_accounts(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        with patch.object(p, "_trader_get", new_callable=AsyncMock, return_value={"accounts": []}) as mock_get:
+            out = await p.get_accounts()
+        assert out == {"accounts": []}
+        mock_get.assert_called_once_with("/accounts")
+
+    @pytest.mark.asyncio
+    async def test_get_account(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        with patch.object(p, "_trader_get", new_callable=AsyncMock, return_value={"securitiesAccount": {}}) as mock_get:
+            out = await p.get_account("encrypted_hash_123")
+        assert out == {"securitiesAccount": {}}
+        mock_get.assert_called_once_with("/accounts/encrypted_hash_123")
+
+    @pytest.mark.asyncio
+    async def test_get_orders_with_account(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        with patch.object(p, "_trader_get", new_callable=AsyncMock, return_value={"orders": []}) as mock_get:
+            out = await p.get_orders("123")
+        assert out == {"orders": []}
+        mock_get.assert_called_once_with("/accounts/123/orders")
+
+    @pytest.mark.asyncio
+    async def test_get_orders_all_accounts(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        with patch.object(p, "_trader_get", new_callable=AsyncMock, return_value={"orders": []}) as mock_get:
+            out = await p.get_orders(None)
+        assert out == {"orders": []}
+        mock_get.assert_called_once_with("/orders")
+
+    @pytest.mark.asyncio
+    async def test_get_transactions(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        with patch.object(p, "_trader_get", new_callable=AsyncMock, return_value={"transactions": []}) as mock_get:
+            out = await p.get_transactions("456")
+        assert out == {"transactions": []}
+        mock_get.assert_called_once_with("/accounts/456/transactions")
 
 
 class TestStreamLifecycle:
