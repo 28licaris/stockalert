@@ -22,11 +22,20 @@ Store these in `.env` only; never commit.
 - **`SCHWAB_CALLBACK_URL`** – HTTPS callback for the one-time OAuth script. Either (A) a local URL (e.g. `https://127.0.0.1:8080/oauth/callback`) — then you paste the redirect URL after sign-in — or (B) your ngrok URL + `/callback` with `ngrok http 8765` running so the script receives the redirect automatically.
 - **`SCHWAB_BASE_URL`** – Optional; default `https://api.schwabapi.com`.
 
-The provider uses the Trader API for OAuth token exchange and price history, and the Streamer API (WebSocket) for real-time bars. Rate limits: market data (e.g. 120 requests/min); respect limits when backfilling.
+The provider uses the Trader API for OAuth, user preference (streamer connection info), accounts/orders/transactions (read-only), and price history; and the Streamer API (WebSocket) for real-time bars. API specs are in `api_docs/` (Account Access, Market Data, Streamer, Security). Data collection covers monitoring and alerting; trading is manual and order entry is not implemented. Rate limits: market data (e.g. 120 requests/min); respect limits when backfilling.
 
-## Database
+## ClickHouse
 
-- `DATABASE_URL` – Async Postgres URL (default `postgresql+asyncpg://admin:password@localhost:5432/stockalerts`).
+- `CLICKHOUSE_HOST` – default `localhost`.
+- `CLICKHOUSE_PORT` – HTTP port, default `8123`.
+- `CLICKHOUSE_USER` – default `default`.
+- `CLICKHOUSE_PASSWORD` – optional; empty for local dev.
+- `CLICKHOUSE_DATABASE` – default `stocks` (created on startup if missing).
+- `DATA_SOURCE_TAG` – optional string stored on OHLCV rows; if unset, `DATA_PROVIDER` is used when saving bars.
+
+Start ClickHouse locally: `docker compose --profile ch up -d` (see [docker-compose.yml](docker-compose.yml)). If port `8123` is already in use, stop the other service or change `CLICKHOUSE_PORT`.
+
+Integration tests (`tests/test_database_alert.py`): set `CLICKHOUSE_TEST=1` and ensure the credentials in `.env` match your server (many installs require `CLICKHOUSE_PASSWORD`).
 
 ## Technical analysis / divergence
 
