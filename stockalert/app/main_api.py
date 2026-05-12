@@ -16,12 +16,14 @@ from app.db import (
     close_client,
     get_bar_batcher,
     init_schema,
+    migrate_default_watchlist,
     ping,
     reset_bar_batcher,
 )
+from app.services.backfill_service import backfill_service
 from app.services.monitor_manager import monitor_manager
 from app.services.watchlist_service import watchlist_service
-from app.api import routes_monitors, routes_movers, routes_watchlist
+from app.api import routes_backfill, routes_monitors, routes_movers, routes_watchlist
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,15 +41,26 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(init_schema)
     logger.info("✅ ClickHouse schema ready")
 
+    migration = await asyncio.to_thread(migrate_default_watchlist)
+    if migration.get("migrated"):
+        logger.info(
+            "✅ Default watchlist migrated from %s (symbols=%d)",
+            migration.get("source") or "(empty)",
+            len(migration.get("symbols") or []),
+        )
+
     batcher = get_bar_batcher()
     await batcher.start()
     logger.info("✅ OHLCV batch writer started")
 
+    await backfill_service.start()
+    logger.info("✅ Backfill service ready")
+
     await watchlist_service.start()
     status = watchlist_service.status()
     logger.info(
-        "✅ Watchlist service started (provider=%s, symbols=%d)",
-        status["provider"], status["symbol_count"],
+        "✅ Watchlist service started (provider=%s, symbols=%d, streaming=%d)",
+        status["provider"], status["symbol_count"], status.get("subscribed_count", 0),
     )
 
     async def broadcast_signal(signal_data: dict):
@@ -74,6 +87,9 @@ async def lifespan(app: FastAPI):
 
     await watchlist_service.stop()
     logger.info("✅ Watchlist service stopped")
+
+    await backfill_service.stop()
+    logger.info("✅ Backfill service stopped")
 
     await get_bar_batcher().stop()
     reset_bar_batcher()
@@ -102,6 +118,7 @@ app.add_middleware(
 app.include_router(routes_monitors.router, prefix="", tags=["Monitors"])
 app.include_router(routes_watchlist.router, prefix="", tags=["Watchlist"])
 app.include_router(routes_movers.router, prefix="/api", tags=["Movers"])
+app.include_router(routes_backfill.router, prefix="/api", tags=["Backfill"])
 
 try:
     from app.api import routes_signals

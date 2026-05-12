@@ -24,12 +24,26 @@
         <a href="/dashboard" class="text-slate-400 hover:text-slate-200 text-sm">← Dashboard</a>
         <span class="text-slate-700">|</span>
         <h1 class="text-2xl font-semibold font-mono" x-text="symbol"></h1>
-        <span class="text-slate-500 text-sm" x-text="bars.length + ' bars (1m)'"></span>
+        <span class="text-slate-500 text-sm">
+          <span x-text="bars.length + ' bars (' + interval + ')'"></span>
+        </span>
         <span x-show="gapCount > 0"
               class="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300"
               :title="gapDetail">
-          <span x-text="gapCount + ' gap' + (gapCount === 1 ? '' : 's')"></span>
-          (<span x-text="missingMinutes + ' min missing'"></span>)
+          <span x-text="gapCount + ' within-session gap' + (gapCount === 1 ? '' : 's')"></span>
+          <span x-show="missingUnits > 0" x-text="' (' + missingUnits + ' ' + interval + ' bars missing)'"></span>
+        </span>
+        <!-- Backfill state pill -->
+        <span x-show="backfill.quick.state && backfill.quick.state !== 'idle'"
+              class="text-xs px-2 py-0.5 rounded-full"
+              :class="{
+                'bg-sky-500/10 border border-sky-500/30 text-sky-300': ['queued','running'].includes(backfill.quick.state),
+                'bg-emerald-500/10 border border-emerald-500/30 text-emerald-300': backfill.quick.state === 'done',
+                'bg-slate-500/10 border border-slate-500/30 text-slate-300': backfill.quick.state === 'skipped',
+                'bg-rose-500/10 border border-rose-500/30 text-rose-300': backfill.quick.state === 'error',
+              }">
+          <span x-text="'backfill: ' + backfill.quick.state"></span>
+          <span x-show="backfill.quick.state === 'done'" x-text="' (' + backfill.quick.bars + ' bars)'"></span>
         </span>
       </div>
       <div class="flex items-center gap-2">
@@ -41,6 +55,15 @@
                 class="px-3 py-1.5 rounded-lg text-xs font-medium"
                 :class="streaming ? 'bg-slate-800 hover:bg-slate-700 text-slate-200' : 'bg-indigo-500 hover:bg-indigo-400 text-white'">
           <span x-text="streaming ? 'Remove from watchlist' : 'Add to watchlist'"></span>
+        </button>
+        <button @click="fillGaps()" class="px-3 py-1.5 rounded-lg text-xs bg-amber-500/20 border border-amber-500/40 text-amber-200 hover:bg-amber-500/30"
+                :disabled="['queued','running'].includes(backfill.quick.state)">
+          Fill gaps
+        </button>
+        <button @click="deepBackfill()" class="px-3 py-1.5 rounded-lg text-xs bg-slate-800 hover:bg-slate-700"
+                :disabled="['queued','running'].includes(backfill.deep.state)"
+                title="Fetch up to 365 days of history">
+          Deep backfill
         </button>
         <button @click="refresh()" class="px-3 py-1.5 rounded-lg text-xs bg-slate-800 hover:bg-slate-700">Refresh</button>
       </div>
@@ -77,13 +100,52 @@
 
     <!-- CHART -->
     <section class="rounded-xl border border-slate-800 bg-slate-900/60 overflow-hidden">
-      <div class="flex items-center justify-between px-4 py-2 border-b border-slate-800">
-        <div class="text-sm font-medium">1-minute candles</div>
-        <div class="text-xs text-slate-400" x-text="bars.length ? new Date(tsToMs(bars[bars.length-1].ts)).toLocaleString() : ''"></div>
+      <div class="flex items-center justify-between px-4 py-2 border-b border-slate-800 flex-wrap gap-2">
+        <div class="flex items-center gap-2">
+          <div class="text-sm font-medium" x-text="intervalLabel"></div>
+          <!-- Interval selector -->
+          <div class="flex bg-slate-800/60 rounded-lg p-0.5">
+            <template x-for="iv in intervals" :key="iv.id">
+              <button @click="setInterval(iv.id)"
+                      class="px-2 py-0.5 text-[11px] rounded-md transition-colors"
+                      :class="interval === iv.id
+                        ? 'bg-indigo-500 text-white'
+                        : 'text-slate-300 hover:bg-slate-700/50'"
+                      x-text="iv.label"></button>
+            </template>
+          </div>
+          <!-- Lookback selector -->
+          <div class="flex bg-slate-800/60 rounded-lg p-0.5 ml-1">
+            <template x-for="lb in lookbacks" :key="lb.days">
+              <button @click="setLookback(lb.days)"
+                      class="px-2 py-0.5 text-[11px] rounded-md transition-colors"
+                      :class="lookbackDays === lb.days
+                        ? 'bg-indigo-500 text-white'
+                        : 'text-slate-300 hover:bg-slate-700/50'"
+                      x-text="lb.label"></button>
+            </template>
+          </div>
+        </div>
+        <div class="text-xs text-slate-400 flex items-center gap-3">
+          <span x-show="coverage.earliest">
+            DB:
+            <span class="font-mono" x-text="coverage.earliestShort"></span>
+            →
+            <span class="font-mono" x-text="coverage.latestShort"></span>
+            (<span x-text="coverage.bar_count"></span> 1m bars)
+          </span>
+          <span x-show="bars.length"
+                x-text="'last: ' + new Date(tsToMs(bars[bars.length-1].ts)).toLocaleString()"></span>
+        </div>
+      </div>
+      <!-- Schwab coverage hint: explains why deep backfill can't reach > 48 days at 1m -->
+      <div x-show="interval === '1m' && lookbackDays > 48"
+           class="px-4 py-2 text-[11px] text-amber-300 bg-amber-500/5 border-b border-amber-500/20">
+        Schwab caps 1-minute history at ~48 days. For a longer window, switch to 5m / 15m / 1h / 1d.
       </div>
       <div id="chart" class="w-full h-[480px]"></div>
       <div x-show="bars.length === 0" class="px-4 py-12 text-center text-slate-500 text-sm">
-        No bars in ClickHouse for <span class="font-mono" x-text="symbol"></span> yet.
+        No bars in ClickHouse for <span class="font-mono" x-text="symbol"></span> at <span x-text="interval"></span>.
         <span x-show="!streaming">Add this symbol to the watchlist to start streaming.</span>
       </div>
     </section>
@@ -114,8 +176,8 @@
                   <span x-text="new Date(tsToMs(b.ts)).toLocaleString()"></span>
                   <span x-show="gapBefore(b) > 0"
                         class="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30"
-                        :title="gapBefore(b) + ' minute(s) of bars missing before this row'">
-                    +<span x-text="gapBefore(b)"></span>m gap
+                        :title="(gapBefore(b)) + ' ' + interval + ' bar(s) missing before this row (within-session gap)'">
+                    +<span x-text="gapBefore(b)"></span> <span x-text="interval"></span> gap
                   </span>
                 </td>
                 <td class="px-5 py-2 text-right font-mono" x-text="fmtPrice(b.open)"></td>
@@ -150,9 +212,43 @@
         symbol,
         bars: [],
         watchlistSymbols: [],
+        backfill: {
+          quick: { state: 'idle' },
+          deep: { state: 'idle' },
+          intraday: { state: 'idle' },
+          daily: { state: 'idle' },
+        },
+        coverage: { earliest: null, latest: null, bar_count: 0, earliestShort: '', latestShort: '' },
+
+        // Interval (storage timeframe) + lookback window. These drive both the
+        // /api/bars query and gap-detection heuristics. The set of intervals
+        // mirrors `queries.SUPPORTED_INTERVALS` in the backend.
+        interval: '1m',
+        lookbackDays: 30,
+        intervals: [
+          { id: '1m',  label: '1m',  minutes: 1 },
+          { id: '5m',  label: '5m',  minutes: 5 },
+          { id: '15m', label: '15m', minutes: 15 },
+          { id: '30m', label: '30m', minutes: 30 },
+          { id: '1h',  label: '1h',  minutes: 60 },
+          { id: '4h',  label: '4h',  minutes: 240 },
+          { id: '1d',  label: '1d',  minutes: 60 * 24 },
+        ],
+        lookbacks: [
+          { days: 1,   label: '1d'  },
+          { days: 5,   label: '5d'  },
+          { days: 30,  label: '30d' },
+          { days: 90,  label: '90d' },
+          { days: 180, label: '180d'},
+          { days: 365, label: '1y'  },
+        ],
+
         _chart: null,
         _candleSeries: null,
         _volumeSeries: null,
+        _backfillTimer: null,
+        _autoEnqueued: false,
+        _refreshTimer: null,
 
         get streaming() { return this.watchlistSymbols.includes(this.symbol); },
         get latest() { return this.bars.length ? this.bars[this.bars.length - 1] : null; },
@@ -174,37 +270,69 @@
         get recentBars() {
           return this.bars.slice(-50).slice().reverse();
         },
-        // Detect gaps in the 1-minute series (any step > 60s).
+        // Interval helpers
+        get intervalMinutes() {
+          const m = (this.intervals.find(x => x.id === this.interval) || {}).minutes;
+          return m || 1;
+        },
+        get intervalLabel() {
+          const m = (this.intervals.find(x => x.id === this.interval) || {}).label || this.interval;
+          return `${m} candles`;
+        },
+
+        // A "real" gap is one *within* a single session: more than one interval
+        // step apart, but less than the typical overnight gap. Anything >= 4
+        // hours is treated as an overnight/weekend/holiday boundary and ignored
+        // because Schwab does not stream RTH-only data; depending on the
+        // symbol we'll have pre-market (04:00-09:30 ET) and after-hours
+        // (16:00-20:00 ET), so true "session windows" are 16h long for stocks,
+        // ~24h for ETFs.
+        //
+        // For daily bars (interval >= 1 day), we just don't flag gaps -
+        // weekends/holidays are expected.
+        _isOvernightGap(prevMs, curMs) {
+          if (this.intervalMinutes >= 60 * 24) return true; // daily: never flag
+          const stepMin = (curMs - prevMs) / 60000;
+          // 4h+ between candles -> almost certainly a session boundary.
+          return stepMin >= 4 * 60;
+        },
+
         get _gaps() {
           const out = [];
+          const step = this.intervalMinutes;
           for (let i = 1; i < this.bars.length; i++) {
             const prev = this.tsToMs(this.bars[i - 1].ts);
             const cur = this.tsToMs(this.bars[i].ts);
             const stepMin = Math.round((cur - prev) / 60000);
-            if (stepMin > 1) {
-              out.push({
-                from: prev, to: cur,
-                missing: stepMin - 1,
-              });
+            // Expected step is `intervalMinutes`; anything bigger that isn't
+            // an overnight/weekend boundary is a real within-session gap.
+            if (stepMin > step && !this._isOvernightGap(prev, cur)) {
+              const missingUnits = Math.max(1, Math.round(stepMin / step) - 1);
+              out.push({ from: prev, to: cur, missing: missingUnits });
             }
           }
           return out;
         },
         get gapCount() { return this._gaps.length; },
-        get missingMinutes() { return this._gaps.reduce((a, g) => a + g.missing, 0); },
+        get missingUnits() { return this._gaps.reduce((a, g) => a + g.missing, 0); },
         get gapDetail() {
           if (!this._gaps.length) return '';
           return this._gaps.slice(0, 5).map(g =>
-            `${new Date(g.from).toLocaleTimeString()} → ${new Date(g.to).toLocaleTimeString()} (${g.missing} min)`
+            `${new Date(g.from).toLocaleString()} → ${new Date(g.to).toLocaleString()} (${g.missing} bar${g.missing === 1 ? '' : 's'} missing)`
           ).join('\n');
         },
-        // Returns the size (in minutes) of the gap *before* this row, if any.
+        // Returns the size (in *interval-units*) of the within-session gap
+        // immediately before this row, or 0 if the previous step is normal /
+        // an overnight boundary.
         gapBefore(b) {
           const i = this.bars.findIndex(x => x.ts === b.ts);
           if (i <= 0) return 0;
           const prev = this.tsToMs(this.bars[i - 1].ts);
           const cur = this.tsToMs(this.bars[i].ts);
-          return Math.max(0, Math.round((cur - prev) / 60000) - 1);
+          if (this._isOvernightGap(prev, cur)) return 0;
+          const step = this.intervalMinutes;
+          const stepMin = Math.round((cur - prev) / 60000);
+          return Math.max(0, Math.round(stepMin / step) - 1);
         },
 
         fmtNum(n) {
@@ -299,16 +427,63 @@
 
         async refresh() {
           try {
+            const url = `/api/bars?symbol=${encodeURIComponent(this.symbol)}`
+              + `&interval=${encodeURIComponent(this.interval)}`
+              + `&lookback_days=${this.lookbackDays}`
+              + `&limit=2000`;
             const [bars, wl] = await Promise.all([
-              this.getJSON(`/api/bars?symbol=${encodeURIComponent(this.symbol)}&limit=500`),
+              this.getJSON(url),
               this.getJSON('/watchlist'),
             ]);
-            this.bars = bars; // already ascending from list_bars_desc(reversed)
+            this.bars = bars;
             this.watchlistSymbols = wl.symbols || [];
             this.renderChart();
+            // Coverage info comes from a separate endpoint; refresh it lazily
+            // so the banner stays in sync with the chosen lookback.
+            this.loadCoverage();
           } catch (e) {
             console.error(e);
           }
+        },
+
+        async loadCoverage() {
+          try {
+            const data = await this.getJSON(
+              `/api/backfill/coverage?symbol=${encodeURIComponent(this.symbol)}&days=${this.lookbackDays}`
+            );
+            const earliest = data.earliest ? new Date(data.earliest) : null;
+            const latest = data.latest ? new Date(data.latest) : null;
+            this.coverage = {
+              earliest: data.earliest,
+              latest: data.latest,
+              bar_count: data.bar_count,
+              earliestShort: earliest ? earliest.toLocaleDateString() : '',
+              latestShort: latest ? latest.toLocaleDateString() : '',
+            };
+          } catch (e) {
+            // non-fatal
+          }
+        },
+
+        setInterval(id) {
+          if (this.interval === id) return;
+          this.interval = id;
+          // Persist user pref so reloads keep their selection.
+          try { localStorage.setItem('chart.interval', id); } catch (_) {}
+          // For daily we widen the lookback automatically so the chart shows
+          // something useful out of the box.
+          if (id === '1d' && this.lookbackDays < 90) {
+            this.lookbackDays = 365;
+            try { localStorage.setItem('chart.lookback', String(this.lookbackDays)); } catch (_) {}
+          }
+          this.refresh();
+        },
+
+        setLookback(days) {
+          if (this.lookbackDays === days) return;
+          this.lookbackDays = days;
+          try { localStorage.setItem('chart.lookback', String(days)); } catch (_) {}
+          this.refresh();
         },
 
         async toggleSubscribe() {
@@ -321,11 +496,102 @@
           }
         },
 
+        async fillGaps() {
+          try {
+            await this.postJSON('/api/backfill', { symbols: [this.symbol], days: 30 });
+            this.startBackfillPolling();
+          } catch (e) {
+            alert('Backfill failed: ' + e.message);
+          }
+        },
+
+        async deepBackfill() {
+          if (!confirm(`Run deep backfill for ${this.symbol} (up to 365 days)? This may take a few minutes.`)) return;
+          try {
+            await this.postJSON('/api/backfill/deep', { symbols: [this.symbol], days: 365 });
+            this.startBackfillPolling();
+          } catch (e) {
+            alert('Deep backfill failed: ' + e.message);
+          }
+        },
+
+        async pollBackfill() {
+          try {
+            const data = await this.getJSON(`/api/backfill/status?symbol=${encodeURIComponent(this.symbol)}`);
+            const s = data[this.symbol] || {};
+            this.backfill = {
+              quick: s.quick || { state: 'idle' },
+              deep: s.deep || { state: 'idle' },
+              intraday: s.intraday || { state: 'idle' },
+              daily: s.daily || { state: 'idle' },
+            };
+            const stillBusy = ['queued', 'running'].some(b =>
+              [this.backfill.quick.state, this.backfill.deep.state,
+               this.backfill.intraday.state, this.backfill.daily.state].includes(b)
+            );
+            if (!stillBusy && this._backfillTimer) {
+              clearInterval(this._backfillTimer);
+              this._backfillTimer = null;
+              // Final refresh once jobs finish so the chart shows new bars.
+              await this.refresh();
+            }
+          } catch (e) {
+            // Non-fatal; the dashboard keeps polling.
+          }
+        },
+
+        startBackfillPolling() {
+          if (this._backfillTimer) return;
+          this.pollBackfill();
+          this._backfillTimer = setInterval(() => this.pollBackfill(), 2000);
+        },
+
+        // Heuristic: if the symbol page loads with no data or with gaps, quietly
+        // kick off a quick (1m) backfill. We ALSO always enqueue intraday (5m)
+        // + daily backfills so 5m/15m/30m/1h/4h/1d charts have long history
+        // available the next time the user picks that interval. All paths are
+        // idempotent on the server.
+        async maybeAutoBackfill() {
+          if (this._autoEnqueued) return;
+          this._autoEnqueued = true;
+          const noData = this.bars.length === 0;
+          const hasGaps = this.gapCount > 0;
+          try {
+            // Intraday (5m, ~270d) and Daily (2y) fire on every first visit;
+            // server-side coverage check turns them into no-ops if already done.
+            await this.postJSON('/api/backfill/intraday', { symbols: [this.symbol], days: 270 });
+            await this.postJSON('/api/backfill/daily',    { symbols: [this.symbol], days: 365 * 2 });
+            // Quick 1-min only fires when something is missing/gappy on the
+            // currently-displayed interval.
+            if (noData || hasGaps) {
+              await this.postJSON('/api/backfill', { symbols: [this.symbol], days: 30 });
+            }
+            this.startBackfillPolling();
+          } catch (e) {
+            console.warn('Auto-backfill failed:', e);
+          }
+        },
+
         init() {
           document.title = `${this.symbol} · StockAlert`;
+          // Restore prior interval / lookback choice.
+          try {
+            const iv = localStorage.getItem('chart.interval');
+            if (iv && this.intervals.some(x => x.id === iv)) this.interval = iv;
+            const lb = parseInt(localStorage.getItem('chart.lookback') || '', 10);
+            if (lb && this.lookbacks.some(x => x.days === lb)) this.lookbackDays = lb;
+          } catch (_) {}
+
           this.buildChart();
-          this.refresh();
-          setInterval(() => this.refresh(), 10000);
+          this.refresh().then(() => this.maybeAutoBackfill());
+          // Periodic refresh - 10s for intraday, 60s for daily (no point hammering)
+          this._refreshTimer = window.setInterval(
+            () => this.refresh(),
+            this.intervalMinutes >= 60 * 24 ? 60000 : 10000,
+          );
+          // One initial backfill-status poll so the badge shows in-flight work
+          // (e.g. the watchlist-startup backfill).
+          this.pollBackfill();
         },
       };
     }

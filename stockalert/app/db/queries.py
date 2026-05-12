@@ -16,7 +16,23 @@ def _now_version() -> int:
     return time.time_ns() // 1_000_000
 
 
-def insert_bars_batch(rows: List[dict]) -> None:
+_INTRADAY_COLUMNS = [
+    "symbol",
+    "timestamp",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "vwap",
+    "trade_count",
+    "source",
+    "version",
+]
+
+
+def _insert_intraday(table: str, rows: List[dict]) -> None:
+    """Generic 1-min / 5-min insert; both tables share the same column layout."""
     if not rows:
         return
     client = get_client()
@@ -38,23 +54,21 @@ def insert_bars_batch(rows: List[dict]) -> None:
                 int(r.get("version") or ver),
             ]
         )
-    client.insert(
-        "ohlcv_1m",
-        data,
-        column_names=[
-            "symbol",
-            "timestamp",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "vwap",
-            "trade_count",
-            "source",
-            "version",
-        ],
-    )
+    client.insert(table, data, column_names=_INTRADAY_COLUMNS)
+
+
+def insert_bars_batch(rows: List[dict]) -> None:
+    """Insert 1-min bars into `ohlcv_1m`."""
+    _insert_intraday("ohlcv_1m", rows)
+
+
+def insert_5m_bars_batch(rows: List[dict]) -> None:
+    """Insert native 5-min bars into `ohlcv_5m`."""
+    _insert_intraday("ohlcv_5m", rows)
+
+
+async def insert_5m_bars_batch_async(rows: List[dict]) -> None:
+    await asyncio.to_thread(insert_5m_bars_batch, rows)
 
 
 def insert_signals_batch(rows: List[dict]) -> None:
@@ -150,6 +164,195 @@ def list_bars_desc(symbol: str, limit: int) -> List[dict]:
                 "high": h,
                 "low": l,
                 "close": c,
+                "volume": int(v) if v is not None else 0,
+            }
+        )
+    return list(reversed(out))
+
+
+# Map interval strings to ClickHouse INTERVAL expressions. We keep the storage
+# tables at fixed timeframes (1-min and 1-day) and aggregate on read for the
+# intra-day intervals; `toStartOfInterval` is O(rows) and fast.
+SUPPORTED_INTERVALS: dict[str, str] = {
+    "1m":  "INTERVAL 1 MINUTE",
+    "5m":  "INTERVAL 5 MINUTE",
+    "15m": "INTERVAL 15 MINUTE",
+    "30m": "INTERVAL 30 MINUTE",
+    "1h":  "INTERVAL 1 HOUR",
+    "4h":  "INTERVAL 4 HOUR",
+    "1d":  "INTERVAL 1 DAY",
+}
+
+
+def insert_daily_bars_batch(rows: List[dict]) -> None:
+    if not rows:
+        return
+    client = get_client()
+    ver = _now_version()
+    data: List[List[Any]] = []
+    for r in rows:
+        data.append(
+            [
+                r["symbol"],
+                r["timestamp"],
+                float(r["open"]),
+                float(r["high"]),
+                float(r["low"]),
+                float(r["close"]),
+                float(r["volume"]),
+                str(r.get("source") or ""),
+                int(r.get("version") or ver),
+            ]
+        )
+    client.insert(
+        "ohlcv_daily",
+        data,
+        column_names=[
+            "symbol", "timestamp", "open", "high", "low", "close",
+            "volume", "source", "version",
+        ],
+    )
+
+
+async def insert_daily_bars_batch_async(rows: List[dict]) -> None:
+    await asyncio.to_thread(insert_daily_bars_batch, rows)
+
+
+def list_daily_bars(
+    symbol: str,
+    start: Optional[datetime],
+    end: Optional[datetime],
+    limit: int,
+) -> List[dict]:
+    """Read native daily bars from `ohlcv_daily` (no resampling)."""
+    where_parts = ["symbol = {sym:String}"]
+    params: dict = {"sym": symbol.upper(), "lim": int(limit)}
+    if start is not None:
+        where_parts.append("timestamp >= {start:DateTime64(3)}")
+        params["start"] = start
+    if end is not None:
+        where_parts.append("timestamp <= {end:DateTime64(3)}")
+        params["end"] = end
+    sql = f"""
+        SELECT timestamp, open, high, low, close, volume
+        FROM ohlcv_daily FINAL
+        WHERE {' AND '.join(where_parts)}
+        ORDER BY timestamp DESC
+        LIMIT {{lim:UInt32}}
+    """
+    result = get_client().query(sql, parameters=params)
+    out: List[dict] = []
+    for row in result.result_rows:
+        ts, o, h, l, c, v = row
+        out.append({
+            "ts": ts,
+            "open": float(o) if o is not None else None,
+            "high": float(h) if h is not None else None,
+            "low": float(l) if l is not None else None,
+            "close": float(c) if c is not None else None,
+            "volume": int(v) if v is not None else 0,
+        })
+    return list(reversed(out))
+
+
+def daily_coverage(symbol: str, start: datetime, end: datetime) -> dict:
+    """Coverage report against `ohlcv_daily`. Same shape as `coverage()`."""
+    result = get_client().query(
+        """
+        SELECT min(timestamp), max(timestamp), count()
+        FROM ohlcv_daily FINAL
+        WHERE symbol = {sym:String}
+          AND timestamp >= {start:DateTime64(3)}
+          AND timestamp <= {end:DateTime64(3)}
+        """,
+        parameters={"sym": symbol.upper(), "start": start, "end": end},
+    )
+    if not result.result_rows:
+        return {"symbol": symbol.upper(), "start": start, "end": end,
+                "earliest": None, "latest": None, "bar_count": 0}
+    earliest, latest, n = result.result_rows[0]
+    n_int = int(n) if n is not None else 0
+    return {
+        "symbol": symbol.upper(),
+        "start": start, "end": end,
+        "earliest": earliest if n_int > 0 else None,
+        "latest": latest if n_int > 0 else None,
+        "bar_count": n_int,
+    }
+
+
+async def daily_coverage_async(symbol: str, start: datetime, end: datetime) -> dict:
+    return await asyncio.to_thread(daily_coverage, symbol, start, end)
+
+
+def list_bars_resampled(
+    symbol: str,
+    interval: str,
+    start: Optional[datetime],
+    end: Optional[datetime],
+    limit: int,
+    *,
+    source_table: str = "ohlcv_1m",
+) -> List[dict]:
+    """
+    Return OHLCV bars resampled to `interval` (e.g. '1m', '5m', '1h', '1d')
+    from the given `source_table` (`ohlcv_1m` or `ohlcv_5m`).
+
+    Aggregation rules (the only correct ones for candle data):
+      - open  = `argMin(open, timestamp)`  (first bar's open)
+      - high  = `max(high)`
+      - low   = `min(low)`
+      - close = `argMax(close, timestamp)` (last bar's close)
+      - volume = `sum(volume)`
+    """
+    if source_table not in ("ohlcv_1m", "ohlcv_5m"):
+        raise ValueError(f"Unsupported source_table: {source_table!r}")
+    if interval not in SUPPORTED_INTERVALS:
+        raise ValueError(f"Unsupported interval: {interval!r}")
+    # 1m can only come from ohlcv_1m (5m can't be downsampled).
+    if interval == "1m" and source_table != "ohlcv_1m":
+        raise ValueError("interval '1m' requires source_table='ohlcv_1m'")
+    if interval == "1m" and start is None and end is None:
+        return list_bars_desc(symbol, limit)
+
+    where_parts = ["symbol = {sym:String}"]
+    params: dict = {"sym": symbol.upper(), "lim": int(limit)}
+    if start is not None:
+        where_parts.append("timestamp >= {start:DateTime64(3)}")
+        params["start"] = start
+    if end is not None:
+        where_parts.append("timestamp <= {end:DateTime64(3)}")
+        params["end"] = end
+    where_clause = " AND ".join(where_parts)
+    interval_expr = SUPPORTED_INTERVALS[interval]
+
+    # ORDER BY ts DESC + LIMIT keeps the NEWEST N rows; reverse in Python for
+    # ascending output.
+    sql = f"""
+        SELECT
+            toStartOfInterval(timestamp, {interval_expr}) AS bucket_ts,
+            argMin(open, timestamp)  AS o,
+            max(high)                AS h,
+            min(low)                 AS l,
+            argMax(close, timestamp) AS c,
+            sum(volume)              AS v
+        FROM {source_table} FINAL
+        WHERE {where_clause}
+        GROUP BY bucket_ts
+        ORDER BY bucket_ts DESC
+        LIMIT {{lim:UInt32}}
+    """
+    result = get_client().query(sql, parameters=params)
+    out: List[dict] = []
+    for row in result.result_rows:
+        ts, o, h, l, c, v = row
+        out.append(
+            {
+                "ts": ts,
+                "open": float(o) if o is not None else None,
+                "high": float(h) if h is not None else None,
+                "low": float(l) if l is not None else None,
+                "close": float(c) if c is not None else None,
                 "volume": int(v) if v is not None else 0,
             }
         )
@@ -266,3 +469,79 @@ def latest_bar_per_symbol(symbols: List[str]) -> List[dict]:
 
 async def latest_bar_per_symbol_async(symbols: List[str]) -> List[dict]:
     return await asyncio.to_thread(latest_bar_per_symbol, symbols)
+
+
+def coverage(symbol: str, start: datetime, end: datetime) -> dict:
+    """
+    Return min/max timestamp and bar count for `symbol` in `[start, end]`.
+
+    Used by the backfill service to (a) short-circuit redundant fetches and
+    (b) compute the gap between requested and existing coverage.
+    """
+    client = get_client()
+    result = client.query(
+        """
+        SELECT
+            min(timestamp) AS earliest,
+            max(timestamp) AS latest,
+            count() AS bar_count
+        FROM ohlcv_1m FINAL
+        WHERE symbol = {sym:String}
+          AND timestamp >= {start:DateTime64(3)}
+          AND timestamp <= {end:DateTime64(3)}
+        """,
+        parameters={"sym": symbol.upper(), "start": start, "end": end},
+    )
+    if not result.result_rows:
+        return {
+            "symbol": symbol.upper(),
+            "start": start,
+            "end": end,
+            "earliest": None,
+            "latest": None,
+            "bar_count": 0,
+        }
+    earliest, latest, n = result.result_rows[0]
+    n_int = int(n) if n is not None else 0
+    return {
+        "symbol": symbol.upper(),
+        "start": start,
+        "end": end,
+        "earliest": earliest if n_int > 0 else None,
+        "latest": latest if n_int > 0 else None,
+        "bar_count": n_int,
+    }
+
+
+async def coverage_async(symbol: str, start: datetime, end: datetime) -> dict:
+    return await asyncio.to_thread(coverage, symbol, start, end)
+
+
+def coverage_5m(symbol: str, start: datetime, end: datetime) -> dict:
+    """Coverage report against `ohlcv_5m`. Same shape as `coverage()`."""
+    result = get_client().query(
+        """
+        SELECT min(timestamp), max(timestamp), count()
+        FROM ohlcv_5m FINAL
+        WHERE symbol = {sym:String}
+          AND timestamp >= {start:DateTime64(3)}
+          AND timestamp <= {end:DateTime64(3)}
+        """,
+        parameters={"sym": symbol.upper(), "start": start, "end": end},
+    )
+    if not result.result_rows:
+        return {"symbol": symbol.upper(), "start": start, "end": end,
+                "earliest": None, "latest": None, "bar_count": 0}
+    earliest, latest, n = result.result_rows[0]
+    n_int = int(n) if n is not None else 0
+    return {
+        "symbol": symbol.upper(),
+        "start": start, "end": end,
+        "earliest": earliest if n_int > 0 else None,
+        "latest": latest if n_int > 0 else None,
+        "bar_count": n_int,
+    }
+
+
+async def coverage_5m_async(symbol: str, start: datetime, end: datetime) -> dict:
+    return await asyncio.to_thread(coverage_5m, symbol, start, end)

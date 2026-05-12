@@ -7,6 +7,7 @@ depend on Schwab's exact field naming (which varies across doc revisions).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -36,19 +37,45 @@ INDEX_ALIASES = {
     "COMPX": "$COMPX", "NASDAQ_COMPOSITE": "$COMPX",
 }
 
+# Pseudo-indexes expand to a set of real Schwab indexes that we call in parallel
+# and merge. Each index is capped at 10 rows by Schwab, but the *pools differ*
+# (e.g. $SPX returns mega-caps, $COMPX returns small-caps), so fan-out is the
+# only way to get more than 10 unique candidates.
+INDEX_FANOUT = {
+    "ALL_US": ["$SPX", "$DJI", "$COMPX", "NYSE", "NASDAQ"],
+    "ALL_LARGECAP": ["$SPX", "$DJI"],
+    "ALL_EXCHANGES": ["NYSE", "NASDAQ", "OTCBB"],
+}
 
-def _normalize_index(raw: str) -> str:
-    s = (raw or "").strip().upper()
-    s = INDEX_ALIASES.get(s, s)
-    if s not in VALID_INDEXES:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"invalid index '{raw}'. Allowed: "
-                + ", ".join(sorted(VALID_INDEXES))
-            ),
-        )
-    return s
+
+def _resolve_indexes(raw: str) -> list[str]:
+    """
+    Accept a single index ($SPX), a friendly alias (DOW), a pseudo-index (ALL_US),
+    or a comma-separated list (e.g. '$SPX,$DJI,$COMPX'). Returns a deduped list
+    of real Schwab index symbols.
+    """
+    tokens = [t.strip().upper() for t in (raw or "").split(",") if t.strip()]
+    if not tokens:
+        raise HTTPException(status_code=400, detail="index is required")
+
+    resolved: list[str] = []
+    for tok in tokens:
+        # Expand pseudo-indexes first.
+        if tok in INDEX_FANOUT:
+            for inner in INDEX_FANOUT[tok]:
+                if inner not in resolved:
+                    resolved.append(inner)
+            continue
+        canonical = INDEX_ALIASES.get(tok, tok)
+        if canonical not in VALID_INDEXES:
+            allowed = sorted(VALID_INDEXES) + sorted(INDEX_FANOUT.keys())
+            raise HTTPException(
+                status_code=400,
+                detail=f"invalid index '{tok}'. Allowed: " + ", ".join(allowed),
+            )
+        if canonical not in resolved:
+            resolved.append(canonical)
+    return resolved
 
 
 def _pick(d: dict, *keys: str) -> Any:
@@ -89,8 +116,15 @@ def _normalize_mover(row: dict) -> dict:
 async def get_movers(
     index: str = Query(
         "$SPX",
-        description="Index symbol. One of $DJI, $COMPX, $SPX, NYSE, NASDAQ, OTCBB, "
-                    "INDEX_ALL, EQUITY_ALL, OPTION_ALL, OPTION_PUT, OPTION_CALL.",
+        description=(
+            "Index symbol(s). One of: $DJI, $COMPX, $SPX, NYSE, NASDAQ, OTCBB, "
+            "INDEX_ALL, EQUITY_ALL, OPTION_ALL, OPTION_PUT, OPTION_CALL. "
+            "Or a comma-separated list ('$SPX,$DJI'), or a pseudo-index: "
+            "ALL_US (fans out to $SPX,$DJI,$COMPX,NYSE,NASDAQ), "
+            "ALL_LARGECAP ($SPX,$DJI), ALL_EXCHANGES (NYSE,NASDAQ,OTCBB). "
+            "Schwab caps each individual index at 10 rows, so fan-out is the "
+            "only way to get more than 10 unique movers."
+        ),
     ),
     sort: str = Query(
         "PERCENT_CHANGE_UP",
@@ -100,15 +134,17 @@ async def get_movers(
         0,
         description="Lookback window in minutes (0 = since open). Allowed: 0,1,5,10,30,60.",
     ),
-    limit: int = Query(10, ge=1, le=50, description="Truncate the returned list."),
+    limit: int = Query(10, ge=1, le=100, description="Truncate the returned list."),
 ):
     """
-    Return the top movers for an index/exchange via Schwab Market Data API.
+    Return the top movers for one or more indexes via Schwab Market Data API.
 
-    The response is stable regardless of which Schwab field-naming variant
-    is returned upstream, so it is safe to consume from the dashboard or an MCP tool.
+    Schwab's `/movers/{index}` endpoint hard-caps each index at 10 rows. We fan
+    out across the resolved index list in parallel, dedupe by symbol, then
+    filter+sort according to `sort`. The response is stable regardless of which
+    Schwab field-naming variant the upstream returns.
     """
-    idx = _normalize_index(index)
+    indexes = _resolve_indexes(index)
     sort_u = sort.strip().upper()
     if sort_u not in VALID_SORTS:
         raise HTTPException(
@@ -130,25 +166,44 @@ async def get_movers(
                    "Set DATA_PROVIDER=schwab and configure SCHWAB_* credentials.",
         )
 
-    try:
-        raw = await provider.get_movers(idx, sort=sort_u, frequency=frequency)
-    except Exception as e:
-        logger.error("get_movers failed: %s", e, exc_info=True)
-        raise HTTPException(status_code=502, detail=f"Schwab movers call failed: {e}")
+    async def _fetch(one_idx: str) -> tuple[str, list[dict], str | None]:
+        try:
+            raw = await provider.get_movers(one_idx, sort=sort_u, frequency=frequency)
+            rows = (raw or {}).get("screeners") or []
+            return one_idx, [_normalize_mover(r) for r in rows if isinstance(r, dict)], None
+        except Exception as e:
+            logger.warning("get_movers(%s) failed: %s", one_idx, e)
+            return one_idx, [], str(e)
 
-    screeners = (raw or {}).get("screeners") or []
-    movers = [_normalize_mover(r) for r in screeners if isinstance(r, dict)]
+    results = await asyncio.gather(*[_fetch(i) for i in indexes])
 
-    # Schwab's `sort` param is unreliable: it returns the top-N by magnitude of
-    # move regardless of direction, so "PERCENT_CHANGE_UP" can include losers.
-    # Filter & re-sort here so the response actually matches `sort`.
+    # Dedup by symbol, but remember which index(es) each ticker came from.
+    by_symbol: dict[str, dict] = {}
+    per_index_counts: dict[str, int] = {}
+    errors: dict[str, str] = {}
+    for one_idx, rows, err in results:
+        per_index_counts[one_idx] = len(rows)
+        if err:
+            errors[one_idx] = err
+        for row in rows:
+            sym = (row.get("symbol") or "").upper()
+            if not sym:
+                continue
+            if sym not in by_symbol:
+                row["source_indexes"] = [one_idx]
+                by_symbol[sym] = row
+            else:
+                by_symbol[sym]["source_indexes"].append(one_idx)
+
+    movers = list(by_symbol.values())
+    upstream_count = len(movers)
+
     def _num(x: Any) -> float:
         try:
             return float(x) if x is not None else 0.0
         except (TypeError, ValueError):
             return 0.0
 
-    upstream_count = len(movers)
     if sort_u == "PERCENT_CHANGE_UP":
         movers = [m for m in movers if _num(m.get("percent_change")) > 0]
         movers.sort(key=lambda m: _num(m.get("percent_change")), reverse=True)
@@ -163,12 +218,15 @@ async def get_movers(
     movers = movers[:limit]
 
     return {
-        "index": idx,
+        "index": indexes[0] if len(indexes) == 1 else ",".join(indexes),
+        "indexes": indexes,
         "sort": sort_u,
         "frequency": frequency,
         "count": len(movers),
         "upstream_count": upstream_count,
         "filtered_out": max(0, upstream_count - len(movers)),
+        "per_index_counts": per_index_counts,
+        "errors": errors or None,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "movers": movers,
     }

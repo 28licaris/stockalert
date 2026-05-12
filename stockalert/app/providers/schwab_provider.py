@@ -671,30 +671,38 @@ class SchwabProvider(DataProvider):
         timeframe: str = "1Min",
     ) -> pd.DataFrame:
         """Fetch historical bars from Market Data API price history endpoint."""
-        if timeframe == "1Min":
-            period_type, period, freq_type, freq = "day", 10, "minute", 1
-        elif timeframe == "5Min":
-            period_type, period, freq_type, freq = "day", 10, "minute", 5
-        elif timeframe == "15Min":
-            period_type, period, freq_type, freq = "day", 10, "minute", 15
-        elif timeframe == "30Min":
-            period_type, period, freq_type, freq = "day", 10, "minute", 30
-        elif timeframe in ("1D", "1day", "day"):
-            period_type, period, freq_type, freq = "month", 1, "daily", 1
+        tf_lower = (timeframe or "").lower()
+        if tf_lower in ("1min", "1m"):
+            period_type, freq_type, freq = "day", "minute", 1
+        elif tf_lower in ("5min", "5m"):
+            period_type, freq_type, freq = "day", "minute", 5
+        elif tf_lower in ("15min", "15m"):
+            period_type, freq_type, freq = "day", "minute", 15
+        elif tf_lower in ("30min", "30m"):
+            period_type, freq_type, freq = "day", "minute", 30
+        elif tf_lower in ("1d", "1day", "day", "daily"):
+            period_type, freq_type, freq = "month", "daily", 1
+        elif tf_lower in ("1w", "1week", "week", "weekly"):
+            period_type, freq_type, freq = "year", "weekly", 1
+        elif tf_lower in ("1mo", "1month", "month", "monthly"):
+            period_type, freq_type, freq = "year", "monthly", 1
         else:
-            period_type, period, freq_type, freq = "day", 10, "minute", 1
+            period_type, freq_type, freq = "day", "minute", 1
 
         start_ms = int(start.timestamp() * 1000) if start.tzinfo else int(start.replace(tzinfo=timezone.utc).timestamp() * 1000)
         end_ms = int(end.timestamp() * 1000) if end.tzinfo else int(end.replace(tzinfo=timezone.utc).timestamp() * 1000)
 
+        # NOTE: Schwab's pricehistory only honors startDate/endDate when `period`
+        # is OMITTED. Sending both makes it fall back to the default 10-day
+        # window from "now", which silently breaks chunked backfill.
         params = {
             "symbol": symbol.upper(),
             "periodType": period_type,
-            "period": period,
             "frequencyType": freq_type,
             "frequency": freq,
-            "startTime": start_ms,
-            "endTime": end_ms,
+            "startDate": start_ms,
+            "endDate": end_ms,
+            "needExtendedHoursData": "true",
         }
         data = await self._market_data_get(PRICE_HISTORY_PATH, params)
         if not data:

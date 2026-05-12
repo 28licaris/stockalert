@@ -105,15 +105,23 @@
         </div>
         <div class="flex items-center gap-2 text-xs">
           <select x-model="moversIndex" @change="loadMovers()"
-                  class="bg-slate-950 border border-slate-700 rounded-md px-2 py-1">
-            <option value="$SPX">S&P 500</option>
-            <option value="$DJI">Dow Jones</option>
-            <option value="$COMPX">Nasdaq Comp.</option>
-            <option value="NYSE">NYSE</option>
-            <option value="NASDAQ">Nasdaq</option>
-            <option value="OTCBB">OTC</option>
-            <option value="INDEX_ALL">All indexes</option>
-            <option value="EQUITY_ALL">All equities</option>
+                  class="bg-slate-950 border border-slate-700 rounded-md px-2 py-1"
+                  title="Schwab caps each index at 10 rows. Pick a 'combined' option to fan out.">
+            <optgroup label="Combined (fan-out)">
+              <option value="ALL_US">All US Markets</option>
+              <option value="ALL_LARGECAP">Large-cap ($SPX + $DJI)</option>
+              <option value="ALL_EXCHANGES">All Exchanges (NYSE+NASDAQ+OTC)</option>
+            </optgroup>
+            <optgroup label="Single index">
+              <option value="$SPX">S&P 500</option>
+              <option value="$DJI">Dow Jones</option>
+              <option value="$COMPX">Nasdaq Comp.</option>
+              <option value="NYSE">NYSE</option>
+              <option value="NASDAQ">Nasdaq</option>
+              <option value="OTCBB">OTC</option>
+              <option value="INDEX_ALL">All indexes (Schwab)</option>
+              <option value="EQUITY_ALL">All equities (Schwab)</option>
+            </optgroup>
           </select>
           <div class="inline-flex rounded-md overflow-hidden border border-slate-700">
             <button @click="moversSort='PERCENT_CHANGE_UP'; loadMovers()"
@@ -147,13 +155,23 @@
           <span>
             No
             <span x-text="moversSort === 'PERCENT_CHANGE_UP' ? 'gainers' : (moversSort === 'PERCENT_CHANGE_DOWN' ? 'losers' : 'matches')"></span>
-            in Schwab's top-<span x-text="movers.upstream_count"></span> movers for this index right now.
-            Try switching the direction or changing the index.
+            in Schwab's <span x-text="movers.upstream_count"></span>-symbol pool for these indexes right now.
+            Try switching the direction or picking a different index.
           </span>
         </template>
         <template x-if="!(movers.upstream_count || 0)">
           <span>No movers returned. (Markets closed, or provider isn't Schwab.)</span>
         </template>
+      </div>
+      <div x-show="(movers.indexes || []).length > 1 && (movers.movers || []).length > 0"
+           class="px-5 py-2 text-[11px] text-slate-500 border-b border-slate-800/60">
+        Fanned out across
+        <template x-for="(i, ix) in (movers.indexes || [])" :key="i">
+          <span>
+            <span class="font-mono text-slate-300" x-text="i"></span><span x-text="(movers.per_index_counts && movers.per_index_counts[i] != null) ? ' (' + movers.per_index_counts[i] + ')' : ''"></span><span x-show="ix < (movers.indexes || []).length - 1">, </span>
+          </span>
+        </template>
+        · <span x-text="movers.upstream_count"></span> unique symbols, <span x-text="movers.filtered_out"></span> filtered out
       </div>
       <div class="overflow-x-auto">
         <table x-show="(movers.movers || []).length > 0" class="min-w-full text-sm">
@@ -292,7 +310,7 @@
         _prev: {},
 
         movers: { movers: [], fetched_at: null },
-        moversIndex: '$SPX',
+        moversIndex: 'ALL_US',
         moversSort: 'PERCENT_CHANGE_UP',
         moversFreq: 0,
         moversError: '',
