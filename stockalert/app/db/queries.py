@@ -221,3 +221,48 @@ async def insert_bars_batch_async(rows: List[dict]) -> None:
 
 async def insert_signals_batch_async(rows: List[dict]) -> None:
     await asyncio.to_thread(insert_signals_batch, rows)
+
+
+def latest_bar_per_symbol(symbols: List[str]) -> List[dict]:
+    """Return the most recent bar for each requested symbol (ClickHouse `argMax`)."""
+    if not symbols:
+        return []
+    client = get_client()
+    result = client.query(
+        """
+        SELECT
+            symbol,
+            argMax(timestamp, timestamp) AS ts,
+            argMax(open,      timestamp) AS o,
+            argMax(high,      timestamp) AS h,
+            argMax(low,       timestamp) AS l,
+            argMax(close,     timestamp) AS c,
+            argMax(volume,    timestamp) AS v,
+            count() AS bar_count
+        FROM ohlcv_1m
+        WHERE symbol IN {syms:Array(String)}
+        GROUP BY symbol
+        ORDER BY symbol
+        """,
+        parameters={"syms": [s.upper() for s in symbols]},
+    )
+    out = []
+    for row in result.result_rows:
+        sym, ts, o, h, l, c, v, n = row
+        out.append(
+            {
+                "symbol": sym,
+                "ts": ts,
+                "open": o,
+                "high": h,
+                "low": l,
+                "close": c,
+                "volume": int(v) if v is not None else 0,
+                "bar_count": int(n),
+            }
+        )
+    return out
+
+
+async def latest_bar_per_symbol_async(symbols: List[str]) -> List[dict]:
+    return await asyncio.to_thread(latest_bar_per_symbol, symbols)

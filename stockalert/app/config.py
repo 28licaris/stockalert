@@ -1,8 +1,16 @@
 import os
+from pathlib import Path
+
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-load_dotenv()  # Load .env file if present
+_REPO_ROOT = Path(__file__).resolve().parents[1]  # stockalert/stockalert
+for _candidate in (_REPO_ROOT / ".env", _REPO_ROOT / "scripts" / ".env", _REPO_ROOT.parent / ".env"):
+    if _candidate.is_file():
+        load_dotenv(_candidate, override=False)
+        break
+else:
+    load_dotenv(override=False)
 
 
 class Settings(BaseModel):
@@ -27,7 +35,10 @@ class Settings(BaseModel):
     schwab_refresh_token: str = os.getenv("SCHWAB_REFRESH_TOKEN", "")
     schwab_refresh_token_file: str = os.getenv("SCHWAB_REFRESH_TOKEN_FILE", "data/.schwab_refresh_token")
     schwab_callback_url: str = os.getenv("SCHWAB_CALLBACK_URL", "")
-    schwab_base_url: str = os.getenv("SCHWAB_BASE_URL", "https://api.schwabapi.com")
+    # Empty SCHWAB_BASE_URL in .env would otherwise become "" and break API URLs (relative path → DNS error).
+    schwab_base_url: str = (
+        os.getenv("SCHWAB_BASE_URL", "https://api.schwabapi.com").strip() or "https://api.schwabapi.com"
+    )
     
     # ─────────────────────────────────────────────────────────
     # ClickHouse (time-series)

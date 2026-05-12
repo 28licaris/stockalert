@@ -5,10 +5,12 @@ Provides REST API and WebSocket endpoints for real-time divergence detection.
 """
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, RedirectResponse
 
 from app.db import (
     close_client,
@@ -18,7 +20,8 @@ from app.db import (
     reset_bar_batcher,
 )
 from app.services.monitor_manager import monitor_manager
-from app.api import routes_monitors
+from app.services.watchlist_service import watchlist_service
+from app.api import routes_monitors, routes_movers, routes_watchlist
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,6 +42,13 @@ async def lifespan(app: FastAPI):
     batcher = get_bar_batcher()
     await batcher.start()
     logger.info("✅ OHLCV batch writer started")
+
+    await watchlist_service.start()
+    status = watchlist_service.status()
+    logger.info(
+        "✅ Watchlist service started (provider=%s, symbols=%d)",
+        status["provider"], status["symbol_count"],
+    )
 
     async def broadcast_signal(signal_data: dict):
         logger.info(f"📡 Broadcasting signal: {signal_data}")
@@ -61,6 +71,9 @@ async def lifespan(app: FastAPI):
     logger.info("🛑 Shutting down StockAlert API...")
     await monitor_manager.stop_all()
     logger.info("✅ Monitors stopped")
+
+    await watchlist_service.stop()
+    logger.info("✅ Watchlist service stopped")
 
     await get_bar_batcher().stop()
     reset_bar_batcher()
@@ -87,6 +100,8 @@ app.add_middleware(
 )
 
 app.include_router(routes_monitors.router, prefix="", tags=["Monitors"])
+app.include_router(routes_watchlist.router, prefix="", tags=["Watchlist"])
+app.include_router(routes_movers.router, prefix="/api", tags=["Movers"])
 
 try:
     from app.api import routes_signals
@@ -103,13 +118,23 @@ except ImportError:
     logger.info("ℹ️  Backtest routes not available")
 
 
-@app.get("/")
+_DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "static", "dashboard.html")
+_SYMBOL_PATH = os.path.join(os.path.dirname(__file__), "static", "symbol.html")
+
+
+@app.get("/", include_in_schema=False)
 async def root():
-    return {
-        "status": "running",
-        "service": "StockAlert API",
-        "version": "0.1.0"
-    }
+    return RedirectResponse(url="/dashboard")
+
+
+@app.get("/dashboard", include_in_schema=False)
+async def dashboard():
+    return FileResponse(_DASHBOARD_PATH, media_type="text/html")
+
+
+@app.get("/symbol/{ticker}", include_in_schema=False)
+async def symbol_page(ticker: str):
+    return FileResponse(_SYMBOL_PATH, media_type="text/html")
 
 
 @app.get("/health")

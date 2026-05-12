@@ -14,13 +14,45 @@ import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Callable, Optional
+from urllib.parse import urlparse
 
 import aiohttp
+from aiohttp.client_exceptions import ClientConnectorError
 import pandas as pd
 
 from app.providers.base import DataProvider
 
 logger = logging.getLogger(__name__)
+
+# #region agent log
+def _debug_ndjson(message: str, data: dict, hypothesis_id: str = "H1") -> None:
+    import json
+    import time
+
+    try:
+        payload = {
+            "sessionId": "98e2bc",
+            "timestamp": int(time.time() * 1000),
+            "message": message,
+            "data": data,
+            "hypothesisId": hypothesis_id,
+        }
+        with open(
+            "/Users/licaris/dev/stockalert/stockalert/.cursor/debug-98e2bc.log",
+            "a",
+            encoding="utf-8",
+        ) as f:
+            f.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
+
+
+# #endregion
+
+# REST calls must not hang forever on a stuck TLS/socket (common without an explicit timeout).
+_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=90, connect=20, sock_connect=20, sock_read=60)
+# WebSocket: handshake + long gaps between frames during quiet markets.
+_WS_HANDSHAKE_TIMEOUT = aiohttp.ClientWSTimeout(ws_close=60, ws_receive=600)
 
 # Trader API (auth + user preference, accounts, orders, transactions). Base per api_docs/account_access_api.md.
 TOKEN_PATH = "/v1/oauth/token"
@@ -55,15 +87,51 @@ SERVICE_OPTIONS_BOOK = "OPTIONS_BOOK"
 SERVICE_SCREENER_EQUITY = "SCREENER_EQUITY"
 SERVICE_SCREENER_OPTION = "SCREENER_OPTION"
 SERVICE_ACCT_ACTIVITY = "ACCT_ACTIVITY"
-CHART_EQUITY_FIELDS = "0,1,2,3,4,5,7"  # key, open, high, low, close, volume, chartTime
+# Schwab CHART_EQUITY fields (empirically validated against live data; the local docs copy is misleading):
+#   0=key, 1=Sequence, 2=Open, 3=High, 4=Low, 5=Close, 6=Volume, 7=ChartTime(ms), 8=ChartDay
+CHART_EQUITY_FIELDS = "0,2,3,4,5,6,7"
+
+_DEFAULT_SCHWAB_API_BASE = "https://api.schwabapi.com"
+
+
+def _normalize_schwab_base_url(base_url: str) -> str:
+    """Schwab API origin; empty/whitespace falls back to production (avoids relative URLs and DNS errors)."""
+    bu = (base_url or "").strip().rstrip("/")
+    return bu if bu else _DEFAULT_SCHWAB_API_BASE.rstrip("/")
+
+
+def _schwab_refresh_token_user_hint(status: int, body: str) -> str:
+    """If Schwab rejects refresh, return a short user-facing hint (no secrets)."""
+    if status != 400 or not (body or "").strip():
+        return ""
+    low = body.lower()
+    if "refresh_token_authentication" in low or "unsupported_token_type" in low:
+        return (
+            "Schwab rejected this refresh token (often expired after ~7 days, revoked, or issued for a "
+            "different SCHWAB_CLIENT_ID). Re-authorize and refresh the token:\n"
+            "  poetry run python scripts/schwab_get_refresh_token.py\n"
+            "If SCHWAB_REFRESH_TOKEN is set in .env, it overrides SCHWAB_REFRESH_TOKEN_FILE — update or "
+            "unset it so the new file token is used."
+        )
+    return ""
+
+
+def _schwab_user_preference_401_hint() -> str:
+    """After token refresh, 401 on GET userPreference usually means app or account linkage (Schwab Trader API doc)."""
+    return (
+        "GET /trader/v1/userPreference returned 401 after refreshing the access token. Typical causes:\n"
+        "  • Developer Portal: enable the Trader API (Individual) product for this app, not Market Data alone.\n"
+        "  • OAuth consent: link at least one brokerage account to the app during sign-in.\n"
+        "  • Re-authorize: poetry run python scripts/schwab_get_refresh_token.py\n"
+    )
 
 
 class SchwabProvider(DataProvider):
     """
     Schwab/Think or Swim data provider.
 
-    Uses Trader API for OAuth, user preference (streamer connection info),
-    and historical price history. Uses Streamer API (WebSocket) for real-time bars.
+    Uses Trader API for OAuth. Market Data REST (e.g. price history, quotes) needs only the
+    access token. User Preference is fetched only for the Streamer WebSocket (live bars).
     """
 
     def __init__(
@@ -79,7 +147,7 @@ class SchwabProvider(DataProvider):
         self._client_secret = client_secret
         self._refresh_token = refresh_token
         self._callback_url = callback_url
-        self._base_url = base_url.rstrip("/")
+        self._base_url = _normalize_schwab_base_url(base_url)
         self._refresh_token_file = refresh_token_file
         self._access_token: Optional[str] = None
         self._streamer_url: Optional[str] = None
@@ -92,6 +160,10 @@ class SchwabProvider(DataProvider):
         self._streamer_started = False
         self._subscribed_tickers: list[str] = []
         self._bar_callback: Optional[Callable] = None
+        self._streamer_cmd_q: Optional[asyncio.Queue] = None
+        self._streamer_ws: Optional[aiohttp.ClientWebSocketResponse] = None
+        self._streamer_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._streamer_ready = threading.Event()
 
     async def _ensure_token(self) -> str:
         """
@@ -104,26 +176,41 @@ class SchwabProvider(DataProvider):
             if not self._refresh_token:
                 raise ValueError("SCHWAB_REFRESH_TOKEN is required for Schwab provider")
         url = f"{self._base_url}{TOKEN_PATH}"
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            raise ValueError(
+                f"Invalid SCHWAB_BASE_URL / base_url (got host={parsed.netloc!r}). "
+                f"Use a full URL such as {_DEFAULT_SCHWAB_API_BASE}."
+            )
         # Schwab token endpoint requires client credentials via Basic auth (RFC 6749 2.3.1), not body.
         credentials = base64.b64encode(f"{self._client_id}:{self._client_secret}".encode()).decode()
         payload = {
             "grant_type": "refresh_token",
             "refresh_token": self._refresh_token,
         }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                data=payload,
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "Authorization": f"Basic {credentials}",
-                },
-            ) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    logger.error("Schwab token exchange failed: %s %s", resp.status, text)
-                    raise RuntimeError(f"Schwab token exchange failed: {resp.status} {text}")
-                data = await resp.json()
+        try:
+            async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+                async with session.post(
+                    url,
+                    data=payload,
+                    headers={
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "Authorization": f"Basic {credentials}",
+                    },
+                ) as resp:
+                    if resp.status != 200:
+                        text = await resp.text()
+                        hint = _schwab_refresh_token_user_hint(resp.status, text)
+                        logger.error("Schwab token exchange failed: %s %s", resp.status, text)
+                        base_msg = f"Schwab token exchange failed: {resp.status} {text}"
+                        raise RuntimeError(f"{hint}\n\n{base_msg}" if hint else base_msg)
+                    data = await resp.json()
+        except ClientConnectorError as e:
+            raise RuntimeError(
+                f"Cannot connect to Schwab at {url} ({e}). "
+                "Check network, DNS, and VPN. If SCHWAB_BASE_URL is in .env, it must be a full URL "
+                f"(e.g. {_DEFAULT_SCHWAB_API_BASE}), not empty."
+            ) from None
         with self._token_refresh_lock:
             self._access_token = data.get("access_token")
             new_refresh = data.get("refresh_token")
@@ -142,74 +229,93 @@ class SchwabProvider(DataProvider):
         logger.info("Schwab access token obtained")
         return self._access_token
 
-    async def _get_user_principals(self) -> dict:
+    async def _get_user_principals(self, _retry_on_401: bool = True) -> dict:
         """
-        GET User Preference (streamer connection info, subscription keys).
-        Supports both streamerConnectionInfo/streamerSubscriptionKeys and streamerInfo (api_docs/account_access_api.md).
+        GET /trader/v1/userPreference. Per Schwab docs the endpoint takes NO query parameters
+        and returns a list wrapping {accounts, streamerInfo, offers}. We previously sent a
+        TD-Ameritrade-style ?fields=... query which Schwab rejects with 401 Client not authorized.
         """
         token = await self._ensure_token()
         url = f"{self._base_url}{USER_PREFERENCE_PATH}"
-        params = {"fields": "streamerSubscriptionKeys,streamerConnectionInfo"}
-        headers = {"Authorization": f"Bearer {token}"}
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params, headers=headers) as resp:
-                if resp.status == 401:
-                    self._access_token = None
-                    return await self._get_user_principals()
-                if resp.status != 200:
-                    text = await resp.text()
-                    logger.error("Schwab user preference failed: %s %s", resp.status, text)
-                    raise RuntimeError(f"Schwab user preference failed: {resp.status} {text}")
-                data = await resp.json()
-        self._user_prefs = data
-        # Resolve streamer WebSocket URL: streamerConnectionInfo (Streamer doc) or streamerInfo (Account Access doc)
-        conn_info = data.get("streamerConnectionInfo")
-        if isinstance(conn_info, list):
-            for node in conn_info:
-                self._streamer_url = node.get("uri") or node.get("streamerSocketUrl") or node.get("websocketUrl")
-                if self._streamer_url:
-                    break
-        elif isinstance(conn_info, dict):
-            nodes = conn_info.get("streamerConnectionInfo") or conn_info.get("streamerInfo")
-            if isinstance(nodes, list):
-                for node in nodes:
-                    self._streamer_url = node.get("uri") or node.get("streamerSocketUrl") or node.get("websocketUrl")
-                    if self._streamer_url:
-                        break
-            if not self._streamer_url:
-                self._streamer_url = conn_info.get("uri") or conn_info.get("streamerSocketUrl")
-        if not self._streamer_url:
-            streamer_info = data.get("streamerInfo")
-            if isinstance(streamer_info, list) and streamer_info:
-                node = streamer_info[0]
-                self._streamer_url = node.get("streamerSocketUrl") or node.get("uri") or node.get("websocketUrl")
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Schwab-Client-CorrelID": str(uuid.uuid4()),
+            "Accept": "application/json",
+        }
+        try:
+            async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status == 401:
+                        if not _retry_on_401:
+                            text = await resp.text()
+                            hint = _schwab_user_preference_401_hint()
+                            msg = f"Schwab user preference unauthorized after token refresh: {text[:500]}"
+                            raise RuntimeError(f"{hint}\n{msg}")
+                        self._access_token = None
+                        return await self._get_user_principals(_retry_on_401=False)
+                    if resp.status != 200:
+                        text = await resp.text()
+                        logger.error("Schwab user preference failed: %s %s", resp.status, text)
+                        raise RuntimeError(f"Schwab user preference failed: {resp.status} {text}")
+                    data = await resp.json()
+        except ClientConnectorError as e:
+            raise RuntimeError(
+                f"Cannot reach Schwab Trader API at {url} ({e}). "
+                "Check DNS/network/VPN; try: ping api.schwabapi.com"
+            ) from None
+        # Schwab returns either a list [{...}] or a dict {...}; normalize to a dict.
+        prefs = data[0] if isinstance(data, list) and data else data
+        if not isinstance(prefs, dict):
+            raise RuntimeError(f"Schwab userPreference returned unexpected shape: {type(data).__name__}")
+        self._user_prefs = prefs
+        streamer_info = prefs.get("streamerInfo")
+        if isinstance(streamer_info, list) and streamer_info:
+            node = streamer_info[0]
+            self._streamer_url = (
+                node.get("streamerSocketUrl") or node.get("uri") or node.get("websocketUrl")
+            )
         logger.info("Schwab user preference loaded, streamer_url=%s", bool(self._streamer_url))
-        return data
+        return prefs
 
-    async def _market_data_get(self, path: str, params: Optional[dict] = None) -> dict:
+    async def _market_data_get(
+        self, path: str, params: Optional[dict] = None, _retry_on_401: bool = True
+    ) -> dict:
         """
         Authenticated GET to Market Data API. Path is appended to base + MARKET_DATA_BASE.
         Caller may pass path with placeholders already formatted (e.g. /pricehistory or /AAPL/quotes).
-        On 401 clears token and retries once. On non-2xx returns {}. Response shape follows Schwab schemas.
+        On 401 clears token and retries at most once. On non-2xx returns {}.
         """
         token = await self._ensure_token()
         url = f"{self._base_url}{MARKET_DATA_BASE}{path}"
         headers = {"Authorization": f"Bearer {token}"}
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
             async with session.get(url, params=params or {}, headers=headers) as resp:
+                # #region agent log
+                _debug_ndjson(
+                    "market_data_get",
+                    {"path": path, "status": resp.status, "retryOn401": _retry_on_401},
+                    "H1",
+                )
+                # #endregion
                 if resp.status == 401:
+                    if not _retry_on_401:
+                        await resp.text()
+                        logger.error("Schwab market data %s unauthorized after token refresh", path)
+                        return {}
                     self._access_token = None
-                    return await self._market_data_get(path, params)
+                    return await self._market_data_get(path, params, _retry_on_401=False)
                 if resp.status != 200:
                     text = await resp.text()
                     logger.error("Schwab market data %s failed: %s %s", path, resp.status, text[:200])
                     return {}
                 return await resp.json()
 
-    async def _trader_get(self, path: str, params: Optional[dict] = None) -> dict:
+    async def _trader_get(
+        self, path: str, params: Optional[dict] = None, _retry_on_401: bool = True
+    ) -> dict:
         """
         Authenticated GET to Trader API (Account Access). Path is appended to base + TRADER_API_BASE.
-        On 401 clears token and retries once. On non-2xx returns {}. Uses Schwab-Client-CorrelID header per doc.
+        On 401 clears token and retries at most once. On non-2xx returns {}.
         """
         token = await self._ensure_token()
         url = f"{self._base_url}{TRADER_API_BASE}{path}"
@@ -217,11 +323,22 @@ class SchwabProvider(DataProvider):
             "Authorization": f"Bearer {token}",
             "Schwab-Client-CorrelID": str(uuid.uuid4()),
         }
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
             async with session.get(url, params=params or {}, headers=headers) as resp:
+                # #region agent log
+                _debug_ndjson(
+                    "trader_get",
+                    {"path": path, "status": resp.status, "retryOn401": _retry_on_401},
+                    "H1",
+                )
+                # #endregion
                 if resp.status == 401:
+                    if not _retry_on_401:
+                        await resp.text()
+                        logger.error("Schwab trader %s unauthorized after token refresh", path)
+                        return {}
                     self._access_token = None
-                    return await self._trader_get(path, params)
+                    return await self._trader_get(path, params, _retry_on_401=False)
                 if resp.status != 200:
                     text = await resp.text()
                     logger.error("Schwab trader %s failed: %s %s", path, resp.status, text[:200])
@@ -267,8 +384,15 @@ class SchwabProvider(DataProvider):
 
     @staticmethod
     def _chart_content_to_bar(content: dict) -> SimpleNamespace:
-        """Map CHART_EQUITY content (key, 1–5, 7) to bar object for app contract."""
-        ts_ms = content.get(7) or content.get("7")
+        """
+        Map CHART_EQUITY content to a bar object.
+        Schwab field IDs: 0=key, 2=Open, 3=High, 4=Low, 5=Close, 6=Volume, 7=ChartTime(ms).
+        Field 1 is Sequence, not Open — Schwab's public field tables list these incorrectly.
+        """
+        def _f(key: int) -> Any:
+            return content.get(key) if content.get(key) is not None else content.get(str(key))
+
+        ts_ms = _f(7)
         if ts_ms is not None:
             ts = datetime.fromtimestamp(int(ts_ms) / 1000.0, tz=timezone.utc)
         else:
@@ -278,12 +402,68 @@ class SchwabProvider(DataProvider):
             ticker=content.get("key", ""),
             timestamp=ts,
             ts=ts,
-            open=float(content.get(1) or content.get("1") or 0),
-            high=float(content.get(2) or content.get("2") or 0),
-            low=float(content.get(3) or content.get("3") or 0),
-            close=float(content.get(4) or content.get("4") or 0),
-            volume=int(content.get(5) or content.get("5") or 0),
+            open=float(_f(2) or 0),
+            high=float(_f(3) or 0),
+            low=float(_f(4) or 0),
+            close=float(_f(5) or 0),
+            volume=int(_f(6) or 0),
         )
+
+    def _enqueue_streamer_cmd(self, cmd: dict) -> None:
+        """
+        Enqueue a streamer command (e.g., SUBS/UNSUBS) for the streamer thread.
+        Safe to call from any thread.
+        """
+        if not self._streamer_loop or not self._streamer_cmd_q:
+            return
+
+        def _put_nowait() -> None:
+            try:
+                self._streamer_cmd_q.put_nowait(cmd)
+            except Exception:
+                logger.debug("Schwab streamer: failed to enqueue command", exc_info=True)
+
+        try:
+            self._streamer_loop.call_soon_threadsafe(_put_nowait)
+        except Exception:
+            logger.debug("Schwab streamer: call_soon_threadsafe failed", exc_info=True)
+
+    async def _streamer_send(self, payload: dict) -> None:
+        ws = self._streamer_ws
+        if not ws or ws.closed:
+            return
+        await ws.send_str(json.dumps(payload))
+
+    async def _streamer_cmd_loop(self, ids: dict) -> None:
+        """
+        Process queued streamer commands and send them over the active WebSocket.
+        Commands are dicts like:
+          {"service": "...", "command": "SUBS"/"UNSUBS", "parameters": {...}}
+        """
+        assert self._streamer_cmd_q is not None
+        while self._streamer_started:
+            cmd = await self._streamer_cmd_q.get()
+            if not isinstance(cmd, dict):
+                continue
+            if cmd.get("_type") == "STOP":
+                break
+
+            payload = {
+                "requests": [
+                    {
+                        "requestid": cmd.get("requestid") or str(uuid.uuid4()),
+                        "service": cmd.get("service"),
+                        "command": cmd.get("command"),
+                        "SchwabClientCustomerId": ids["SchwabClientCustomerId"],
+                        "SchwabClientCorrelId": ids["SchwabClientCorrelId"],
+                        "parameters": cmd.get("parameters") or {},
+                    }
+                ]
+            }
+            try:
+                await self._streamer_send(payload)
+            except Exception:
+                logger.warning("Schwab streamer: send command failed", exc_info=True)
 
     async def _run_streamer_loop(self) -> None:
         """Run in streamer thread: connect, LOGIN, SUBS, then receive and dispatch bars."""
@@ -299,6 +479,8 @@ class SchwabProvider(DataProvider):
         ids = self._streamer_ids()
         ch_fun = self._channel_function_ids()
         token = await self._ensure_token()
+        self._streamer_loop = asyncio.get_running_loop()
+        self._streamer_cmd_q = asyncio.Queue()
         login_req = {
             "requests": [
                 {
@@ -316,8 +498,12 @@ class SchwabProvider(DataProvider):
             ]
         }
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.ws_connect(self._streamer_url) as ws:
+            async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+                async with session.ws_connect(
+                    self._streamer_url,
+                    timeout=_WS_HANDSHAKE_TIMEOUT,
+                ) as ws:
+                    self._streamer_ws = ws
                     await ws.send_str(json.dumps(login_req))
                     login_ok = False
                     while True:
@@ -355,27 +541,26 @@ class SchwabProvider(DataProvider):
                             continue
                     if not login_ok:
                         return
-                    # Subscribe to CHART_EQUITY for current tickers. Other services (LEVELONE_EQUITIES, etc.)
-                    # use the same request format (service, command, SchwabClientCustomerId, SchwabClientCorrelId, parameters)
-                    # and can be added by sending additional requests here after LOGIN.
+                    self._streamer_ready.set()
+                    cmd_task = asyncio.create_task(self._streamer_cmd_loop(ids))
+
+                    # Initial subscription snapshot (if already requested before the socket was ready)
                     tickers = list(self._subscribed_tickers)
                     if tickers and self._bar_callback:
-                        subs_req = {
-                            "requests": [
-                                {
-                                    "requestid": "2",
-                                    "service": SERVICE_CHART_EQUITY,
-                                    "command": "SUBS",
-                                    "SchwabClientCustomerId": ids["SchwabClientCustomerId"],
-                                    "SchwabClientCorrelId": ids["SchwabClientCorrelId"],
-                                    "parameters": {
-                                        "keys": ",".join(tickers),
-                                        "fields": CHART_EQUITY_FIELDS,
-                                    },
-                                }
-                            ]
-                        }
-                        await ws.send_str(json.dumps(subs_req))
+                        await self._streamer_send(
+                            {
+                                "requests": [
+                                    {
+                                        "requestid": "2",
+                                        "service": SERVICE_CHART_EQUITY,
+                                        "command": "SUBS",
+                                        "SchwabClientCustomerId": ids["SchwabClientCustomerId"],
+                                        "SchwabClientCorrelId": ids["SchwabClientCorrelId"],
+                                        "parameters": {"keys": ",".join(tickers), "fields": CHART_EQUITY_FIELDS},
+                                    }
+                                ]
+                            }
+                        )
                         logger.info("Schwab CHART_EQUITY SUBS sent for %s", tickers)
                     # Receive loop
                     while self._streamer_started:
@@ -400,12 +585,18 @@ class SchwabProvider(DataProvider):
                                         self._bar_callback(bar),
                                         self._main_loop,
                                     )
+                    if not cmd_task.done():
+                        cmd_task.cancel()
         except asyncio.CancelledError:
             pass
         except Exception as e:
             logger.error("Schwab streamer loop error: %s", e, exc_info=True)
         finally:
             self._streamer_started = False
+            self._streamer_ready.clear()
+            self._streamer_ws = None
+            self._streamer_cmd_q = None
+            self._streamer_loop = None
 
     def _streamer_thread_target(self) -> None:
         """Entry point for streamer daemon thread: run async loop."""
@@ -421,14 +612,16 @@ class SchwabProvider(DataProvider):
         if self._streamer_started:
             logger.debug("Schwab stream already started")
             return
+        self._streamer_ready.clear()
         self._streamer_started = True
         self._streamer_thread = threading.Thread(target=self._streamer_thread_target, daemon=True)
         self._streamer_thread.start()
         logger.info("Schwab streamer thread started")
 
     def stop_stream(self) -> None:
-        """Stop the Streamer connection (ADMIN LOGOUT and close WebSocket)."""
+        """Stop the Streamer connection."""
         self._streamer_started = False
+        self._enqueue_streamer_cmd({"_type": "STOP"})
         self._streamer_thread = None
         logger.info("Schwab stream stopped")
 
@@ -440,16 +633,35 @@ class SchwabProvider(DataProvider):
             logger.error("Schwab subscribe_bars: no event loop; call from async context")
             return
         self._bar_callback = callback
-        self._subscribed_tickers = list(dict.fromkeys(self._subscribed_tickers + tickers))
+        new_tickers = [t.upper() for t in tickers]
+        self._subscribed_tickers = list(dict.fromkeys(self._subscribed_tickers + new_tickers))
         logger.info("Schwab subscribing to bars for %s", self._subscribed_tickers)
         self.start_stream()
+        # If streamer is already logged in, send a SUBS immediately for the requested tickers.
+        if self._streamer_ready.is_set():
+            self._enqueue_streamer_cmd(
+                {
+                    "service": SERVICE_CHART_EQUITY,
+                    "command": "SUBS",
+                    "parameters": {"keys": ",".join(new_tickers), "fields": CHART_EQUITY_FIELDS},
+                }
+            )
 
     def unsubscribe_bars(self, tickers: list[str]) -> None:
         """Unsubscribe from bar updates for given tickers."""
-        for t in tickers:
+        norm = [t.upper() for t in tickers]
+        for t in norm:
             if t in self._subscribed_tickers:
                 self._subscribed_tickers.remove(t)
-        logger.info("Schwab unsubscribed from %s; remaining %s", tickers, self._subscribed_tickers)
+        logger.info("Schwab unsubscribed from %s; remaining %s", norm, self._subscribed_tickers)
+        if self._streamer_ready.is_set() and norm:
+            self._enqueue_streamer_cmd(
+                {
+                    "service": SERVICE_CHART_EQUITY,
+                    "command": "UNSUBS",
+                    "parameters": {"keys": ",".join(norm)},
+                }
+            )
 
     async def historical_df(
         self,

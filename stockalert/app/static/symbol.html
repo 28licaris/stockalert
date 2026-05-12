@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en" class="bg-slate-950 text-slate-100">
+<head>
+  <meta charset="UTF-8" />
+  <title>StockAlert · Symbol</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .price-up { color: #4ade80; }
+    .price-down { color: #f87171; }
+    .badge-ok { background: rgba(74,222,128,.12); color: #4ade80; border: 1px solid rgba(74,222,128,.3); }
+    .badge-warn { background: rgba(248,113,113,.12); color: #f87171; border: 1px solid rgba(248,113,113,.3); }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div x-data="symbolPage()" x-init="init()" class="max-w-7xl mx-auto px-6 py-6 space-y-6">
+
+    <!-- HEADER -->
+    <header class="flex items-center justify-between flex-wrap gap-3">
+      <div class="flex items-center gap-3">
+        <a href="/dashboard" class="text-slate-400 hover:text-slate-200 text-sm">← Dashboard</a>
+        <span class="text-slate-700">|</span>
+        <h1 class="text-2xl font-semibold font-mono" x-text="symbol"></h1>
+        <span class="text-slate-500 text-sm" x-text="bars.length + ' bars (1m)'"></span>
+        <span x-show="gapCount > 0"
+              class="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300"
+              :title="gapDetail">
+          <span x-text="gapCount + ' gap' + (gapCount === 1 ? '' : 's')"></span>
+          (<span x-text="missingMinutes + ' min missing'"></span>)
+        </span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="px-2.5 py-1 rounded-full text-xs"
+              :class="streaming ? 'badge-ok' : 'badge-warn'">
+          <span x-text="streaming ? 'streaming' : 'not streaming'"></span>
+        </span>
+        <button @click="toggleSubscribe()"
+                class="px-3 py-1.5 rounded-lg text-xs font-medium"
+                :class="streaming ? 'bg-slate-800 hover:bg-slate-700 text-slate-200' : 'bg-indigo-500 hover:bg-indigo-400 text-white'">
+          <span x-text="streaming ? 'Remove from watchlist' : 'Add to watchlist'"></span>
+        </button>
+        <button @click="refresh()" class="px-3 py-1.5 rounded-lg text-xs bg-slate-800 hover:bg-slate-700">Refresh</button>
+      </div>
+    </header>
+
+    <!-- KPI -->
+    <section class="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="text-xs uppercase tracking-wide text-slate-400">Last</div>
+        <div class="mt-1 text-2xl font-semibold font-mono"
+             :class="changePct > 0 ? 'price-up' : (changePct < 0 ? 'price-down' : '')"
+             x-text="fmtPrice(latest?.close)"></div>
+        <div class="text-xs mt-1"
+             :class="changePct > 0 ? 'price-up' : (changePct < 0 ? 'price-down' : 'text-slate-500')"
+             x-text="changeText"></div>
+      </div>
+      <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="text-xs uppercase tracking-wide text-slate-400">Open</div>
+        <div class="mt-1 text-lg font-mono" x-text="fmtPrice(latest?.open)"></div>
+      </div>
+      <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="text-xs uppercase tracking-wide text-slate-400">High</div>
+        <div class="mt-1 text-lg font-mono" x-text="fmtPrice(latest?.high)"></div>
+      </div>
+      <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="text-xs uppercase tracking-wide text-slate-400">Low</div>
+        <div class="mt-1 text-lg font-mono" x-text="fmtPrice(latest?.low)"></div>
+      </div>
+      <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="text-xs uppercase tracking-wide text-slate-400">Volume</div>
+        <div class="mt-1 text-lg font-mono" x-text="fmtNum(latest?.volume)"></div>
+      </div>
+    </section>
+
+    <!-- CHART -->
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 overflow-hidden">
+      <div class="flex items-center justify-between px-4 py-2 border-b border-slate-800">
+        <div class="text-sm font-medium">1-minute candles</div>
+        <div class="text-xs text-slate-400" x-text="bars.length ? new Date(tsToMs(bars[bars.length-1].ts)).toLocaleString() : ''"></div>
+      </div>
+      <div id="chart" class="w-full h-[480px]"></div>
+      <div x-show="bars.length === 0" class="px-4 py-12 text-center text-slate-500 text-sm">
+        No bars in ClickHouse for <span class="font-mono" x-text="symbol"></span> yet.
+        <span x-show="!streaming">Add this symbol to the watchlist to start streaming.</span>
+      </div>
+    </section>
+
+    <!-- BARS TABLE -->
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60">
+      <div class="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
+        <h2 class="text-sm font-semibold">Recent bars</h2>
+        <span class="text-xs text-slate-500" x-text="Math.min(bars.length, 50) + ' shown'"></span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="text-xs uppercase text-slate-400 bg-slate-900/30">
+            <tr>
+              <th class="text-left px-5 py-2">Time</th>
+              <th class="text-right px-5 py-2">Open</th>
+              <th class="text-right px-5 py-2">High</th>
+              <th class="text-right px-5 py-2">Low</th>
+              <th class="text-right px-5 py-2">Close</th>
+              <th class="text-right px-5 py-2">Δ</th>
+              <th class="text-right px-5 py-2">Volume</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="(b, i) in recentBars" :key="b.ts">
+              <tr class="border-t border-slate-800/60 hover:bg-slate-900/40">
+                <td class="px-5 py-2 text-slate-300 font-mono">
+                  <span x-text="new Date(tsToMs(b.ts)).toLocaleString()"></span>
+                  <span x-show="gapBefore(b) > 0"
+                        class="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30"
+                        :title="gapBefore(b) + ' minute(s) of bars missing before this row'">
+                    +<span x-text="gapBefore(b)"></span>m gap
+                  </span>
+                </td>
+                <td class="px-5 py-2 text-right font-mono" x-text="fmtPrice(b.open)"></td>
+                <td class="px-5 py-2 text-right font-mono" x-text="fmtPrice(b.high)"></td>
+                <td class="px-5 py-2 text-right font-mono" x-text="fmtPrice(b.low)"></td>
+                <td class="px-5 py-2 text-right font-mono" x-text="fmtPrice(b.close)"></td>
+                <td class="px-5 py-2 text-right font-mono"
+                    :class="barDelta(b) > 0 ? 'price-up' : (barDelta(b) < 0 ? 'price-down' : 'text-slate-500')"
+                    x-text="fmtDelta(barDelta(b))"></td>
+                <td class="px-5 py-2 text-right font-mono text-slate-300" x-text="fmtNum(b.volume)"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer class="text-center text-xs text-slate-500 pt-4 pb-8">
+      <a href="/dashboard" class="hover:text-slate-300">Dashboard</a>
+      &nbsp;·&nbsp;
+      <a href="/docs" class="hover:text-slate-300">API docs</a>
+    </footer>
+  </div>
+
+  <script>
+    function symbolPage() {
+      const params = new URLSearchParams(location.search);
+      const fromPath = location.pathname.split('/').filter(Boolean).pop() || '';
+      const symbol = (params.get('symbol') || fromPath || 'SPY').toUpperCase();
+
+      return {
+        symbol,
+        bars: [],
+        watchlistSymbols: [],
+        _chart: null,
+        _candleSeries: null,
+        _volumeSeries: null,
+
+        get streaming() { return this.watchlistSymbols.includes(this.symbol); },
+        get latest() { return this.bars.length ? this.bars[this.bars.length - 1] : null; },
+        get firstClose() { return this.bars.length ? this.bars[0].close : null; },
+        get changeAbs() {
+          if (!this.latest || this.firstClose == null) return 0;
+          return this.latest.close - this.firstClose;
+        },
+        get changePct() {
+          if (!this.latest || !this.firstClose) return 0;
+          return ((this.latest.close - this.firstClose) / this.firstClose) * 100;
+        },
+        get changeText() {
+          if (!this.bars.length) return '—';
+          const a = this.changeAbs, p = this.changePct;
+          const sign = a >= 0 ? '+' : '';
+          return `${sign}${a.toFixed(2)} (${sign}${p.toFixed(2)}%) since first bar`;
+        },
+        get recentBars() {
+          return this.bars.slice(-50).slice().reverse();
+        },
+        // Detect gaps in the 1-minute series (any step > 60s).
+        get _gaps() {
+          const out = [];
+          for (let i = 1; i < this.bars.length; i++) {
+            const prev = this.tsToMs(this.bars[i - 1].ts);
+            const cur = this.tsToMs(this.bars[i].ts);
+            const stepMin = Math.round((cur - prev) / 60000);
+            if (stepMin > 1) {
+              out.push({
+                from: prev, to: cur,
+                missing: stepMin - 1,
+              });
+            }
+          }
+          return out;
+        },
+        get gapCount() { return this._gaps.length; },
+        get missingMinutes() { return this._gaps.reduce((a, g) => a + g.missing, 0); },
+        get gapDetail() {
+          if (!this._gaps.length) return '';
+          return this._gaps.slice(0, 5).map(g =>
+            `${new Date(g.from).toLocaleTimeString()} → ${new Date(g.to).toLocaleTimeString()} (${g.missing} min)`
+          ).join('\n');
+        },
+        // Returns the size (in minutes) of the gap *before* this row, if any.
+        gapBefore(b) {
+          const i = this.bars.findIndex(x => x.ts === b.ts);
+          if (i <= 0) return 0;
+          const prev = this.tsToMs(this.bars[i - 1].ts);
+          const cur = this.tsToMs(this.bars[i].ts);
+          return Math.max(0, Math.round((cur - prev) / 60000) - 1);
+        },
+
+        fmtNum(n) {
+          if (n === null || n === undefined) return '—';
+          return new Intl.NumberFormat().format(n);
+        },
+        fmtPrice(n) {
+          if (n === null || n === undefined || isNaN(n)) return '—';
+          return Number(n).toFixed(2);
+        },
+        fmtDelta(n) {
+          if (n === null || n === undefined || isNaN(n)) return '—';
+          const s = n >= 0 ? '+' : '';
+          return `${s}${n.toFixed(2)}`;
+        },
+        barDelta(b) { return (b.close ?? 0) - (b.open ?? 0); },
+
+        // ClickHouse returns naive ISO timestamps that represent UTC; force-parse as UTC.
+        tsToMs(s) {
+          if (!s) return 0;
+          if (typeof s !== 'string') return new Date(s).getTime();
+          return /[zZ]|[+-]\d{2}:?\d{2}$/.test(s) ? new Date(s).getTime() : new Date(s + 'Z').getTime();
+        },
+
+        async getJSON(url) {
+          const r = await fetch(url);
+          if (!r.ok) throw new Error(url + ' -> ' + r.status);
+          return r.json();
+        },
+        async postJSON(url, body) {
+          const r = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (!r.ok) {
+            const t = await r.text();
+            throw new Error(url + ' -> ' + r.status + ' ' + t);
+          }
+          return r.json();
+        },
+
+        buildChart() {
+          if (this._chart) return;
+          const el = document.getElementById('chart');
+          this._chart = LightweightCharts.createChart(el, {
+            layout: { background: { color: '#0f172a' }, textColor: '#cbd5e1' },
+            grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
+            timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#334155' },
+            rightPriceScale: {
+              borderColor: '#334155',
+              // reserve bottom 25% of the pane for the volume histogram
+              scaleMargins: { top: 0.08, bottom: 0.28 },
+            },
+            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+            autoSize: true,
+          });
+          this._candleSeries = this._chart.addCandlestickSeries({
+            upColor: '#4ade80', downColor: '#f87171',
+            borderUpColor: '#4ade80', borderDownColor: '#f87171',
+            wickUpColor: '#4ade80', wickDownColor: '#f87171',
+          });
+          this._volumeSeries = this._chart.addHistogramSeries({
+            color: 'rgba(100,116,139,0.45)',
+            priceFormat: { type: 'volume' },
+            priceScaleId: 'volume',
+          });
+          this._chart.priceScale('volume').applyOptions({
+            // volume occupies the bottom ~22% of the pane, no overlap with candles
+            scaleMargins: { top: 0.78, bottom: 0 },
+            visible: false,
+          });
+          window.addEventListener('resize', () => this._chart && this._chart.applyOptions({}));
+        },
+
+        renderChart() {
+          if (!this._chart) this.buildChart();
+          if (!this.bars.length) return;
+          const candles = this.bars.map(b => ({
+            time: Math.floor(this.tsToMs(b.ts) / 1000),
+            open: b.open, high: b.high, low: b.low, close: b.close,
+          }));
+          const volumes = this.bars.map(b => ({
+            time: Math.floor(this.tsToMs(b.ts) / 1000),
+            value: b.volume,
+            color: (b.close >= b.open) ? 'rgba(74,222,128,0.45)' : 'rgba(248,113,113,0.45)',
+          }));
+          this._candleSeries.setData(candles);
+          this._volumeSeries.setData(volumes);
+          this._chart.timeScale().fitContent();
+        },
+
+        async refresh() {
+          try {
+            const [bars, wl] = await Promise.all([
+              this.getJSON(`/api/bars?symbol=${encodeURIComponent(this.symbol)}&limit=500`),
+              this.getJSON('/watchlist'),
+            ]);
+            this.bars = bars; // already ascending from list_bars_desc(reversed)
+            this.watchlistSymbols = wl.symbols || [];
+            this.renderChart();
+          } catch (e) {
+            console.error(e);
+          }
+        },
+
+        async toggleSubscribe() {
+          try {
+            const url = this.streaming ? '/watchlist/remove' : '/watchlist/add';
+            await this.postJSON(url, { symbols: [this.symbol] });
+            await this.refresh();
+          } catch (e) {
+            alert('Watchlist update failed: ' + e.message);
+          }
+        },
+
+        init() {
+          document.title = `${this.symbol} · StockAlert`;
+          this.buildChart();
+          this.refresh();
+          setInterval(() => this.refresh(), 10000);
+        },
+      };
+    }
+  </script>
+</body>
+</html>

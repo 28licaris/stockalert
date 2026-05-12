@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en" class="bg-slate-950 text-slate-100">
+<head>
+  <meta charset="UTF-8" />
+  <title>StockAlert Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .price-up { color: #4ade80; }
+    .price-down { color: #f87171; }
+    .badge-ok { background: rgba(74,222,128,.12); color: #4ade80; border: 1px solid rgba(74,222,128,.3); }
+    .badge-warn { background: rgba(248,113,113,.12); color: #f87171; border: 1px solid rgba(248,113,113,.3); }
+    .skeleton { background: linear-gradient(90deg,#1e293b,#334155,#1e293b); background-size:200% 100%; animation: shimmer 1.5s infinite; }
+    @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div x-data="dashboard()" x-init="init()" class="max-w-7xl mx-auto px-6 py-6 space-y-6">
+
+    <!-- HEADER -->
+    <header class="flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="h-10 w-10 rounded-lg bg-gradient-to-br from-indigo-500 to-fuchsia-500 flex items-center justify-center font-bold text-lg">SA</div>
+        <div>
+          <h1 class="text-xl font-semibold">StockAlert</h1>
+          <p class="text-xs text-slate-400">Live OHLCV ingestion + divergence signals</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="px-2.5 py-1 rounded-full text-xs"
+              :class="health.clickhouse ? 'badge-ok' : 'badge-warn'">
+          ClickHouse: <span x-text="health.clickhouse ? 'OK' : 'down'"></span>
+        </span>
+        <span class="px-2.5 py-1 rounded-full text-xs"
+              :class="watchlist.started ? 'badge-ok' : 'badge-warn'">
+          Stream: <span x-text="watchlist.started ? 'running' : 'stopped'"></span>
+        </span>
+        <span class="px-2.5 py-1 rounded-full text-xs border border-slate-700 text-slate-300">
+          Provider: <span class="font-mono" x-text="watchlist.provider"></span>
+        </span>
+      </div>
+    </header>
+
+    <!-- KPI ROW -->
+    <section class="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="text-xs uppercase tracking-wide text-slate-400">Watchlist</div>
+        <div class="mt-1 text-2xl font-semibold" x-text="watchlist.symbol_count"></div>
+        <div class="text-xs text-slate-500 mt-1" x-text="watchlist.symbols.length ? watchlist.symbols.slice(0,4).join(', ') + (watchlist.symbols.length > 4 ? '…' : '') : '—'"></div>
+      </div>
+      <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="text-xs uppercase tracking-wide text-slate-400">Total Bars</div>
+        <div class="mt-1 text-2xl font-semibold" x-text="fmtNum(stats.total_bars)"></div>
+        <div class="text-xs text-slate-500 mt-1">in ohlcv_1m</div>
+      </div>
+      <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="text-xs uppercase tracking-wide text-slate-400">Signals</div>
+        <div class="mt-1 text-2xl font-semibold" x-text="fmtNum(stats.total_signals)"></div>
+        <div class="text-xs text-slate-500 mt-1">divergences detected</div>
+      </div>
+      <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="text-xs uppercase tracking-wide text-slate-400">Last refresh</div>
+        <div class="mt-1 text-2xl font-mono" x-text="lastRefresh || '—'"></div>
+        <div class="text-xs text-slate-500 mt-1">auto every 5s</div>
+      </div>
+    </section>
+
+    <!-- WATCHLIST MANAGEMENT -->
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold">Watchlist</h2>
+        <span class="text-xs text-slate-400" x-text="watchlist.symbol_count + ' tracked'"></span>
+      </div>
+      <form @submit.prevent="addSymbols()" class="flex gap-2 mb-4">
+        <input
+          x-model="addInput"
+          placeholder="e.g. SPY, AAPL, TSLA"
+          class="flex-1 px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 placeholder-slate-500 focus:outline-none focus:border-indigo-500" />
+        <button type="submit"
+                class="px-4 py-2 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white font-medium disabled:opacity-50"
+                :disabled="!addInput.trim()">Add</button>
+      </form>
+      <div class="flex flex-wrap gap-2">
+        <template x-for="s in watchlist.symbols" :key="s">
+          <span class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-sm hover:border-indigo-500">
+            <a :href="'/symbol/' + s" class="font-mono hover:text-indigo-300" x-text="s"></a>
+            <button @click="removeSymbol(s)" class="text-slate-400 hover:text-red-400" title="Remove">×</button>
+          </span>
+        </template>
+        <span x-show="watchlist.symbols.length === 0" class="text-sm text-slate-500">No symbols yet. Add some above.</span>
+      </div>
+      <div x-show="watchlist.provider_error" class="mt-3 text-xs text-red-400">
+        Provider error: <span x-text="watchlist.provider_error"></span>
+      </div>
+    </section>
+
+    <!-- TOP MOVERS -->
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60">
+      <div class="px-5 py-3 border-b border-slate-800 flex items-center justify-between flex-wrap gap-3">
+        <div class="flex items-center gap-3">
+          <h2 class="text-sm font-semibold">Top Movers</h2>
+          <span class="text-xs text-slate-500" x-text="movers.fetched_at ? 'updated ' + new Date(movers.fetched_at).toLocaleTimeString() : ''"></span>
+        </div>
+        <div class="flex items-center gap-2 text-xs">
+          <select x-model="moversIndex" @change="loadMovers()"
+                  class="bg-slate-950 border border-slate-700 rounded-md px-2 py-1">
+            <option value="$SPX">S&P 500</option>
+            <option value="$DJI">Dow Jones</option>
+            <option value="$COMPX">Nasdaq Comp.</option>
+            <option value="NYSE">NYSE</option>
+            <option value="NASDAQ">Nasdaq</option>
+            <option value="OTCBB">OTC</option>
+            <option value="INDEX_ALL">All indexes</option>
+            <option value="EQUITY_ALL">All equities</option>
+          </select>
+          <div class="inline-flex rounded-md overflow-hidden border border-slate-700">
+            <button @click="moversSort='PERCENT_CHANGE_UP'; loadMovers()"
+                    :class="moversSort==='PERCENT_CHANGE_UP' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-900 text-slate-300 hover:bg-slate-800'"
+                    class="px-2 py-1">Gainers</button>
+            <button @click="moversSort='PERCENT_CHANGE_DOWN'; loadMovers()"
+                    :class="moversSort==='PERCENT_CHANGE_DOWN' ? 'bg-rose-500/20 text-rose-300' : 'bg-slate-900 text-slate-300 hover:bg-slate-800'"
+                    class="px-2 py-1 border-l border-slate-700">Losers</button>
+            <button @click="moversSort='VOLUME'; loadMovers()"
+                    :class="moversSort==='VOLUME' ? 'bg-indigo-500/20 text-indigo-300' : 'bg-slate-900 text-slate-300 hover:bg-slate-800'"
+                    class="px-2 py-1 border-l border-slate-700">Volume</button>
+            <button @click="moversSort='TRADES'; loadMovers()"
+                    :class="moversSort==='TRADES' ? 'bg-indigo-500/20 text-indigo-300' : 'bg-slate-900 text-slate-300 hover:bg-slate-800'"
+                    class="px-2 py-1 border-l border-slate-700">Trades</button>
+          </div>
+          <select x-model.number="moversFreq" @change="loadMovers()"
+                  class="bg-slate-950 border border-slate-700 rounded-md px-2 py-1"
+                  title="Lookback window">
+            <option value="0">since open</option>
+            <option value="1">1 min</option>
+            <option value="5">5 min</option>
+            <option value="10">10 min</option>
+            <option value="30">30 min</option>
+            <option value="60">60 min</option>
+          </select>
+        </div>
+      </div>
+      <div x-show="moversError" class="px-5 py-3 text-xs text-red-400" x-text="moversError"></div>
+      <div x-show="!moversError && (movers.movers || []).length === 0" class="px-5 py-6 text-sm text-slate-500">
+        <template x-if="(movers.upstream_count || 0) > 0">
+          <span>
+            No
+            <span x-text="moversSort === 'PERCENT_CHANGE_UP' ? 'gainers' : (moversSort === 'PERCENT_CHANGE_DOWN' ? 'losers' : 'matches')"></span>
+            in Schwab's top-<span x-text="movers.upstream_count"></span> movers for this index right now.
+            Try switching the direction or changing the index.
+          </span>
+        </template>
+        <template x-if="!(movers.upstream_count || 0)">
+          <span>No movers returned. (Markets closed, or provider isn't Schwab.)</span>
+        </template>
+      </div>
+      <div class="overflow-x-auto">
+        <table x-show="(movers.movers || []).length > 0" class="min-w-full text-sm">
+          <thead class="text-xs uppercase text-slate-400 bg-slate-900/30">
+            <tr>
+              <th class="text-left px-5 py-2">#</th>
+              <th class="text-left px-5 py-2">Symbol</th>
+              <th class="text-left px-5 py-2">Name</th>
+              <th class="text-right px-5 py-2">Last</th>
+              <th class="text-right px-5 py-2">Change</th>
+              <th class="text-right px-5 py-2">%</th>
+              <th class="text-right px-5 py-2">Volume</th>
+              <th class="px-5 py-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="(m, i) in (movers.movers || [])" :key="(m.symbol || '') + i">
+              <tr class="border-t border-slate-800/60 hover:bg-slate-900/40">
+                <td class="px-5 py-2 text-slate-500" x-text="i + 1"></td>
+                <td class="px-5 py-2 font-mono font-semibold">
+                  <a :href="'/symbol/' + (m.symbol || '').replace(/^\$/, '')"
+                     class="hover:text-indigo-300" x-text="m.symbol"></a>
+                </td>
+                <td class="px-5 py-2 text-slate-300 max-w-[280px] truncate" :title="m.description" x-text="m.description || '—'"></td>
+                <td class="px-5 py-2 text-right font-mono" x-text="fmtPrice(m.last)"></td>
+                <td class="px-5 py-2 text-right font-mono"
+                    :class="(m.change ?? 0) > 0 ? 'price-up' : (m.change ?? 0) < 0 ? 'price-down' : 'text-slate-400'"
+                    x-text="fmtSigned(m.change)"></td>
+                <td class="px-5 py-2 text-right font-mono"
+                    :class="(m.percent_change ?? 0) > 0 ? 'price-up' : (m.percent_change ?? 0) < 0 ? 'price-down' : 'text-slate-400'"
+                    x-text="fmtPct(m.percent_change)"></td>
+                <td class="px-5 py-2 text-right font-mono text-slate-300" x-text="fmtNum(m.volume ?? m.total_volume)"></td>
+                <td class="px-5 py-2 text-right">
+                  <button @click="addSymbolsFromString(m.symbol)"
+                          class="text-xs text-indigo-400 hover:text-indigo-300"
+                          title="Add to watchlist">+ watch</button>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- LIVE QUOTES GRID -->
+    <section>
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold">Latest Bars</h2>
+        <button @click="refresh()" class="text-xs text-slate-400 hover:text-slate-200">Refresh now</button>
+      </div>
+      <div x-show="snapshot.length === 0" class="rounded-xl border border-dashed border-slate-700 p-8 text-center text-slate-500 text-sm">
+        Bars will appear here once the stream produces data (Schwab CHART_EQUITY emits per minute).
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <template x-for="row in snapshot" :key="row.symbol">
+          <a :href="'/symbol/' + row.symbol"
+             class="block rounded-xl border border-slate-800 bg-slate-900/60 p-4 hover:border-indigo-500 transition-colors">
+            <div class="flex items-baseline justify-between">
+              <div class="font-mono text-lg font-semibold" x-text="row.symbol"></div>
+              <div class="text-xs text-slate-500" x-text="row.ts ? new Date(row.ts).toLocaleTimeString() : 'no data yet'"></div>
+            </div>
+            <div class="mt-2 text-2xl font-semibold"
+                 :class="priceColor(row)"
+                 x-text="row.close != null ? fmtPrice(row.close) : '—'"></div>
+            <div class="mt-2 grid grid-cols-4 gap-2 text-[10px] uppercase tracking-wide text-slate-400">
+              <div><div class="text-slate-300 text-xs font-mono" x-text="row.open != null ? fmtPrice(row.open) : '—'"></div>open</div>
+              <div><div class="text-slate-300 text-xs font-mono" x-text="row.high != null ? fmtPrice(row.high) : '—'"></div>high</div>
+              <div><div class="text-slate-300 text-xs font-mono" x-text="row.low  != null ? fmtPrice(row.low)  : '—'"></div>low</div>
+              <div><div class="text-slate-300 text-xs font-mono" x-text="row.volume != null ? fmtNum(row.volume) : '—'"></div>vol</div>
+            </div>
+            <div class="mt-2 text-[10px] text-slate-500 flex justify-between">
+              <span x-text="row.bar_count + ' bars stored'"></span>
+              <span class="text-indigo-400">View chart →</span>
+            </div>
+          </a>
+        </template>
+      </div>
+    </section>
+
+    <!-- RECENT SIGNALS -->
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60">
+      <div class="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
+        <h2 class="text-sm font-semibold">Recent Signals</h2>
+        <span class="text-xs text-slate-500" x-text="signals.length + ' shown'"></span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="text-xs uppercase text-slate-400 bg-slate-900/30">
+            <tr>
+              <th class="text-left px-5 py-2">Time</th>
+              <th class="text-left px-5 py-2">Symbol</th>
+              <th class="text-left px-5 py-2">Type</th>
+              <th class="text-left px-5 py-2">Indicator</th>
+              <th class="text-right px-5 py-2">Price</th>
+              <th class="text-right px-5 py-2">Indicator value</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="s in signals" :key="s.id">
+              <tr class="border-t border-slate-800/60 hover:bg-slate-900/40">
+                <td class="px-5 py-2 text-slate-300" x-text="s.ts ? new Date(s.ts).toLocaleString() : ''"></td>
+                <td class="px-5 py-2 font-mono" x-text="s.symbol"></td>
+                <td class="px-5 py-2" x-text="s.type"></td>
+                <td class="px-5 py-2 text-slate-400" x-text="s.indicator"></td>
+                <td class="px-5 py-2 text-right font-mono" x-text="fmtPrice(s.price)"></td>
+                <td class="px-5 py-2 text-right font-mono" x-text="fmtPrice(s.indicator_value)"></td>
+              </tr>
+            </template>
+            <tr x-show="signals.length === 0">
+              <td colspan="6" class="px-5 py-8 text-center text-slate-500 text-sm">No signals yet.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer class="text-center text-xs text-slate-500 pt-4 pb-8">
+      <a href="/docs" class="hover:text-slate-300">API docs</a>
+      &nbsp;·&nbsp;
+      <a href="/health" class="hover:text-slate-300">health</a>
+      &nbsp;·&nbsp;
+      <a href="/stats" class="hover:text-slate-300">stats</a>
+    </footer>
+  </div>
+
+  <script>
+    function dashboard() {
+      return {
+        watchlist: { symbols: [], symbol_count: 0, started: false, provider: '', provider_ready: false, provider_error: null },
+        snapshot: [],
+        signals: [],
+        stats: { total_bars: 0, total_signals: 0 },
+        health: { clickhouse: false },
+        addInput: '',
+        lastRefresh: '',
+        _prev: {},
+
+        movers: { movers: [], fetched_at: null },
+        moversIndex: '$SPX',
+        moversSort: 'PERCENT_CHANGE_UP',
+        moversFreq: 0,
+        moversError: '',
+
+        fmtNum(n) {
+          if (n === null || n === undefined) return '—';
+          return new Intl.NumberFormat().format(n);
+        },
+        fmtPrice(n) {
+          if (n === null || n === undefined || isNaN(n)) return '—';
+          return Number(n).toFixed(2);
+        },
+        fmtSigned(n) {
+          if (n === null || n === undefined || isNaN(n)) return '—';
+          const sign = n >= 0 ? '+' : '';
+          return `${sign}${Number(n).toFixed(2)}`;
+        },
+        fmtPct(n) {
+          if (n === null || n === undefined || isNaN(n)) return '—';
+          const sign = n >= 0 ? '+' : '';
+          return `${sign}${Number(n).toFixed(2)}%`;
+        },
+        priceColor(row) {
+          const prev = this._prev[row.symbol];
+          this._prev[row.symbol] = row.close;
+          if (prev == null || row.close == null) return '';
+          if (row.close > prev) return 'price-up';
+          if (row.close < prev) return 'price-down';
+          return '';
+        },
+
+        async getJSON(url) {
+          const r = await fetch(url);
+          if (!r.ok) throw new Error(url + ' -> ' + r.status);
+          return r.json();
+        },
+        async postJSON(url, body) {
+          const r = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (!r.ok) {
+            const t = await r.text();
+            throw new Error(url + ' -> ' + r.status + ' ' + t);
+          }
+          return r.json();
+        },
+
+        async refresh() {
+          try {
+            const [wl, snap, st, hl, sig] = await Promise.all([
+              this.getJSON('/watchlist'),
+              this.getJSON('/watchlist/snapshot'),
+              this.getJSON('/stats'),
+              this.getJSON('/health'),
+              this.getJSON('/api/signals?limit=25').catch(() => []),
+            ]);
+            this.watchlist = wl;
+            this.snapshot = snap;
+            this.stats = st;
+            this.health = hl;
+            this.signals = sig;
+            this.lastRefresh = new Date().toLocaleTimeString();
+          } catch (e) {
+            console.error(e);
+          }
+        },
+
+        async addSymbols() {
+          const symbols = this.addInput.split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+          if (!symbols.length) return;
+          try {
+            await this.postJSON('/watchlist/add', { symbols });
+            this.addInput = '';
+            await this.refresh();
+          } catch (e) {
+            alert('Add failed: ' + e.message);
+          }
+        },
+        async addSymbolsFromString(s) {
+          // Skip index pseudo-symbols like $SPX, $DJI when added from movers list.
+          const symbols = (s || '').split(/[,\s]+/)
+            .map(x => x.trim().replace(/^\$/, ''))
+            .filter(Boolean);
+          if (!symbols.length) return;
+          try {
+            await this.postJSON('/watchlist/add', { symbols });
+            await this.refresh();
+          } catch (e) {
+            alert('Add failed: ' + e.message);
+          }
+        },
+
+        async loadMovers() {
+          this.moversError = '';
+          try {
+            const url = `/api/movers?index=${encodeURIComponent(this.moversIndex)}`
+                      + `&sort=${this.moversSort}&frequency=${this.moversFreq}&limit=15`;
+            this.movers = await this.getJSON(url);
+          } catch (e) {
+            this.moversError = e.message;
+            this.movers = { movers: [], fetched_at: null };
+          }
+        },
+        async removeSymbol(s) {
+          if (!confirm('Remove ' + s + ' from watchlist?')) return;
+          try {
+            await this.postJSON('/watchlist/remove', { symbols: [s] });
+            await this.refresh();
+          } catch (e) {
+            alert('Remove failed: ' + e.message);
+          }
+        },
+
+        connectSignalsWS() {
+          try {
+            const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/signals');
+            ws.onmessage = () => this.refresh();
+            ws.onclose = () => setTimeout(() => this.connectSignalsWS(), 3000);
+          } catch (_) { /* ignore */ }
+        },
+
+        init() {
+          this.refresh();
+          this.loadMovers();
+          this.connectSignalsWS();
+          setInterval(() => this.refresh(), 5000);
+          setInterval(() => this.loadMovers(), 30000);
+        },
+      };
+    }
+  </script>
+</body>
+</html>

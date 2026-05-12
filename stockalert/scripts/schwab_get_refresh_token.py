@@ -31,7 +31,9 @@ import os
 CLIENT_ID = os.getenv("SCHWAB_CLIENT_ID", "")
 CLIENT_SECRET = os.getenv("SCHWAB_CLIENT_SECRET", "")
 REDIRECT_URI = os.getenv("SCHWAB_CALLBACK_URL", "").strip()
-BASE_URL = os.getenv("SCHWAB_BASE_URL", "https://api.schwabapi.com").rstrip("/")
+BASE_URL = (
+    os.getenv("SCHWAB_BASE_URL", "https://api.schwabapi.com").strip() or "https://api.schwabapi.com"
+).rstrip("/")
 TOKEN_FILE = os.getenv("SCHWAB_REFRESH_TOKEN_FILE", "data/.schwab_refresh_token")
 AUTHORIZE_URL = f"{BASE_URL}/v1/oauth/authorize"
 TOKEN_URL = f"{BASE_URL}/v1/oauth/token"
