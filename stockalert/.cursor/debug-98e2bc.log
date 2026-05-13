@@ -15556,3 +15556,13 @@
 {"sessionId": "98e2bc", "timestamp": 1778680892070, "message": "market_data_get", "data": {"path": "/movers/$SPX", "status": 200, "retryOn401": true}, "hypothesisId": "H1"}
 {"sessionId": "98e2bc", "timestamp": 1778680892109, "message": "market_data_get", "data": {"path": "/movers/NASDAQ", "status": 200, "retryOn401": true}, "hypothesisId": "H1"}
 {"sessionId": "98e2bc", "timestamp": 1778680893531, "message": "market_data_get", "data": {"path": "/quotes", "status": 200, "retryOn401": true}, "hypothesisId": "H1"}
+{"sessionId": "98e2bc", "timestamp": 1778680920789, "message": "market_data_get", "data": {"path": "/movers/$DJI", "status": 200, "retryOn401": true}, "hypothesisId": "H1"}
+{"sessionId": "98e2bc", "timestamp": 1778680921009, "message": "market_data_get", "data": {"path": "/movers/NASDAQ", "status": 200, "retryOn401": true}, "hypothesisId": "H1"}
+{"sessionId": "98e2bc", "timestamp": 1778680921219, "message": "market_data_get", "data": {"path": "/movers/$COMPX", "status": 200, "retryOn401": true}, "hypothesisId": "H1"}
+{"sessionId": "98e2bc", "timestamp": 1778680921269, "message": "market_data_get", "data": {"path": "/movers/NYSE", "status": 200, "retryOn401": true}, "hypothesisId": "H1"}
+{"sessionId": "98e2bc", "timestamp": 1778680921364, "message": "market_data_get", "data": {"path": "/movers/$SPX", "status": 200, "retryOn401": true}, "hypothesisId": "H1"}
+{"sessionId": "98e2bc", "timestamp": 1778680921948, "message": "market_data_get", "data": {"path": "/movers/$DJI", "status": 200, "retryOn401": true}, "hypothesisId": "H1"}
+{"sessionId": "98e2bc", "timestamp": 1778680922387, "message": "market_data_get", "data": {"path": "/movers/$COMPX", "status": 200, "retryOn401": true}, "hypothesisId": "H1"}
+{"sessionId": "98e2bc", "timestamp": 1778680922469, "message": "market_data_get", "data": {"path": "/movers/NYSE", "status": 200, "retryOn401": true}, "hypothesisId": "H1"}
+{"sessionId": "98e2bc", "timestamp": 1778680922470, "message": "market_data_get", "data": {"path": "/movers/NASDAQ", "status": 200, "retryOn401": true}, "hypothesisId": "H1"}
+{"sessionId": "98e2bc", "timestamp": 1778680922574, "message": "market_data_get", "data": {"path": "/movers/$SPX", "status": 200, "retryOn401": true}, "hypothesisId": "H1"}
