@@ -144,10 +144,15 @@ class PolygonFlatFilesClient:
         )
 
     def day_aggs_key(self, d: date) -> str:
-        """S3 key for the daily aggregates file on date ``d``."""
+        """S3 key for the daily aggregates file on date ``d``.
+
+        Polygon's day-aggs layout matches minute-aggs: ``YYYY/MM/YYYY-MM-DD.csv.gz``.
+        Earlier docs implied a flat ``YYYY/YYYY-MM-DD.csv.gz`` shape, but live
+        listings confirm the month subdirectory is present.
+        """
         return (
             f"{self._stocks_prefix}/day_aggs_v1/{d.year:04d}/"
-            f"{d:%Y-%m-%d}.csv.gz"
+            f"{d.month:02d}/{d:%Y-%m-%d}.csv.gz"
         )
 
     # ---------- internal ----------

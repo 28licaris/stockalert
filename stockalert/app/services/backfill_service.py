@@ -122,6 +122,7 @@ class BackfillService:
         quick_coverage_ratio: float = 0.9,
         now_fn: NowFn = _real_now,
         coverage_fn: Optional[Callable[..., Awaitable[dict]]] = None,
+        flatfiles_service: Optional["object"] = None,
     ) -> None:
         # Lazy: a loader is only created on first job, so the service can
         # be constructed safely at import time even if no provider is configured.
@@ -134,6 +135,12 @@ class BackfillService:
         self._now_fn = now_fn
         # Allow tests to swap the coverage function.
         self._coverage_fn = coverage_fn or queries.coverage_async
+        # Flat-files deep path. Lazily constructed on first use when Polygon
+        # is the configured history provider AND POLYGON_FLATFILES_ENABLED.
+        # Tests inject directly; production builds via from_settings(). Typed
+        # as ``object`` to avoid a hard import (flat-files needs boto3 +
+        # pyarrow, which we don't want to require for Schwab-only deploys).
+        self._flatfiles_service = flatfiles_service
 
         # symbol -> SymbolStatus
         self._status: dict[str, SymbolStatus] = {}
@@ -574,8 +581,63 @@ class BackfillService:
             job.finished_at = self._now_fn().isoformat()
             logger.error("Backfill %s %s failed: %s", kind, symbol, e, exc_info=True)
 
+    @staticmethod
+    def _should_use_flatfiles_for_deep() -> bool:
+        """
+        True when the deep backfill should route through Polygon Flat Files
+        instead of REST. Gated on three conditions:
+
+          1. The effective history provider is ``polygon`` (so we have an
+             entitlement to flat files in the first place).
+          2. ``POLYGON_FLATFILES_ENABLED`` is set (opt-in; lets users on
+             Polygon plans WITHOUT flat files keep using REST without
+             config gymnastics).
+          3. Both S3 keys are present (otherwise the lazy ``from_settings()``
+             would raise on first use).
+
+        Static so tests can patch ``app.config.settings`` cheaply.
+        """
+        if settings.effective_history_provider != "polygon":
+            return False
+        if not getattr(settings, "polygon_flatfiles_enabled", False):
+            return False
+        return bool(
+            (settings.polygon_s3_access_key_id or "").strip()
+            and (settings.polygon_s3_secret_access_key or "").strip()
+        )
+
+    def _get_flatfiles_service(self):
+        """Lazy-build the FlatFilesBackfillService. Returns ``None`` and
+        logs (does NOT raise) if construction fails — callers must then
+        fall back to the REST deep path so a misconfigured flat-files
+        install never silently breaks backfill."""
+        if self._flatfiles_service is not None:
+            return self._flatfiles_service
+        try:
+            from app.services.flatfiles_backfill import FlatFilesBackfillService
+            self._flatfiles_service = FlatFilesBackfillService.from_settings()
+            return self._flatfiles_service
+        except Exception as e:
+            logger.warning(
+                "BackfillService: flat-files unavailable, falling back to REST: %s",
+                e,
+            )
+            return None
+
     async def _execute_deep(self, symbol: str, *, days: int) -> None:
         """Gap-aware, chunked fetch. Used by the deep path."""
+        # Provider-aware dispatch: when Polygon Flat Files is the configured
+        # history source, route deep backfill through the bulk S3 path
+        # (~one request per trading day, fetches every symbol simultaneously
+        # at the wire level). REST stays as the fallback for any failure or
+        # for non-Polygon history providers.
+        if self._should_use_flatfiles_for_deep():
+            ff_svc = self._get_flatfiles_service()
+            if ff_svc is not None:
+                await self._execute_deep_via_flatfiles(symbol, days=days, ff_svc=ff_svc)
+                return
+            # Flat-files build failed; fall through to REST below.
+
         st = self._sym_status(symbol)
         job = st.deep
         job.state = "running"
@@ -647,6 +709,102 @@ class BackfillService:
             job.error = str(e)
             job.finished_at = self._now_fn().isoformat()
             logger.error("Backfill deep %s failed: %s", symbol, e, exc_info=True)
+
+    async def _execute_deep_via_flatfiles(
+        self, symbol: str, *, days: int, ff_svc,
+    ) -> None:
+        """
+        Deep backfill via Polygon Flat Files.
+
+        Strategy diverges from the REST path in three important ways:
+
+          - We don't chunk by ``chunk_days``. Each S3 GET fetches an entire
+            trading day for every US ticker; chunking would just multiply
+            the number of round trips for no benefit.
+          - We don't pre-compute the gap. The flat-files service walks
+            ``available_dates`` itself (which handles weekends/holidays),
+            and ClickHouse's ReplacingMergeTree(version) makes re-ingesting
+            already-covered days a safe no-op.
+          - Status accounting maps the per-day result counters back onto
+            the existing ``JobStatus`` shape so the UI / status endpoint
+            doesn't need to learn a second progress model.
+        """
+        st = self._sym_status(symbol)
+        job = st.deep
+        job.state = "running"
+        job.started_at = self._now_fn().isoformat()
+        job.bars = 0
+        job.chunks_done = 0
+        job.chunks_total = 0
+
+        try:
+            now = self._now_fn()
+            target_start = now - timedelta(days=days)
+            # Use a coverage check identical to the REST path so we still
+            # short-circuit when nothing genuinely new is needed. With
+            # flat-files this matters less (dedup is free) but it keeps the
+            # status UI consistent between providers.
+            cov_full = await self._coverage_fn(symbol, target_start, now)
+            existing_earliest = cov_full["earliest"]
+            if existing_earliest is not None and existing_earliest.tzinfo is None:
+                existing_earliest = existing_earliest.replace(tzinfo=timezone.utc)
+            if existing_earliest is None:
+                fetch_end = now
+            else:
+                fetch_end = existing_earliest
+                if fetch_end <= target_start:
+                    job.state = "skipped"
+                    job.reason = "no gap before target window"
+                    job.bars = cov_full["bar_count"]
+                    job.finished_at = self._now_fn().isoformat()
+                    logger.info(
+                        "Backfill deep %s (flat-files): skipped (earliest=%s)",
+                        symbol, existing_earliest,
+                    )
+                    return
+
+            result = await ff_svc.backfill_range(
+                [symbol],
+                target_start.date(),
+                fetch_end.date(),
+                kind="minute",
+            )
+
+            job.chunks_total = result.days_listed
+            # Treat any non-errored day (ok / filtered / missing / skipped)
+            # as "made progress" so the UI shows steady forward motion even
+            # on weekends / for symbols with sparse flat-file coverage.
+            job.chunks_done = (
+                result.days_listed - result.days_errored
+            )
+            job.bars = result.bars_persisted
+            if result.days_errored > 0:
+                job.state = "error"
+                job.error = f"{result.days_errored} day(s) failed"
+            else:
+                job.state = "done"
+            job.reason = (
+                f"flat-files: {result.days_ok} ok / "
+                f"{result.days_filtered} filtered / "
+                f"{result.days_missing} missing / "
+                f"{result.bars_persisted} bars over {days}d"
+            )
+            job.finished_at = self._now_fn().isoformat()
+            logger.info(
+                "Backfill deep %s (flat-files): %s (bars=%d, days_ok=%d, "
+                "filtered=%d, missing=%d, errored=%d)",
+                symbol, job.state, result.bars_persisted,
+                result.days_ok, result.days_filtered,
+                result.days_missing, result.days_errored,
+            )
+        except Exception as e:
+            job.state = "error"
+            job.error = str(e)
+            job.finished_at = self._now_fn().isoformat()
+            logger.error(
+                "Backfill deep %s (flat-files) failed: %s",
+                symbol, e, exc_info=True,
+            )
 
     async def _execute_intraday(self, symbol: str, *, days: int) -> None:
         """

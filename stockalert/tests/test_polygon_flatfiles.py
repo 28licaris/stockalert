@@ -58,7 +58,7 @@ class TestKeyResolution:
     def test_day_key_path(self):
         c, _ = _make_client()
         key = c.day_aggs_key(date(2026, 5, 13))
-        assert key == "us_stocks_sip/day_aggs_v1/2026/2026-05-13.csv.gz"
+        assert key == "us_stocks_sip/day_aggs_v1/2026/05/2026-05-13.csv.gz"
 
     def test_custom_prefix_is_honored(self):
         """Other asset classes share the layout under a different prefix."""
@@ -188,7 +188,7 @@ class TestDownloadDayAggs:
         c.download_day_aggs(date(2026, 5, 13))
         fake.get_object.assert_called_once_with(
             Bucket="flatfiles",
-            Key="us_stocks_sip/day_aggs_v1/2026/2026-05-13.csv.gz",
+            Key="us_stocks_sip/day_aggs_v1/2026/05/2026-05-13.csv.gz",
         )
 
 

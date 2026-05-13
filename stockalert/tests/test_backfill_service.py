@@ -109,6 +109,22 @@ def _patch_persist(monkeypatch):
     monkeypatch.setattr(BackfillService, "_persist", _noop_persist)
 
 
+@pytest.fixture(autouse=True)
+def _disable_flatfiles_dispatch_by_default(monkeypatch):
+    """
+    The deep dispatch reads live ``settings`` to decide whether to route
+    through Polygon Flat Files. Local dev configs may have flat-files
+    enabled, which would silently divert the REST-path tests below to
+    flat-files and break them. Force the dispatch off for every test by
+    default; the flat-files tests at the bottom of this file opt back in
+    explicitly via their own fixture.
+    """
+    import app.services.backfill_service as bs_mod
+    monkeypatch.setattr(
+        bs_mod.settings, "polygon_flatfiles_enabled", False, raising=False,
+    )
+
+
 # ---------- Quick path ----------
 
 
@@ -531,3 +547,185 @@ def test_seconds_until_next_sweep_same_day_before_hour() -> None:
     # 02:00 UTC -> next 06:00 UTC is today (4h away)
     wait = svc._seconds_until_next_sweep()
     assert 3.9 * 3600 < wait <= 4 * 3600
+
+
+# ---------- Flat-files deep dispatch ----------
+
+
+@pytest.fixture
+def _ff_settings(monkeypatch):
+    """Helper to set the env-var-driven flags ``_should_use_flatfiles_for_deep``
+    checks. Returns a single ``apply(provider, enabled, key, secret)`` that
+    callers use to express the test's intent compactly."""
+    import app.services.backfill_service as bs_mod
+
+    def apply(*, provider: str, enabled: bool, key: str = "k", secret: str = "s"):
+        monkeypatch.setattr(bs_mod.settings, "history_provider", provider,
+                            raising=False)
+        # ``effective_history_provider`` is a @property on settings; we patch
+        # its return value via the underlying ``history_provider`` /
+        # ``data_provider`` fields used by the property.
+        monkeypatch.setattr(bs_mod.settings, "data_provider", provider,
+                            raising=False)
+        monkeypatch.setattr(bs_mod.settings, "polygon_flatfiles_enabled",
+                            enabled, raising=False)
+        monkeypatch.setattr(bs_mod.settings, "polygon_s3_access_key_id",
+                            key, raising=False)
+        monkeypatch.setattr(bs_mod.settings, "polygon_s3_secret_access_key",
+                            secret, raising=False)
+    return apply
+
+
+class _FakeFlatFilesResult:
+    def __init__(self, *, bars=0, ok=0, filtered=0, missing=0, errored=0,
+                 listed=0):
+        self.bars_persisted = bars
+        self.days_ok = ok
+        self.days_filtered = filtered
+        self.days_missing = missing
+        self.days_errored = errored
+        self.days_listed = listed
+
+
+class _FakeFlatFilesService:
+    """Mimics the surface ``BackfillService`` consumes: a single async
+    ``backfill_range`` returning a result object with the same attribute
+    names as ``BackfillRangeResult``."""
+    def __init__(self, result: _FakeFlatFilesResult):
+        self.result = result
+        self.calls: list[dict] = []
+
+    async def backfill_range(self, symbols, start, end, *, kind="minute",
+                             dry_run=False, on_progress=None):
+        self.calls.append({
+            "symbols": list(symbols), "start": start, "end": end,
+            "kind": kind, "dry_run": dry_run,
+        })
+        return self.result
+
+
+def test_should_use_flatfiles_for_deep_requires_all_conditions(_ff_settings):
+    """All three conditions must be true (provider + enabled + creds)."""
+    _ff_settings(provider="polygon", enabled=True)
+    assert BackfillService._should_use_flatfiles_for_deep() is True
+
+    _ff_settings(provider="schwab", enabled=True)
+    assert BackfillService._should_use_flatfiles_for_deep() is False
+
+    _ff_settings(provider="polygon", enabled=False)
+    assert BackfillService._should_use_flatfiles_for_deep() is False
+
+    _ff_settings(provider="polygon", enabled=True, key="", secret="s")
+    assert BackfillService._should_use_flatfiles_for_deep() is False
+
+    _ff_settings(provider="polygon", enabled=True, key="k", secret="")
+    assert BackfillService._should_use_flatfiles_for_deep() is False
+
+
+@pytest.mark.asyncio
+async def test_deep_routes_through_flatfiles_when_enabled(
+    fixed_now, empty_coverage_fn, _ff_settings,
+):
+    _ff_settings(provider="polygon", enabled=True)
+    fake_ff = _FakeFlatFilesService(
+        _FakeFlatFilesResult(bars=2690, ok=1, listed=1),
+    )
+    svc = BackfillService(
+        coverage_fn=empty_coverage_fn,
+        now_fn=lambda: fixed_now,
+        flatfiles_service=fake_ff,
+    )
+    svc.enqueue_deep("AAPL", days=30)
+    for task in list(svc._tasks.values()):
+        await task
+
+    assert len(fake_ff.calls) == 1
+    call = fake_ff.calls[0]
+    assert call["symbols"] == ["AAPL"]
+    assert call["kind"] == "minute"
+    # Window endpoints are date-typed and inclusive.
+    assert call["start"] == (fixed_now - timedelta(days=30)).date()
+    assert call["end"] == fixed_now.date()
+
+    status = svc.status("AAPL")["AAPL"]["deep"]
+    assert status["state"] == "done"
+    assert status["bars"] == 2690
+    assert "flat-files:" in (status.get("reason") or "")
+
+
+@pytest.mark.asyncio
+async def test_deep_skipped_when_flatfiles_path_already_covers_target(
+    fixed_now, _ff_settings,
+):
+    _ff_settings(provider="polygon", enabled=True)
+    # DB already has bars going further back than target_start, so the
+    # flat-files path must short-circuit WITHOUT calling backfill_range.
+    cov_fn = make_coverage_fn(
+        bar_count=5000,
+        earliest=fixed_now - timedelta(days=400),  # older than 365d target
+        latest=fixed_now,
+    )
+    fake_ff = _FakeFlatFilesService(_FakeFlatFilesResult())
+    svc = BackfillService(
+        coverage_fn=cov_fn, now_fn=lambda: fixed_now,
+        flatfiles_service=fake_ff,
+    )
+    svc.enqueue_deep("AAPL", days=365)
+    for task in list(svc._tasks.values()):
+        await task
+
+    assert fake_ff.calls == []  # never invoked
+    status = svc.status("AAPL")["AAPL"]["deep"]
+    assert status["state"] == "skipped"
+    assert status["bars"] == 5000
+
+
+@pytest.mark.asyncio
+async def test_deep_falls_back_to_rest_when_flatfiles_unavailable(
+    fixed_now, empty_coverage_fn, _ff_settings,
+):
+    """If the flat-files service can't be built (boto3 missing, creds
+    unreachable, etc.) ``_get_flatfiles_service`` returns ``None`` and the
+    deep dispatch falls through to the REST chunked path. The contract is
+    "never raise from the lazy build"; this test asserts the fallthrough."""
+    _ff_settings(provider="polygon", enabled=True)
+    loader = FakeLoader(bars_per_call=100)
+    svc = BackfillService(
+        loader=loader, coverage_fn=empty_coverage_fn,
+        now_fn=lambda: fixed_now,
+    )
+    # Simulate "boto3 import failed" or "from_settings() raised" the way
+    # the real helper handles it — swallowed exception, ``None`` return.
+    svc._get_flatfiles_service = lambda: None  # type: ignore[method-assign]
+
+    svc.enqueue_deep("AAPL", days=30)
+    for task in list(svc._tasks.values()):
+        await task
+
+    # The REST loader saw the chunked deep calls -> fallback fired.
+    assert len(loader.calls) > 0
+    assert svc.status("AAPL")["AAPL"]["deep"]["state"] in ("done", "error")
+
+
+@pytest.mark.asyncio
+async def test_deep_records_errored_days_as_error_state(
+    fixed_now, empty_coverage_fn, _ff_settings,
+):
+    _ff_settings(provider="polygon", enabled=True)
+    fake_ff = _FakeFlatFilesService(
+        _FakeFlatFilesResult(bars=900, ok=2, errored=1, listed=3),
+    )
+    svc = BackfillService(
+        coverage_fn=empty_coverage_fn,
+        now_fn=lambda: fixed_now,
+        flatfiles_service=fake_ff,
+    )
+    svc.enqueue_deep("AAPL", days=30)
+    for task in list(svc._tasks.values()):
+        await task
+
+    status = svc.status("AAPL")["AAPL"]["deep"]
+    assert status["state"] == "error"
+    assert "1 day" in (status.get("error") or "")
+    # Bars still recorded so the user sees partial progress.
+    assert status["bars"] == 900
