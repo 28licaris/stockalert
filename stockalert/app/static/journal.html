@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en" class="bg-slate-950 text-slate-100">
+<head>
+  <meta charset="UTF-8" />
+  <title>Trading Journal - StockAlert</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .price-up { color: #4ade80; }
+    .price-down { color: #f87171; }
+    .badge-ok { background: rgba(74,222,128,.12); color: #4ade80; border: 1px solid rgba(74,222,128,.3); }
+    .badge-warn { background: rgba(248,113,113,.12); color: #f87171; border: 1px solid rgba(248,113,113,.3); }
+    .badge-neutral { background: rgba(148,163,184,.12); color: #cbd5e1; border: 1px solid rgba(148,163,184,.3); }
+    .badge-buy   { background: rgba(74,222,128,.12); color: #4ade80; border: 1px solid rgba(74,222,128,.3); }
+    .badge-sell  { background: rgba(248,113,113,.12); color: #f87171; border: 1px solid rgba(248,113,113,.3); }
+    .pnl-pos { color: #4ade80; }
+    .pnl-neg { color: #f87171; }
+    .skeleton { background: linear-gradient(90deg,#1e293b,#334155,#1e293b); background-size:200% 100%; animation: shimmer 1.5s infinite; }
+    @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+    /* tiny inline svg chart */
+    .bar-pos { fill: rgba(74,222,128,0.85); }
+    .bar-neg { fill: rgba(248,113,113,0.85); }
+    .axis-line { stroke: #1e293b; stroke-width: 1; }
+    .axis-tick { fill: #64748b; font-size: 10px; }
+    input.note-input, textarea.note-input {
+      background: rgba(15,23,42,0.6); border: 1px solid #1e293b;
+      border-radius: 4px; color: #e2e8f0; padding: 2px 6px;
+    }
+    input.note-input:focus, textarea.note-input:focus { outline: none; border-color: #6366f1; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div x-data="journalPage()" x-init="init()" class="max-w-7xl mx-auto px-6 py-6 space-y-6">
+
+    <!-- HEADER -->
+    <header class="flex items-center justify-between flex-wrap gap-3">
+      <div class="flex items-center gap-3">
+        <div class="h-10 w-10 rounded-lg bg-gradient-to-br from-indigo-500 to-fuchsia-500 flex items-center justify-center font-bold text-lg">SA</div>
+        <div>
+          <h1 class="text-xl font-semibold">Trading Journal</h1>
+          <p class="text-xs text-slate-400">Schwab trades, realized P&amp;L, and notes for future LLM context</p>
+        </div>
+      </div>
+      <nav class="flex items-center gap-2 text-sm">
+        <a href="/dashboard" class="px-3 py-1.5 rounded border border-slate-700 hover:bg-slate-800/60">← Dashboard</a>
+        <button @click="manualSync()"
+                :disabled="syncing"
+                class="px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold">
+          <span x-show="!syncing">Sync from Schwab</span>
+          <span x-show="syncing">Syncing…</span>
+        </button>
+      </nav>
+    </header>
+
+    <!-- ACCOUNTS STRIP -->
+    <section class="grid grid-cols-1 md:grid-cols-2 gap-4" x-show="accounts.length > 0">
+      <template x-for="acc in accounts" :key="acc.account_hash">
+        <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-xs uppercase tracking-wide text-slate-400">Account</div>
+              <div class="text-lg font-mono mt-1" x-text="acc.account_label"></div>
+            </div>
+            <span class="px-2.5 py-1 rounded-full text-xs border border-slate-700 text-slate-300"
+                  x-text="acc.account_type || 'CASH'"></span>
+          </div>
+          <div class="grid grid-cols-3 gap-3 mt-3 text-sm">
+            <div>
+              <div class="text-xs text-slate-500">Liquidation</div>
+              <div class="font-semibold" x-text="fmtUsd(acc.liquidation_value)"></div>
+            </div>
+            <div>
+              <div class="text-xs text-slate-500">Cash</div>
+              <div class="font-semibold" x-text="fmtUsd(acc.cash_balance)"></div>
+            </div>
+            <div>
+              <div class="text-xs text-slate-500">Buying power</div>
+              <div class="font-semibold" x-text="fmtUsd(acc.buying_power)"></div>
+            </div>
+          </div>
+          <div class="text-xs text-slate-500 mt-2">
+            Round trips: <span class="font-mono" x-text="acc.round_trips"></span> ·
+            Snapshot <span x-text="fmtTime(acc.snapshot_time)"></span>
+          </div>
+        </div>
+      </template>
+    </section>
+
+    <section x-show="accounts.length === 0 && !loadingAccounts"
+             class="rounded-xl border border-slate-800 bg-slate-900/40 p-6 text-center text-slate-400 text-sm">
+      No account snapshots yet. Click <span class="text-indigo-300">Sync from Schwab</span> to pull your latest balances.
+    </section>
+
+    <!-- KPI / FILTER ROW -->
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 space-y-4">
+      <div class="flex items-center justify-between flex-wrap gap-3">
+        <div class="flex items-center gap-2">
+          <label class="text-xs text-slate-400">Window</label>
+          <select x-model.number="windowDays" @change="reload()"
+                  class="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500">
+            <option :value="7">Last 7 days</option>
+            <option :value="30">Last 30 days</option>
+            <option :value="90">Last 90 days</option>
+            <option :value="180">Last 6 months</option>
+            <option :value="365">Last year</option>
+          </select>
+          <label class="text-xs text-slate-400 ml-3">Account</label>
+          <select x-model="filterAccount" @change="reload()"
+                  class="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm font-mono">
+            <option value="">All accounts</option>
+            <template x-for="acc in accounts" :key="acc.account_hash">
+              <option :value="acc.account_hash" x-text="acc.account_label"></option>
+            </template>
+          </select>
+          <label class="text-xs text-slate-400 ml-3">Symbol</label>
+          <input type="text" x-model="filterSymbol" @keydown.enter="reload()" placeholder="(all)"
+                 class="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm font-mono w-24 uppercase" />
+        </div>
+        <div class="text-xs text-slate-500">
+          <span x-text="trades.length"></span> trades ·
+          <span x-text="(summary.overall?.closed_trade_count || 0) + ' closed legs'"></span>
+        </div>
+      </div>
+
+      <!-- KPI strip -->
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <div class="rounded-lg border border-slate-800 bg-slate-900/50 p-3">
+          <div class="text-xs text-slate-400">Realized P&amp;L</div>
+          <div class="text-xl font-semibold mt-1"
+               :class="(summary.overall?.total_realized_pnl || 0) >= 0 ? 'pnl-pos' : 'pnl-neg'"
+               x-text="fmtPnl(summary.overall?.total_realized_pnl)"></div>
+          <div class="text-xs text-slate-500" x-text="`gross ${fmtPnl(summary.overall?.gross_pnl)}`"></div>
+        </div>
+        <div class="rounded-lg border border-slate-800 bg-slate-900/50 p-3">
+          <div class="text-xs text-slate-400">Win rate</div>
+          <div class="text-xl font-semibold mt-1" x-text="fmtPct(summary.overall?.win_rate)"></div>
+          <div class="text-xs text-slate-500"
+               x-text="`${summary.overall?.win_count || 0}W / ${summary.overall?.loss_count || 0}L`"></div>
+        </div>
+        <div class="rounded-lg border border-slate-800 bg-slate-900/50 p-3">
+          <div class="text-xs text-slate-400">Avg winner</div>
+          <div class="text-xl font-semibold mt-1 pnl-pos" x-text="fmtPnl(summary.overall?.avg_winner)"></div>
+        </div>
+        <div class="rounded-lg border border-slate-800 bg-slate-900/50 p-3">
+          <div class="text-xs text-slate-400">Avg loser</div>
+          <div class="text-xl font-semibold mt-1 pnl-neg" x-text="fmtPnl(summary.overall?.avg_loser)"></div>
+        </div>
+        <div class="rounded-lg border border-slate-800 bg-slate-900/50 p-3">
+          <div class="text-xs text-slate-400">Fees paid</div>
+          <div class="text-xl font-semibold mt-1 text-slate-300" x-text="fmtUsd(summary.overall?.fees)"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- DAILY P&L CHART -->
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+      <h2 class="text-sm font-semibold mb-3">Daily realized P&amp;L</h2>
+      <div x-show="dailyBars.length === 0" class="text-slate-500 text-sm">No closed trades in window.</div>
+      <svg x-show="dailyBars.length > 0" class="w-full" viewBox="0 0 700 200" preserveAspectRatio="none">
+        <line x1="0" :y1="chartZeroY" x2="700" :y2="chartZeroY" class="axis-line"></line>
+        <template x-for="(d,i) in dailyBars" :key="d.date">
+          <g>
+            <rect :x="i * chartBarW + 2"
+                  :y="d.net_pnl >= 0 ? chartZeroY - chartBarHeight(d.net_pnl) : chartZeroY"
+                  :width="Math.max(2, chartBarW - 4)"
+                  :height="Math.abs(chartBarHeight(d.net_pnl))"
+                  :class="d.net_pnl >= 0 ? 'bar-pos' : 'bar-neg'">
+              <title x-text="`${d.date}: ${fmtPnl(d.net_pnl)}`"></title>
+            </rect>
+          </g>
+        </template>
+        <!-- left/right tick labels (date) -->
+        <text x="0" y="195" class="axis-tick" x-text="dailyBars[0]?.date || ''"></text>
+        <text x="650" y="195" class="axis-tick" x-text="dailyBars[dailyBars.length-1]?.date || ''"></text>
+      </svg>
+    </section>
+
+    <!-- PER-SYMBOL BREAKDOWN -->
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5"
+             x-show="summary.by_symbol && summary.by_symbol.length > 0">
+      <h2 class="text-sm font-semibold mb-3">Per-symbol summary</h2>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="text-xs text-slate-400 uppercase tracking-wider">
+            <tr class="border-b border-slate-800">
+              <th class="text-left py-2 pr-3">Symbol</th>
+              <th class="text-right py-2 pr-3">Net P&amp;L</th>
+              <th class="text-right py-2 pr-3">Gross</th>
+              <th class="text-right py-2 pr-3">Fees</th>
+              <th class="text-right py-2 pr-3">Legs</th>
+              <th class="text-right py-2 pr-3">W / L</th>
+              <th class="text-right py-2 pr-3">Win rate</th>
+              <th class="text-right py-2">Chart</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="row in summary.by_symbol" :key="row.symbol">
+              <tr class="border-b border-slate-800/50 hover:bg-slate-800/30">
+                <td class="py-2 pr-3 font-mono font-semibold" x-text="row.symbol"></td>
+                <td class="py-2 pr-3 text-right font-mono font-semibold"
+                    :class="row.net_pnl >= 0 ? 'pnl-pos' : 'pnl-neg'"
+                    x-text="fmtPnl(row.net_pnl)"></td>
+                <td class="py-2 pr-3 text-right font-mono text-slate-400" x-text="fmtPnl(row.gross_pnl)"></td>
+                <td class="py-2 pr-3 text-right font-mono text-slate-400" x-text="fmtUsd(row.fees)"></td>
+                <td class="py-2 pr-3 text-right text-slate-400" x-text="row.trade_count"></td>
+                <td class="py-2 pr-3 text-right text-slate-400"
+                    x-text="`${row.win_count} / ${row.loss_count}`"></td>
+                <td class="py-2 pr-3 text-right text-slate-400"
+                    x-text="fmtPct(row.trade_count ? row.win_count / row.trade_count : 0)"></td>
+                <td class="py-2 text-right">
+                  <a :href="'/symbol/' + encodeURIComponent(row.symbol)" class="text-indigo-400 hover:underline text-xs">view →</a>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- TRADES TABLE -->
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold">Recent trades</h2>
+        <div class="text-xs text-slate-500">
+          Inline-edit <span class="text-slate-300">strategy</span> and <span class="text-slate-300">notes</span> · saves automatically
+        </div>
+      </div>
+
+      <div x-show="loadingTrades" class="space-y-1">
+        <div class="h-8 skeleton rounded"></div>
+        <div class="h-8 skeleton rounded"></div>
+        <div class="h-8 skeleton rounded"></div>
+      </div>
+
+      <div x-show="!loadingTrades && trades.length === 0" class="text-slate-500 text-sm py-6 text-center">
+        No trades in this window.
+      </div>
+
+      <div x-show="!loadingTrades && trades.length > 0" class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="text-xs text-slate-400 uppercase tracking-wider">
+            <tr class="border-b border-slate-800">
+              <th class="text-left py-2 pr-3">Time</th>
+              <th class="text-left py-2 pr-3">Symbol</th>
+              <th class="text-left py-2 pr-3">Side</th>
+              <th class="text-left py-2 pr-3">Open/Close</th>
+              <th class="text-right py-2 pr-3">Qty</th>
+              <th class="text-right py-2 pr-3">Price</th>
+              <th class="text-right py-2 pr-3">Net $</th>
+              <th class="text-right py-2 pr-3">Fees</th>
+              <th class="text-right py-2 pr-3">P&amp;L</th>
+              <th class="text-left py-2 pr-3">Strategy</th>
+              <th class="text-left py-2">Note</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="t in trades" :key="t.activity_id">
+              <tr class="border-b border-slate-800/50 hover:bg-slate-800/30 align-top">
+                <td class="py-2 pr-3 text-slate-300 whitespace-nowrap font-mono text-xs"
+                    x-text="fmtTime(t.trade_time)"></td>
+                <td class="py-2 pr-3 font-mono font-semibold">
+                  <a :href="'/symbol/' + encodeURIComponent(t.symbol)" class="hover:text-indigo-300" x-text="t.symbol"></a>
+                </td>
+                <td class="py-2 pr-3">
+                  <span class="px-2 py-0.5 rounded text-xs font-semibold"
+                        :class="t.side === 'BUY' ? 'badge-buy' : 'badge-sell'"
+                        x-text="t.side"></span>
+                </td>
+                <td class="py-2 pr-3 text-xs text-slate-400" x-text="t.position_effect || '—'"></td>
+                <td class="py-2 pr-3 text-right font-mono" x-text="fmtNum(t.quantity)"></td>
+                <td class="py-2 pr-3 text-right font-mono" x-text="fmtPrice(t.price)"></td>
+                <td class="py-2 pr-3 text-right font-mono"
+                    :class="t.net_amount >= 0 ? 'pnl-pos' : 'pnl-neg'"
+                    x-text="fmtUsd(t.net_amount)"></td>
+                <td class="py-2 pr-3 text-right font-mono text-slate-400" x-text="fmtUsd(t.fees)"></td>
+                <td class="py-2 pr-3 text-right font-mono"
+                    :class="pnlForTrade(t) >= 0 ? 'pnl-pos' : 'pnl-neg'"
+                    x-text="pnlForTrade(t) === null ? '—' : fmtPnl(pnlForTrade(t))"></td>
+                <td class="py-2 pr-3">
+                  <input type="text"
+                         class="note-input w-32 text-xs"
+                         :value="t.strategy"
+                         @change="saveNote(t, $event.target.value, t.note)"
+                         placeholder="(strategy)" />
+                </td>
+                <td class="py-2">
+                  <input type="text"
+                         class="note-input w-full text-xs"
+                         :value="t.note"
+                         @change="saveNote(t, t.strategy, $event.target.value)"
+                         placeholder="(notes — chart pattern, setup, lesson learned…)" />
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- SYNC STATUS -->
+    <section x-show="lastSync" class="rounded-xl border border-slate-800 bg-slate-900/40 p-4 text-xs text-slate-400">
+      <span class="text-slate-300 font-semibold">Last sync:</span>
+      <span class="ml-2 font-mono"
+        x-text="`accounts=${lastSync.accounts}  snapshots=${lastSync.snapshots}  trades_fetched=${lastSync.trades_fetched}  trades_inserted=${lastSync.trades_inserted}`"></span>
+      <span x-show="lastSync.errors && lastSync.errors.length" class="ml-2 text-rose-400"
+        x-text="`(${lastSync.errors.length} errors)`"></span>
+    </section>
+
+  </div>
+
+<script>
+function journalPage() {
+  return {
+    accounts: [],
+    trades: [],
+    summary: {},
+    dailyBars: [],
+    pnlByActivity: {},   // closing_activity_id -> net_pnl  (for inline column)
+    windowDays: 90,
+    filterAccount: "",
+    filterSymbol: "",
+    loadingAccounts: false,
+    loadingTrades: false,
+    syncing: false,
+    lastSync: null,
+
+    // chart geometry (computed once we have data)
+    get chartBarW() { return this.dailyBars.length ? 696 / this.dailyBars.length : 12; },
+    get chartZeroY() {
+      if (!this.dailyBars.length) return 100;
+      const vmax = Math.max(...this.dailyBars.map(d => Math.max(0, d.net_pnl)));
+      const vmin = Math.min(...this.dailyBars.map(d => Math.min(0, d.net_pnl)));
+      const range = Math.max(1, vmax - vmin);
+      // upper region for positives, lower for negatives. 180px tall chart.
+      return 10 + (vmax / range) * 180;
+    },
+    chartBarHeight(val) {
+      if (!this.dailyBars.length) return 0;
+      const vmax = Math.max(...this.dailyBars.map(d => Math.max(0, d.net_pnl)));
+      const vmin = Math.min(...this.dailyBars.map(d => Math.min(0, d.net_pnl)));
+      const range = Math.max(1, vmax - vmin);
+      return (val / range) * 180;
+    },
+
+    async init() {
+      await this.loadAccounts();
+      await this.reload();
+    },
+
+    async loadAccounts() {
+      this.loadingAccounts = true;
+      try {
+        const r = await fetch("/api/journal/accounts");
+        const j = await r.json();
+        this.accounts = j.accounts || [];
+      } catch (e) {
+        console.error("loadAccounts failed", e);
+      } finally {
+        this.loadingAccounts = false;
+      }
+    },
+
+    async reload() {
+      this.loadingTrades = true;
+      const qs = new URLSearchParams({ days: String(this.windowDays) });
+      if (this.filterAccount) qs.set("account", this.filterAccount);
+      if (this.filterSymbol)  qs.set("symbol", this.filterSymbol.toUpperCase());
+      try {
+        const [t, s] = await Promise.all([
+          fetch("/api/journal/trades?" + qs.toString()).then(r => r.json()),
+          fetch("/api/journal/summary?" + qs.toString()).then(r => r.json()),
+        ]);
+        this.trades = t.trades || [];
+        this.summary = s || {};
+        this.dailyBars = s?.by_day || [];
+        this.pnlByActivity = {};
+        for (const leg of (s?.legs || [])) {
+          // Sum legs that share the same closing activity (partial closes).
+          this.pnlByActivity[leg.closing_activity_id] =
+            (this.pnlByActivity[leg.closing_activity_id] || 0) + leg.net_pnl;
+        }
+      } catch (e) {
+        console.error("reload failed", e);
+      } finally {
+        this.loadingTrades = false;
+      }
+    },
+
+    pnlForTrade(t) {
+      // Only closing trades have realized P&L. Use position_effect=CLOSING
+      // OR a non-undefined lookup from the legs map.
+      if (t.position_effect === "CLOSING" || this.pnlByActivity[t.activity_id] !== undefined) {
+        return this.pnlByActivity[t.activity_id] ?? 0;
+      }
+      return null;
+    },
+
+    async manualSync() {
+      this.syncing = true;
+      try {
+        const r = await fetch("/api/journal/sync", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ days: this.windowDays, force: true }),
+        });
+        const j = await r.json();
+        this.lastSync = j;
+        await this.loadAccounts();
+        await this.reload();
+      } catch (e) {
+        console.error("manualSync failed", e);
+        alert("Sync failed: " + e);
+      } finally {
+        this.syncing = false;
+      }
+    },
+
+    async saveNote(t, strategy, note) {
+      try {
+        await fetch(`/api/journal/notes/${t.activity_id}`, {
+          method: "PUT",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            account_hash: t.account_hash,
+            strategy: strategy || "",
+            note: note || "",
+            tags: t.tags || [],
+          }),
+        });
+        // Optimistically update the local row so the column stays in sync.
+        t.strategy = strategy || "";
+        t.note = note || "";
+      } catch (e) {
+        console.error("saveNote failed", e);
+        alert("Note save failed: " + e);
+      }
+    },
+
+    fmtNum(n) {
+      if (n === null || n === undefined) return "—";
+      return Number(n).toLocaleString(undefined, {maximumFractionDigits: 4});
+    },
+    fmtPrice(n) {
+      if (n === null || n === undefined) return "—";
+      return Number(n).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4});
+    },
+    fmtUsd(n) {
+      if (n === null || n === undefined) return "—";
+      const sign = n < 0 ? "-" : "";
+      return sign + "$" + Math.abs(Number(n)).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    },
+    fmtPnl(n) {
+      if (n === null || n === undefined) return "—";
+      const num = Number(n);
+      const sign = num > 0 ? "+" : (num < 0 ? "-" : "");
+      return sign + "$" + Math.abs(num).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    },
+    fmtPct(p) {
+      if (p === null || p === undefined) return "—";
+      return (Number(p) * 100).toFixed(1) + "%";
+    },
+    fmtTime(s) {
+      if (!s) return "—";
+      try {
+        const d = new Date(s);
+        return d.toLocaleString();
+      } catch { return s; }
+    },
+  };
+}
+</script>
+</body>
+</html>
