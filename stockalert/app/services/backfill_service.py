@@ -278,8 +278,12 @@ class BackfillService:
             return self._loader
         if self._provider_factory is None:
             try:
-                from app.config import get_provider
-                self._provider_factory = get_provider  # type: ignore[assignment]
+                # Explicitly use the history-role provider so users running with
+                # STREAM_PROVIDER != HISTORY_PROVIDER backfill from the correct
+                # vendor (e.g. Polygon Flat Files / REST for history, even when
+                # live streaming is happening through a cheaper feed).
+                from app.config import get_history_provider
+                self._provider_factory = get_history_provider  # type: ignore[assignment]
             except Exception as e:
                 logger.error("BackfillService: could not build provider_factory: %s", e)
                 return None
@@ -298,6 +302,20 @@ class BackfillService:
             st = SymbolStatus()
             self._status[sym] = st
         return st
+
+    @staticmethod
+    def _history_source_tag() -> str:
+        """
+        Source-column value to stamp on every backfilled bar. Falls back to
+        the effective HISTORY_PROVIDER so the lake archive can route deltas
+        to the right ``raw/provider=<source>/`` partition. Users may pin a
+        more specific tag (e.g. ``polygon-flatfiles`` vs ``polygon``) via
+        DATA_SOURCE_TAG.
+        """
+        return (
+            (settings.data_source_tag or "").strip()
+            or settings.effective_history_provider
+        )
 
     # ----- public API -----
 
@@ -355,6 +373,42 @@ class BackfillService:
         queries with lookback > 48 days (the 1-min limit).
         """
         return self._enqueue(symbol, days=days, kind="intraday", force=force)
+
+    def sweep_now(self, *, days: Optional[int] = None) -> dict:
+        """
+        One-shot gap sweep across the currently registered streaming symbols.
+
+        Intended to be called at startup (or via an admin endpoint) so the user
+        doesn't have to wait until the next daily 06:00 UTC sweep when gaps
+        accumulate mid-day — e.g. after switching providers, after a restart
+        that took longer than one bar, or after the user manually edits the
+        watchlist. Per-symbol `gap_fill` throttle still applies, so repeated
+        kicks within the cooldown window are free no-ops.
+
+        Returns a dict describing what was enqueued so callers (e.g. tests,
+        admin endpoints) can assert the right thing happened.
+        """
+        if self._symbol_provider is None:
+            return {"scanned": 0, "skipped": True, "reason": "no symbol provider"}
+        try:
+            symbols = list(self._symbol_provider() or [])
+        except Exception as e:
+            logger.warning("sweep_now: symbol provider failed: %s", e)
+            return {"scanned": 0, "error": str(e)}
+        window = days if days is not None else self._sweeper_window_days
+        results: list[dict] = []
+        for sym in symbols:
+            try:
+                res = self.enqueue_gap_fill(sym, days=window, source="ohlcv_1m")
+                results.append({"symbol": sym, "state": res.get("state")})
+            except Exception as e:
+                logger.warning("sweep_now: enqueue %s failed: %s", sym, e)
+                results.append({"symbol": sym, "state": "error", "error": str(e)})
+        logger.info(
+            "sweep_now: enqueued %d gap-fill job(s) over %dd window",
+            len(results), window,
+        )
+        return {"scanned": len(results), "window_days": window, "results": results}
 
     def enqueue_gap_fill(self, symbol: str, days: int = 30, *,
                         source: str = "ohlcv_1m",
@@ -694,8 +748,12 @@ class BackfillService:
     # re-downloaded for fewer round trips.
     GAP_MERGE_MINUTES = 30
     # Hard cap on number of distinct provider fetches per gap-fill job. Keeps a
-    # symbol with many small holes from blowing through Schwab rate limits.
-    GAP_FETCH_LIMIT = 20
+    # symbol with many small holes from blowing through provider rate limits.
+    # When the number of merged ranges exceeds this, the **most recent** ranges
+    # are kept — the user just looked at the latest chart and clicked "Fill
+    # gaps", so we prioritize fresh holes over historical noise from a
+    # previous provider's session boundaries.
+    GAP_FETCH_LIMIT = 60
     # Pad each gap window by this many minutes on each side so any bars exactly
     # at the boundaries are returned (Schwab is inclusive but defensive).
     GAP_PAD_MINUTES = 5
@@ -752,13 +810,20 @@ class BackfillService:
                 return
 
             # Merge adjacent gaps + cap the number of provider fetches.
+            # The merger returns ranges in chronological (ASC) order. When we
+            # exceed the per-symbol fetch budget, keep the **newest** ranges
+            # so today's holes always get a chance to be filled even when a
+            # symbol carries a long tail of old historical gaps. We also walk
+            # the kept ranges newest-first so the most user-visible bars are
+            # persisted before any provider hiccup or rate-limit kicks in.
             ranges = self._merge_gap_ranges(gaps, self.GAP_MERGE_MINUTES)
             if len(ranges) > self.GAP_FETCH_LIMIT:
                 logger.warning(
-                    "Backfill gap_fill %s: %d gap ranges > limit %d; processing first %d",
+                    "Backfill gap_fill %s: %d gap ranges > limit %d; "
+                    "keeping the %d most recent",
                     symbol, len(ranges), self.GAP_FETCH_LIMIT, self.GAP_FETCH_LIMIT,
                 )
-                ranges = ranges[: self.GAP_FETCH_LIMIT]
+                ranges = ranges[-self.GAP_FETCH_LIMIT:]
 
             job.chunks_total = len(ranges)
             total_missing = sum(g["missing"] for g in gaps)
@@ -766,7 +831,7 @@ class BackfillService:
 
             pad = timedelta(minutes=self.GAP_PAD_MINUTES)
             persisted = 0
-            for r_start, r_end in ranges:
+            for r_start, r_end in reversed(ranges):
                 try:
                     fetched = await self._fetch_gap_range(
                         symbol, r_start - pad, r_end + pad, source=source,
@@ -857,7 +922,7 @@ class BackfillService:
 
     async def _persist_5m(self, symbol: str, df: pd.DataFrame) -> None:
         """Insert provider-fetched 5-minute bars into `ohlcv_5m`."""
-        src = (settings.data_source_tag or "").strip() or settings.data_provider
+        src = self._history_source_tag()
         records: list[dict] = []
         for ts, row in df.iterrows():
             if ts.tzinfo is None:
@@ -902,7 +967,7 @@ class BackfillService:
 
     async def _persist_daily(self, symbol: str, df: pd.DataFrame) -> None:
         """Insert provider-fetched daily bars into ClickHouse `ohlcv_daily`."""
-        src = (settings.data_source_tag or "").strip() or settings.data_provider
+        src = self._history_source_tag()
         records: list[dict] = []
         for ts, row in df.iterrows():
             if ts.tzinfo is None:
@@ -924,7 +989,7 @@ class BackfillService:
 
     async def _persist(self, symbol: str, df: pd.DataFrame) -> None:
         """Insert provider-fetched 1-min bars into ClickHouse, deduped on insert."""
-        src = (settings.data_source_tag or "").strip() or settings.data_provider
+        src = self._history_source_tag()
         records: list[dict] = []
         for ts, row in df.iterrows():
             if ts.tzinfo is None:

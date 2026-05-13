@@ -125,14 +125,28 @@ async def market_banner(
     ),
 ) -> dict:
     want = _split_symbols(symbols) if symbols else _split_symbols(settings.market_banner_symbols)
-    if not want:
-        return {"as_of": datetime.now(timezone.utc).isoformat(), "items": [], "errors": []}
-
     provider = get_market_quotes_provider()
+    # Surface which provider actually backed this response so the dashboard
+    # (and humans staring at the JSON) can confirm the configured DATA_PROVIDER
+    # is the one serving the tape. ``provider_class`` is more robust than
+    # ``DATA_PROVIDER`` because it survives the Schwab fallback inside
+    # ``get_market_quotes_provider`` when the primary lacks ``get_quotes``.
+    provider_class = type(provider).__name__ if provider is not None else None
+    provider_name = (provider_class or "").replace("Provider", "").lower() or None
+
+    if not want:
+        return {
+            "as_of": datetime.now(timezone.utc).isoformat(),
+            "provider": provider_name,
+            "items": [],
+            "errors": [],
+        }
+
     getter = getattr(provider, "get_quotes", None)
     if getter is None:
         return {
             "as_of": datetime.now(timezone.utc).isoformat(),
+            "provider": provider_name,
             "items": [],
             "errors": [{"message": "provider has no get_quotes"}],
         }
@@ -143,6 +157,7 @@ async def market_banner(
         logger.warning("market_banner get_quotes failed: %s", e)
         return {
             "as_of": datetime.now(timezone.utc).isoformat(),
+            "provider": provider_name,
             "items": [],
             "errors": [{"message": str(e)}],
         }
@@ -151,6 +166,7 @@ async def market_banner(
         errors = [{"message": "empty quotes response (token expired, network, or unsupported batch)"}]
         return {
             "as_of": datetime.now(timezone.utc).isoformat(),
+            "provider": provider_name,
             "items": [],
             "errors": errors,
         }
@@ -193,6 +209,7 @@ async def market_banner(
                     items.append(row)
     return {
         "as_of": datetime.now(timezone.utc).isoformat(),
+        "provider": provider_name,
         "items": items,
         "errors": errors,
     }

@@ -27,7 +27,7 @@ import logging
 import threading
 from typing import Iterable, Optional
 
-from app.config import get_provider, settings
+from app.config import get_stream_provider, settings
 from app.db import get_bar_batcher, watchlist_repo
 from app.providers.base import DataProvider
 from app.services.backfill_service import backfill_service
@@ -50,7 +50,14 @@ class WatchlistService:
         self._provider: Optional[DataProvider] = None
         self._provider_error: Optional[str] = None
         self._started = False
-        self._source = (settings.data_source_tag or "").strip() or settings.data_provider
+        # Stamp every streamed bar with the *stream* provider's identity so the
+        # lake-archive layer can route deltas back to the correct
+        # `s3://stock-lake/raw/provider=<source>/` partition. Explicit
+        # DATA_SOURCE_TAG still wins so users can override (e.g. polygon-iex).
+        self._source = (
+            (settings.data_source_tag or "").strip()
+            or settings.effective_stream_provider
+        )
 
         # Symbol -> # of active watchlists containing it (excludes baseline membership;
         # baseline is tracked separately so refcount==0 cannot evict a baseline symbol).
@@ -68,13 +75,19 @@ class WatchlistService:
         if self._provider is not None:
             return self._provider
         try:
-            self._provider = get_provider()
+            # Use the *stream* provider explicitly so users can configure a
+            # cheaper live feed (STREAM_PROVIDER) while keeping a different
+            # HISTORY_PROVIDER for backfill.
+            self._provider = get_stream_provider()
             self._provider_error = None
-            logger.info("Watchlist: data provider initialized (%s)", settings.data_provider)
+            logger.info(
+                "Watchlist: stream provider initialized (%s)",
+                settings.effective_stream_provider,
+            )
             return self._provider
         except Exception as e:
             self._provider_error = str(e)
-            logger.error("Watchlist: could not initialize data provider: %s", e)
+            logger.error("Watchlist: could not initialize stream provider: %s", e)
             return None
 
     async def _on_bar(self, bar) -> None:
@@ -349,7 +362,7 @@ class WatchlistService:
         with self._lock:
             return {
                 "started": self._started,
-                "provider": settings.data_provider,
+                "provider": settings.effective_stream_provider,
                 "provider_ready": self._provider is not None,
                 "provider_error": self._provider_error,
                 "symbol_count": len(default_members),

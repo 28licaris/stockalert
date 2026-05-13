@@ -86,8 +86,43 @@ async def lifespan(app: FastAPI):
     backfill_service.set_symbol_provider(_streaming_symbols_for_sweeper)
     logger.info("✅ Backfill gap sweeper armed (daily at 06:00 UTC, 7d window)")
 
-    await journal_sync_service.start()
-    logger.info("✅ Journal sync started (every 5min: balances + trades)")
+    # Kick a one-shot sweep shortly after startup so any holes that opened up
+    # while the app was down (or while a provider switch was in flight) get
+    # repaired immediately instead of waiting until the next 06:00 UTC sweep.
+    # The per-symbol `gap_fill` throttle (6h cooldown) makes this a free no-op
+    # if a sweep already ran recently, so rapid restarts don't hammer the
+    # provider.
+    async def _initial_gap_sweep_after_warmup() -> None:
+        # Let the watchlist subscribe + a couple of live bars land before we
+        # scan. 30s is well inside the user's "Refresh" loop and outside the
+        # tightest WS-handshake window.
+        try:
+            await asyncio.sleep(30.0)
+            result = backfill_service.sweep_now()
+            logger.info("✅ Initial gap sweep complete: %s", result)
+        except Exception as e:
+            logger.warning("Initial gap sweep failed: %s", e)
+    asyncio.create_task(_initial_gap_sweep_after_warmup(),
+                        name="backfill_initial_sweep")
+
+    # Journal sync is Schwab-only — gate it behind both an explicit toggle and
+    # the presence of Schwab credentials so users running on other providers
+    # (e.g. DATA_PROVIDER=polygon) don't get a noisy 5-minute warning loop.
+    from app.config import settings as _settings
+    _journal_has_creds = bool(
+        _settings.schwab_client_id and _settings.schwab_client_secret
+        and _settings.get_schwab_refresh_token()
+    )
+    if _settings.journal_enabled and _journal_has_creds:
+        await journal_sync_service.start()
+        logger.info("✅ Journal sync started (every 5min: balances + trades)")
+    elif not _settings.journal_enabled:
+        logger.info("ℹ️  Journal sync disabled (JOURNAL_ENABLED=false)")
+    else:
+        logger.info(
+            "ℹ️  Journal sync skipped (missing Schwab credentials; "
+            "set SCHWAB_CLIENT_ID/SECRET + refresh token to enable)"
+        )
 
     async def broadcast_signal(signal_data: dict):
         logger.info(f"📡 Broadcasting signal: {signal_data}")
@@ -117,8 +152,12 @@ async def lifespan(app: FastAPI):
     await backfill_service.stop()
     logger.info("✅ Backfill service stopped")
 
-    await journal_sync_service.stop()
-    logger.info("✅ Journal sync stopped")
+    # Symmetric guard: only stop if we actually started it above. The service
+    # is a singleton, so calling stop on an unstarted instance is safe; we just
+    # skip the log line to avoid lying about state.
+    if journal_sync_service._started:  # type: ignore[attr-defined]
+        await journal_sync_service.stop()
+        logger.info("✅ Journal sync stopped")
 
     await get_bar_batcher().stop()
     reset_bar_batcher()

@@ -18,8 +18,12 @@ logger = logging.getLogger(__name__)
 
 
 def _source_tag() -> str:
+    # HistoricalDataLoader only ever loads from the history-role provider, so
+    # we tag bars accordingly. Lets STREAM_PROVIDER and HISTORY_PROVIDER
+    # operate independently while keeping ClickHouse rows traceable back to
+    # the provider that produced them.
     tag = (settings.data_source_tag or "").strip()
-    return tag if tag else settings.data_provider
+    return tag if tag else settings.effective_history_provider
 
 
 class HistoricalDataLoader:

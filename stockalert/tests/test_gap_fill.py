@@ -147,6 +147,37 @@ def test_unsupported_source_raises(fresh_db) -> None:
         )
 
 
+def test_max_results_keeps_newest_gaps(fresh_db) -> None:
+    """When more raw gaps exist than `max_results`, the **newest** ones are
+    kept. This is the contract that makes manual "Fill gaps" useful for
+    today's holes even when a symbol has a long tail of older Schwab/Polygon
+    session boundaries dragging the gap count above the cap. Regression for
+    the bug where the LIMIT kept the oldest gaps and silently dropped the
+    fresh ones."""
+    start = datetime(2026, 4, 15, 14, 30, tzinfo=timezone.utc)
+    # Create 5 distinct gaps. Seed pattern: write 1 bar, skip 2, write 1 bar.
+    # That yields 5 gaps (each missing 2 bars) at known prev_ts offsets.
+    timestamps: list[datetime] = []
+    for i in range(5):
+        timestamps.append(start + timedelta(minutes=i * 4))      # bar A
+        timestamps.append(start + timedelta(minutes=i * 4 + 3))  # bar B (gap 2)
+    _seed_1m(TEST_SYMBOL, timestamps)
+
+    # Cap to 2 — should keep the 2 newest, not the 2 oldest.
+    gaps = queries.find_intraday_gaps(
+        TEST_SYMBOL,
+        start - timedelta(minutes=1),
+        start + timedelta(minutes=30),
+        max_results=2,
+    )
+    assert len(gaps) == 2
+    # Public contract: chronologically ordered.
+    assert gaps[0]["prev_ts"] < gaps[1]["prev_ts"]
+    # Newest two = i=3 (prev_ts=start+12) and i=4 (prev_ts=start+16).
+    assert gaps[0]["prev_ts"] == start + timedelta(minutes=12)
+    assert gaps[1]["prev_ts"] == start + timedelta(minutes=16)
+
+
 # ---------- merge_gap_ranges (pure Python) ----------
 
 
@@ -275,6 +306,123 @@ async def test_gap_fill_skipped_when_no_gaps(fresh_db) -> None:
     st = svc.status(TEST_SYMBOL)[TEST_SYMBOL]["gap_fill"]
     assert st["state"] == "skipped"
     assert "no within-session gaps" in (st["reason"] or "")
+
+
+@pytest.mark.asyncio
+async def test_gap_fill_prioritizes_newest_ranges_when_over_budget(fresh_db) -> None:
+    """If a symbol has more merged gap-ranges than GAP_FETCH_LIMIT, the
+    service must fetch the **newest** ranges first so today's holes are
+    repaired even when older gaps are dropped. Regression for the original
+    bug where the oldest ranges consumed the budget."""
+    # One isolated gap per day across 5 days. Cross-day separation (24h) is
+    # well past the 4h session boundary so `find_intraday_gaps` ignores it,
+    # which gives us exactly N gaps with no spurious cluster-boundary noise.
+    base_day = datetime(2026, 4, 15, 14, 30, tzinfo=timezone.utc)
+    n_gaps = 5
+    timestamps: list[datetime] = []
+    expected_prev = []
+    expected_next = []
+    for i in range(n_gaps):
+        day = base_day + timedelta(days=i)
+        # Five bars, then a 3-min hole, then five more bars.
+        timestamps += [day + timedelta(minutes=j) for j in range(5)]      # 0..4
+        timestamps += [day + timedelta(minutes=j) for j in range(8, 13)]  # 8..12
+        expected_prev.append(day + timedelta(minutes=4))   # bar before hole
+        expected_next.append(day + timedelta(minutes=8))   # bar after hole
+    _seed_1m(TEST_SYMBOL, timestamps)
+
+    window_end = base_day + timedelta(days=n_gaps, hours=2)
+    pre = queries.find_intraday_gaps(
+        TEST_SYMBOL,
+        base_day - timedelta(minutes=1),
+        window_end,
+    )
+    assert len(pre) == n_gaps, f"expected {n_gaps} clean intraday gaps, got {len(pre)}"
+    assert [g["prev_ts"] for g in pre] == expected_prev
+
+    # Provider returns whatever bars exist in this DataFrame intersected with
+    # the requested window. We pre-build every minute across all 5 days so any
+    # of the gap-fill fetches will succeed.
+    full_idx = pd.date_range(
+        start=base_day - timedelta(minutes=5),
+        end=window_end,
+        freq="1min", tz=timezone.utc,
+    )
+    full_df = pd.DataFrame(
+        {"open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "volume": 1.0},
+        index=full_idx,
+    )
+    provider = FakeProvider(full_df)
+    loader = FakeLoader(provider)
+    svc = BackfillService(loader=loader, now_fn=lambda: window_end)  # type: ignore[arg-type]
+    # Pin the fetch budget below the gap count so truncation kicks in.
+    svc.GAP_FETCH_LIMIT = 3  # type: ignore[attr-defined]
+
+    svc.enqueue_gap_fill(TEST_SYMBOL, days=n_gaps + 1, source="ohlcv_1m")
+    for task in list(svc._tasks.values()):
+        await task
+
+    # Exactly GAP_FETCH_LIMIT provider calls, all targeting the newest 3 gaps.
+    assert len(provider.calls) == 3
+    # Each fetch window covers [prev_ts - 5min, next_ts + 5min] (the pad).
+    fetched_starts = sorted(s for s, _ in provider.calls)
+    expected_fetched = sorted(
+        expected_prev[-3:][k] - timedelta(minutes=5) for k in range(3)
+    )
+    assert fetched_starts == expected_fetched, \
+        f"expected newest-3 fetches, got {fetched_starts}"
+
+    # Newest 3 gaps are now filled; oldest 2 remain unfilled.
+    post = queries.find_intraday_gaps(
+        TEST_SYMBOL,
+        base_day - timedelta(minutes=1),
+        window_end,
+    )
+    assert sorted(g["prev_ts"] for g in post) == expected_prev[:2]
+
+
+@pytest.mark.asyncio
+async def test_sweep_now_enqueues_all_registered_symbols(fresh_db) -> None:
+    """`sweep_now` should fan out across whatever symbols the registered
+    provider returns. Verifies the startup-sweep wiring."""
+    start = datetime(2026, 4, 15, 14, 30, tzinfo=timezone.utc)
+    sym_a = TEST_SYMBOL_PREFIX + "A"
+    sym_b = TEST_SYMBOL_PREFIX + "B"
+    # Both symbols have one 3-min hole so gap-fill has something to do.
+    for s in (sym_a, sym_b):
+        _seed_1m(
+            s,
+            [start + timedelta(minutes=i) for i in range(6)]
+            + [start + timedelta(minutes=i) for i in range(9, 15)],
+        )
+
+    missing_df = _build_missing_bars(start + timedelta(minutes=6), 3)
+    provider = FakeProvider(missing_df)
+    loader = FakeLoader(provider)
+    fixed_now = start + timedelta(minutes=20)
+    svc = BackfillService(loader=loader, now_fn=lambda: fixed_now)  # type: ignore[arg-type]
+    svc.set_symbol_provider(lambda: [sym_a, sym_b])
+
+    result = svc.sweep_now(days=1)
+    assert result["scanned"] == 2
+    assert {r["symbol"] for r in result["results"]} == {sym_a, sym_b}
+
+    # Drain the enqueued tasks and verify both symbols actually got the fix.
+    for task in list(svc._tasks.values()):
+        await task
+    assert provider.calls, "sweep_now should have triggered provider fetches"
+    for s in (sym_a, sym_b):
+        post = queries.find_intraday_gaps(
+            s, start - timedelta(minutes=1), start + timedelta(minutes=20),
+        )
+        assert post == [], f"gap should be filled for {s}"
+
+
+def test_sweep_now_returns_skipped_when_no_provider() -> None:
+    """No symbol provider registered -> sweep_now reports skipped without raising."""
+    svc = BackfillService()
+    res = svc.sweep_now()
+    assert res == {"scanned": 0, "skipped": True, "reason": "no symbol provider"}
 
 
 @pytest.mark.asyncio

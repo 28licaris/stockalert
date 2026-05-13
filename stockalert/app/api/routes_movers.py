@@ -162,8 +162,10 @@ async def get_movers(
     if provider is None or not hasattr(provider, "get_movers"):
         raise HTTPException(
             status_code=503,
-            detail="Movers requires the Schwab provider. "
-                   "Set DATA_PROVIDER=schwab and configure SCHWAB_* credentials.",
+            detail=(
+                "The configured stream provider does not support a movers "
+                "endpoint. Use DATA_PROVIDER=schwab or DATA_PROVIDER=polygon."
+            ),
         )
 
     async def _fetch(one_idx: str) -> tuple[str, list[dict], str | None]:
@@ -175,7 +177,19 @@ async def get_movers(
             logger.warning("get_movers(%s) failed: %s", one_idx, e)
             return one_idx, [], str(e)
 
-    results = await asyncio.gather(*[_fetch(i) for i in indexes])
+    # Some providers (Polygon) return market-wide gainers/losers regardless of
+    # the index argument, so a fan-out would just N-multiply the same call.
+    # Honour ``provider.MOVERS_MARKET_WIDE`` to call exactly once in that case
+    # and report the response under a synthetic ``ALL_US`` bucket so the
+    # downstream payload doesn't lie about which indexes were actually queried.
+    market_wide = bool(getattr(provider, "MOVERS_MARKET_WIDE", False))
+    if market_wide:
+        sym, rows, err = await _fetch(indexes[0])
+        results = [("ALL_US", rows, err)]
+        effective_indexes = ["ALL_US"]
+    else:
+        results = await asyncio.gather(*[_fetch(i) for i in indexes])
+        effective_indexes = indexes
 
     # Dedup by symbol, but remember which index(es) each ticker came from.
     by_symbol: dict[str, dict] = {}
@@ -217,9 +231,13 @@ async def get_movers(
 
     movers = movers[:limit]
 
+    provider_class = type(provider).__name__
+    provider_name = provider_class.replace("Provider", "").lower() or None
+
     return {
-        "index": indexes[0] if len(indexes) == 1 else ",".join(indexes),
-        "indexes": indexes,
+        "index": effective_indexes[0] if len(effective_indexes) == 1 else ",".join(effective_indexes),
+        "indexes": effective_indexes,
+        "provider": provider_name,
         "sort": sort_u,
         "frequency": frequency,
         "count": len(movers),

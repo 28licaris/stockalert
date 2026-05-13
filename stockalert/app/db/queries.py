@@ -560,7 +560,7 @@ def find_intraday_gaps(
     *,
     source_table: str = "ohlcv_1m",
     session_boundary_minutes: int = 4 * 60,
-    max_results: int = 500,
+    max_results: int = 5000,
 ) -> list[dict]:
     """
     Return within-session gaps in `[start, end]` for the given symbol/source.
@@ -575,8 +575,11 @@ def find_intraday_gaps(
         next_ts: timestamp of the bar AFTER the gap (UTC-aware)
         missing: integer count of missing bars between them at the source's
                  native resolution.
-    Results are ordered chronologically and capped at `max_results` to bound
-    response size.
+    Results are returned chronologically (oldest first). When the total number
+    of gaps exceeds `max_results`, the **newest** gaps are kept — fresh holes
+    (the ones the user just saw, and which a live or delayed provider can
+    still produce) are always prioritized over historical noise that's been
+    sitting unfilled for weeks.
     """
     if source_table not in _TABLE_STEP_MINUTES:
         raise ValueError(f"Unsupported source_table: {source_table!r}")
@@ -585,6 +588,15 @@ def find_intraday_gaps(
     # Use `lagInFrame` (proper SQL window function). The older `neighbor()` is
     # deprecated in ClickHouse >= 24.x because it's order-of-evaluation-dependent.
     # `lagInFrame` returns NULL for the first row, which we filter out.
+    #
+    # The inner LIMIT orders DESC so the **most recent** gaps survive
+    # truncation; we re-sort to ascending in Python so the public contract
+    # ("ordered chronologically") and the gap-range merger downstream stay
+    # correct. Prior to this fix, the LIMIT kept the OLDEST gaps and silently
+    # dropped today's holes for any symbol that had accumulated more than
+    # `max_results` historical gaps (e.g. from a previous provider's session
+    # boundaries) — which made manual "Fill gaps" a no-op for the windows
+    # users actually care about.
     sql = f"""
         SELECT prev_ts, ts, dateDiff('minute', prev_ts, ts) AS delta_min
         FROM (
@@ -599,7 +611,7 @@ def find_intraday_gaps(
         WHERE prev_ts != toDateTime64(0, 3, 'UTC')
           AND dateDiff('minute', prev_ts, ts) > {{step:UInt32}}
           AND dateDiff('minute', prev_ts, ts) < {{boundary:UInt32}}
-        ORDER BY prev_ts ASC
+        ORDER BY prev_ts DESC
         LIMIT {{lim:UInt32}}
     """
     result = get_client().query(
@@ -622,6 +634,10 @@ def find_intraday_gaps(
             ts = ts.replace(tzinfo=timezone.utc)
         missing = max(1, int(delta) // step_min - 1)
         out.append({"prev_ts": prev_ts, "next_ts": ts, "missing": missing})
+    # Re-sort to chronological order so downstream consumers (the gap-range
+    # merger, the routes_backfill response, and existing tests) keep their
+    # "oldest first" contract.
+    out.sort(key=lambda g: g["prev_ts"])
     return out
 
 
@@ -632,7 +648,7 @@ async def find_intraday_gaps_async(
     *,
     source_table: str = "ohlcv_1m",
     session_boundary_minutes: int = 4 * 60,
-    max_results: int = 500,
+    max_results: int = 5000,
 ) -> list[dict]:
     return await asyncio.to_thread(
         find_intraday_gaps,

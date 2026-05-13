@@ -1,7 +1,0 @@
-{
-  "plugins": {
-    "clickhouse-cursor-plugin": {
-      "enabled": true
-    }
-  }
-}

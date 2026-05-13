@@ -152,7 +152,7 @@ def svc(monkeypatch) -> WatchlistService:
     fake_prov = FakeDataProvider()
 
     monkeypatch.setattr(wls_module, "watchlist_repo", fake_repo)
-    monkeypatch.setattr(wls_module, "get_provider", lambda: fake_prov)
+    monkeypatch.setattr(wls_module, "get_stream_provider", lambda: fake_prov)
 
     # backfill=None disables auto-enqueue so these tests don't pull in the
     # real loader/provider. Backfill behavior is covered in test_backfill_service.py.

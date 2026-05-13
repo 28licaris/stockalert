@@ -27,7 +27,18 @@ class Settings(BaseModel):
     alpaca_secret_key: str = os.getenv("ALPACA_SECRET_KEY", "")
     alpaca_feed: str = os.getenv("ALPACA_FEED", "iex")
     polygon_api_key: str = os.getenv("POLYGON_API_KEY", "")
+    polygon_feed: str = os.getenv("POLYGON_FEED", "socket.polygon.io")
+    polygon_market: str = os.getenv("POLYGON_MARKET", "stocks")
+    polygon_secure_ws: bool = os.getenv("POLYGON_SECURE_WS", "true").lower() == "true"
+    polygon_flatfiles_enabled: bool = os.getenv("POLYGON_FLATFILES_ENABLED", "false").lower() == "true"
+    polygon_s3_access_key_id: str = os.getenv("POLYGON_S3_ACCESS_KEY_ID", "")
+    polygon_s3_secret_access_key: str = os.getenv("POLYGON_S3_SECRET_ACCESS_KEY", "")
+    polygon_s3_endpoint: str = os.getenv("POLYGON_S3_ENDPOINT", "https://files.massive.com")
+    polygon_s3_bucket: str = os.getenv("POLYGON_S3_BUCKET", "flatfiles")
     data_provider: str = os.getenv("DATA_PROVIDER", "alpaca")
+    # Optional role-specific overrides. Empty values fall back to DATA_PROVIDER.
+    stream_provider: str = os.getenv("STREAM_PROVIDER", "")
+    history_provider: str = os.getenv("HISTORY_PROVIDER", "")
 
     # Schwab (Think or Swim) – store credentials in .env only; never commit
     schwab_client_id: str = os.getenv("SCHWAB_CLIENT_ID", "")
@@ -39,6 +50,7 @@ class Settings(BaseModel):
     schwab_base_url: str = (
         os.getenv("SCHWAB_BASE_URL", "https://api.schwabapi.com").strip() or "https://api.schwabapi.com"
     )
+    journal_enabled: bool = os.getenv("JOURNAL_ENABLED", "true").lower() == "true"
     
     # ─────────────────────────────────────────────────────────
     # ClickHouse (time-series)
@@ -141,7 +153,13 @@ class Settings(BaseModel):
         """
         return {
             "data_provider": self.data_provider,
+            "stream_provider": self.effective_stream_provider,
+            "history_provider": self.effective_history_provider,
             "alpaca_feed": self.alpaca_feed,
+            "polygon_feed": self.polygon_feed,
+            "polygon_market": self.polygon_market,
+            "polygon_flatfiles_enabled": self.polygon_flatfiles_enabled,
+            "journal_enabled": self.journal_enabled,
             "monitor_preload_bars": self.monitor_preload_bars,
             "monitor_preload_days": self.monitor_preload_days,
             "backfill_default_days": self.backfill_default_days,
@@ -155,12 +173,20 @@ class Settings(BaseModel):
             "min_pivot_separation": self.min_pivot_separation,
         }
 
+    @property
+    def effective_stream_provider(self) -> str:
+        return (self.stream_provider or self.data_provider).strip().lower()
+
+    @property
+    def effective_history_provider(self) -> str:
+        return (self.history_provider or self.data_provider).strip().lower()
+
 
 # Global settings instance
 settings = Settings()
 
 
-def get_provider():
+def get_provider(provider_name: str | None = None):
     """
     Factory function to create data provider based on configuration.
     
@@ -170,17 +196,23 @@ def get_provider():
     Raises:
         ValueError: If unsupported provider specified
     """
-    if settings.data_provider == "alpaca":
+    provider = (provider_name or settings.data_provider).strip().lower()
+    if provider == "alpaca":
         from app.providers.alpaca_provider import AlpacaProvider
         return AlpacaProvider(
             settings.alpaca_api_key,
             settings.alpaca_secret_key,
             settings.alpaca_feed_enum,
         )
-    elif settings.data_provider == "polygon":
+    elif provider == "polygon":
         from app.providers.polygon_provider import PolygonProvider
-        return PolygonProvider(settings.polygon_api_key)
-    elif settings.data_provider in ("schwab", "thinkorswim"):
+        return PolygonProvider(
+            settings.polygon_api_key,
+            feed=settings.polygon_feed,
+            market=settings.polygon_market,
+            secure_ws=settings.polygon_secure_ws,
+        )
+    elif provider in ("schwab", "thinkorswim"):
         from app.providers.schwab_provider import SchwabProvider
         return SchwabProvider(
             client_id=settings.schwab_client_id,
@@ -191,7 +223,17 @@ def get_provider():
             refresh_token_file=settings.schwab_refresh_token_file or None,
         )
     else:
-        raise ValueError(f"Unsupported provider: {settings.data_provider}")
+        raise ValueError(f"Unsupported provider: {provider}")
+
+
+def get_stream_provider():
+    """Provider used for live WebSocket bars."""
+    return get_provider(settings.effective_stream_provider)
+
+
+def get_history_provider():
+    """Provider used for REST historical bars and backfill jobs."""
+    return get_provider(settings.effective_history_provider)
 
 
 def get_market_quotes_provider():
