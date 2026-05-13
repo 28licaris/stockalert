@@ -40,6 +40,24 @@ class Settings(BaseModel):
     stream_provider: str = os.getenv("STREAM_PROVIDER", "")
     history_provider: str = os.getenv("HISTORY_PROVIDER", "")
 
+    # ─────────────────────────────────────────────────────────
+    # Stock Lake (S3) — your own data lake, separate from Polygon Flat Files.
+    # See `storage_plan.md` for layout. Empty AWS creds fall through to the
+    # default boto3 credential chain (env, ~/.aws/credentials, IAM role, etc.),
+    # so deploys on EC2 / ECS need only set the bucket name.
+    # ─────────────────────────────────────────────────────────
+    stock_lake_bucket: str = os.getenv("STOCK_LAKE_BUCKET", "")
+    stock_lake_region: str = os.getenv("STOCK_LAKE_REGION", "us-east-1")
+    aws_access_key_id: str = os.getenv("AWS_ACCESS_KEY_ID", "")
+    aws_secret_access_key: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+    aws_session_token: str = os.getenv("AWS_SESSION_TOKEN", "")
+    # Daily archive worker toggle. Even when set true, the worker no-ops if
+    # `stock_lake_bucket` is empty so misconfigured deploys don't crash.
+    lake_archive_enabled: bool = os.getenv("LAKE_ARCHIVE_ENABLED", "false").lower() == "true"
+    # UTC hour to run the daily archive sweep at. 07:00 UTC == 03:00 ET,
+    # after extended-hours close so we operate on a complete prior trading day.
+    lake_archive_run_hour_utc: int = int(os.getenv("LAKE_ARCHIVE_RUN_HOUR_UTC", "7"))
+
     # Schwab (Think or Swim) – store credentials in .env only; never commit
     schwab_client_id: str = os.getenv("SCHWAB_CLIENT_ID", "")
     schwab_client_secret: str = os.getenv("SCHWAB_CLIENT_SECRET", "")

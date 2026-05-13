@@ -234,6 +234,40 @@ def init_schema() -> None:
         """
     )
 
+    # ---------- Lake archive watermarks (Phase A / S3 lake) ----------
+    # Idempotency ledger for ``LakeArchiveService``. One row per
+    # (source, table, stage, period) describing which window of ClickHouse
+    # rows has been successfully serialized to ``s3://<stock-lake>/...``.
+    # The daily worker uses this table to skip windows already archived,
+    # and the monthly compactor uses it to discover staging partitions to
+    # roll up. Storing the ``s3_key`` makes "where did this bar end up?"
+    # trivially answerable from SQL.
+    #
+    # ReplacingMergeTree on `archived_at` so re-running an archive job
+    # (after a crash mid-write, say) cleanly overwrites the prior watermark
+    # without leaving zombie entries.
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS lake_archive_watermarks (
+            source        LowCardinality(String),
+            table_name    LowCardinality(String),
+            stage         LowCardinality(String),
+            period_start  DateTime64(3, 'UTC'),
+            period_end    DateTime64(3, 'UTC'),
+            bars_archived UInt64 DEFAULT 0,
+            s3_key        String DEFAULT '',
+            status        LowCardinality(String) DEFAULT 'ok',
+            error         String DEFAULT '',
+            archived_at   DateTime64(3, 'UTC') DEFAULT now64(3),
+            version       UInt64 DEFAULT 0
+        )
+        ENGINE = ReplacingMergeTree(version)
+        PARTITION BY toYYYYMM(period_start)
+        ORDER BY (source, table_name, stage, period_start)
+        SETTINGS index_granularity = 8192
+        """
+    )
+
 
 def _read_legacy_watchlist(path: str) -> Optional[list[str]]:
     """Best-effort read of the old `data/watchlist.json` file. Returns None on any error."""
