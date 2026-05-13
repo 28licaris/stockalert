@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class JobStatus:
     """Snapshot of a single backfill job for one (symbol, kind)."""
-    state: str = "idle"            # idle | queued | running | done | error | skipped
+    state: str = "idle"            # idle | queued | running | done | error | skipped | throttled
     days: int = 0                  # requested lookback window
     bars: int = 0                  # total bars persisted across all chunks
     chunks_total: int = 0
@@ -69,11 +69,12 @@ class JobStatus:
 
 @dataclass
 class SymbolStatus:
-    """Combined status for a symbol's quick / deep / intraday / daily jobs."""
+    """Combined status for a symbol's quick / deep / intraday / daily / gap_fill jobs."""
     quick: JobStatus = field(default_factory=JobStatus)
     deep: JobStatus = field(default_factory=JobStatus)
     intraday: JobStatus = field(default_factory=JobStatus)
     daily: JobStatus = field(default_factory=JobStatus)
+    gap_fill: JobStatus = field(default_factory=JobStatus)
 
     def to_dict(self) -> dict:
         return {
@@ -81,6 +82,7 @@ class SymbolStatus:
             "deep": self.deep.__dict__,
             "intraday": self.intraday.__dict__,
             "daily": self.daily.__dict__,
+            "gap_fill": self.gap_fill.__dict__,
         }
 
 
@@ -140,7 +142,42 @@ class BackfillService:
         self._started = False
         self._lock = asyncio.Lock()
 
+        # ---------- Throttle ----------
+        # Per-(symbol, kind) cooldown: when an enqueue completes (done OR
+        # skipped) we record `now`. A subsequent enqueue within the throttle
+        # window returns `{state: "throttled"}` immediately without doing a
+        # coverage query or provider call. Pass `force=True` to bypass.
+        #
+        # This is the single biggest knob for keeping the app snappy:
+        # uvicorn-restart auto-enqueues, symbol-page revisits, and the daily
+        # sweeper all become free no-ops within the cooldown.
+        self._last_completed: dict[tuple[str, str], datetime] = {}
+        self._throttle: dict[str, timedelta] = {
+            "quick":    timedelta(hours=4),   # 1m refill — short cooldown so
+                                              # dev clicks aren't blocked too long
+            "intraday": timedelta(hours=24),  # 5m / >48d data — once daily is plenty
+            "daily":    timedelta(hours=24),  # daily candles finalize at close
+            "gap_fill": timedelta(hours=6),   # surgical refetch; sweeper runs 1×/day
+            "deep":     timedelta(days=7),    # 1y 1m chunked job - expensive
+        }
+
+        # ---------- Background sweeper ----------
+        # Populated in `start()` and torn down in `stop()`. Sweeper runs ONCE
+        # per UTC day at the configured hour, NOT every 15 minutes. The
+        # throttle layer handles inter-call dedup; this loop is just the
+        # daily kick.
+        self._sweeper_task: Optional[asyncio.Task] = None
+        # UTC hour to run the daily sweep at. 06:00 UTC == 02:00 ET, after
+        # extended-hours close so we operate during the quietest window.
+        self._sweeper_run_hour_utc: int = 6
+        self._sweeper_window_days: int = 7
+        self._symbol_provider: Optional[Callable[[], list[str]]] = None
+
     # ----- lifecycle -----
+
+    def set_symbol_provider(self, fn: Callable[[], list[str]]) -> None:
+        """Inject the function that returns symbols to sweep for gaps."""
+        self._symbol_provider = fn
 
     async def start(self) -> None:
         self._started = True
@@ -150,9 +187,23 @@ class BackfillService:
             self._sem_deep._value,   # type: ignore[attr-defined]
             self._chunk_days,
         )
+        # Kick off the periodic gap sweeper. Safe to start even if
+        # `_symbol_provider` hasn't been injected yet: the loop just no-ops
+        # until a provider is registered.
+        if self._sweeper_task is None or self._sweeper_task.done():
+            self._sweeper_task = asyncio.create_task(
+                self._gap_sweeper_loop(), name="backfill_gap_sweeper",
+            )
 
     async def stop(self) -> None:
         self._started = False
+        if self._sweeper_task is not None and not self._sweeper_task.done():
+            self._sweeper_task.cancel()
+            try:
+                await self._sweeper_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._sweeper_task = None
         tasks = list(self._tasks.values())
         for t in tasks:
             t.cancel()
@@ -162,6 +213,63 @@ class BackfillService:
             except (asyncio.CancelledError, Exception):
                 pass
         self._tasks.clear()
+
+    def _seconds_until_next_sweep(self) -> float:
+        """
+        How many seconds from now until the next `_sweeper_run_hour_utc` (UTC).
+        Returns a value in `(0, 86400]`. Pure function for testability.
+        """
+        now = self._now_fn()
+        target = now.replace(hour=self._sweeper_run_hour_utc, minute=0,
+                             second=0, microsecond=0)
+        if target <= now:
+            target = target + timedelta(days=1)
+        return max(1.0, (target - now).total_seconds())
+
+    async def _gap_sweeper_loop(self) -> None:
+        """
+        Background maintenance task. Runs ONCE per UTC day at
+        `_sweeper_run_hour_utc` (default 06:00 UTC = ~02:00 ET, after
+        extended-hours close so we operate during the quietest window).
+
+        Each sweep iterates the currently-streaming symbols and enqueues a
+        `gap_fill` job. The throttle layer makes per-symbol enqueues free
+        no-ops when the symbol was filled recently, so this is safe to call
+        even right after a restart.
+
+        Errors are caught + logged: this loop is a maintenance task and must
+        never crash the service.
+        """
+        while self._started:
+            wait_s = self._seconds_until_next_sweep()
+            logger.info(
+                "gap sweeper: next sweep at %02d:00 UTC (in %.1fh)",
+                self._sweeper_run_hour_utc, wait_s / 3600.0,
+            )
+            try:
+                await asyncio.sleep(wait_s)
+            except asyncio.CancelledError:
+                return
+            if not self._started:
+                return
+
+            try:
+                provider_fn = self._symbol_provider
+                symbols: list[str] = []
+                if provider_fn is not None:
+                    try:
+                        symbols = list(provider_fn() or [])
+                    except Exception as e:
+                        logger.warning("gap sweeper: symbol provider failed: %s", e)
+                logger.info("gap sweeper: scanning %d symbol(s) for gaps", len(symbols))
+                for sym in symbols:
+                    try:
+                        self.enqueue_gap_fill(sym, days=self._sweeper_window_days,
+                                              source="ohlcv_1m")
+                    except Exception as e:
+                        logger.warning("gap sweeper: enqueue %s failed: %s", sym, e)
+            except Exception as e:
+                logger.error("gap sweeper iteration failed: %s", e, exc_info=True)
 
     # ----- helpers -----
 
@@ -225,32 +333,49 @@ class BackfillService:
             return {symbol.upper(): self._sym_status(symbol).to_dict()}
         return {sym: st.to_dict() for sym, st in self._status.items()}
 
-    def enqueue_quick(self, symbol: str, days: int = 30) -> dict:
-        return self._enqueue(symbol, days=days, kind="quick")
+    def enqueue_quick(self, symbol: str, days: int = 30, *, force: bool = False) -> dict:
+        return self._enqueue(symbol, days=days, kind="quick", force=force)
 
-    def enqueue_deep(self, symbol: str, days: int = 365) -> dict:
-        return self._enqueue(symbol, days=days, kind="deep")
+    def enqueue_deep(self, symbol: str, days: int = 365, *, force: bool = False) -> dict:
+        return self._enqueue(symbol, days=days, kind="deep", force=force)
 
-    def enqueue_daily(self, symbol: str, days: int = 365 * 2) -> dict:
+    def enqueue_daily(self, symbol: str, days: int = 365 * 2, *, force: bool = False) -> dict:
         """
         Fetch native daily candles for `[now - days, now]` from the provider
         and persist into `ohlcv_daily`. Schwab returns 20+ years of daily
         history in a single call, so we don't bother chunking by default.
         """
-        return self._enqueue(symbol, days=days, kind="daily")
+        return self._enqueue(symbol, days=days, kind="daily", force=force)
 
-    def enqueue_intraday(self, symbol: str, days: int = 270) -> dict:
+    def enqueue_intraday(self, symbol: str, days: int = 270, *, force: bool = False) -> dict:
         """
         Fetch native 5-minute candles for `[now - days, now]` and persist
         into `ohlcv_5m`. Schwab's pricehistory serves ~270 days of 5-min
         history per call, so this is the source for 5m/15m/30m/1h/4h
         queries with lookback > 48 days (the 1-min limit).
         """
-        return self._enqueue(symbol, days=days, kind="intraday")
+        return self._enqueue(symbol, days=days, kind="intraday", force=force)
+
+    def enqueue_gap_fill(self, symbol: str, days: int = 30, *,
+                        source: str = "ohlcv_1m",
+                        force: bool = False) -> dict:
+        """
+        Detect within-session gaps in `[now - days, now]` for the given source
+        table (`ohlcv_1m` or `ohlcv_5m`) and re-fetch each gap range from the
+        provider. Unlike `enqueue_quick`, this path does NOT short-circuit on
+        coverage ratio: even a 99%-dense window will be re-checked because the
+        whole point is to find the 1% of holes inside it.
+
+        Schwab's pricehistory honors `startDate`/`endDate` for sub-day ranges,
+        so each gap is fetched as a narrow window. To avoid hammering the API,
+        adjacent gaps within `GAP_MERGE_MINUTES` are merged into a single fetch.
+        """
+        return self._enqueue(symbol, days=days, kind="gap_fill", force=force, source=source)
 
     # ----- internals -----
 
-    def _enqueue(self, symbol: str, *, days: int, kind: str) -> dict:
+    def _enqueue(self, symbol: str, *, days: int, kind: str,
+                 force: bool = False, **runner_kwargs) -> dict:
         sym = symbol.upper().strip()
         if not sym:
             return {"symbol": "", "kind": kind, "state": "error", "error": "empty symbol"}
@@ -261,8 +386,28 @@ class BackfillService:
         existing = self._tasks.get(key)
         if existing and not existing.done():
             st = self._sym_status(sym)
-            job = st.quick if kind == "quick" else st.deep
+            job_map = {"quick": st.quick, "deep": st.deep, "intraday": st.intraday,
+                       "daily": st.daily, "gap_fill": st.gap_fill}
+            job = job_map.get(kind, st.quick)
             return {"symbol": sym, "kind": kind, "state": job.state, "reason": "already running"}
+
+        # Throttle: if this (symbol, kind) completed recently AND the caller
+        # didn't pass force=True, return immediately without doing ANY work.
+        # This makes uvicorn-restart / symbol-page-revisit / sweeper-tick free.
+        if not force:
+            cooldown = self._throttle.get(kind)
+            last = self._last_completed.get(key)
+            if cooldown is not None and last is not None:
+                elapsed = self._now_fn() - last
+                if elapsed < cooldown:
+                    remaining = cooldown - elapsed
+                    mins_remaining = int(remaining.total_seconds() // 60)
+                    return {
+                        "symbol": sym, "kind": kind, "state": "throttled",
+                        "reason": f"ran {int(elapsed.total_seconds() // 60)} min ago; "
+                                  f"cooldown {int(cooldown.total_seconds() // 60)} min "
+                                  f"({mins_remaining} min remaining)",
+                    }
 
         # Mark queued immediately so callers see it before the event loop tick.
         st = self._sym_status(sym)
@@ -271,6 +416,7 @@ class BackfillService:
             "deep": st.deep,
             "intraday": st.intraday,
             "daily": st.daily,
+            "gap_fill": st.gap_fill,
         }.get(kind)
         if job is None:
             return {"symbol": sym, "kind": kind, "state": "error",
@@ -285,10 +431,31 @@ class BackfillService:
             "deep": self._run_deep,
             "intraday": self._run_intraday,
             "daily": self._run_daily,
+            "gap_fill": self._run_gap_fill,
         }[kind]
-        task = asyncio.create_task(runner(sym, days), name=f"backfill_{kind}_{sym}")
+        task = asyncio.create_task(runner(sym, days, **runner_kwargs),
+                                    name=f"backfill_{kind}_{sym}")
         self._tasks[key] = task
-        task.add_done_callback(lambda _t: self._tasks.pop(key, None))
+
+        def _on_done(_t: asyncio.Task) -> None:
+            # Drop the in-flight reference and, if the job actually completed
+            # successfully (done OR coverage-skipped), record the timestamp so
+            # the throttle layer can short-circuit subsequent enqueues.
+            # We DO NOT record on error/throttled so transient failures
+            # don't block retries.
+            self._tasks.pop(key, None)
+            try:
+                st = self._sym_status(sym)
+                job_map = {"quick": st.quick, "deep": st.deep,
+                           "intraday": st.intraday, "daily": st.daily,
+                           "gap_fill": st.gap_fill}
+                job = job_map.get(kind)
+                if job is not None and job.state in ("done", "skipped"):
+                    self._last_completed[key] = self._now_fn()
+            except Exception:
+                pass
+
+        task.add_done_callback(_on_done)
 
         return {"symbol": sym, "kind": kind, "state": "queued", "days": days}
 
@@ -311,6 +478,12 @@ class BackfillService:
         # Reuse deep semaphore - 5m fetches are long-running too.
         async with self._sem_deep:
             await self._execute_intraday(symbol, days=days)
+
+    async def _run_gap_fill(self, symbol: str, days: int, *,
+                            source: str = "ohlcv_1m") -> None:
+        # Quick-semaphore: individual gap fetches are small windows.
+        async with self._sem_quick:
+            await self._execute_gap_fill(symbol, days=days, source=source)
 
     async def _execute_window(self, symbol: str, *, days: int, kind: str) -> None:
         """Single-window fetch with coverage short-circuit. Used by the quick path."""
@@ -513,6 +686,130 @@ class BackfillService:
             job.error = str(e)
             job.finished_at = self._now_fn().isoformat()
             logger.error("Backfill daily %s failed: %s", symbol, e, exc_info=True)
+
+    # ---------- gap-fill ----------
+
+    # Adjacent gaps within this many minutes are merged into a single provider
+    # fetch to avoid per-gap API overhead. Bumping this up trades extra bars
+    # re-downloaded for fewer round trips.
+    GAP_MERGE_MINUTES = 30
+    # Hard cap on number of distinct provider fetches per gap-fill job. Keeps a
+    # symbol with many small holes from blowing through Schwab rate limits.
+    GAP_FETCH_LIMIT = 20
+    # Pad each gap window by this many minutes on each side so any bars exactly
+    # at the boundaries are returned (Schwab is inclusive but defensive).
+    GAP_PAD_MINUTES = 5
+
+    @staticmethod
+    def _merge_gap_ranges(gaps: list[dict], merge_minutes: int) -> list[tuple[datetime, datetime]]:
+        """
+        Collapse adjacent gaps whose endpoints are within `merge_minutes` of each
+        other into a single (start, end) range. Each input row is
+        {prev_ts, next_ts, missing}. The returned ranges are the OUTER bounds we
+        want to refetch from the provider.
+        """
+        if not gaps:
+            return []
+        ranges: list[tuple[datetime, datetime]] = []
+        cur_start = gaps[0]["prev_ts"]
+        cur_end = gaps[0]["next_ts"]
+        for g in gaps[1:]:
+            if (g["prev_ts"] - cur_end).total_seconds() / 60 <= merge_minutes:
+                cur_end = g["next_ts"]
+            else:
+                ranges.append((cur_start, cur_end))
+                cur_start, cur_end = g["prev_ts"], g["next_ts"]
+        ranges.append((cur_start, cur_end))
+        return ranges
+
+    async def _execute_gap_fill(self, symbol: str, *, days: int, source: str) -> None:
+        """
+        Detect within-session gaps in [now - days, now] and refetch each gap
+        range from the provider. Stores into the same source table.
+        """
+        if source not in ("ohlcv_1m", "ohlcv_5m"):
+            raise ValueError(f"Unsupported gap-fill source: {source!r}")
+        st = self._sym_status(symbol)
+        job = st.gap_fill
+        job.state = "running"
+        job.started_at = self._now_fn().isoformat()
+        job.bars = 0
+        job.chunks_total = 0
+        job.chunks_done = 0
+        job.reason = None
+
+        try:
+            now = self._now_fn()
+            start = now - timedelta(days=days)
+            gaps = await queries.find_intraday_gaps_async(
+                symbol, start, now, source_table=source,
+            )
+            if not gaps:
+                job.state = "skipped"
+                job.reason = "no within-session gaps detected"
+                job.finished_at = self._now_fn().isoformat()
+                logger.info("Backfill gap_fill %s: skipped (no gaps in %dd window)", symbol, days)
+                return
+
+            # Merge adjacent gaps + cap the number of provider fetches.
+            ranges = self._merge_gap_ranges(gaps, self.GAP_MERGE_MINUTES)
+            if len(ranges) > self.GAP_FETCH_LIMIT:
+                logger.warning(
+                    "Backfill gap_fill %s: %d gap ranges > limit %d; processing first %d",
+                    symbol, len(ranges), self.GAP_FETCH_LIMIT, self.GAP_FETCH_LIMIT,
+                )
+                ranges = ranges[: self.GAP_FETCH_LIMIT]
+
+            job.chunks_total = len(ranges)
+            total_missing = sum(g["missing"] for g in gaps)
+            job.reason = f"{len(gaps)} gap(s), {total_missing} bars missing"
+
+            pad = timedelta(minutes=self.GAP_PAD_MINUTES)
+            persisted = 0
+            for r_start, r_end in ranges:
+                try:
+                    fetched = await self._fetch_gap_range(
+                        symbol, r_start - pad, r_end + pad, source=source,
+                    )
+                    persisted += fetched
+                    job.chunks_done += 1
+                    job.bars = persisted
+                except Exception as e:
+                    logger.warning(
+                        "Backfill gap_fill %s: fetch %s..%s failed: %s",
+                        symbol, r_start, r_end, e,
+                    )
+
+            # Re-measure gaps so the user sees the remainder (if Schwab couldn't
+            # produce some bars, they're outside the provider's history).
+            remaining = await queries.find_intraday_gaps_async(
+                symbol, start, now, source_table=source,
+            )
+            remaining_missing = sum(g["missing"] for g in remaining)
+            job.reason = (
+                f"filled {persisted} bars across {len(ranges)} window(s); "
+                f"{len(remaining)} gap(s) remain ({remaining_missing} bars)"
+            )
+            job.state = "done"
+            job.finished_at = self._now_fn().isoformat()
+            logger.info(
+                "Backfill gap_fill %s: done (persisted=%d, ranges=%d, remaining_gaps=%d)",
+                symbol, persisted, len(ranges), len(remaining),
+            )
+        except Exception as e:
+            job.state = "error"
+            job.error = str(e)
+            job.finished_at = self._now_fn().isoformat()
+            logger.error("Backfill gap_fill %s failed: %s", symbol, e, exc_info=True)
+
+    async def _fetch_gap_range(
+        self, symbol: str, start: datetime, end: datetime, *, source: str,
+    ) -> int:
+        """Fetch a single gap window from the provider and persist into `source`."""
+        if source == "ohlcv_1m":
+            return await self._fetch_and_persist_range(symbol, start, end)
+        # ohlcv_5m path: ask provider for 5m bars and persist into the 5m table.
+        return await self._fetch_and_persist_5m(symbol, start, end)
 
     async def _fetch_and_persist(self, symbol: str, days_back: int) -> int:
         """Quick-path fetch: pull 1-min bars for [now-days, now] and persist."""

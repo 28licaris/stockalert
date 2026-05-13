@@ -40,15 +40,61 @@
         <span class="px-2.5 py-1 rounded-full text-xs border border-slate-700 text-slate-300">
           Provider: <span class="font-mono" x-text="watchlist.provider"></span>
         </span>
+        <a href="/journal"
+           class="px-3 py-1 rounded-full text-xs border border-indigo-700/60 text-indigo-200 hover:bg-indigo-900/30">
+          Journal →
+        </a>
       </div>
     </header>
+
+    <!-- MARKET TAPE: major indexes + configured futures (MARKET_BANNER_SYMBOLS) -->
+    <section class="rounded-xl border border-slate-800 bg-gradient-to-r from-slate-900/95 via-indigo-950/35 to-slate-900/95 px-4 py-3 shadow-lg">
+      <div class="flex items-center justify-between gap-3 mb-2 flex-wrap">
+        <span class="text-xs font-semibold uppercase tracking-wide text-slate-400">Market tape</span>
+        <span class="text-[10px] text-slate-500 font-mono" x-text="marketTape.as_of ? ('As of ' + new Date(marketTape.as_of).toLocaleTimeString()) : ''"></span>
+      </div>
+      <div x-show="marketTape.loading" class="h-10 skeleton rounded"></div>
+      <div x-show="!marketTape.loading && marketTape.errors && marketTape.errors.length"
+           class="text-xs text-amber-300/95 mb-2 space-y-0.5 font-mono">
+        <template x-for="e in marketTape.errors" :key="(e.symbol || '') + '|' + (e.message || '')">
+          <div>
+            <span x-show="e.symbol" class="text-slate-400" x-text="e.symbol + ': '"></span>
+            <span x-text="e.message || JSON.stringify(e)"></span>
+          </div>
+        </template>
+      </div>
+      <div x-show="!marketTape.loading && !marketTape.items.length && !(marketTape.errors && marketTape.errors.length)" class="text-xs text-slate-500">
+        No banner quotes — check <span class="font-mono text-slate-400">MARKET_BANNER_SYMBOLS</span> in <span class="font-mono">.env</span>, Schwab token, and restart <span class="font-mono">uvicorn</span> after code changes.
+      </div>
+      <div x-show="!marketTape.loading && marketTape.items.length" class="flex flex-wrap gap-2 md:gap-4">
+        <template x-for="it in marketTape.items" :key="it.symbol">
+          <a :href="symbolHref(it.symbol)"
+             class="group flex flex-col min-w-[6.5rem] shrink-0 rounded-lg border border-slate-700/70 bg-slate-950/50 px-3 py-2 hover:border-indigo-500/50 hover:bg-slate-800/50 transition">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-[11px] font-bold text-slate-300 tracking-tight" x-text="it.label"></span>
+              <span class="text-[9px] uppercase text-slate-500 hidden sm:inline" x-text="it.asset_type || ''"></span>
+            </div>
+            <div class="mt-1 font-mono text-sm font-semibold text-slate-100" x-text="fmtPrice(it.last)"></div>
+            <div class="text-xs font-mono"
+                 :class="(it.change_pct || 0) >= 0 ? 'price-up' : 'price-down'"
+                 x-text="fmtPct(it.change_pct)"></div>
+          </a>
+        </template>
+      </div>
+    </section>
 
     <!-- KPI ROW -->
     <section class="grid grid-cols-2 md:grid-cols-4 gap-4">
       <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-        <div class="text-xs uppercase tracking-wide text-slate-400">Watchlist</div>
-        <div class="mt-1 text-2xl font-semibold" x-text="watchlist.symbol_count"></div>
-        <div class="text-xs text-slate-500 mt-1" x-text="watchlist.symbols.length ? watchlist.symbols.slice(0,4).join(', ') + (watchlist.symbols.length > 4 ? '…' : '') : '—'"></div>
+        <div class="text-xs uppercase tracking-wide text-slate-400">Active watchlist</div>
+        <div class="mt-1 text-2xl font-semibold font-mono" x-text="selectedWatchlist || '—'"></div>
+        <div class="text-xs text-slate-500 mt-1">
+          <span x-text="currentMembers.length + ' symbols'"></span>
+          <span class="ml-1 text-slate-600">·</span>
+          <span x-text="watchlists.length + ' lists'"></span>
+          <span class="ml-1 text-slate-600">·</span>
+          <span x-text="(watchlist.subscribed_count || 0) + ' streaming'"></span>
+        </div>
       </div>
       <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
         <div class="text-xs uppercase tracking-wide text-slate-400">Total Bars</div>
@@ -69,28 +115,101 @@
 
     <!-- WATCHLIST MANAGEMENT -->
     <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-      <div class="flex items-center justify-between mb-3">
-        <h2 class="text-sm font-semibold">Watchlist</h2>
-        <span class="text-xs text-slate-400" x-text="watchlist.symbol_count + ' tracked'"></span>
+      <!-- Selector row: dropdown + New/Rename/Delete -->
+      <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <div class="flex items-center gap-2">
+          <h2 class="text-sm font-semibold mr-2">Watchlist</h2>
+          <select x-model="selectedWatchlist" @change="onSelectWatchlist()"
+                  class="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 text-sm font-mono"
+                  title="Choose a watchlist to view/edit">
+            <template x-for="wl in watchlists" :key="wl.name">
+              <option :value="wl.name"
+                      x-text="wl.name + ' (' + wl.member_count + ')' + (wl.kind === 'baseline' ? ' · baseline' : '')"></option>
+            </template>
+          </select>
+          <span class="text-xs text-slate-500" x-show="currentWatchlist && currentWatchlist.description"
+                x-text="currentWatchlist.description"></span>
+        </div>
+        <div class="flex items-center gap-1 text-xs">
+          <button @click="createWatchlistPrompt()"
+                  class="px-2.5 py-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                  title="Create a new watchlist">+ New</button>
+          <button @click="renameWatchlistPrompt()"
+                  :disabled="!selectedWatchlist || selectedWatchlist === 'default'"
+                  class="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Rename the selected watchlist">Rename</button>
+          <button @click="deleteWatchlistConfirm()"
+                  :disabled="!selectedWatchlist || selectedWatchlist === 'default'"
+                  class="px-2.5 py-1 rounded-md bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Delete the selected watchlist">Delete</button>
+        </div>
       </div>
-      <form @submit.prevent="addSymbols()" class="flex gap-2 mb-4">
-        <input
-          x-model="addInput"
-          placeholder="e.g. SPY, AAPL, TSLA"
-          class="flex-1 px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 placeholder-slate-500 focus:outline-none focus:border-indigo-500" />
+
+      <form @submit.prevent="onSubmitAdd()" class="flex gap-2 mb-4 relative">
+        <div class="flex-1 relative"
+             @keydown.arrow-down.prevent="moveHighlight(1)"
+             @keydown.arrow-up.prevent="moveHighlight(-1)"
+             @keydown.escape="closeSuggestions()"
+             @click.outside="closeSuggestions()">
+          <input
+            x-model="addInput"
+            @input.debounce.150ms="onAddInput()"
+            @focus="if (suggestions.length) suggestionsOpen = true"
+            :placeholder="'Add to ' + (selectedWatchlist || 'watchlist') + ' — ticker, company name, /ESM26 futures, or $SPX index'"
+            autocomplete="off"
+            spellcheck="false"
+            class="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 placeholder-slate-500 focus:outline-none focus:border-indigo-500" />
+          <!-- Loading spinner inline at the right edge while waiting on /api/instruments/search -->
+          <div x-show="suggestionsLoading"
+               class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+            <svg class="animate-spin h-4 w-4 text-slate-500" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" opacity="0.25"></circle>
+              <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" stroke-width="3"></path>
+            </svg>
+          </div>
+          <!-- Dropdown -->
+          <ul x-show="suggestionsOpen && suggestions.length"
+              x-transition.opacity
+              class="absolute z-30 top-full left-0 right-0 mt-1 max-h-72 overflow-y-auto rounded-lg bg-slate-950 border border-slate-700 shadow-xl">
+            <template x-for="(s, i) in suggestions" :key="s.symbol">
+              <li @mousedown.prevent="pickSuggestion(s)"
+                  @mouseenter="suggestionsHighlight = i"
+                  :class="i === suggestionsHighlight ? 'bg-indigo-500/20' : 'hover:bg-slate-800'"
+                  class="px-3 py-2 cursor-pointer flex items-center justify-between gap-3 border-b border-slate-800 last:border-b-0">
+                <div class="min-w-0">
+                  <div class="font-mono text-indigo-300" x-text="s.symbol"></div>
+                  <div class="text-xs text-slate-400 truncate" x-text="s.description"></div>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                  <span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400" x-text="s.asset_type || ''"></span>
+                  <span class="text-[10px] text-slate-500" x-text="s.exchange || ''"></span>
+                </div>
+              </li>
+            </template>
+          </ul>
+          <!-- Empty-state shown only after a search returned 0 hits -->
+          <div x-show="suggestionsOpen && !suggestions.length && !suggestionsLoading && addInput.trim().length >= 1"
+               class="absolute z-30 top-full left-0 right-0 mt-1 rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-xs text-slate-500">
+            No matches. Press Enter to add <span class="font-mono text-slate-300" x-text="addInput.trim().toUpperCase()"></span> anyway.
+          </div>
+        </div>
         <button type="submit"
                 class="px-4 py-2 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white font-medium disabled:opacity-50"
-                :disabled="!addInput.trim()">Add</button>
+                :disabled="!addInput.trim() || !selectedWatchlist">Add</button>
       </form>
+
       <div class="flex flex-wrap gap-2">
-        <template x-for="s in watchlist.symbols" :key="s">
+        <template x-for="s in currentMembers" :key="s">
           <span class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-sm hover:border-indigo-500">
-            <a :href="'/symbol/' + s" class="font-mono hover:text-indigo-300" x-text="s"></a>
-            <button @click="removeSymbol(s)" class="text-slate-400 hover:text-red-400" title="Remove">×</button>
+            <a :href="symbolHref(s)" class="font-mono hover:text-indigo-300" x-text="s"></a>
+            <button @click="removeSymbol(s)" class="text-slate-400 hover:text-red-400" title="Remove from this watchlist">×</button>
           </span>
         </template>
-        <span x-show="watchlist.symbols.length === 0" class="text-sm text-slate-500">No symbols yet. Add some above.</span>
+        <span x-show="currentMembers.length === 0" class="text-sm text-slate-500">
+          No symbols in <span class="font-mono" x-text="selectedWatchlist || '—'"></span> yet. Add some above.
+        </span>
       </div>
+
       <div x-show="watchlist.provider_error" class="mt-3 text-xs text-red-400">
         Provider error: <span x-text="watchlist.provider_error"></span>
       </div>
@@ -192,7 +311,7 @@
               <tr class="border-t border-slate-800/60 hover:bg-slate-900/40">
                 <td class="px-5 py-2 text-slate-500" x-text="i + 1"></td>
                 <td class="px-5 py-2 font-mono font-semibold">
-                  <a :href="'/symbol/' + (m.symbol || '').replace(/^\$/, '')"
+                  <a :href="symbolHref(m.symbol)"
                      class="hover:text-indigo-300" x-text="m.symbol"></a>
                 </td>
                 <td class="px-5 py-2 text-slate-300 max-w-[280px] truncate" :title="m.description" x-text="m.description || '—'"></td>
@@ -219,19 +338,27 @@
     <!-- LIVE QUOTES GRID -->
     <section>
       <div class="flex items-center justify-between mb-3">
-        <h2 class="text-sm font-semibold">Latest Bars</h2>
+        <h2 class="text-sm font-semibold">
+          Latest Bars
+          <span class="text-xs text-slate-500 ml-2 font-normal" x-text="'· ' + (selectedWatchlist || 'no watchlist')"></span>
+        </h2>
         <button @click="refresh()" class="text-xs text-slate-400 hover:text-slate-200">Refresh now</button>
       </div>
       <div x-show="snapshot.length === 0" class="rounded-xl border border-dashed border-slate-700 p-8 text-center text-slate-500 text-sm">
-        Bars will appear here once the stream produces data (Schwab CHART_EQUITY emits per minute).
+        <template x-if="currentMembers.length === 0">
+          <span>No symbols in this watchlist yet. Add some above.</span>
+        </template>
+        <template x-if="currentMembers.length > 0">
+          <span>Bars will appear here once the stream produces data (Schwab CHART_EQUITY emits per minute).</span>
+        </template>
       </div>
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <template x-for="row in snapshot" :key="row.symbol">
-          <a :href="'/symbol/' + row.symbol"
+          <a :href="symbolHref(row.symbol)"
              class="block rounded-xl border border-slate-800 bg-slate-900/60 p-4 hover:border-indigo-500 transition-colors">
             <div class="flex items-baseline justify-between">
               <div class="font-mono text-lg font-semibold" x-text="row.symbol"></div>
-              <div class="text-xs text-slate-500" x-text="row.ts ? new Date(row.ts).toLocaleTimeString() : 'no data yet'"></div>
+              <div class="text-xs text-slate-500" x-text="row.ts ? new Date(tsToMs(row.ts)).toLocaleTimeString() : 'no data yet'"></div>
             </div>
             <div class="mt-2 text-2xl font-semibold"
                  :class="priceColor(row)"
@@ -272,7 +399,7 @@
           <tbody>
             <template x-for="s in signals" :key="s.id">
               <tr class="border-t border-slate-800/60 hover:bg-slate-900/40">
-                <td class="px-5 py-2 text-slate-300" x-text="s.ts ? new Date(s.ts).toLocaleString() : ''"></td>
+                <td class="px-5 py-2 text-slate-300" x-text="s.ts ? new Date(tsToMs(s.ts)).toLocaleString() : ''"></td>
                 <td class="px-5 py-2 font-mono" x-text="s.symbol"></td>
                 <td class="px-5 py-2" x-text="s.type"></td>
                 <td class="px-5 py-2 text-slate-400" x-text="s.indicator"></td>
@@ -298,14 +425,34 @@
   </div>
 
   <script>
+    const SELECTED_WL_KEY = 'stockalert.selectedWatchlist';
+
     function dashboard() {
       return {
-        watchlist: { symbols: [], symbol_count: 0, started: false, provider: '', provider_ready: false, provider_error: null },
+        // ----- multi-watchlist state -----
+        watchlists: [],                  // [{name, kind, description, members, member_count, ...}]
+        selectedWatchlist: '',           // name of currently-selected watchlist
+        get currentWatchlist() {
+          return this.watchlists.find(w => w.name === this.selectedWatchlist) || null;
+        },
+        get currentMembers() {
+          return this.currentWatchlist ? this.currentWatchlist.members : [];
+        },
+
+        // ----- global state -----
+        watchlist: { started: false, provider: '', provider_ready: false, provider_error: null, subscribed_count: 0 },
         snapshot: [],
         signals: [],
         stats: { total_bars: 0, total_signals: 0 },
         health: { clickhouse: false },
         addInput: '',
+        // Symbol autocomplete: results from /api/instruments/search, plus UI state.
+        suggestions: [],
+        suggestionsOpen: false,
+        suggestionsLoading: false,
+        suggestionsHighlight: -1,
+        _suggestTimer: null,
+        _suggestSeq: 0,
         lastRefresh: '',
         _prev: {},
 
@@ -314,6 +461,20 @@
         moversSort: 'PERCENT_CHANGE_UP',
         moversFreq: 0,
         moversError: '',
+
+        // Top-of-page market tape (/api/market/banner)
+        marketTape: { items: [], as_of: null, loading: true, errors: [] },
+
+        // ClickHouse returns naive ISO timestamps that represent UTC. JS parses
+        // such strings (with a time portion but no `Z` / offset) as LOCAL time
+        // per the ES spec, which would shift every bar by the local UTC offset.
+        // Force-append `Z` if no timezone is encoded, so all downstream
+        // `toLocaleString()` calls show the correct local-clock time.
+        tsToMs(s) {
+          if (!s) return 0;
+          if (typeof s !== 'string') return new Date(s).getTime();
+          return /[zZ]|[+-]\d{2}:?\d{2}$/.test(s) ? new Date(s).getTime() : new Date(s + 'Z').getTime();
+        },
 
         fmtNum(n) {
           if (n === null || n === undefined) return '—';
@@ -333,6 +494,11 @@
           const sign = n >= 0 ? '+' : '';
           return `${sign}${Number(n).toFixed(2)}%`;
         },
+        /** Safe link for /symbol/… including `$` indexes and `/` futures roots. */
+        symbolHref(sym) {
+          const s = sym == null ? '' : String(sym);
+          return '/symbol/' + encodeURIComponent(s);
+        },
         priceColor(row) {
           const prev = this._prev[row.symbol];
           this._prev[row.symbol] = row.close;
@@ -342,34 +508,237 @@
           return '';
         },
 
+        // ----- HTTP helpers -----
         async getJSON(url) {
           const r = await fetch(url);
           if (!r.ok) throw new Error(url + ' -> ' + r.status);
           return r.json();
         },
-        async postJSON(url, body) {
+        async sendJSON(method, url, body) {
           const r = await fetch(url, {
-            method: 'POST',
+            method,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
+            body: body == null ? undefined : JSON.stringify(body),
           });
           if (!r.ok) {
-            const t = await r.text();
-            throw new Error(url + ' -> ' + r.status + ' ' + t);
+            let detail = '';
+            try { detail = (await r.json()).detail || ''; } catch (_) { detail = await r.text(); }
+            throw new Error(url + ' -> ' + r.status + (detail ? ' ' + detail : ''));
           }
-          return r.json();
+          // 204/empty bodies
+          const ct = r.headers.get('content-type') || '';
+          return ct.includes('application/json') ? r.json() : null;
+        },
+        postJSON(url, body)   { return this.sendJSON('POST', url, body); },
+        patchJSON(url, body)  { return this.sendJSON('PATCH', url, body); },
+        deleteJSON(url, body) { return this.sendJSON('DELETE', url, body); },
+
+        // ----- watchlist management -----
+        async reloadWatchlists() {
+          this.watchlists = await this.getJSON('/api/watchlists');
+          // Persisted selection still valid? Otherwise fall back to default → first.
+          const names = this.watchlists.map(w => w.name);
+          if (!this.selectedWatchlist || !names.includes(this.selectedWatchlist)) {
+            this.selectedWatchlist =
+              localStorage.getItem(SELECTED_WL_KEY) && names.includes(localStorage.getItem(SELECTED_WL_KEY))
+                ? localStorage.getItem(SELECTED_WL_KEY)
+                : (names.includes('default') ? 'default' : (names[0] || ''));
+            localStorage.setItem(SELECTED_WL_KEY, this.selectedWatchlist);
+          }
         },
 
+        onSelectWatchlist() {
+          localStorage.setItem(SELECTED_WL_KEY, this.selectedWatchlist);
+          this._prev = {};  // reset price-flash memory when switching lists
+          this.refresh();
+        },
+
+        async createWatchlistPrompt() {
+          const name = (prompt('Name for the new watchlist:') || '').trim();
+          if (!name) return;
+          try {
+            await this.postJSON('/api/watchlists', { name, kind: 'user', description: '' });
+            await this.reloadWatchlists();
+            this.selectedWatchlist = name;
+            localStorage.setItem(SELECTED_WL_KEY, name);
+            await this.refresh();
+          } catch (e) {
+            alert('Create failed: ' + e.message);
+          }
+        },
+
+        async renameWatchlistPrompt() {
+          if (!this.selectedWatchlist || this.selectedWatchlist === 'default') return;
+          const newName = (prompt('Rename "' + this.selectedWatchlist + '" to:', this.selectedWatchlist) || '').trim();
+          if (!newName || newName === this.selectedWatchlist) return;
+          try {
+            await this.patchJSON('/api/watchlists/' + encodeURIComponent(this.selectedWatchlist),
+                                 { new_name: newName });
+            this.selectedWatchlist = newName;
+            localStorage.setItem(SELECTED_WL_KEY, newName);
+            await this.reloadWatchlists();
+            await this.refresh();
+          } catch (e) {
+            alert('Rename failed: ' + e.message);
+          }
+        },
+
+        async deleteWatchlistConfirm() {
+          if (!this.selectedWatchlist || this.selectedWatchlist === 'default') return;
+          const name = this.selectedWatchlist;
+          if (!confirm('Delete watchlist "' + name + '"? Members move out of streaming if no other list keeps them.')) return;
+          try {
+            await this.deleteJSON('/api/watchlists/' + encodeURIComponent(name));
+            this.selectedWatchlist = 'default';
+            localStorage.setItem(SELECTED_WL_KEY, 'default');
+            await this.reloadWatchlists();
+            await this.refresh();
+          } catch (e) {
+            alert('Delete failed: ' + e.message);
+          }
+        },
+
+        // ----- members of the selected watchlist -----
+        async addSymbols() {
+          if (!this.selectedWatchlist) return;
+          const symbols = this.addInput.split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+          if (!symbols.length) return;
+          try {
+            await this.postJSON('/api/watchlists/' + encodeURIComponent(this.selectedWatchlist) + '/members',
+                                { symbols });
+            this.addInput = '';
+            this.closeSuggestions();
+            await this.reloadWatchlists();
+            await this.refresh();
+          } catch (e) {
+            alert('Add failed: ' + e.message);
+          }
+        },
+
+        // ----- Symbol autocomplete -----
+        // Debounced fetch wired via @input.debounce.150ms="onAddInput()".
+        // Uses a monotonically-incrementing sequence number so out-of-order
+        // responses (slow network) can't overwrite newer ones.
+        async onAddInput() {
+          const raw = this.addInput.trim();
+          if (!raw) {
+            this.closeSuggestions();
+            return;
+          }
+          // If the user typed multiple tokens (e.g. "AAPL TSLA"), don't try
+          // to autocomplete - they're clearly batching, just hide the dropdown.
+          if (/[,\s]/.test(raw)) {
+            this.closeSuggestions();
+            return;
+          }
+          this.suggestionsLoading = true;
+          this.suggestionsOpen = true;
+          const mySeq = ++this._suggestSeq;
+          try {
+            const data = await this.getJSON('/api/instruments/search?q=' + encodeURIComponent(raw) + '&limit=10');
+            if (mySeq !== this._suggestSeq) return;
+            this.suggestions = data.results || [];
+            this.suggestionsHighlight = this.suggestions.length ? 0 : -1;
+          } catch (e) {
+            if (mySeq === this._suggestSeq) {
+              this.suggestions = [];
+              this.suggestionsHighlight = -1;
+            }
+          } finally {
+            if (mySeq === this._suggestSeq) this.suggestionsLoading = false;
+          }
+        },
+
+        pickSuggestion(s) {
+          if (!s || !s.symbol) return;
+          this.addInput = s.symbol;
+          this.closeSuggestions();
+          // Submit immediately - clicking a suggestion = "add this one".
+          this.addSymbols();
+        },
+
+        moveHighlight(delta) {
+          if (!this.suggestionsOpen || !this.suggestions.length) return;
+          const n = this.suggestions.length;
+          this.suggestionsHighlight = (this.suggestionsHighlight + delta + n) % n;
+        },
+
+        // Called by the form's submit handler. If the dropdown is open AND a
+        // suggestion is highlighted, pick that. Otherwise fall through to the
+        // multi-token "type and add manually" path so power users can still
+        // paste "AAPL,TSLA,SPY" and press Enter.
+        onSubmitAdd() {
+          if (this.suggestionsOpen
+              && this.suggestionsHighlight >= 0
+              && this.suggestions[this.suggestionsHighlight]) {
+            this.pickSuggestion(this.suggestions[this.suggestionsHighlight]);
+            return;
+          }
+          this.addSymbols();
+        },
+
+        closeSuggestions() {
+          this.suggestionsOpen = false;
+          this.suggestions = [];
+          this.suggestionsHighlight = -1;
+          this.suggestionsLoading = false;
+        },
+
+        async addSymbolsFromString(s) {
+          if (!this.selectedWatchlist) return;
+          // Skip index pseudo-symbols like $SPX, $DJI when added from movers list.
+          const symbols = (s || '').split(/[,\s]+/)
+            .map(x => x.trim().replace(/^\$/, ''))
+            .filter(Boolean);
+          if (!symbols.length) return;
+          try {
+            await this.postJSON('/api/watchlists/' + encodeURIComponent(this.selectedWatchlist) + '/members',
+                                { symbols });
+            await this.reloadWatchlists();
+            await this.refresh();
+          } catch (e) {
+            alert('Add failed: ' + e.message);
+          }
+        },
+
+        async removeSymbol(s) {
+          if (!this.selectedWatchlist) return;
+          if (!confirm('Remove ' + s + ' from "' + this.selectedWatchlist + '"?')) return;
+          try {
+            await this.deleteJSON('/api/watchlists/' + encodeURIComponent(this.selectedWatchlist) + '/members',
+                                  { symbols: [s] });
+            await this.reloadWatchlists();
+            await this.refresh();
+          } catch (e) {
+            alert('Remove failed: ' + e.message);
+          }
+        },
+
+        // ----- general refresh -----
         async refresh() {
           try {
-            const [wl, snap, st, hl, sig] = await Promise.all([
+            // First make sure we know what lists exist + which one is selected.
+            if (!this.selectedWatchlist) {
+              await this.reloadWatchlists();
+            }
+            const snapUrl = this.selectedWatchlist
+              ? '/api/watchlists/' + encodeURIComponent(this.selectedWatchlist) + '/snapshot'
+              : '/watchlist/snapshot';
+            const [wls, wlStatus, snap, st, hl, sig] = await Promise.all([
+              this.getJSON('/api/watchlists'),
               this.getJSON('/watchlist'),
-              this.getJSON('/watchlist/snapshot'),
+              this.getJSON(snapUrl),
               this.getJSON('/stats'),
               this.getJSON('/health'),
               this.getJSON('/api/signals?limit=25').catch(() => []),
             ]);
-            this.watchlist = wl;
+            this.watchlists = wls;
+            // Keep selectedWatchlist valid in case a list was deleted under us.
+            if (!wls.find(w => w.name === this.selectedWatchlist)) {
+              this.selectedWatchlist = wls.find(w => w.name === 'default') ? 'default' : (wls[0]?.name || '');
+              localStorage.setItem(SELECTED_WL_KEY, this.selectedWatchlist);
+            }
+            this.watchlist = wlStatus;
             this.snapshot = snap;
             this.stats = st;
             this.health = hl;
@@ -377,31 +746,6 @@
             this.lastRefresh = new Date().toLocaleTimeString();
           } catch (e) {
             console.error(e);
-          }
-        },
-
-        async addSymbols() {
-          const symbols = this.addInput.split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
-          if (!symbols.length) return;
-          try {
-            await this.postJSON('/watchlist/add', { symbols });
-            this.addInput = '';
-            await this.refresh();
-          } catch (e) {
-            alert('Add failed: ' + e.message);
-          }
-        },
-        async addSymbolsFromString(s) {
-          // Skip index pseudo-symbols like $SPX, $DJI when added from movers list.
-          const symbols = (s || '').split(/[,\s]+/)
-            .map(x => x.trim().replace(/^\$/, ''))
-            .filter(Boolean);
-          if (!symbols.length) return;
-          try {
-            await this.postJSON('/watchlist/add', { symbols });
-            await this.refresh();
-          } catch (e) {
-            alert('Add failed: ' + e.message);
           }
         },
 
@@ -416,13 +760,20 @@
             this.movers = { movers: [], fetched_at: null };
           }
         },
-        async removeSymbol(s) {
-          if (!confirm('Remove ' + s + ' from watchlist?')) return;
+
+        async loadMarketTape() {
+          this.marketTape.loading = true;
           try {
-            await this.postJSON('/watchlist/remove', { symbols: [s] });
-            await this.refresh();
+            const j = await this.getJSON('/api/market/banner');
+            this.marketTape.items = j.items || [];
+            this.marketTape.as_of = j.as_of || null;
+            this.marketTape.errors = j.errors || [];
           } catch (e) {
-            alert('Remove failed: ' + e.message);
+            console.error('market banner', e);
+            this.marketTape.items = [];
+            this.marketTape.errors = [{ message: String(e) }];
+          } finally {
+            this.marketTape.loading = false;
           }
         },
 
@@ -434,12 +785,18 @@
           } catch (_) { /* ignore */ }
         },
 
-        init() {
+        async init() {
+          // Restore last-selected watchlist before the first refresh so the
+          // snapshot we fetch matches what the user saw last session.
+          this.selectedWatchlist = localStorage.getItem(SELECTED_WL_KEY) || '';
+          await this.reloadWatchlists();
           this.refresh();
           this.loadMovers();
+          this.loadMarketTape();
           this.connectSignalsWS();
           setInterval(() => this.refresh(), 5000);
           setInterval(() => this.loadMovers(), 30000);
+          setInterval(() => this.loadMarketTape(), 60000);
         },
       };
     }

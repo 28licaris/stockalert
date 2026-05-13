@@ -21,12 +21,21 @@ but for watchlists (a handful of rows) FINAL is cheap and correct.
 """
 from __future__ import annotations
 
+import re
 import time
 from typing import Iterable, Optional
 
 from app.db.client import get_client
 
 VALID_KINDS = {"user", "baseline", "adhoc"}
+
+# CME-style month codes + 2-digit year, without the leading ``/`` that Schwab
+# uses in quotes/streamer keys. If a user types ``MNQM26`` we normalize to
+# ``/MNQM26`` so watchlist + backfill align with Schwab's symbol space.
+_FUTURES_CONTRACT_BODY = re.compile(
+    r"^[A-Z]{2,6}[FGHJKMNQUVXZ]\d{2}$",
+    re.IGNORECASE,
+)
 
 
 def _now_version() -> int:
@@ -41,11 +50,21 @@ def _normalize_name(name: str) -> str:
     return n
 
 
+def normalize_member_symbol(s: str) -> str:
+    """Uppercase + optional implicit futures slash (MNQM26 -> /MNQM26)."""
+    ss = (s or "").strip().upper()
+    if not ss:
+        return ""
+    if not ss.startswith(("/", "$")) and _FUTURES_CONTRACT_BODY.fullmatch(ss):
+        ss = "/" + ss
+    return ss
+
+
 def _normalize_symbols(symbols: Iterable[str]) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     for s in symbols or []:
-        ss = (s or "").strip().upper()
+        ss = normalize_member_symbol(s)
         if ss and ss not in seen:
             seen.add(ss)
             out.append(ss)

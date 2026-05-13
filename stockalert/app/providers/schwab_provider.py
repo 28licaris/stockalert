@@ -11,9 +11,9 @@ import logging
 import os
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional
 from urllib.parse import urlparse
 
 import aiohttp
@@ -90,6 +90,9 @@ SERVICE_ACCT_ACTIVITY = "ACCT_ACTIVITY"
 # Schwab CHART_EQUITY fields (empirically validated against live data; the local docs copy is misleading):
 #   0=key, 1=Sequence, 2=Open, 3=High, 4=Low, 5=Close, 6=Volume, 7=ChartTime(ms), 8=ChartDay
 CHART_EQUITY_FIELDS = "0,2,3,4,5,6,7"
+# CHART_FUTURES uses the same field IDs as CHART_EQUITY in the Schwab streamer
+# protocol (0=key, 2-7 OHLCV+time). Verified against live /MNQ… contracts.
+CHART_FUTURES_FIELDS = CHART_EQUITY_FIELDS
 
 _DEFAULT_SCHWAB_API_BASE = "https://api.schwabapi.com"
 
@@ -152,8 +155,9 @@ class SchwabProvider(DataProvider):
         self._access_token: Optional[str] = None
         self._streamer_url: Optional[str] = None
         self._user_prefs: Optional[dict] = None
-        self._lock = asyncio.Lock()
-        self._token_refresh_lock = threading.Lock()
+        # One asyncio.Lock per running event loop so concurrent API calls cannot
+        # each POST /oauth/token (Schwab may rotate refresh tokens on every exchange).
+        self._token_async_locks: dict[asyncio.AbstractEventLoop, asyncio.Lock] = {}
         # Streamer thread and state
         self._main_loop: Optional[asyncio.AbstractEventLoop] = None
         self._streamer_thread: Optional[threading.Thread] = None
@@ -165,53 +169,60 @@ class SchwabProvider(DataProvider):
         self._streamer_loop: Optional[asyncio.AbstractEventLoop] = None
         self._streamer_ready = threading.Event()
 
+    def _token_lock_for_running_loop(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        lock = self._token_async_locks.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._token_async_locks[loop] = lock
+        return lock
+
     async def _ensure_token(self) -> str:
         """
         Obtain a valid access token (refresh if needed).
         POST /v1/oauth/token with grant_type=refresh_token.
         """
-        with self._token_refresh_lock:
+        async with self._token_lock_for_running_loop():
             if self._access_token:
                 return self._access_token
             if not self._refresh_token:
                 raise ValueError("SCHWAB_REFRESH_TOKEN is required for Schwab provider")
-        url = f"{self._base_url}{TOKEN_PATH}"
-        parsed = urlparse(url)
-        if not parsed.scheme or not parsed.netloc:
-            raise ValueError(
-                f"Invalid SCHWAB_BASE_URL / base_url (got host={parsed.netloc!r}). "
-                f"Use a full URL such as {_DEFAULT_SCHWAB_API_BASE}."
-            )
-        # Schwab token endpoint requires client credentials via Basic auth (RFC 6749 2.3.1), not body.
-        credentials = base64.b64encode(f"{self._client_id}:{self._client_secret}".encode()).decode()
-        payload = {
-            "grant_type": "refresh_token",
-            "refresh_token": self._refresh_token,
-        }
-        try:
-            async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
-                async with session.post(
-                    url,
-                    data=payload,
-                    headers={
-                        "Content-Type": "application/x-www-form-urlencoded",
-                        "Authorization": f"Basic {credentials}",
-                    },
-                ) as resp:
-                    if resp.status != 200:
-                        text = await resp.text()
-                        hint = _schwab_refresh_token_user_hint(resp.status, text)
-                        logger.error("Schwab token exchange failed: %s %s", resp.status, text)
-                        base_msg = f"Schwab token exchange failed: {resp.status} {text}"
-                        raise RuntimeError(f"{hint}\n\n{base_msg}" if hint else base_msg)
-                    data = await resp.json()
-        except ClientConnectorError as e:
-            raise RuntimeError(
-                f"Cannot connect to Schwab at {url} ({e}). "
-                "Check network, DNS, and VPN. If SCHWAB_BASE_URL is in .env, it must be a full URL "
-                f"(e.g. {_DEFAULT_SCHWAB_API_BASE}), not empty."
-            ) from None
-        with self._token_refresh_lock:
+            url = f"{self._base_url}{TOKEN_PATH}"
+            parsed = urlparse(url)
+            if not parsed.scheme or not parsed.netloc:
+                raise ValueError(
+                    f"Invalid SCHWAB_BASE_URL / base_url (got host={parsed.netloc!r}). "
+                    f"Use a full URL such as {_DEFAULT_SCHWAB_API_BASE}."
+                )
+            # Schwab token endpoint requires client credentials via Basic auth (RFC 6749 2.3.1), not body.
+            credentials = base64.b64encode(f"{self._client_id}:{self._client_secret}".encode()).decode()
+            payload = {
+                "grant_type": "refresh_token",
+                "refresh_token": self._refresh_token,
+            }
+            try:
+                async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+                    async with session.post(
+                        url,
+                        data=payload,
+                        headers={
+                            "Content-Type": "application/x-www-form-urlencoded",
+                            "Authorization": f"Basic {credentials}",
+                        },
+                    ) as resp:
+                        if resp.status != 200:
+                            text = await resp.text()
+                            hint = _schwab_refresh_token_user_hint(resp.status, text)
+                            logger.error("Schwab token exchange failed: %s %s", resp.status, text)
+                            base_msg = f"Schwab token exchange failed: {resp.status} {text}"
+                            raise RuntimeError(f"{hint}\n\n{base_msg}" if hint else base_msg)
+                        data = await resp.json()
+            except ClientConnectorError as e:
+                raise RuntimeError(
+                    f"Cannot connect to Schwab at {url} ({e}). "
+                    "Check network, DNS, and VPN. If SCHWAB_BASE_URL is in .env, it must be a full URL "
+                    f"(e.g. {_DEFAULT_SCHWAB_API_BASE}), not empty."
+                ) from None
             self._access_token = data.get("access_token")
             new_refresh = data.get("refresh_token")
             if new_refresh:
@@ -221,13 +232,13 @@ class SchwabProvider(DataProvider):
                         os.makedirs(os.path.dirname(self._refresh_token_file) or ".", exist_ok=True)
                         with open(self._refresh_token_file, "w") as f:
                             f.write(new_refresh)
-                        logger.info("Schwab refresh token persisted to %s", self._refresh_token_file)
+                        logger.debug("Schwab refresh token persisted to %s", self._refresh_token_file)
                     except OSError as e:
                         logger.warning("Could not persist Schwab refresh token: %s", e)
-        if not self._access_token:
-            raise RuntimeError("Schwab token response missing access_token")
-        logger.info("Schwab access token obtained")
-        return self._access_token
+            if not self._access_token:
+                raise RuntimeError("Schwab token response missing access_token")
+            logger.debug("Schwab access token obtained")
+            return self._access_token
 
     async def _get_user_principals(self, _retry_on_401: bool = True) -> dict:
         """
@@ -385,7 +396,7 @@ class SchwabProvider(DataProvider):
     @staticmethod
     def _chart_content_to_bar(content: dict) -> SimpleNamespace:
         """
-        Map CHART_EQUITY content to a bar object.
+        Map CHART_EQUITY / CHART_FUTURES content to a bar object.
         Schwab field IDs: 0=key, 2=Open, 3=High, 4=Low, 5=Close, 6=Volume, 7=ChartTime(ms).
         Field 1 is Sequence, not Open — Schwab's public field tables list these incorrectly.
         """
@@ -408,6 +419,25 @@ class SchwabProvider(DataProvider):
             close=float(_f(5) or 0),
             volume=int(_f(6) or 0),
         )
+
+    @staticmethod
+    def partition_chart_stream_keys(tickers: Iterable[str]) -> tuple[list[str], list[str]]:
+        """
+        Schwab streamer uses CHART_EQUITY for stocks/ETFs/indexes and CHART_FUTURES
+        for roots that start with ``/`` (e.g. ``/MNQM26``). Keys must not be mixed
+        across services in a single SUBS request.
+        """
+        equity: list[str] = []
+        futures: list[str] = []
+        for raw in tickers or []:
+            s = (raw or "").strip().upper()
+            if not s:
+                continue
+            if s.startswith("/"):
+                futures.append(s)
+            else:
+                equity.append(s)
+        return equity, futures
 
     def _enqueue_streamer_cmd(self, cmd: dict) -> None:
         """
@@ -547,21 +577,36 @@ class SchwabProvider(DataProvider):
                     # Initial subscription snapshot (if already requested before the socket was ready)
                     tickers = list(self._subscribed_tickers)
                     if tickers and self._bar_callback:
-                        await self._streamer_send(
-                            {
-                                "requests": [
-                                    {
-                                        "requestid": "2",
-                                        "service": SERVICE_CHART_EQUITY,
-                                        "command": "SUBS",
-                                        "SchwabClientCustomerId": ids["SchwabClientCustomerId"],
-                                        "SchwabClientCorrelId": ids["SchwabClientCorrelId"],
-                                        "parameters": {"keys": ",".join(tickers), "fields": CHART_EQUITY_FIELDS},
-                                    }
-                                ]
-                            }
-                        )
-                        logger.info("Schwab CHART_EQUITY SUBS sent for %s", tickers)
+                        eq_keys, fut_keys = self.partition_chart_stream_keys(tickers)
+                        requests: list[dict] = []
+                        if eq_keys:
+                            requests.append(
+                                {
+                                    "requestid": "2",
+                                    "service": SERVICE_CHART_EQUITY,
+                                    "command": "SUBS",
+                                    "SchwabClientCustomerId": ids["SchwabClientCustomerId"],
+                                    "SchwabClientCorrelId": ids["SchwabClientCorrelId"],
+                                    "parameters": {"keys": ",".join(eq_keys), "fields": CHART_EQUITY_FIELDS},
+                                }
+                            )
+                        if fut_keys:
+                            requests.append(
+                                {
+                                    "requestid": "3",
+                                    "service": SERVICE_CHART_FUTURES,
+                                    "command": "SUBS",
+                                    "SchwabClientCustomerId": ids["SchwabClientCustomerId"],
+                                    "SchwabClientCorrelId": ids["SchwabClientCorrelId"],
+                                    "parameters": {"keys": ",".join(fut_keys), "fields": CHART_FUTURES_FIELDS},
+                                }
+                            )
+                        if requests:
+                            await self._streamer_send({"requests": requests})
+                        if eq_keys:
+                            logger.info("Schwab CHART_EQUITY SUBS sent for %s", eq_keys)
+                        if fut_keys:
+                            logger.info("Schwab CHART_FUTURES SUBS sent for %s", fut_keys)
                     # Receive loop
                     while self._streamer_started:
                         msg = await ws.receive()
@@ -576,7 +621,8 @@ class SchwabProvider(DataProvider):
                         if "data" not in data or not self._bar_callback or not self._main_loop:
                             continue
                         for block in data["data"]:
-                            if block.get("service") != SERVICE_CHART_EQUITY:
+                            svc = block.get("service")
+                            if svc not in (SERVICE_CHART_EQUITY, SERVICE_CHART_FUTURES):
                                 continue
                             for content in block.get("content") or []:
                                 bar = self._chart_content_to_bar(content)
@@ -626,42 +672,62 @@ class SchwabProvider(DataProvider):
         logger.info("Schwab stream stopped")
 
     def subscribe_bars(self, callback: Callable, tickers: list[str]) -> None:
-        """Subscribe to CHART_EQUITY for given tickers. Starts stream and sends SUBS after LOGIN."""
+        """Subscribe to CHART_EQUITY and/or CHART_FUTURES for given tickers. Starts stream and sends SUBS after LOGIN."""
         try:
             self._main_loop = asyncio.get_running_loop()
         except RuntimeError:
             logger.error("Schwab subscribe_bars: no event loop; call from async context")
             return
         self._bar_callback = callback
-        new_tickers = [t.upper() for t in tickers]
+        new_tickers = [t.strip().upper() for t in tickers if (t or "").strip()]
         self._subscribed_tickers = list(dict.fromkeys(self._subscribed_tickers + new_tickers))
         logger.info("Schwab subscribing to bars for %s", self._subscribed_tickers)
         self.start_stream()
-        # If streamer is already logged in, send a SUBS immediately for the requested tickers.
+        # If streamer is already logged in, send SUBS immediately for the requested tickers.
         if self._streamer_ready.is_set():
-            self._enqueue_streamer_cmd(
-                {
-                    "service": SERVICE_CHART_EQUITY,
-                    "command": "SUBS",
-                    "parameters": {"keys": ",".join(new_tickers), "fields": CHART_EQUITY_FIELDS},
-                }
-            )
+            eq_sub, fu_sub = self.partition_chart_stream_keys(new_tickers)
+            if eq_sub:
+                self._enqueue_streamer_cmd(
+                    {
+                        "service": SERVICE_CHART_EQUITY,
+                        "command": "SUBS",
+                        "parameters": {"keys": ",".join(eq_sub), "fields": CHART_EQUITY_FIELDS},
+                    }
+                )
+            if fu_sub:
+                self._enqueue_streamer_cmd(
+                    {
+                        "service": SERVICE_CHART_FUTURES,
+                        "command": "SUBS",
+                        "parameters": {"keys": ",".join(fu_sub), "fields": CHART_FUTURES_FIELDS},
+                    }
+                )
 
     def unsubscribe_bars(self, tickers: list[str]) -> None:
-        """Unsubscribe from bar updates for given tickers."""
-        norm = [t.upper() for t in tickers]
+        """Unsubscribe from bar updates for given tickers (correct chart service per symbol)."""
+        norm = [t.strip().upper() for t in tickers if (t or "").strip()]
         for t in norm:
             if t in self._subscribed_tickers:
                 self._subscribed_tickers.remove(t)
         logger.info("Schwab unsubscribed from %s; remaining %s", norm, self._subscribed_tickers)
         if self._streamer_ready.is_set() and norm:
-            self._enqueue_streamer_cmd(
-                {
-                    "service": SERVICE_CHART_EQUITY,
-                    "command": "UNSUBS",
-                    "parameters": {"keys": ",".join(norm)},
-                }
-            )
+            eq_u, fu_u = self.partition_chart_stream_keys(norm)
+            if eq_u:
+                self._enqueue_streamer_cmd(
+                    {
+                        "service": SERVICE_CHART_EQUITY,
+                        "command": "UNSUBS",
+                        "parameters": {"keys": ",".join(eq_u)},
+                    }
+                )
+            if fu_u:
+                self._enqueue_streamer_cmd(
+                    {
+                        "service": SERVICE_CHART_FUTURES,
+                        "command": "UNSUBS",
+                        "parameters": {"keys": ",".join(fu_u)},
+                    }
+                )
 
     async def historical_df(
         self,
@@ -782,6 +848,149 @@ class SchwabProvider(DataProvider):
         path = INSTRUMENT_CUSIP_PATH.format(cusip_id=cusip_id)
         return await self._market_data_get(path, None)
 
+    @staticmethod
+    def _normalize_instrument(it: dict) -> dict:
+        """Provider-agnostic shape used by /api/instruments/search."""
+        return {
+            "symbol": (it.get("symbol") or "").upper(),
+            "description": it.get("description") or "",
+            "exchange": it.get("exchange") or "",
+            "asset_type": it.get("assetType") or it.get("type") or "",
+        }
+
+    @staticmethod
+    def _to_prefix_regex(query: str) -> str:
+        """
+        Build a safe prefix regex for Schwab's `symbol-regex` projection.
+        Schwab equity/ETF tickers are alphanumeric only, so we strip everything
+        else - including `.` which is a regex metachar - to make injection
+        impossible. The result is anchored at start with a trailing `.*` so
+        'NVD' matches NVDA, NVDS, NVDX, etc.
+
+        Futures use a leading ``/`` (e.g. ``/MNQM26``). For queries that start
+        with ``/`` we keep the slash and only allow alphanumerics after it so
+        ``/mnq`` becomes ``^/MNQ.*``.
+        """
+        q = (query or "").strip()
+        if q.startswith("/"):
+            tail = "".join(ch for ch in q[1:] if ch.isalnum())
+            if not tail:
+                return ""
+            return f"^/{tail.upper()}.*"
+        cleaned = "".join(ch for ch in query if ch.isalnum())
+        if not cleaned:
+            return ""
+        return f"^{cleaned.upper()}.*"
+
+    # Relevance weights for autocomplete ranking. Higher = pushed to the top.
+    # Tuned for retail-trader expectations: typing 'apple' should surface AAPL
+    # before mutual funds like APPLESEED INVESTOR.
+    _ASSET_TYPE_WEIGHTS = {
+        "EQUITY": 30,
+        "ETF": 25,
+        "INDEX": 20,
+        "MUTUAL_FUND": 5,
+        "FOREX": 5,
+        "FUTURE": 5,
+        "OPTION": 0,
+    }
+
+    @classmethod
+    def _score_instrument(cls, inst: dict, query_upper: str) -> int:
+        """
+        Rank an instrument against a search query. Pure function; tested
+        directly. Higher score = more relevant.
+        """
+        sym = inst.get("symbol", "")
+        desc = (inst.get("description") or "").upper()
+        score = 0
+
+        if sym == query_upper:
+            score += 200          # exact ticker match wins everything
+        elif sym.startswith(query_upper):
+            score += 100          # ticker-prefix match (NVD -> NVDA, NVDS)
+        elif query_upper in desc:
+            score += 30           # description substring (apple -> AAPL)
+
+        # Futures autocomplete: user types "/mnq" — boost matching contracts.
+        if query_upper.startswith("/") and sym.startswith("/"):
+            score += 55
+        elif query_upper.startswith("/") and inst.get("asset_type") == "FUTURE":
+            score += 20
+
+        # Bias toward retail-friendly instrument types.
+        score += cls._ASSET_TYPE_WEIGHTS.get(inst.get("asset_type", ""), 0)
+
+        # Shorter symbols tend to be more popular (AAPL vs AAPLW). Subtract
+        # a small penalty so ties break in favor of shorter tickers.
+        score -= len(sym)
+
+        return score
+
+    async def search_instruments(self, query: str, *, limit: int = 10) -> list[dict]:
+        """
+        Symbol autocomplete via Schwab `/instruments`. Strategy:
+          1. `symbol-regex` matches by ticker prefix (covers 'NVD' -> NVDA).
+          2. `desc-search` matches by company name (covers 'apple' -> AAPL).
+          3. Merge, dedupe by symbol, then re-rank by relevance so EQUITIES
+             with exact / prefix matches float to the top BEFORE applying
+             `limit`. Without re-ranking, Schwab returns alphabetical lists
+             where AAPL is buried behind APPLESEED mutual funds.
+
+        Returns `[]` on any provider error so the UI degrades gracefully.
+        """
+        q = (query or "").strip()
+        if not q or limit <= 0:
+            return []
+        q_upper = q.upper()
+
+        merged: dict[str, dict] = {}
+
+        # 1) Prefix match on symbol
+        regex = self._to_prefix_regex(q)
+        if regex:
+            try:
+                data = await self._market_data_get(
+                    INSTRUMENTS_PATH,
+                    {"symbol": regex, "projection": "symbol-regex"},
+                )
+                for it in (data or {}).get("instruments", []) or []:
+                    norm = self._normalize_instrument(it)
+                    if norm["symbol"]:
+                        merged.setdefault(norm["symbol"], norm)
+            except Exception as e:
+                logger.debug("Schwab symbol-regex search failed for %r: %s", q, e)
+
+        # 2) Description search (only if the query has > 1 character — single
+        # chars produce ~thousands of matches and aren't useful for AC).
+        if len(q) >= 2:
+            try:
+                data = await self._market_data_get(
+                    INSTRUMENTS_PATH,
+                    {"symbol": q, "projection": "desc-search"},
+                )
+                for it in (data or {}).get("instruments", []) or []:
+                    norm = self._normalize_instrument(it)
+                    if norm["symbol"]:
+                        merged.setdefault(norm["symbol"], norm)
+            except Exception as e:
+                logger.debug("Schwab desc-search failed for %r: %s", q, e)
+
+        # Rank, then cap. Sort key:
+        #   1. higher score first
+        #   2. shorter description as a tiebreaker (canonical companies tend to
+        #      have terser descriptions: "APPLE INC" beats "APPLE ISPORTS GROUP")
+        #   3. alphabetical symbol order as a final stable tiebreaker
+        ranked = sorted(
+            merged.values(),
+            key=lambda r: (
+                -self._score_instrument(r, q_upper),
+                len(r.get("description") or ""),
+                r["symbol"],
+            ),
+        )
+        return ranked[:limit]
+
     # ----- Trader API (Account Access) – data only, no order entry -----
     # See api_docs/account_access_api.md. Use hashValue from get_account_numbers() for accountNumber if API requires.
 
@@ -806,7 +1015,35 @@ class SchwabProvider(DataProvider):
             path = "/orders"
         return await self._trader_get(path)
 
-    async def get_transactions(self, account_number: str) -> dict:
-        """GET /accounts/{accountNumber}/transactions. Returns transaction history for the account."""
+    async def get_transactions(
+        self,
+        account_number: str,
+        *,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+        types: Optional[str] = None,
+    ) -> dict:
+        """
+        GET /accounts/{accountNumber}/transactions. Schwab REQUIRES `startDate`
+        and `endDate` as ISO-8601 ZonedDateTime strings; defaults here cover
+        the past 365 days (the max window Schwab allows per call).
+
+        `types` is an optional comma-separated filter:
+            TRADE, RECEIVE_AND_DELIVER, DIVIDEND_OR_INTEREST,
+            ACH_RECEIPT, ACH_DISBURSEMENT, CASH_RECEIPT, CASH_DISBURSEMENT,
+            ELECTRONIC_FUND, WIRE_OUT, WIRE_IN, JOURNAL,
+            MEMORANDUM, MARGIN_CALL, MONEY_MARKET, SMA_ADJUSTMENT
+        """
+        if end is None:
+            end = datetime.now(timezone.utc)
+        if start is None:
+            start = end - timedelta(days=365)
         path = f"/accounts/{account_number}/transactions"
-        return await self._trader_get(path)
+        params = {
+            # Schwab wants `2024-05-12T00:00:00.000Z` style timestamps.
+            "startDate": start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            "endDate": end.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        }
+        if types:
+            params["types"] = types
+        return await self._trader_get(path, params=params)

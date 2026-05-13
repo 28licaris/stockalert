@@ -151,6 +151,89 @@ def init_schema() -> None:
         """
     )
 
+    # ---------- Journal (Phase 3) ----------
+    # account_snapshots: timestamped balance snapshots from /accounts. One row
+    # per (account_hash, snapshot_time). Useful for an equity curve later.
+    # Keyed on account_hash (not the real account number) so we can publish
+    # MCP queries without leaking account identifiers.
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS account_snapshots (
+            account_hash       LowCardinality(String),
+            snapshot_time      DateTime64(3, 'UTC'),
+            account_type       LowCardinality(String) DEFAULT '',
+            is_day_trader      UInt8 DEFAULT 0,
+            round_trips        Int32 DEFAULT 0,
+            cash_balance       Float64 DEFAULT 0,
+            liquidation_value  Float64 DEFAULT 0,
+            long_market_value  Float64 DEFAULT 0,
+            short_market_value Float64 DEFAULT 0,
+            buying_power       Float64 DEFAULT 0,
+            pending_deposits   Float64 DEFAULT 0,
+            raw_json           String DEFAULT '',
+            version            UInt64 DEFAULT 0
+        )
+        ENGINE = ReplacingMergeTree(version)
+        PARTITION BY toYYYYMM(snapshot_time)
+        ORDER BY (account_hash, snapshot_time)
+        SETTINGS index_granularity = 8192
+        """
+    )
+
+    # trades: one row per Schwab `activityId` (single fill). `net_amount` is
+    # signed: + for sell proceeds, - for buy outlay. `quantity` is always abs
+    # share/contract count. `side` and `position_effect` are normalized.
+    # Idempotency: ReplacingMergeTree on (account_hash, activity_id) so
+    # resyncing the same Schwab payload is a safe no-op.
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS trades (
+            account_hash      LowCardinality(String),
+            activity_id       UInt64,
+            order_id          UInt64 DEFAULT 0,
+            position_id       UInt64 DEFAULT 0,
+            trade_time        DateTime64(3, 'UTC'),
+            symbol            LowCardinality(String),
+            asset_type        LowCardinality(String) DEFAULT 'EQUITY',
+            side              LowCardinality(String) DEFAULT '',
+            position_effect   LowCardinality(String) DEFAULT '',
+            quantity          Float64 DEFAULT 0,
+            price             Float64 DEFAULT 0,
+            gross_amount      Float64 DEFAULT 0,
+            fees              Float64 DEFAULT 0,
+            net_amount        Float64 DEFAULT 0,
+            status            LowCardinality(String) DEFAULT '',
+            raw_json          String DEFAULT '',
+            version           UInt64 DEFAULT 0
+        )
+        ENGINE = ReplacingMergeTree(version)
+        PARTITION BY toYYYYMM(trade_time)
+        ORDER BY (account_hash, activity_id)
+        SETTINGS index_granularity = 8192
+        """
+    )
+
+    # trade_notes: user-authored annotations. Decoupled from the `trades`
+    # table so a re-sync NEVER clobbers notes. Keyed the same way as `trades`
+    # so a JOIN is cheap. `strategy` is LowCardinality for fast group-bys
+    # in the per-strategy summary later.
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS trade_notes (
+            account_hash  LowCardinality(String),
+            activity_id   UInt64,
+            strategy      LowCardinality(String) DEFAULT '',
+            tags          Array(LowCardinality(String)) DEFAULT [],
+            note          String DEFAULT '',
+            updated_at    DateTime64(3, 'UTC') DEFAULT now64(3),
+            version       UInt64 DEFAULT 0
+        )
+        ENGINE = ReplacingMergeTree(version)
+        ORDER BY (account_hash, activity_id)
+        SETTINGS index_granularity = 8192
+        """
+    )
+
 
 def _read_legacy_watchlist(path: str) -> Optional[list[str]]:
     """Best-effort read of the old `data/watchlist.json` file. Returns None on any error."""

@@ -39,11 +39,25 @@
               :class="{
                 'bg-sky-500/10 border border-sky-500/30 text-sky-300': ['queued','running'].includes(backfill.quick.state),
                 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-300': backfill.quick.state === 'done',
-                'bg-slate-500/10 border border-slate-500/30 text-slate-300': backfill.quick.state === 'skipped',
+                'bg-slate-500/10 border border-slate-500/30 text-slate-300': ['skipped','throttled'].includes(backfill.quick.state),
                 'bg-rose-500/10 border border-rose-500/30 text-rose-300': backfill.quick.state === 'error',
-              }">
+              }"
+              :title="backfill.quick.reason || ''">
           <span x-text="'backfill: ' + backfill.quick.state"></span>
           <span x-show="backfill.quick.state === 'done'" x-text="' (' + backfill.quick.bars + ' bars)'"></span>
+        </span>
+        <!-- gap-fill status: shown only when a gap-fill job has run / is running -->
+        <span x-show="backfill.gap_fill && backfill.gap_fill.state && backfill.gap_fill.state !== 'idle'"
+              class="text-xs px-2 py-0.5 rounded-full"
+              :class="{
+                'bg-sky-500/10 border border-sky-500/30 text-sky-300': ['queued','running'].includes(backfill.gap_fill.state),
+                'bg-emerald-500/10 border border-emerald-500/30 text-emerald-300': backfill.gap_fill.state === 'done',
+                'bg-slate-500/10 border border-slate-500/30 text-slate-300': backfill.gap_fill.state === 'skipped',
+                'bg-rose-500/10 border border-rose-500/30 text-rose-300': backfill.gap_fill.state === 'error',
+              }"
+              :title="backfill.gap_fill.reason || ''">
+          <span x-text="'gap-fill: ' + backfill.gap_fill.state"></span>
+          <span x-show="backfill.gap_fill.state === 'done' && backfill.gap_fill.bars" x-text="' (+' + backfill.gap_fill.bars + ' bars)'"></span>
         </span>
       </div>
       <div class="flex items-center gap-2">
@@ -56,8 +70,9 @@
                 :class="streaming ? 'bg-slate-800 hover:bg-slate-700 text-slate-200' : 'bg-indigo-500 hover:bg-indigo-400 text-white'">
           <span x-text="streaming ? 'Remove from watchlist' : 'Add to watchlist'"></span>
         </button>
-        <button @click="fillGaps()" class="px-3 py-1.5 rounded-lg text-xs bg-amber-500/20 border border-amber-500/40 text-amber-200 hover:bg-amber-500/30"
-                :disabled="['queued','running'].includes(backfill.quick.state)">
+        <button @click="fillGaps()" class="px-3 py-1.5 rounded-lg text-xs bg-amber-500/20 border border-amber-500/40 text-amber-200 hover:bg-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                :disabled="['queued','running'].includes(backfill.gap_fill && backfill.gap_fill.state)"
+                title="Detect and re-fetch within-session gaps from the provider">
           Fill gaps
         </button>
         <button @click="deepBackfill()" class="px-3 py-1.5 rounded-lg text-xs bg-slate-800 hover:bg-slate-700"
@@ -203,10 +218,27 @@
   </div>
 
   <script>
-    function symbolPage() {
+    function parseSymbolFromLocation() {
       const params = new URLSearchParams(location.search);
-      const fromPath = location.pathname.split('/').filter(Boolean).pop() || '';
-      const symbol = (params.get('symbol') || fromPath || 'SPY').toUpperCase();
+      let raw = params.get('symbol');
+      if (!raw) {
+        const segs = location.pathname.split('/').filter(Boolean);
+        if (segs[0] === 'symbol' && segs.length >= 2) {
+          raw = segs.slice(1).join('/');
+        } else {
+          raw = segs.pop() || 'SPY';
+        }
+        try { raw = decodeURIComponent(raw); } catch (_) { /* keep raw */ }
+      }
+      raw = (raw || 'SPY').trim();
+      if (raw.startsWith('/')) return '/' + raw.slice(1).toUpperCase();
+      if (raw.startsWith('$')) return '$' + raw.slice(1).toUpperCase();
+      if (/^[A-Za-z]{2,6}[FGHJKMNQUVXZfghjkmnquvxz]\d{2}$/.test(raw)) return '/' + raw.toUpperCase();
+      return raw.toUpperCase();
+    }
+
+    function symbolPage() {
+      const symbol = parseSymbolFromLocation();
 
       return {
         symbol,
@@ -217,6 +249,7 @@
           deep: { state: 'idle' },
           intraday: { state: 'idle' },
           daily: { state: 'idle' },
+          gap_fill: { state: 'idle' },
         },
         coverage: { earliest: null, latest: null, bar_count: 0, earliestShort: '', latestShort: '' },
 
@@ -249,6 +282,8 @@
         _backfillTimer: null,
         _autoEnqueued: false,
         _refreshTimer: null,
+        _coverageTimer: null,
+        _watchlistTimer: null,
 
         get streaming() { return this.watchlistSymbols.includes(this.symbol); },
         get latest() { return this.bars.length ? this.bars[this.bars.length - 1] : null; },
@@ -425,22 +460,36 @@
           this._chart.timeScale().fitContent();
         },
 
-        async refresh() {
+        async loadWatchlist() {
           try {
+            const wl = await this.getJSON('/watchlist');
+            this.watchlistSymbols = wl.symbols || [];
+          } catch (_) { /* non-fatal */ }
+        },
+
+        /**
+         * @param {{ barsOnly?: boolean }} [opts]
+         * When barsOnly (periodic poll), skip watchlist + coverage — those have their own timers.
+         */
+        async refresh(opts = {}) {
+          try {
+            // No explicit limit - server auto-sizes from interval x lookback
+            // so we don't truncate long histories (e.g. 1h/270d).
             const url = `/api/bars?symbol=${encodeURIComponent(this.symbol)}`
               + `&interval=${encodeURIComponent(this.interval)}`
-              + `&lookback_days=${this.lookbackDays}`
-              + `&limit=2000`;
-            const [bars, wl] = await Promise.all([
-              this.getJSON(url),
-              this.getJSON('/watchlist'),
-            ]);
-            this.bars = bars;
-            this.watchlistSymbols = wl.symbols || [];
+              + `&lookback_days=${this.lookbackDays}`;
+            if (opts.barsOnly) {
+              this.bars = await this.getJSON(url);
+            } else {
+              const [bars, wl] = await Promise.all([
+                this.getJSON(url),
+                this.getJSON('/watchlist'),
+              ]);
+              this.bars = bars;
+              this.watchlistSymbols = wl.symbols || [];
+              this.loadCoverage();
+            }
             this.renderChart();
-            // Coverage info comes from a separate endpoint; refresh it lazily
-            // so the banner stays in sync with the chosen lookback.
-            this.loadCoverage();
           } catch (e) {
             console.error(e);
           }
@@ -497,18 +546,27 @@
         },
 
         async fillGaps() {
+          // Explicit user click - bypass the throttle.
+          const source = (this.interval === '1m')
+            ? 'ohlcv_1m'
+            : (this.lookbackDays > 48 ? 'ohlcv_5m' : 'ohlcv_1m');
+          const days = Math.max(1, Math.min(365, this.lookbackDays || 30));
           try {
-            await this.postJSON('/api/backfill', { symbols: [this.symbol], days: 30 });
+            await this.postJSON('/api/backfill/gaps', {
+              symbols: [this.symbol], days, source, force: true,
+            });
             this.startBackfillPolling();
           } catch (e) {
-            alert('Backfill failed: ' + e.message);
+            alert('Gap fill failed: ' + e.message);
           }
         },
 
         async deepBackfill() {
           if (!confirm(`Run deep backfill for ${this.symbol} (up to 365 days)? This may take a few minutes.`)) return;
           try {
-            await this.postJSON('/api/backfill/deep', { symbols: [this.symbol], days: 365 });
+            await this.postJSON('/api/backfill/deep', {
+              symbols: [this.symbol], days: 365, force: true,
+            });
             this.startBackfillPolling();
           } catch (e) {
             alert('Deep backfill failed: ' + e.message);
@@ -524,10 +582,12 @@
               deep: s.deep || { state: 'idle' },
               intraday: s.intraday || { state: 'idle' },
               daily: s.daily || { state: 'idle' },
+              gap_fill: s.gap_fill || { state: 'idle' },
             };
             const stillBusy = ['queued', 'running'].some(b =>
               [this.backfill.quick.state, this.backfill.deep.state,
-               this.backfill.intraday.state, this.backfill.daily.state].includes(b)
+               this.backfill.intraday.state, this.backfill.daily.state,
+               this.backfill.gap_fill.state].includes(b)
             );
             if (!stillBusy && this._backfillTimer) {
               clearInterval(this._backfillTimer);
@@ -546,23 +606,17 @@
           this._backfillTimer = setInterval(() => this.pollBackfill(), 2000);
         },
 
-        // Heuristic: if the symbol page loads with no data or with gaps, quietly
-        // kick off a quick (1m) backfill. We ALSO always enqueue intraday (5m)
-        // + daily backfills so 5m/15m/30m/1h/4h/1d charts have long history
-        // available the next time the user picks that interval. All paths are
-        // idempotent on the server.
+        // Auto-enqueue on first visit. These are NOT forced - the server-side
+        // throttle returns instantly (state="throttled") if the symbol was
+        // backfilled recently, keeping repeat visits free.
         async maybeAutoBackfill() {
           if (this._autoEnqueued) return;
           this._autoEnqueued = true;
           const noData = this.bars.length === 0;
           const hasGaps = this.gapCount > 0;
           try {
-            // Intraday (5m, ~270d) and Daily (2y) fire on every first visit;
-            // server-side coverage check turns them into no-ops if already done.
             await this.postJSON('/api/backfill/intraday', { symbols: [this.symbol], days: 270 });
             await this.postJSON('/api/backfill/daily',    { symbols: [this.symbol], days: 365 * 2 });
-            // Quick 1-min only fires when something is missing/gappy on the
-            // currently-displayed interval.
             if (noData || hasGaps) {
               await this.postJSON('/api/backfill', { symbols: [this.symbol], days: 30 });
             }
@@ -584,11 +638,11 @@
 
           this.buildChart();
           this.refresh().then(() => this.maybeAutoBackfill());
-          // Periodic refresh - 10s for intraday, 60s for daily (no point hammering)
-          this._refreshTimer = window.setInterval(
-            () => this.refresh(),
-            this.intervalMinutes >= 60 * 24 ? 60000 : 10000,
-          );
+          // Bars-only poll: avoids /watchlist + /coverage on every tick (major log noise on idle chart).
+          const barMs = this.intervalMinutes >= 60 * 24 ? 60000 : 15000;
+          this._refreshTimer = window.setInterval(() => this.refresh({ barsOnly: true }), barMs);
+          this._coverageTimer = window.setInterval(() => this.loadCoverage(), 60000);
+          this._watchlistTimer = window.setInterval(() => this.loadWatchlist(), 120000);
           // One initial backfill-status poll so the badge shows in-flight work
           // (e.g. the watchlist-startup backfill).
           this.pollBackfill();

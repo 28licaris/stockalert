@@ -162,3 +162,11 @@ def test_rename_preserves_members(wl_name: str) -> None:
         assert wl_old is not None and wl_old["is_active"] is False
     finally:
         _wipe_watchlist(new)
+
+
+def test_normalize_member_symbol_futures_and_indexes() -> None:
+    assert watchlist_repo.normalize_member_symbol("mnqm26") == "/MNQM26"
+    assert watchlist_repo.normalize_member_symbol("/esm26") == "/ESM26"
+    assert watchlist_repo.normalize_member_symbol("$spx") == "$SPX"
+    assert watchlist_repo.normalize_member_symbol("aapl") == "AAPL"
+    assert watchlist_repo.normalize_member_symbol("") == ""

@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, List, Optional
 
 import pandas as pd
@@ -442,7 +442,7 @@ def latest_bar_per_symbol(symbols: List[str]) -> List[dict]:
             argMax(close,     timestamp) AS c,
             argMax(volume,    timestamp) AS v,
             count() AS bar_count
-        FROM ohlcv_1m
+        FROM ohlcv_1m FINAL
         WHERE symbol IN {syms:Array(String)}
         GROUP BY symbol
         ORDER BY symbol
@@ -545,3 +545,99 @@ def coverage_5m(symbol: str, start: datetime, end: datetime) -> dict:
 
 async def coverage_5m_async(symbol: str, start: datetime, end: datetime) -> dict:
     return await asyncio.to_thread(coverage_5m, symbol, start, end)
+
+
+# ---------- Gap detection ----------
+
+# Source-table → bar resolution in minutes. Used by `find_intraday_gaps`.
+_TABLE_STEP_MINUTES = {"ohlcv_1m": 1, "ohlcv_5m": 5}
+
+
+def find_intraday_gaps(
+    symbol: str,
+    start: datetime,
+    end: datetime,
+    *,
+    source_table: str = "ohlcv_1m",
+    session_boundary_minutes: int = 4 * 60,
+    max_results: int = 500,
+) -> list[dict]:
+    """
+    Return within-session gaps in `[start, end]` for the given symbol/source.
+
+    A "gap" is two consecutive stored bars whose timestamp delta exceeds the
+    table's bar resolution but is SMALLER than `session_boundary_minutes`
+    (default 4h). Gaps larger than that are treated as overnight/weekend
+    boundaries and ignored, mirroring the frontend chart logic.
+
+    Each returned record has:
+        prev_ts: timestamp of the bar BEFORE the gap (UTC-aware)
+        next_ts: timestamp of the bar AFTER the gap (UTC-aware)
+        missing: integer count of missing bars between them at the source's
+                 native resolution.
+    Results are ordered chronologically and capped at `max_results` to bound
+    response size.
+    """
+    if source_table not in _TABLE_STEP_MINUTES:
+        raise ValueError(f"Unsupported source_table: {source_table!r}")
+    step_min = _TABLE_STEP_MINUTES[source_table]
+
+    # Use `lagInFrame` (proper SQL window function). The older `neighbor()` is
+    # deprecated in ClickHouse >= 24.x because it's order-of-evaluation-dependent.
+    # `lagInFrame` returns NULL for the first row, which we filter out.
+    sql = f"""
+        SELECT prev_ts, ts, dateDiff('minute', prev_ts, ts) AS delta_min
+        FROM (
+            SELECT
+                timestamp AS ts,
+                lagInFrame(timestamp, 1) OVER (ORDER BY timestamp ASC) AS prev_ts
+            FROM {source_table} FINAL
+            WHERE symbol = {{sym:String}}
+              AND timestamp >= {{start:DateTime64(3)}}
+              AND timestamp <= {{end:DateTime64(3)}}
+        )
+        WHERE prev_ts != toDateTime64(0, 3, 'UTC')
+          AND dateDiff('minute', prev_ts, ts) > {{step:UInt32}}
+          AND dateDiff('minute', prev_ts, ts) < {{boundary:UInt32}}
+        ORDER BY prev_ts ASC
+        LIMIT {{lim:UInt32}}
+    """
+    result = get_client().query(
+        sql,
+        parameters={
+            "sym": symbol.upper(),
+            "start": start,
+            "end": end,
+            "step": step_min,
+            "boundary": session_boundary_minutes,
+            "lim": int(max_results),
+        },
+    )
+    out: list[dict] = []
+    for prev_ts, ts, delta in result.result_rows:
+        # ClickHouse returns naive DateTime; force-UTC for consumers.
+        if prev_ts.tzinfo is None:
+            prev_ts = prev_ts.replace(tzinfo=timezone.utc)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        missing = max(1, int(delta) // step_min - 1)
+        out.append({"prev_ts": prev_ts, "next_ts": ts, "missing": missing})
+    return out
+
+
+async def find_intraday_gaps_async(
+    symbol: str,
+    start: datetime,
+    end: datetime,
+    *,
+    source_table: str = "ohlcv_1m",
+    session_boundary_minutes: int = 4 * 60,
+    max_results: int = 500,
+) -> list[dict]:
+    return await asyncio.to_thread(
+        find_intraday_gaps,
+        symbol, start, end,
+        source_table=source_table,
+        session_boundary_minutes=session_boundary_minutes,
+        max_results=max_results,
+    )

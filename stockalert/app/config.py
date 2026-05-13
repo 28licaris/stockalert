@@ -50,6 +50,12 @@ class Settings(BaseModel):
     clickhouse_database: str = os.getenv("CLICKHOUSE_DATABASE", "stocks")
     # Optional tag stored on OHLCV rows (e.g. matches DATA_PROVIDER)
     data_source_tag: str = os.getenv("DATA_SOURCE_TAG", "")
+    # Comma-separated symbols for the dashboard tape (indexes, ETFs, explicit
+    # futures roots like /ESM26). Override via MARKET_BANNER_SYMBOLS in .env.
+    market_banner_symbols: str = os.getenv(
+        "MARKET_BANNER_SYMBOLS",
+        "$SPX,$NDX,$DJI,$RUT,$VIX,/ESM26,/MNQM26,/CLM26,/GCM26",
+    )
     
     # ─────────────────────────────────────────────────────────
     # Technical Analysis Settings (RELAXED for 1-min bars)
@@ -186,3 +192,30 @@ def get_provider():
         )
     else:
         raise ValueError(f"Unsupported provider: {settings.data_provider}")
+
+
+def get_market_quotes_provider():
+    """
+    Provider for GET /api/market/banner (Schwab Market Data ``/quotes``).
+
+    Uses the configured ``DATA_PROVIDER`` when it exposes ``get_quotes`` (Schwab).
+    If the primary provider has no quotes (e.g. Alpaca) but Schwab OAuth is
+    configured, returns a ``SchwabProvider`` so the tape still works.
+    """
+    p = get_provider()
+    if getattr(p, "get_quotes", None) is not None:
+        return p
+    cid = (settings.schwab_client_id or "").strip()
+    csec = (settings.schwab_client_secret or "").strip()
+    if cid and csec and settings.get_schwab_refresh_token():
+        from app.providers.schwab_provider import SchwabProvider
+
+        return SchwabProvider(
+            client_id=settings.schwab_client_id,
+            client_secret=settings.schwab_client_secret,
+            refresh_token=settings.get_schwab_refresh_token(),
+            callback_url=settings.schwab_callback_url or None,
+            base_url=settings.schwab_base_url,
+            refresh_token_file=settings.schwab_refresh_token_file or None,
+        )
+    return p

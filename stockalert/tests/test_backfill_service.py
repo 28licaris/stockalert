@@ -399,3 +399,135 @@ async def test_intraday_skipped_when_5m_table_already_covers(fixed_now, monkeypa
     assert "already covers" in (st["reason"] or "")
     # Provider should NOT have been called.
     assert provider.calls == []
+
+
+# ---------- Throttle ----------
+
+
+@pytest.mark.asyncio
+async def test_quick_throttle_blocks_repeat_enqueue(fixed_now, empty_coverage_fn) -> None:
+    """Once a quick job completes, a second enqueue within the throttle window returns 'throttled'."""
+    cov_fn = make_coverage_fn(bar_count=0, earliest=None, latest=None)
+    loader = FakeLoader(bars_per_call=500)
+
+    # Advanceable clock so we can simulate "later".
+    now_ref = {"t": fixed_now}
+    svc = BackfillService(
+        loader=loader, coverage_fn=cov_fn, now_fn=lambda: now_ref["t"],
+    )  # type: ignore[arg-type]
+
+    # First run: executes normally.
+    svc.enqueue_quick("AAPL", days=30)
+    for task in list(svc._tasks.values()):
+        await task
+    assert svc.status("AAPL")["AAPL"]["quick"]["state"] == "done"
+    first_call_count = len(loader.calls)
+    assert first_call_count == 1
+
+    # Second enqueue 1 minute later: throttled (quick cooldown = 4h).
+    now_ref["t"] = fixed_now + timedelta(minutes=1)
+    result = svc.enqueue_quick("AAPL", days=30)
+    assert result["state"] == "throttled"
+    assert "cooldown" in result["reason"]
+    # No new in-flight task, no new loader call.
+    assert (("AAPL", "quick") not in svc._tasks
+            or svc._tasks[("AAPL", "quick")].done())
+    assert len(loader.calls) == first_call_count
+
+
+@pytest.mark.asyncio
+async def test_throttle_expires_after_cooldown(fixed_now, empty_coverage_fn) -> None:
+    """After the cooldown window elapses, the enqueue runs again."""
+    cov_fn = make_coverage_fn(bar_count=0, earliest=None, latest=None)
+    loader = FakeLoader(bars_per_call=500)
+    now_ref = {"t": fixed_now}
+    svc = BackfillService(
+        loader=loader, coverage_fn=cov_fn, now_fn=lambda: now_ref["t"],
+    )  # type: ignore[arg-type]
+
+    svc.enqueue_quick("AAPL", days=30)
+    for task in list(svc._tasks.values()):
+        await task
+    assert len(loader.calls) == 1
+
+    # Jump 5 hours forward (quick cooldown is 4h).
+    now_ref["t"] = fixed_now + timedelta(hours=5)
+    svc.enqueue_quick("AAPL", days=30)
+    for task in list(svc._tasks.values()):
+        await task
+    # Should have done a second fetch now.
+    assert len(loader.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_force_bypasses_throttle(fixed_now, empty_coverage_fn) -> None:
+    """force=True ignores the cooldown."""
+    cov_fn = make_coverage_fn(bar_count=0, earliest=None, latest=None)
+    loader = FakeLoader(bars_per_call=500)
+    svc = BackfillService(loader=loader, coverage_fn=cov_fn, now_fn=lambda: fixed_now)  # type: ignore[arg-type]
+
+    svc.enqueue_quick("AAPL", days=30)
+    for task in list(svc._tasks.values()):
+        await task
+    assert len(loader.calls) == 1
+
+    # Immediate retry with force=True must run.
+    svc.enqueue_quick("AAPL", days=30, force=True)
+    for task in list(svc._tasks.values()):
+        await task
+    assert len(loader.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_throttle_per_kind_is_independent(fixed_now, empty_coverage_fn) -> None:
+    """A quick throttle does NOT prevent a deep/daily/intraday from running."""
+    cov_fn = make_coverage_fn(bar_count=0, earliest=None, latest=None)
+    loader = FakeLoader(bars_per_call=500)
+    svc = BackfillService(loader=loader, coverage_fn=cov_fn, now_fn=lambda: fixed_now)  # type: ignore[arg-type]
+
+    svc.enqueue_quick("AAPL", days=30)
+    for task in list(svc._tasks.values()):
+        await task
+
+    # Now deep should still be runnable - different kind, separate cooldown.
+    result = svc.enqueue_deep("AAPL", days=365)
+    assert result["state"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_error_state_does_not_set_cooldown(fixed_now, empty_coverage_fn) -> None:
+    """A failed job must NOT record completion (so retries aren't blocked)."""
+    cov_fn = make_coverage_fn(bar_count=0, earliest=None, latest=None)
+    loader = FakeLoader(bars_per_call=500)
+
+    async def boom(symbol, start, end):
+        loader.calls.append({"symbol": symbol, "start": start, "end": end})
+        raise RuntimeError("provider exploded")
+
+    loader._fetch_from_provider = boom  # type: ignore[assignment]
+    svc = BackfillService(loader=loader, coverage_fn=cov_fn, now_fn=lambda: fixed_now)  # type: ignore[arg-type]
+
+    svc.enqueue_quick("AAPL", days=30)
+    for task in list(svc._tasks.values()):
+        await task
+    assert svc.status("AAPL")["AAPL"]["quick"]["state"] == "error"
+
+    # Immediate retry must NOT be throttled (no completion recorded).
+    result = svc.enqueue_quick("AAPL", days=30)
+    assert result["state"] == "queued"
+
+
+def test_seconds_until_next_sweep_picks_next_06_utc() -> None:
+    """Pure-function test for the sweeper schedule."""
+    svc = BackfillService(now_fn=lambda: datetime(2026, 5, 12, 10, 0, tzinfo=timezone.utc))
+    # 10:00 UTC -> next 06:00 UTC is tomorrow (~20h away)
+    wait = svc._seconds_until_next_sweep()
+    assert 19.5 * 3600 < wait <= 20 * 3600
+
+
+def test_seconds_until_next_sweep_same_day_before_hour() -> None:
+    """If we're before today's sweep hour, the next sweep is today, not tomorrow."""
+    svc = BackfillService(now_fn=lambda: datetime(2026, 5, 12, 2, 0, tzinfo=timezone.utc))
+    # 02:00 UTC -> next 06:00 UTC is today (4h away)
+    wait = svc._seconds_until_next_sweep()
+    assert 3.9 * 3600 < wait <= 4 * 3600

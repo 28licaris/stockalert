@@ -23,7 +23,16 @@ from app.db import (
 from app.services.backfill_service import backfill_service
 from app.services.monitor_manager import monitor_manager
 from app.services.watchlist_service import watchlist_service
-from app.api import routes_backfill, routes_monitors, routes_movers, routes_watchlist
+from app.api import (
+    routes_backfill,
+    routes_instruments,
+    routes_journal,
+    routes_market,
+    routes_monitors,
+    routes_movers,
+    routes_watchlist,
+)
+from app.services.journal_sync import journal_sync_service
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,6 +72,23 @@ async def lifespan(app: FastAPI):
         status["provider"], status["symbol_count"], status.get("subscribed_count", 0),
     )
 
+    # Wire the periodic gap sweeper: every 15 min the backfill service will
+    # ask `watchlist_service` for the current streaming set and auto-enqueue
+    # gap-fill jobs for any symbol with within-session holes. Importing here
+    # (rather than at module top) avoids constructing the service at import
+    # time when env vars may not yet be loaded.
+    def _streaming_symbols_for_sweeper() -> list[str]:
+        try:
+            return list(watchlist_service.status().get("streaming_symbols") or [])
+        except Exception as e:
+            logger.warning("gap sweeper: could not enumerate streaming symbols: %s", e)
+            return []
+    backfill_service.set_symbol_provider(_streaming_symbols_for_sweeper)
+    logger.info("✅ Backfill gap sweeper armed (daily at 06:00 UTC, 7d window)")
+
+    await journal_sync_service.start()
+    logger.info("✅ Journal sync started (every 5min: balances + trades)")
+
     async def broadcast_signal(signal_data: dict):
         logger.info(f"📡 Broadcasting signal: {signal_data}")
         disconnected = []
@@ -90,6 +116,9 @@ async def lifespan(app: FastAPI):
 
     await backfill_service.stop()
     logger.info("✅ Backfill service stopped")
+
+    await journal_sync_service.stop()
+    logger.info("✅ Journal sync stopped")
 
     await get_bar_batcher().stop()
     reset_bar_batcher()
@@ -119,6 +148,9 @@ app.include_router(routes_monitors.router, prefix="", tags=["Monitors"])
 app.include_router(routes_watchlist.router, prefix="", tags=["Watchlist"])
 app.include_router(routes_movers.router, prefix="/api", tags=["Movers"])
 app.include_router(routes_backfill.router, prefix="/api", tags=["Backfill"])
+app.include_router(routes_instruments.router, prefix="/api", tags=["Instruments"])
+app.include_router(routes_market.router, prefix="/api", tags=["Market"])
+app.include_router(routes_journal.router, prefix="/api", tags=["Journal"])
 
 try:
     from app.api import routes_signals
@@ -137,6 +169,7 @@ except ImportError:
 
 _DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "static", "dashboard.html")
 _SYMBOL_PATH = os.path.join(os.path.dirname(__file__), "static", "symbol.html")
+_JOURNAL_PATH = os.path.join(os.path.dirname(__file__), "static", "journal.html")
 
 
 @app.get("/", include_in_schema=False)
@@ -152,6 +185,11 @@ async def dashboard():
 @app.get("/symbol/{ticker}", include_in_schema=False)
 async def symbol_page(ticker: str):
     return FileResponse(_SYMBOL_PATH, media_type="text/html")
+
+
+@app.get("/journal", include_in_schema=False)
+async def journal_page():
+    return FileResponse(_JOURNAL_PATH, media_type="text/html")
 
 
 @app.get("/health")
@@ -174,7 +212,14 @@ async def stats():
     )
 
     def _ts(v):
-        return v.isoformat() if hasattr(v, "isoformat") else str(v)
+        """Force-stamp naive ClickHouse datetimes with `Z` so JS parses them as UTC."""
+        if v is None:
+            return None
+        if hasattr(v, "isoformat"):
+            if getattr(v, "tzinfo", None) is None:
+                return v.isoformat() + "Z"
+            return v.isoformat()
+        return str(v)
 
     return {
         "total_bars": total_bars,

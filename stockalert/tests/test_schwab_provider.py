@@ -4,6 +4,7 @@ Validation tests for SchwabProvider.
 Uses mocks for HTTP/WebSocket so tests run without real credentials.
 Run with: poetry run pytest tests/test_schwab_provider.py -v
 """
+import asyncio
 import time
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -168,6 +169,21 @@ class TestEnsureToken:
         # Second call returns cached (session.post not called again because of lock + cache)
         tok2 = await p._ensure_token()
         assert tok2 == "secret_tok"
+        assert session.post.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_concurrent_ensure_token_single_post(self):
+        """Parallel awaits must not each hit the token endpoint (refresh rotation / log noise)."""
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        session = make_session(post_resp=make_resp(200, {"access_token": "secret_tok"}))
+        with patch("app.providers.schwab_provider.aiohttp.ClientSession", return_value=make_session_cm(session)):
+            out = await asyncio.gather(
+                p._ensure_token(),
+                p._ensure_token(),
+                p._ensure_token(),
+            )
+        assert out == ["secret_tok", "secret_tok", "secret_tok"]
+        assert session.post.call_count == 1
 
     @pytest.mark.asyncio
     async def test_raises_on_non_200(self):
@@ -505,11 +521,24 @@ class TestTraderApiMethods:
 
     @pytest.mark.asyncio
     async def test_get_transactions(self):
+        """Schwab requires startDate/endDate; we auto-default to last 365d."""
         p = SchwabProvider("cid", "secret", refresh_token="rt")
         with patch.object(p, "_trader_get", new_callable=AsyncMock, return_value={"transactions": []}) as mock_get:
             out = await p.get_transactions("456")
         assert out == {"transactions": []}
-        mock_get.assert_called_once_with("/accounts/456/transactions")
+        mock_get.assert_called_once()
+        args, kwargs = mock_get.call_args
+        assert args[0] == "/accounts/456/transactions"
+        params = kwargs.get("params") or (args[1] if len(args) > 1 else {})
+        assert "startDate" in params and "endDate" in params
+        assert "types" not in params
+
+    async def test_get_transactions_passes_types_filter(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        with patch.object(p, "_trader_get", new_callable=AsyncMock, return_value=[]) as mock_get:
+            await p.get_transactions("456", types="TRADE")
+        _, kwargs = mock_get.call_args
+        assert kwargs["params"]["types"] == "TRADE"
 
 
 class TestStreamLifecycle:
