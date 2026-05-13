@@ -22,7 +22,9 @@ Store these in `.env` only; never commit.
 - **`SCHWAB_CALLBACK_URL`** – HTTPS callback for the one-time OAuth script. Either (A) a local URL (e.g. `https://127.0.0.1:8080/oauth/callback`) — then you paste the redirect URL after sign-in — or (B) your ngrok URL + `/callback` with `ngrok http 8765` running so the script receives the redirect automatically.
 - **`SCHWAB_BASE_URL`** – Optional; default `https://api.schwabapi.com`.
 
-The provider uses the Trader API for OAuth, user preference (streamer connection info), accounts/orders/transactions (read-only), and price history; and the Streamer API (WebSocket) for real-time bars. API specs are in `api_docs/` (Account Access, Market Data, Streamer, Security). Data collection covers monitoring and alerting; trading is manual and order entry is not implemented. Rate limits: market data (e.g. 120 requests/min); respect limits when backfilling.
+**`GET /trader/v1/userPreference`** supplies **Streamer (WebSocket) connection info** for live `subscribe_bars` only. **REST market data** (e.g. **`/marketdata/v1/pricehistory`** for historical OHLCV, **`/quotes`**) needs **only a valid access token**, not user preference.
+
+The provider also uses the Trader API for OAuth, accounts/orders/transactions (read-only), and the Streamer API for real-time bars. API specs are in `api_docs/` (Account Access, Market Data, Streamer, Security). Rate limits: market data (e.g. 120 requests/min); respect limits when backfilling.
 
 ## ClickHouse
 

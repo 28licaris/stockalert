@@ -7,6 +7,9 @@ Refresh token: in SCHWAB_REFRESH_TOKEN or in token file (data/.schwab_refresh_to
   Run scripts/schwab_get_refresh_token.py once; it writes the token to the file so you don't need to add it to .env.
   SCHWAB_CALLBACK_URL is only needed when running the get-refresh-token script.
 
+Historical bars and quotes use Market Data REST only (access token). The /userPreference
+call is for live WebSocket (Streamer) setup — see step 3; it is not required to fetch OHLCV.
+
 Run from project root (stockalert/stockalert):
   poetry run python scripts/test_schwab_live.py
 
@@ -51,23 +54,13 @@ async def main(symbol: str, days: int) -> None:
         print(f"   FAILED: {e}")
         return
 
-    print("2. Getting user principals (streamer connection info)...")
-    try:
-        principals = await provider._get_user_principals()
-        print(f"   OK – streamer_url present: {bool(provider._streamer_url)}")
-        ids = provider._streamer_ids()
-        if ids.get("SchwabClientCustomerId"):
-            print(f"   SchwabClientCustomerId: {ids['SchwabClientCustomerId'][:8]}...")
-    except Exception as e:
-        print(f"   WARNING: User preference unavailable ({e}); streamer will be skipped. Continuing with Market Data and historical tests.")
-
-    print(f"3. Fetching historical bars for {symbol} (last {days} day(s), 1-min)...")
+    print(f"2. Fetching historical bars for {symbol} (last {days} day(s), 1-min; Market Data REST)...")
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=days)
     try:
         df = await provider.historical_df(symbol, start, end, timeframe="1Min")
         if df.empty:
-            print("   No bars returned (market closed or symbol/range issue).")
+            print("   No 1-min bars in range (market closed, range too narrow, or API empty). Try --days 5 or another session.")
         else:
             print(f"   OK – {len(df)} bars")
             print(df.head(10).to_string())
@@ -77,7 +70,18 @@ async def main(symbol: str, days: int) -> None:
         print(f"   FAILED: {e}")
         return
 
-    # 4–11: Market Data REST endpoints (each step logs OK/FAILED, script continues)
+    print("3. User preference (Trader API — for live WebSocket streamer only; safe to skip for REST)...")
+    try:
+        await provider._get_user_principals()
+        print(f"   OK – streamer_url present: {bool(provider._streamer_url)}")
+        ids = provider._streamer_ids()
+        if ids.get("SchwabClientCustomerId"):
+            print(f"   SchwabClientCustomerId: {ids['SchwabClientCustomerId'][:8]}...")
+    except Exception as e:
+        print(f"   WARNING: {e}")
+        print("   Live subscribe_bars may not work until this succeeds; REST historical/quotes still work.")
+
+    # 4–14: Market Data + Trader REST (each step logs OK/FAILED, script continues)
     print("4. GET /quotes (list)...")
     try:
         data = await provider.get_quotes([symbol])
