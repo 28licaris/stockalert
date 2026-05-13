@@ -15586,3 +15586,6 @@
 {"sessionId": "98e2bc", "timestamp": 1778680981129, "message": "market_data_get", "data": {"path": "/movers/NASDAQ", "status": 200, "retryOn401": true}, "hypothesisId": "H1"}
 {"sessionId": "98e2bc", "timestamp": 1778680981582, "message": "market_data_get", "data": {"path": "/movers/$SPX", "status": 200, "retryOn401": true}, "hypothesisId": "H1"}
 {"sessionId": "98e2bc", "timestamp": 1778680981651, "message": "market_data_get", "data": {"path": "/movers/NYSE", "status": 200, "retryOn401": true}, "hypothesisId": "H1"}
+{"sessionId": "98e2bc", "timestamp": 1778680981895, "message": "market_data_get", "data": {"path": "/movers/$COMPX", "status": 200, "retryOn401": true}, "hypothesisId": "H1"}
+{"sessionId": "98e2bc", "timestamp": 1778680981944, "message": "market_data_get", "data": {"path": "/movers/$DJI", "status": 200, "retryOn401": true}, "hypothesisId": "H1"}
+{"sessionId": "98e2bc", "timestamp": 1778680982016, "message": "market_data_get", "data": {"path": "/movers/NASDAQ", "status": 200, "retryOn401": true}, "hypothesisId": "H1"}
