@@ -31,6 +31,51 @@ _INTRADAY_COLUMNS = [
 ]
 
 
+def _dedup_ohlc_intraday_subquery(source_table: str, where_sql: str) -> str:
+    """
+    Collapse ReplacingMergeTree(version) duplicates without ``FINAL``.
+
+    ``FINAL`` on large ``ohlcv_1m`` / ``ohlcv_5m`` tables can exceed the
+    server's memory limit (full merge-at-read). Grouping by the sort key
+    and taking ``argMax(_, version)`` matches the engine's row-winner rule.
+    """
+    if source_table not in ("ohlcv_1m", "ohlcv_5m"):
+        raise ValueError(f"Unsupported source_table: {source_table!r}")
+    return f"""
+        SELECT
+            symbol,
+            timestamp,
+            argMax(open, version) AS open,
+            argMax(high, version) AS high,
+            argMax(low, version) AS low,
+            argMax(close, version) AS close,
+            argMax(volume, version) AS volume,
+            argMax(vwap, version) AS vwap,
+            argMax(trade_count, version) AS trade_count
+        FROM {source_table}
+        WHERE {where_sql}
+        GROUP BY symbol, timestamp
+    """
+
+
+def _dedup_ohlc_daily_subquery(where_sql: str) -> str:
+    """Same as ``_dedup_ohlc_intraday_subquery`` for ``ohlcv_daily``."""
+    return f"""
+        SELECT
+            symbol,
+            timestamp,
+            argMax(open, version) AS open,
+            argMax(high, version) AS high,
+            argMax(low, version) AS low,
+            argMax(close, version) AS close,
+            argMax(volume, version) AS volume,
+            argMax(source, version) AS source
+        FROM ohlcv_daily
+        WHERE {where_sql}
+        GROUP BY symbol, timestamp
+    """
+
+
 def _insert_intraday(table: str, rows: List[dict]) -> None:
     """Generic 1-min / 5-min insert; both tables share the same column layout."""
     if not rows:
@@ -119,15 +164,18 @@ def fetch_bars(
     limit: int,
 ) -> pd.DataFrame:
     client = get_client()
+    inner = _dedup_ohlc_intraday_subquery(
+        "ohlcv_1m",
+        "symbol = {sym:String} "
+        "AND timestamp >= {start:DateTime64(3)} "
+        "AND timestamp <= {end:DateTime64(3)}",
+    )
     result = client.query(
-        """
+        f"""
         SELECT timestamp, open, high, low, close, volume
-        FROM ohlcv_1m FINAL
-        WHERE symbol = {sym:String}
-          AND timestamp >= {start:DateTime64(3)}
-          AND timestamp <= {end:DateTime64(3)}
+        FROM ({inner}) AS deduped
         ORDER BY timestamp
-        LIMIT {lim:UInt32}
+        LIMIT {{lim:UInt32}}
         """,
         parameters={"sym": symbol, "start": start, "end": end, "lim": limit},
     )
@@ -144,13 +192,13 @@ def fetch_bars(
 
 def list_bars_desc(symbol: str, limit: int) -> List[dict]:
     client = get_client()
+    inner = _dedup_ohlc_intraday_subquery("ohlcv_1m", "symbol = {sym:String}")
     result = client.query(
-        """
+        f"""
         SELECT timestamp, open, high, low, close, volume
-        FROM ohlcv_1m FINAL
-        WHERE symbol = {sym:String}
+        FROM ({inner}) AS deduped
         ORDER BY timestamp DESC
-        LIMIT {lim:UInt32}
+        LIMIT {{lim:UInt32}}
         """,
         parameters={"sym": symbol, "lim": limit},
     )
@@ -233,10 +281,10 @@ def list_daily_bars(
     if end is not None:
         where_parts.append("timestamp <= {end:DateTime64(3)}")
         params["end"] = end
+    inner = _dedup_ohlc_daily_subquery(" AND ".join(where_parts))
     sql = f"""
         SELECT timestamp, open, high, low, close, volume
-        FROM ohlcv_daily FINAL
-        WHERE {' AND '.join(where_parts)}
+        FROM ({inner}) AS deduped
         ORDER BY timestamp DESC
         LIMIT {{lim:UInt32}}
     """
@@ -259,11 +307,15 @@ def daily_coverage(symbol: str, start: datetime, end: datetime) -> dict:
     """Coverage report against `ohlcv_daily`. Same shape as `coverage()`."""
     result = get_client().query(
         """
-        SELECT min(timestamp), max(timestamp), count()
-        FROM ohlcv_daily FINAL
-        WHERE symbol = {sym:String}
-          AND timestamp >= {start:DateTime64(3)}
-          AND timestamp <= {end:DateTime64(3)}
+        SELECT min(timestamp) AS earliest, max(timestamp) AS latest, count() AS bar_count
+        FROM (
+            SELECT timestamp
+            FROM ohlcv_daily
+            WHERE symbol = {sym:String}
+              AND timestamp >= {start:DateTime64(3)}
+              AND timestamp <= {end:DateTime64(3)}
+            GROUP BY symbol, timestamp
+        )
         """,
         parameters={"sym": symbol.upper(), "start": start, "end": end},
     )
@@ -328,6 +380,7 @@ def list_bars_resampled(
 
     # ORDER BY ts DESC + LIMIT keeps the NEWEST N rows; reverse in Python for
     # ascending output.
+    dedup = _dedup_ohlc_intraday_subquery(source_table, where_clause)
     sql = f"""
         SELECT
             toStartOfInterval(timestamp, {interval_expr}) AS bucket_ts,
@@ -336,8 +389,7 @@ def list_bars_resampled(
             min(low)                 AS l,
             argMax(close, timestamp) AS c,
             sum(volume)              AS v
-        FROM {source_table} FINAL
-        WHERE {where_clause}
+        FROM ({dedup}) AS deduped
         GROUP BY bucket_ts
         ORDER BY bucket_ts DESC
         LIMIT {{lim:UInt32}}
@@ -405,7 +457,10 @@ def list_signals(symbol: Optional[str], limit: int) -> List[dict]:
 
 
 def count_bars() -> int:
-    r = get_client().query("SELECT count() FROM ohlcv_1m FINAL")
+    # Avoid ``FINAL`` here: on a large ReplacingMergeTree it can exhaust server
+    # RAM (merge-at-read). ``count()`` without ``FINAL`` uses part metadata and
+    # may include not-yet-merged physical duplicates — fine for a dashboard stat.
+    r = get_client().query("SELECT count() FROM ohlcv_1m")
     return int(r.result_rows[0][0]) if r.result_rows else 0
 
 
@@ -435,14 +490,14 @@ def latest_bar_per_symbol(symbols: List[str]) -> List[dict]:
         """
         SELECT
             symbol,
-            argMax(timestamp, timestamp) AS ts,
-            argMax(open,      timestamp) AS o,
-            argMax(high,      timestamp) AS h,
-            argMax(low,       timestamp) AS l,
-            argMax(close,     timestamp) AS c,
-            argMax(volume,    timestamp) AS v,
-            count() AS bar_count
-        FROM ohlcv_1m FINAL
+            argMax(timestamp, tuple(timestamp, version)) AS ts,
+            argMax(open,      tuple(timestamp, version)) AS o,
+            argMax(high,      tuple(timestamp, version)) AS h,
+            argMax(low,       tuple(timestamp, version)) AS l,
+            argMax(close,     tuple(timestamp, version)) AS c,
+            argMax(volume,    tuple(timestamp, version)) AS v,
+            uniqExact(timestamp) AS bar_count
+        FROM ohlcv_1m
         WHERE symbol IN {syms:Array(String)}
         GROUP BY symbol
         ORDER BY symbol
@@ -481,14 +536,15 @@ def coverage(symbol: str, start: datetime, end: datetime) -> dict:
     client = get_client()
     result = client.query(
         """
-        SELECT
-            min(timestamp) AS earliest,
-            max(timestamp) AS latest,
-            count() AS bar_count
-        FROM ohlcv_1m FINAL
-        WHERE symbol = {sym:String}
-          AND timestamp >= {start:DateTime64(3)}
-          AND timestamp <= {end:DateTime64(3)}
+        SELECT min(timestamp) AS earliest, max(timestamp) AS latest, count() AS bar_count
+        FROM (
+            SELECT timestamp
+            FROM ohlcv_1m
+            WHERE symbol = {sym:String}
+              AND timestamp >= {start:DateTime64(3)}
+              AND timestamp <= {end:DateTime64(3)}
+            GROUP BY symbol, timestamp
+        )
         """,
         parameters={"sym": symbol.upper(), "start": start, "end": end},
     )
@@ -521,11 +577,15 @@ def coverage_5m(symbol: str, start: datetime, end: datetime) -> dict:
     """Coverage report against `ohlcv_5m`. Same shape as `coverage()`."""
     result = get_client().query(
         """
-        SELECT min(timestamp), max(timestamp), count()
-        FROM ohlcv_5m FINAL
-        WHERE symbol = {sym:String}
-          AND timestamp >= {start:DateTime64(3)}
-          AND timestamp <= {end:DateTime64(3)}
+        SELECT min(timestamp) AS earliest, max(timestamp) AS latest, count() AS bar_count
+        FROM (
+            SELECT timestamp
+            FROM ohlcv_5m
+            WHERE symbol = {sym:String}
+              AND timestamp >= {start:DateTime64(3)}
+              AND timestamp <= {end:DateTime64(3)}
+            GROUP BY symbol, timestamp
+        )
         """,
         parameters={"sym": symbol.upper(), "start": start, "end": end},
     )
@@ -597,16 +657,21 @@ def find_intraday_gaps(
     # `max_results` historical gaps (e.g. from a previous provider's session
     # boundaries) — which made manual "Fill gaps" a no-op for the windows
     # users actually care about.
+    dedup_ts = f"""
+        SELECT timestamp AS ts
+        FROM {source_table}
+        WHERE symbol = {{sym:String}}
+          AND timestamp >= {{start:DateTime64(3)}}
+          AND timestamp <= {{end:DateTime64(3)}}
+        GROUP BY symbol, timestamp
+    """
     sql = f"""
         SELECT prev_ts, ts, dateDiff('minute', prev_ts, ts) AS delta_min
         FROM (
             SELECT
-                timestamp AS ts,
-                lagInFrame(timestamp, 1) OVER (ORDER BY timestamp ASC) AS prev_ts
-            FROM {source_table} FINAL
-            WHERE symbol = {{sym:String}}
-              AND timestamp >= {{start:DateTime64(3)}}
-              AND timestamp <= {{end:DateTime64(3)}}
+                ts,
+                lagInFrame(ts, 1) OVER (ORDER BY ts ASC) AS prev_ts
+            FROM ({dedup_ts}) AS bars
         )
         WHERE prev_ts != toDateTime64(0, 3, 'UTC')
           AND dateDiff('minute', prev_ts, ts) > {{step:UInt32}}

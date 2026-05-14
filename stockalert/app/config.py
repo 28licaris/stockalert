@@ -57,6 +57,9 @@ class Settings(BaseModel):
     # UTC hour to run the daily archive sweep at. 07:00 UTC == 03:00 ET,
     # after extended-hours close so we operate on a complete prior trading day.
     lake_archive_run_hour_utc: int = int(os.getenv("LAKE_ARCHIVE_RUN_HOUR_UTC", "7"))
+    # Nightly in-process Polygon flat-files → S3 lake (see nightly_lake_refresh).
+    nightly_lake_symbols: str = os.getenv("NIGHTLY_LAKE_SYMBOLS", "seed")
+    nightly_lake_kind: str = os.getenv("NIGHTLY_LAKE_KIND", "minute").strip().lower()
 
     # Schwab (Think or Swim) – store credentials in .env only; never commit
     schwab_client_id: str = os.getenv("SCHWAB_CLIENT_ID", "")

@@ -464,3 +464,424 @@ class TestBackfillRange:
             await svc.backfill_range(
                 [], date(2026, 5, 10), date(2026, 5, 1),
             )
+
+
+# ---------- C2: multi-sink fan-out ----------
+
+
+from app.services.flatfiles_sinks import Sink, SinkResult  # noqa: E402
+
+
+class _RecorderSink:
+    """Sink test double that records every frame it sees and returns a
+    canned ``SinkResult``. Captures the canonical frame so tests can
+    assert on the column shape both sinks receive."""
+
+    def __init__(
+        self,
+        *,
+        name: str = "recorder",
+        status: str = "ok",
+        bars: int = 0,
+        error: str | None = None,
+        raises: Exception | None = None,
+    ) -> None:
+        self.name = name
+        self._status = status
+        self._bars = bars
+        self._error = error
+        self._raises = raises
+        self.seen_frames: list[pd.DataFrame] = []
+        self.calls: list[tuple] = []
+
+    async def write(
+        self,
+        df: pd.DataFrame,
+        *,
+        file_date,
+        kind,
+        provider,
+    ) -> SinkResult:
+        self.seen_frames.append(df.copy())
+        self.calls.append((file_date, kind, provider))
+        if self._raises is not None:
+            raise self._raises
+        return SinkResult(
+            sink=self.name,
+            status=self._status,
+            bars_written=self._bars if self._status == "ok" else 0,
+            error=self._error,
+        )
+
+
+class TestMultiSinkFanOut:
+    @pytest.mark.asyncio
+    async def test_two_sinks_both_receive_canonical_frame(self):
+        target = date(2026, 5, 12)
+        flat = _flatfiles_mock(
+            available=[FlatFileInfo(key="x", file_date=target, size=1)],
+            minute_by_date={target: _minute_df([
+                {"ticker": "AAPL"}, {"ticker": "MSFT"},
+            ])},
+        )
+        a = _RecorderSink(name="sink_a", status="ok", bars=2)
+        b = _RecorderSink(name="sink_b", status="ok", bars=2)
+        svc = FlatFilesBackfillService(flat_files=flat, sinks=[a, b])
+
+        result = await svc.backfill_range(["AAPL", "MSFT"], target, target)
+
+        assert result.days_ok == 1
+        assert result.days_errored == 0
+        assert result.bars_persisted == 2
+
+        # Both sinks were called exactly once with the same frame.
+        assert len(a.seen_frames) == 1 and len(b.seen_frames) == 1
+        df_a, df_b = a.seen_frames[0], b.seen_frames[0]
+        # Canonical column set.
+        assert list(df_a.columns) == [
+            "symbol", "timestamp", "open", "high", "low", "close",
+            "volume", "vwap", "trade_count", "source",
+        ]
+        # Symbols are uppercased in canonical frame.
+        assert sorted(df_a["symbol"].tolist()) == ["AAPL", "MSFT"]
+        # Both sinks see identical content (no mutation between sinks).
+        pd.testing.assert_frame_equal(df_a, df_b)
+        # Per-sink results recorded on the DayResult.
+        day = result.days[0]
+        assert set(day.sink_results.keys()) == {"sink_a", "sink_b"}
+        assert day.sink_results["sink_a"].status == "ok"
+        assert day.sink_results["sink_b"].status == "ok"
+
+    @pytest.mark.asyncio
+    async def test_one_ok_one_error_classifies_as_partial(self):
+        target = date(2026, 5, 12)
+        flat = _flatfiles_mock(
+            available=[FlatFileInfo(key="x", file_date=target, size=1)],
+            minute_by_date={target: _minute_df([{"ticker": "AAPL"}])},
+        )
+        ok = _RecorderSink(name="ok_sink", status="ok", bars=1)
+        bad = _RecorderSink(name="bad_sink", status="error",
+                            error="lake PUT denied")
+        svc = FlatFilesBackfillService(flat_files=flat, sinks=[ok, bad])
+
+        result = await svc.backfill_range(["AAPL"], target, target)
+
+        assert result.days_partial == 1
+        assert result.days_ok == 0
+        assert result.days_errored == 0
+        # Partial days do NOT count toward the errored bucket; the data
+        # IS in at least one persistent store.
+        assert result.bars_persisted == 1
+        day = result.days[0]
+        assert day.status == "partial"
+        assert "bad_sink" in (day.error or "")
+        assert "lake PUT denied" in (day.error or "")
+
+    @pytest.mark.asyncio
+    async def test_all_sinks_fail_classifies_as_error(self):
+        target = date(2026, 5, 12)
+        flat = _flatfiles_mock(
+            available=[FlatFileInfo(key="x", file_date=target, size=1)],
+            minute_by_date={target: _minute_df([{"ticker": "AAPL"}])},
+        )
+        a = _RecorderSink(name="a", status="error", error="ch down")
+        b = _RecorderSink(name="b", status="error", error="s3 down")
+        svc = FlatFilesBackfillService(flat_files=flat, sinks=[a, b])
+
+        result = await svc.backfill_range(["AAPL"], target, target)
+
+        assert result.days_errored == 1
+        assert result.days_ok == 0
+        assert result.days_partial == 0
+        assert result.bars_persisted == 0
+        day = result.days[0]
+        assert day.status == "error"
+        assert "ch down" in (day.error or "") and "s3 down" in (day.error or "")
+
+    @pytest.mark.asyncio
+    async def test_no_sinks_configured_marks_day_skipped(self):
+        target = date(2026, 5, 12)
+        flat = _flatfiles_mock(
+            available=[FlatFileInfo(key="x", file_date=target, size=1)],
+            minute_by_date={target: _minute_df([{"ticker": "AAPL"}])},
+        )
+        svc = FlatFilesBackfillService(flat_files=flat, sinks=[])
+
+        result = await svc.backfill_range(["AAPL"], target, target)
+
+        assert result.days_skipped == 1
+        assert result.bars_persisted == 0
+
+    @pytest.mark.asyncio
+    async def test_dry_run_skips_before_calling_sinks(self):
+        target = date(2026, 5, 12)
+        flat = _flatfiles_mock(
+            available=[FlatFileInfo(key="x", file_date=target, size=1)],
+            minute_by_date={target: _minute_df([{"ticker": "AAPL"}])},
+        )
+        sink = _RecorderSink(name="cap", status="ok", bars=1)
+        svc = FlatFilesBackfillService(flat_files=flat, sinks=[sink])
+
+        result = await svc.backfill_range(
+            ["AAPL"], target, target, dry_run=True,
+        )
+
+        assert result.days_skipped == 1
+        assert result.bars_persisted == 0
+        # Dry-run must short-circuit BEFORE any sink fires.
+        assert sink.seen_frames == []
+
+    @pytest.mark.asyncio
+    async def test_sink_raising_exception_is_isolated(self):
+        """Defence-in-depth: a sink that raises (instead of returning
+        SinkResult(status='error')) must NOT take down the run. The
+        backfill service catches and converts it to an error result."""
+        target = date(2026, 5, 12)
+        flat = _flatfiles_mock(
+            available=[FlatFileInfo(key="x", file_date=target, size=1)],
+            minute_by_date={target: _minute_df([{"ticker": "AAPL"}])},
+        )
+        ok = _RecorderSink(name="good", status="ok", bars=1)
+        bomb = _RecorderSink(name="bomb", raises=RuntimeError("kaboom"))
+        svc = FlatFilesBackfillService(flat_files=flat, sinks=[ok, bomb])
+
+        result = await svc.backfill_range(["AAPL"], target, target)
+
+        assert result.days_partial == 1
+        day = result.days[0]
+        assert day.sink_results["good"].status == "ok"
+        assert day.sink_results["bomb"].status == "error"
+        assert "kaboom" in (day.sink_results["bomb"].error or "")
+
+    @pytest.mark.asyncio
+    async def test_legacy_constructor_still_works(self):
+        """C1+C2 must preserve the pre-C2 constructor surface so the
+        BackfillService dispatch path and existing tests do not need
+        modification."""
+        target = date(2026, 5, 12)
+        flat = _flatfiles_mock(
+            available=[FlatFileInfo(key="x", file_date=target, size=1)],
+            minute_by_date={target: _minute_df([{"ticker": "AAPL"}])},
+        )
+        minute = AsyncMock(name="insert_minute_fn")
+        daily = AsyncMock(name="insert_daily_fn")
+        svc = FlatFilesBackfillService(
+            flat_files=flat,
+            insert_minute_fn=minute,
+            insert_daily_fn=daily,
+        )
+        # Internally we built a single ClickHouseSink.
+        assert len(svc.sinks) == 1
+
+        result = await svc.backfill_range(["AAPL"], target, target)
+        assert result.days_ok == 1
+        minute.assert_awaited()
+
+
+class TestCanonicalizeFrame:
+    def test_minute_canonicalisation_shape(self):
+        svc = FlatFilesBackfillService(flat_files=MagicMock(), sinks=[])
+        df = _minute_df([{"ticker": "aapl", "transactions": 7}])
+        out = svc._canonicalize_frame(df, kind="minute")
+        assert list(out.columns) == [
+            "symbol", "timestamp", "open", "high", "low", "close",
+            "volume", "vwap", "trade_count", "source",
+        ]
+        assert out.iloc[0]["symbol"] == "AAPL"
+        assert out.iloc[0]["vwap"] == 0.0
+        assert int(out.iloc[0]["trade_count"]) == 7
+        assert out.iloc[0]["source"] == "polygon-flatfiles"
+        # Timestamp must be tz-aware UTC.
+        assert out["timestamp"].dt.tz is not None
+
+    def test_daily_canonicalisation_drops_transactions(self):
+        svc = FlatFilesBackfillService(flat_files=MagicMock(), sinks=[])
+        df = _daily_df([{"ticker": "AAPL"}])
+        out = svc._canonicalize_frame(df, kind="day")
+        assert list(out.columns) == [
+            "symbol", "timestamp", "open", "high", "low", "close",
+            "volume", "source",
+        ]
+
+    def test_nan_rows_dropped_in_canonical(self):
+        svc = FlatFilesBackfillService(flat_files=MagicMock(), sinks=[])
+        df = _minute_df([
+            {"ticker": "AAPL"},
+            {"ticker": "BAD", "open": float("nan")},
+        ])
+        out = svc._canonicalize_frame(df, kind="minute")
+        assert out["symbol"].tolist() == ["AAPL"]
+
+    def test_missing_required_column_raises(self):
+        svc = FlatFilesBackfillService(flat_files=MagicMock(), sinks=[])
+        df = _minute_df([{"ticker": "AAPL"}]).drop(columns=["open"])
+        with pytest.raises(ValueError, match="missing"):
+            svc._canonicalize_frame(df, kind="minute")
+
+    def test_empty_in_empty_out(self):
+        svc = FlatFilesBackfillService(flat_files=MagicMock(), sinks=[])
+        assert svc._canonicalize_frame(pd.DataFrame(), kind="minute").empty
+        assert svc._canonicalize_frame(None, kind="day").empty  # type: ignore[arg-type]
+
+
+# ---------- C3: concurrency + skip_dates ----------
+
+
+class TestConcurrency:
+    @pytest.mark.asyncio
+    async def test_concurrency_one_matches_serial_output(self):
+        """Sanity: concurrency=1 must produce the same DayResult set
+        and ordering as the pre-C3 serial loop."""
+        dates = [date(2026, 5, d) for d in (11, 12, 13)]
+        flat = _flatfiles_mock(
+            available=[FlatFileInfo(key=f"k{i}", file_date=d, size=1)
+                       for i, d in enumerate(dates)],
+            minute_by_date={d: _minute_df([{"ticker": "AAPL"}]) for d in dates},
+        )
+        svc, insert_minute, _ = _build_service(flat)
+
+        result = await svc.backfill_range(
+            ["AAPL"], dates[0], dates[-1], concurrency=1,
+        )
+        assert result.days_ok == 3
+        assert [d.file_date for d in result.days] == dates  # sorted ascending
+
+    @pytest.mark.asyncio
+    async def test_concurrency_many_processes_all_days(self):
+        """concurrency > 1 must still process every day exactly once
+        and produce a date-sorted result.days regardless of completion
+        order."""
+        dates = [date(2026, 5, d) for d in (11, 12, 13, 14, 15)]
+        flat = _flatfiles_mock(
+            available=[FlatFileInfo(key=f"k{i}", file_date=d, size=1)
+                       for i, d in enumerate(dates)],
+            minute_by_date={d: _minute_df([{"ticker": "AAPL"}]) for d in dates},
+        )
+        svc, insert_minute, _ = _build_service(flat)
+
+        result = await svc.backfill_range(
+            ["AAPL"], dates[0], dates[-1], concurrency=4,
+        )
+        assert result.days_listed == 5
+        assert result.days_ok == 5
+        assert result.bars_persisted == 5
+        # Sorted ascending regardless of internal completion order.
+        assert [d.file_date for d in result.days] == dates
+        # Every day was inserted (1 batch each).
+        assert insert_minute.await_count == 5
+
+    @pytest.mark.asyncio
+    async def test_concurrency_progress_fires_once_per_day(self):
+        dates = [date(2026, 5, d) for d in (11, 12, 13)]
+        flat = _flatfiles_mock(
+            available=[FlatFileInfo(key=f"k{i}", file_date=d, size=1)
+                       for i, d in enumerate(dates)],
+            minute_by_date={d: _minute_df([{"ticker": "AAPL"}]) for d in dates},
+        )
+        svc, _, _ = _build_service(flat)
+
+        seen: list[DayResult] = []
+        await svc.backfill_range(
+            ["AAPL"], dates[0], dates[-1],
+            concurrency=3, on_progress=seen.append,
+        )
+        assert len(seen) == 3
+        # Order may vary under concurrency; just assert the set matches.
+        assert {d.file_date for d in seen} == set(dates)
+
+    @pytest.mark.asyncio
+    async def test_concurrency_isolates_per_day_errors(self):
+        """One failing day must not stop the others under concurrency."""
+        d_ok1 = date(2026, 5, 11)
+        d_bad = date(2026, 5, 12)
+        d_ok2 = date(2026, 5, 13)
+        flat = _flatfiles_mock(
+            available=[
+                FlatFileInfo(key=f"k{i}", file_date=d, size=1)
+                for i, d in enumerate([d_ok1, d_bad, d_ok2])
+            ],
+            minute_by_date={
+                d_ok1: _minute_df([{"ticker": "AAPL"}]),
+                d_ok2: _minute_df([{"ticker": "AAPL"}]),
+            },
+            raise_on_minute={d_bad: PolygonFlatFilesError("boom")},
+        )
+        svc, _, _ = _build_service(flat)
+
+        result = await svc.backfill_range(
+            ["AAPL"], d_ok1, d_ok2, concurrency=3,
+        )
+        assert result.days_ok == 2
+        assert result.days_errored == 1
+        # All three dates present in result.days, date-sorted.
+        assert [d.file_date for d in result.days] == [d_ok1, d_bad, d_ok2]
+
+    @pytest.mark.asyncio
+    async def test_invalid_concurrency_rejected(self):
+        svc, _, _ = _build_service(_flatfiles_mock())
+        with pytest.raises(ValueError, match="concurrency"):
+            await svc.backfill_range(
+                [], date(2026, 5, 1), date(2026, 5, 2), concurrency=0,
+            )
+
+
+class TestSkipDates:
+    @pytest.mark.asyncio
+    async def test_skip_dates_filters_listing_before_download(self):
+        """Days in ``skip_dates`` must not be downloaded or counted in
+        any bucket — they vanish from the run entirely."""
+        dates = [date(2026, 5, d) for d in (11, 12, 13)]
+        flat = _flatfiles_mock(
+            available=[FlatFileInfo(key=f"k{i}", file_date=d, size=1)
+                       for i, d in enumerate(dates)],
+            minute_by_date={d: _minute_df([{"ticker": "AAPL"}]) for d in dates},
+        )
+        svc, insert_minute, _ = _build_service(flat)
+
+        result = await svc.backfill_range(
+            ["AAPL"], dates[0], dates[-1],
+            skip_dates={dates[0], dates[2]},  # skip first + last
+        )
+        assert result.days_listed == 1
+        assert result.days_ok == 1
+        assert [d.file_date for d in result.days] == [dates[1]]
+        # Downloads only fired for the un-skipped date.
+        flat.download_minute_aggs.assert_called_once()
+        assert flat.download_minute_aggs.call_args.args[0] == dates[1]
+
+    @pytest.mark.asyncio
+    async def test_skip_dates_all_listed_returns_clean_zero(self):
+        dates = [date(2026, 5, 11), date(2026, 5, 12)]
+        flat = _flatfiles_mock(
+            available=[FlatFileInfo(key=f"k{i}", file_date=d, size=1)
+                       for i, d in enumerate(dates)],
+            minute_by_date={d: _minute_df([{"ticker": "AAPL"}]) for d in dates},
+        )
+        svc, insert_minute, _ = _build_service(flat)
+
+        result = await svc.backfill_range(
+            ["AAPL"], dates[0], dates[-1],
+            skip_dates=set(dates),
+        )
+        assert result.days_listed == 0
+        assert result.days_ok == 0
+        insert_minute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_skip_dates_with_concurrency(self):
+        dates = [date(2026, 5, d) for d in (11, 12, 13, 14)]
+        flat = _flatfiles_mock(
+            available=[FlatFileInfo(key=f"k{i}", file_date=d, size=1)
+                       for i, d in enumerate(dates)],
+            minute_by_date={d: _minute_df([{"ticker": "AAPL"}]) for d in dates},
+        )
+        svc, _, _ = _build_service(flat)
+
+        result = await svc.backfill_range(
+            ["AAPL"], dates[0], dates[-1],
+            concurrency=2,
+            skip_dates={dates[1]},
+        )
+        assert result.days_listed == 3
+        assert result.days_ok == 3
+        assert [d.file_date for d in result.days] == [dates[0], dates[2], dates[3]]

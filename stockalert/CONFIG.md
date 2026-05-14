@@ -6,6 +6,11 @@ All settings can be overridden via a `.env` file or environment variables. **Nev
 
 - **`DATA_PROVIDER`** – `alpaca` (default), `polygon`, `schwab`, or `thinkorswim`.
 
+### Split live vs history (optional)
+
+- **`STREAM_PROVIDER`** – If set, used only for live WebSocket bars (`get_stream_provider()`). Example: `DATA_PROVIDER=polygon` and `STREAM_PROVIDER=schwab` keeps Polygon for REST/history while Schwab supplies real-time bars (no Polygon delayed feed).
+- **`HISTORY_PROVIDER`** – If set, used for historical/backfill REST paths (`get_history_provider()`). Empty means `DATA_PROVIDER` is used for both roles when `STREAM_PROVIDER` is also empty.
+
 ## Alpaca (when `DATA_PROVIDER=alpaca`)
 
 - `ALPACA_API_KEY`, `ALPACA_SECRET_KEY` – from Alpaca dashboard.

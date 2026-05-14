@@ -124,6 +124,21 @@ async def lifespan(app: FastAPI):
             "set SCHWAB_CLIENT_ID/SECRET + refresh token to enable)"
         )
 
+    nightly_lake_task: asyncio.Task | None = None
+    if _settings.lake_archive_enabled and (_settings.stock_lake_bucket or "").strip():
+        from app.services.nightly_lake_refresh import run_lake_refresh_loop
+
+        nightly_lake_task = asyncio.create_task(
+            run_lake_refresh_loop(),
+            name="nightly_lake_refresh",
+        )
+        app.state.nightly_lake_task = nightly_lake_task
+        logger.info(
+            "nightly_lake_refresh: background loop started "
+            "(LAKE_ARCHIVE_RUN_HOUR_UTC=%s)",
+            _settings.lake_archive_run_hour_utc,
+        )
+
     async def broadcast_signal(signal_data: dict):
         logger.info(f"📡 Broadcasting signal: {signal_data}")
         disconnected = []
@@ -143,6 +158,16 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("🛑 Shutting down StockAlert API...")
+    lt = getattr(app.state, "nightly_lake_task", None)
+    if lt is not None and not lt.done():
+        lt.cancel()
+        try:
+            await lt
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning("nightly_lake_refresh task shutdown: %s", e)
+
     await monitor_manager.stop_all()
     logger.info("✅ Monitors stopped")
 
