@@ -82,20 +82,32 @@ app/
 │   ├── watchlist_repo.py
 │   └── journal_repo.py
 │
-├── services/                in-process services, each with a contract
-│   ├── s3_lake_client.py    boto3 transport
-│   ├── lake_archive.py      LakeArchiveWriter (legacy; replaced by BronzeIcebergSink)
-│   ├── flatfiles_sinks.py   ClickHouseSink + LakeSink fan-out
-│   ├── flatfiles_backfill.py
-│   ├── backfill_service.py  quick/deep gap-fill job queue
-│   ├── historical_loader.py
-│   ├── nightly_lake_refresh.py
-│   ├── watchlist_service.py
-│   ├── monitor_service.py
-│   ├── monitor_manager.py
-│   ├── journal_sync.py      Schwab balances + trades
-│   ├── journal_parser.py
-│   └── pnl.py
+├── services/                domain-grouped, each with a contract
+│   ├── iceberg_catalog.py   shared utility — Glue-backed PyIceberg catalog
+│   │
+│   ├── bronze/              Iceberg tables (multi-provider via factories)
+│   │   ├── schemas.py / tables.py / sink.py / gaps.py / README.md
+│   │
+│   ├── ingest/              Anything that PUTS data in
+│   │   ├── nightly_polygon_refresh.py  daily Polygon → bronze.polygon_minute
+│   │   ├── nightly_schwab_refresh.py   daily Schwab  → bronze.schwab_minute
+│   │   ├── backfill_service.py         REST gap-fill into CH
+│   │   ├── flatfiles_backfill.py       Polygon flat-files → sinks
+│   │   ├── historical_loader.py        provider REST chunker
+│   │   ├── sinks.py                    Sink Protocol + ClickHouseSink
+│   │   └── README.md
+│   │
+│   ├── live/                Streaming subscription + monitor state
+│   │   ├── watchlist_service.py / monitor_service.py / monitor_manager.py
+│   │   └── README.md
+│   │
+│   ├── journal/             Schwab-only account + trade sync
+│   │   ├── journal_sync.py / journal_parser.py / pnl.py
+│   │   └── README.md
+│   │
+│   └── legacy/              Pre-Iceberg raw/ writers — Phase 7 removal
+│       ├── lake_archive.py / lake_sink.py / s3_lake_client.py
+│       └── README.md
 │
 ├── indicators/              technical indicator math
 │   ├── base.py

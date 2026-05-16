@@ -437,33 +437,128 @@ provider per bar.
    automate compaction (already on the deferred list).
 
 
-## Phase 3 — Live → Bronze (CH flush job)
+## Pre-Phase 3 — Code organization & MCP scaffold
 
-**Status:** not started. See [data_platform_plan.md §13](data_platform_plan.md).
+**Goal:** Get the codebase into a shape that supports the silver/gold
+build AND agent (MCP) access cleanly. Three sub-steps; each its own commit.
+
+**Status:** Step 1 complete; Steps 2 & 3 pending.
+
+### Step 1 — Service folder reorg + startup isolation ✅ (commit `5b0655d`, 2026-05-16)
+
+- `app/services/` grouped into domain folders:
+  - `bronze/`   — Iceberg tables + sink (pre-existing)
+  - `ingest/`   — nightly_polygon_refresh, nightly_schwab_refresh,
+                  backfill_service, flatfiles_backfill, historical_loader,
+                  sinks (Sink Protocol + ClickHouseSink + SinkResult)
+  - `live/`     — watchlist_service, monitor_service, monitor_manager
+  - `journal/`  — journal_sync (Schwab-only), journal_parser, pnl
+  - `legacy/`   — lake_archive, lake_sink, s3_lake_client (Phase 7 removal)
+- Renamed `nightly_lake_refresh.py` → `ingest/nightly_polygon_refresh.py`
+  to match `nightly_schwab_refresh.py`.
+- Split `flatfiles_sinks.py`: generic Sink + ClickHouseSink to
+  `ingest/sinks.py`; legacy LakeSink to `legacy/lake_sink.py`.
+- Each domain folder gets its own README.md per doc-discipline memory.
+- `main_api.py` startup hardened with `_safe_start()`: every subsystem
+  starts in isolation. Journal sync failing no longer blocks watchlist,
+  nightly bronze, or HTTP routes. Foundation tasks (CH schema, batcher)
+  remain non-isolated by design.
+- `routes_market.py` docstring corrected — banner is provider-agnostic.
+- 38 files updated for imports; 144/144 in-scope tests pass.
+
+### Step 2 — Read services + CH-independent lake routes (NOT STARTED)
+
+**Why:** Today routes mostly read directly from ClickHouse, and lake
+reads happen inline via PyIceberg. To support (a) agents reading the
+lake without CH up, and (b) MCP tools as thin wrappers around services,
+we need explicit read services with Pydantic contracts.
+
+- [ ] `app/services/readers/bar_reader.py` — CH `ohlcv_1m` reads
+      (`get_recent_bars`, `get_bars_in_range`)
+- [ ] `app/services/readers/signal_reader.py` — CH signals reads
+      (`get_recent_signals`, `get_signals_by_symbol`)
+- [ ] `app/services/readers/quote_service.py` — provider-quote abstraction
+      (works against any provider with `get_quotes`; same fallback chain
+      as the banner already uses)
+- [ ] `app/services/readers/bronze_reader.py` — Iceberg lake reads
+      via PyIceberg + DuckDB (`get_bronze_bars`, `list_symbols`,
+      `latest_trading_day`). **Critical: this is the "works when CH is
+      down" path** for agent historical access.
+- [ ] Refactor existing routes to call the new readers (thin adapters).
+- [ ] New routes `app/api/routes_lake.py` — `/api/lake/bars`,
+      `/api/lake/symbols`, `/api/lake/last-day`. CH-free path.
+- [ ] Pydantic schemas for each reader's input/output (the contract
+      MCP tools will reuse).
+- [ ] Integration tests against real CH + real bronze.
+
+**Gate:** `/api/lake/bars?symbol=AAPL&start=...&end=...` returns rows
+with ClickHouse stopped. Existing CH-backed routes still work normally.
+
+### Step 3 — MCP scaffold mounted on FastAPI (NOT STARTED)
+
+- [ ] `app/mcp/` package with FastMCP server
+- [ ] Mount at `/mcp` on the existing FastAPI app (single process)
+- [ ] One MCP tool per read service: `get_bronze_bars`, `get_recent_bars`,
+      `get_recent_signals`, `get_quote`, `list_symbols`, `gap_report`
+- [ ] Tools call the same services that routes call — zero business
+      logic in the tool layer
+- [ ] `app/mcp/README.md` documenting the tool surface
+
+**Gate:** Claude / an LLM agent can call `get_bronze_bars` via MCP and
+get a DataFrame back. End-to-end "agent reads lake" works.
+
+### What "done" looks like before Phase 3 (Silver)
+
+Sign-off criteria for moving on:
+
+1. All tests green
+2. `/api/lake/bars` route returns data when CH is stopped
+3. MCP `/mcp` endpoint responds to a `list_tools` call
+4. Every service has a README + sits in the right domain folder
+5. Legacy raw/ writer is in `legacy/` and marked for removal
 
 ---
 
-## Phase 3 — Silver + corp actions
+## Phase 3 — Silver layer + corp actions
+
+**Goal:** Build `silver.ohlcv_1m` as the canonical, deduped, gap-filled
+read source for backtests and ML training. Two providers in bronze
+(polygon + schwab) get merged with provider-precedence rules.
+
+**Status:** not started. Depends on Pre-Phase 3 steps 2 + 3 being done.
+
+Detail in [data_platform_plan.md §6](data_platform_plan.md).
+
+---
+
+## Phase 4 — Live → Bronze (CH 5-min flush)
+
+**Status:** not started. Deferred — nightly bronze ingest is currently
+keeping bronze fresh within T+1 which is sufficient for backtests and
+training. Add when sub-day freshness in bronze becomes a real need.
+
+---
+
+## Phase 5 — Reader flip (dashboard reads bronze for history)
+
+**Status:** not started. The Pre-Phase-3 Step 2 work (`BronzeReader`
+service + `/api/lake/bars` route) lays the foundation; this phase
+flips the dashboard's chart endpoint to prefer bronze for older data
+and CH only for today's live bars.
+
+---
+
+## Phase 6 — Gold + ML reproducibility
 
 **Status:** not started.
 
 ---
 
-## Phase 4 — Reader flip (CH becomes serving cache)
+## Phase 7 — Retire legacy lake prefix
 
-**Status:** not started.
-
----
-
-## Phase 5 — Gold + ML reproducibility
-
-**Status:** not started.
-
----
-
-## Phase 6 — Retire legacy lake prefix
-
-**Status:** not started.
+**Status:** not started. Triggered once Phase 3 (silver) + Phase 5
+(reader flip) are stable and the `s3://.../raw/` data is provably
+unreferenced.
 
 ---
 
@@ -563,6 +658,39 @@ bottom with a date.
   2026-04-03 in this Phase 2 backfill. Fix deferred — silver
   dedup handles single-provider single-day gaps gracefully; can
   re-pull the day after fixing `historical_df`.
+- **2026-05-16** — Service folders grouped by **domain, not provider**.
+  `app/services/` split into `bronze/`, `ingest/`, `live/`, `journal/`,
+  `legacy/`. Rationale: a provider is a configuration parameter (set
+  via `STREAM_PROVIDER` / `HISTORY_PROVIDER`), not a service boundary.
+  Bronze is multi-provider via factory methods; ingest jobs are
+  per-provider but share the `Sink` Protocol. Provider-grouped folders
+  would fight the architecture and force duplicate code for
+  multi-provider services like watchlist + bronze.
+- **2026-05-16** — Startup uses `_safe_start()` so each subsystem can
+  fail independently. Journal sync expiring its Schwab token, or
+  watchlist failing to subscribe, does not block nightly bronze
+  ingest, HTTP routes, or other subsystems. Foundation tasks
+  (CH schema init, OHLCV batch writer) stay non-isolated by design —
+  if those fail the app has nothing useful to serve.
+- **2026-05-16** — Journal service formally scoped Schwab-only.
+  README in `app/services/journal/` documents this: account/trade
+  data only makes sense from the broker where trades execute. If a
+  future user uses a different broker, journal would become a
+  multi-provider service with provider-specific implementations;
+  not in scope today.
+- **2026-05-16** — Alpaca deferred indefinitely. Code paths remain
+  (provider abstraction supports it) but Alpaca creds are not
+  exercised. Provider switching is `DATA_PROVIDER` env-only.
+- **2026-05-16** — MCP server will be **mounted on the existing
+  FastAPI app at `/mcp`** rather than run as a separate process.
+  Single process for local dev simplicity; split out later if/when
+  we run the trading-AI services in their own containers. Same
+  services power both HTTP routes (humans/UI) and MCP tools (agents).
+- **2026-05-16** — Lake reads must work without ClickHouse. Agents
+  doing historical/training reads should hit `BronzeReader` → S3 +
+  Iceberg directly; CH is for live/recent only. This decouples
+  agent capability from CH availability. New routes
+  (`/api/lake/*`) and MCP tools route to bronze without touching CH.
 - **2026-05-16** — Nightly auto-catchup. Both `refresh_polygon_lake_yesterday`
   and `refresh_schwab_bronze_yesterday` now detect gaps and fill them
   on each run, using a new helper `app/services/bronze/gaps.py`
