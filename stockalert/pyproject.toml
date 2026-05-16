@@ -17,7 +17,7 @@ pandas = ">=2.2"
 numpy = ">=1.26"
 python-dotenv = ">=1.0"
 aiohttp = ">=3.9"
-massive = {path = "../client-python", develop = true}
+massive = ">=2.7,<3"
 boto3 = ">=1.40"
 pyarrow = ">=20"
 pyiceberg = {extras = ["glue", "s3fs", "pyarrow"], version = ">=0.7"}

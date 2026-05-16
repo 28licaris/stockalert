@@ -1142,22 +1142,20 @@ testing = ["coverage", "pytest", "pytest-cov", "pytest-regressions", "pytest-tim
 
 [[package]]
 name = "massive"
-version = "0.0.0"
+version = "2.7.0"
 description = "Official Massive (formerly Polygon.io) REST and Websocket client."
 optional = false
-python-versions = "^3.9"
+python-versions = "<4.0,>=3.9"
 groups = ["main"]
-files = []
-develop = true
+files = [
+    {file = "massive-2.7.0-py3-none-any.whl", hash = "sha256:2d490723a1163fa22b397d7a253aa7298961108d9bf1b4f26361d8a027879c3f"},
+    {file = "massive-2.7.0.tar.gz", hash = "sha256:52073f8fb77e15e93014dcbe367b8b1835aa9d7341ee0d1931d498e050b6dd96"},
+]
 
 [package.dependencies]
 certifi = ">=2022.5.18,<2027.0.0"
 urllib3 = ">=1.26.9"
 websockets = ">=14.0"
-
-[package.source]
-type = "directory"
-url = "../client-python"
 
 [[package]]
 name = "mdurl"
@@ -3318,4 +3316,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "dbddcb8d3a1cfc256b7b9752b8b92d85fdd94f439eb1dc1c40b06236574d3514"
+content-hash = "6f3a2f5479155e6e3eaf0a48ee81d1b4b4b5dc5f3648db9069e05451c7a75034"
