@@ -31,7 +31,7 @@ from app.data.seed_universe import (
 class TestStructure:
     def test_seed_count_is_100(self):
         """Phase A spec is exactly 100 tickers. Bumping this requires updating
-        storage_plan.md and the scripts/README sample backfill command."""
+        docs/data_platform_plan.md and the scripts/README sample backfill command."""
         assert SEED_COUNT == 100
         assert len(SEED_UNIVERSE) == 100
         assert len(SEED_SYMBOLS) == 100

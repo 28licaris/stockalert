@@ -325,8 +325,8 @@ class TestHistoricalDf:
         p = SchwabProvider("cid", "secret", refresh_token="rt")
         p._access_token = "tok"
         session = make_session(get_resp=make_resp(200, {"candles": []}))
-        start = datetime.now(timezone.utc) - timedelta(days=1)
-        end = datetime.now(timezone.utc)
+        start = datetime(2025, 6, 1, 10, 0, 0, tzinfo=timezone.utc)
+        end = datetime(2025, 6, 1, 16, 0, 0, tzinfo=timezone.utc)
         with patch("app.providers.schwab_provider.aiohttp.ClientSession", return_value=make_session_cm(session)):
             await p.historical_df("AAPL", start, end)
         session.get.assert_called_once()
@@ -334,7 +334,9 @@ class TestHistoricalDf:
         (url,) = call_args
         assert MARKET_DATA_BASE in url
         assert PRICE_HISTORY_PATH in url
-        assert call_kwargs.get("params", {}).get("symbol") == "AAPL"
+        params = call_kwargs.get("params", {})
+        assert params.get("symbol") == "AAPL"
+        assert params.get("period") == 1
 
 
 class TestMarketDataGet:

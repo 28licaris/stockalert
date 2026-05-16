@@ -209,7 +209,7 @@ class FlatFilesBackfillService:
         Sink wiring:
           - ClickHouseSink is always configured (the hot cache is the
             primary read path for the API and the alert engine)
-          - LakeSink is appended when ``LAKE_ARCHIVE_ENABLED=true`` and
+          - LakeSink is appended when ``POLYGON_NIGHTLY_ENABLED=true`` and
             ``STOCK_LAKE_BUCKET`` is non-empty. Missing creds fall
             through silently — operators see the warning in the log.
 
@@ -222,7 +222,7 @@ class FlatFilesBackfillService:
         sinks: list[Sink] = [
             ClickHouseSink.from_settings(batch_size=cls.DEFAULT_BATCH_SIZE),
         ]
-        if settings.lake_archive_enabled:
+        if settings.polygon_nightly_enabled:
             if settings.stock_lake_bucket:
                 # Lazy import to avoid pulling boto3 into modules that
                 # never run a backfill.
@@ -238,7 +238,7 @@ class FlatFilesBackfillService:
                     )
             else:
                 logger.warning(
-                    "FlatFilesBackfillService: LAKE_ARCHIVE_ENABLED=true "
+                    "FlatFilesBackfillService: POLYGON_NIGHTLY_ENABLED=true "
                     "but STOCK_LAKE_BUCKET is empty; LakeSink disabled."
                 )
         return cls(flat_files=client, sinks=sinks)

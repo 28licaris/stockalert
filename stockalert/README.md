@@ -2,7 +2,7 @@
 
 Backend for a stock divergence / monitoring stack: **FastAPI** exposes REST and WebSockets, **ClickHouse** stores 1-minute OHLCV and related data, and a configurable **market data provider** (Alpaca, Polygon, or Schwab) streams bars into the database. On startup the app initializes the schema, runs a batched bar writer, **backfill** (including a periodic gap sweeper), **watchlist** streaming, optional **monitors** for divergence-style signals, and **journal sync** (account balances and trades on a timer). Static HTML pages under `/dashboard`, `/journal`, and `/symbol/{ticker}` sit beside the API.
 
-For deeper design notes see [ARCHITECTURE.md](ARCHITECTURE.md), env details in [CONFIG.md](CONFIG.md) and [.env.example](.env.example), and Schwab helper flows in [scripts/README.md](scripts/README.md).
+For architecture + active build plans see [docs/](docs/README.md) — start with `docs/BUILD_JOURNAL.md` to pick up where the build left off. Env details in [CONFIG.md](CONFIG.md) and [.env.example](.env.example); Schwab helper flows in [scripts/README.md](scripts/README.md).
 
 ## Prerequisites
 

@@ -177,7 +177,7 @@ def _build_parser() -> argparse.ArgumentParser:
     lake_group.add_argument(
         "--write-lake", dest="write_lake",
         action="store_true", default=None,
-        help="Write to the S3 lake (default: follow LAKE_ARCHIVE_ENABLED).",
+        help="Write to the S3 lake (default: follow POLYGON_NIGHTLY_ENABLED).",
     )
     lake_group.add_argument(
         "--no-write-lake", dest="write_lake",
@@ -243,9 +243,9 @@ class _SinkConfig:
 def _resolve_sink_config(args: argparse.Namespace) -> _SinkConfig:
     """Merge ``--write-lake`` / ``--no-write-lake`` / settings into a
     single decision. ``--write-lake`` unspecified falls back to
-    ``LAKE_ARCHIVE_ENABLED``."""
+    ``POLYGON_NIGHTLY_ENABLED``."""
     if args.write_lake is None:
-        write_lake = bool(settings.lake_archive_enabled)
+        write_lake = bool(settings.polygon_nightly_enabled)
     else:
         write_lake = bool(args.write_lake)
     return _SinkConfig(
@@ -416,7 +416,7 @@ async def main(args: argparse.Namespace) -> int:
     print(f"  force           : {sink_cfg.force}")
     print(f"  write_clickhouse: {sink_cfg.write_clickhouse}")
     print(f"  write_lake      : {sink_cfg.write_lake} "
-          f"(LAKE_ARCHIVE_ENABLED={settings.lake_archive_enabled})")
+          f"(POLYGON_NIGHTLY_ENABLED={settings.polygon_nightly_enabled})")
     print(f"  dry-run         : {args.dry_run}")
     print()
 

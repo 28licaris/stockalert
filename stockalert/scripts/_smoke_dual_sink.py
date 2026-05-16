@@ -38,9 +38,9 @@ if str(ROOT) not in sys.path:
 from dotenv import load_dotenv
 load_dotenv(ROOT / "scripts" / ".env")
 
-# Force lake-archive on for the smoke test even if .env disables it.
+# Force nightly polygon on for the smoke test even if .env disables it.
 # We touch settings AFTER dotenv has loaded so the env vars are in place.
-os.environ["LAKE_ARCHIVE_ENABLED"] = "true"
+os.environ["POLYGON_NIGHTLY_ENABLED"] = "true"
 
 from app.config import settings  # noqa: E402
 from app.db.client import get_client  # noqa: E402

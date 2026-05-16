@@ -42,24 +42,42 @@ class Settings(BaseModel):
 
     # ─────────────────────────────────────────────────────────
     # Stock Lake (S3) — your own data lake, separate from Polygon Flat Files.
-    # See `storage_plan.md` for layout. Empty AWS creds fall through to the
-    # default boto3 credential chain (env, ~/.aws/credentials, IAM role, etc.),
-    # so deploys on EC2 / ECS need only set the bucket name.
+    # See docs/data_platform_plan.md for layout. Empty AWS creds fall through
+    # to the default boto3 credential chain (env, ~/.aws/credentials, IAM
+    # role, etc.), so deploys on EC2 / ECS need only set the bucket name.
     # ─────────────────────────────────────────────────────────
     stock_lake_bucket: str = os.getenv("STOCK_LAKE_BUCKET", "")
     stock_lake_region: str = os.getenv("STOCK_LAKE_REGION", "us-east-1")
     aws_access_key_id: str = os.getenv("AWS_ACCESS_KEY_ID", "")
     aws_secret_access_key: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
     aws_session_token: str = os.getenv("AWS_SESSION_TOKEN", "")
-    # Daily archive worker toggle. Even when set true, the worker no-ops if
-    # `stock_lake_bucket` is empty so misconfigured deploys don't crash.
-    lake_archive_enabled: bool = os.getenv("LAKE_ARCHIVE_ENABLED", "false").lower() == "true"
-    # UTC hour to run the daily archive sweep at. 07:00 UTC == 03:00 ET,
-    # after extended-hours close so we operate on a complete prior trading day.
-    lake_archive_run_hour_utc: int = int(os.getenv("LAKE_ARCHIVE_RUN_HOUR_UTC", "7"))
-    # Nightly in-process Polygon flat-files → S3 lake (see nightly_lake_refresh).
-    nightly_lake_symbols: str = os.getenv("NIGHTLY_LAKE_SYMBOLS", "seed")
-    nightly_lake_kind: str = os.getenv("NIGHTLY_LAKE_KIND", "minute").strip().lower()
+    # ─────────────────────────────────────────────────────────
+    # Nightly bronze ingest jobs (per-provider, identical shape).
+    # Both schedules run as asyncio background tasks from main_api.py
+    # startup. Gated by their *_NIGHTLY_ENABLED flag + valid credentials.
+    # ─────────────────────────────────────────────────────────
+    # Polygon flat-files → bronze.polygon_minute (see nightly_lake_refresh).
+    # 07:00 UTC = midnight Arizona; after Polygon's daily flat file is ready.
+    polygon_nightly_enabled: bool = os.getenv("POLYGON_NIGHTLY_ENABLED", "false").lower() == "true"
+    polygon_nightly_run_hour_utc: int = int(os.getenv("POLYGON_NIGHTLY_RUN_HOUR_UTC", "7"))
+    polygon_nightly_symbols: str = os.getenv("POLYGON_NIGHTLY_SYMBOLS", "seed")
+    polygon_nightly_kind: str = os.getenv("POLYGON_NIGHTLY_KIND", "minute").strip().lower()
+
+    # Schwab REST pricehistory → bronze.schwab_minute (see nightly_schwab_refresh).
+    # 22:00 UTC = 3 PM Arizona; ~30 min after NYSE close.
+    schwab_nightly_enabled: bool = os.getenv("SCHWAB_NIGHTLY_ENABLED", "false").lower() == "true"
+    schwab_nightly_run_hour_utc: int = int(os.getenv("SCHWAB_NIGHTLY_RUN_HOUR_UTC", "22"))
+    schwab_nightly_symbols: str = os.getenv("SCHWAB_NIGHTLY_SYMBOLS", "seed")
+
+    # ─────────────────────────────────────────────────────────
+    # Iceberg catalog (AWS Glue) — see docs/data_platform_plan.md.
+    # Iceberg warehouse path: s3://${STOCK_LAKE_BUCKET}/${ICEBERG_WAREHOUSE_PREFIX}/
+    # Glue database holding namespaces bronze/silver/gold (we use one Glue
+    # database; Iceberg namespaces are the `bronze.*` etc. qualifiers).
+    # ─────────────────────────────────────────────────────────
+    iceberg_catalog_name: str = os.getenv("ICEBERG_CATALOG_NAME", "stock_lake")
+    iceberg_glue_database: str = os.getenv("ICEBERG_GLUE_DATABASE", "stock_lake")
+    iceberg_warehouse_prefix: str = os.getenv("ICEBERG_WAREHOUSE_PREFIX", "iceberg").strip("/")
 
     # Schwab (Think or Swim) – store credentials in .env only; never commit
     schwab_client_id: str = os.getenv("SCHWAB_CLIENT_ID", "")

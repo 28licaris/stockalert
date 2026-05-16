@@ -125,18 +125,35 @@ async def lifespan(app: FastAPI):
         )
 
     nightly_lake_task: asyncio.Task | None = None
-    if _settings.lake_archive_enabled and (_settings.stock_lake_bucket or "").strip():
+    if _settings.polygon_nightly_enabled and (_settings.stock_lake_bucket or "").strip():
         from app.services.nightly_lake_refresh import run_lake_refresh_loop
 
         nightly_lake_task = asyncio.create_task(
             run_lake_refresh_loop(),
-            name="nightly_lake_refresh",
+            name="nightly_polygon_refresh",
         )
         app.state.nightly_lake_task = nightly_lake_task
         logger.info(
-            "nightly_lake_refresh: background loop started "
-            "(LAKE_ARCHIVE_RUN_HOUR_UTC=%s)",
-            _settings.lake_archive_run_hour_utc,
+            "nightly_polygon_refresh: background loop started "
+            "(POLYGON_NIGHTLY_RUN_HOUR_UTC=%s, symbols=%s)",
+            _settings.polygon_nightly_run_hour_utc,
+            _settings.polygon_nightly_symbols,
+        )
+
+    nightly_schwab_task: asyncio.Task | None = None
+    if _settings.schwab_nightly_enabled and (_settings.stock_lake_bucket or "").strip():
+        from app.services.nightly_schwab_refresh import run_schwab_refresh_loop
+
+        nightly_schwab_task = asyncio.create_task(
+            run_schwab_refresh_loop(),
+            name="nightly_schwab_refresh",
+        )
+        app.state.nightly_schwab_task = nightly_schwab_task
+        logger.info(
+            "nightly_schwab_refresh: background loop started "
+            "(SCHWAB_NIGHTLY_RUN_HOUR_UTC=%s, symbols=%s)",
+            _settings.schwab_nightly_run_hour_utc,
+            _settings.schwab_nightly_symbols,
         )
 
     async def broadcast_signal(signal_data: dict):
@@ -167,6 +184,16 @@ async def lifespan(app: FastAPI):
             pass
         except Exception as e:
             logger.warning("nightly_lake_refresh task shutdown: %s", e)
+
+    st = getattr(app.state, "nightly_schwab_task", None)
+    if st is not None and not st.done():
+        st.cancel()
+        try:
+            await st
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning("nightly_schwab_refresh task shutdown: %s", e)
 
     await monitor_manager.stop_all()
     logger.info("✅ Monitors stopped")

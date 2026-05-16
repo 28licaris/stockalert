@@ -3,6 +3,9 @@
 Seed ClickHouse OHLCV for the curated universe (or explicit symbols) using
 Schwab price history via ``BackfillService``.
 
+**This script never writes S3.** For Schwab → stock-lake Parquet, use
+``scripts/schwab_lake_backfill.py`` instead.
+
 This mirrors ``polygon_flatfiles_bulk_backfill.py`` ergonomics (``--symbols
 seed``, dotenv from ``scripts/.env``) but writes **only ClickHouse** through
 the REST history provider — not Polygon flat files.
@@ -18,9 +21,9 @@ with ``--quick-days`` / ``--deep-days`` / ``--intraday-days``, or set all
 three intraday windows at once with ``--window-days N``.
 
 S3 stock-lake (Parquet under ``STOCK_LAKE_BUCKET``) is **not** written here;
-only ClickHouse is populated. A follow-on nightly job can export streamed
-Schwab bars from ClickHouse to the lake layout (same idea as Polygon's
-``LakeArchiveWriter``) — that pipeline is not implemented yet.
+only ClickHouse is populated. Use ``schwab_lake_backfill.py`` for S3. A
+follow-on nightly job can export streamed Schwab bars from ClickHouse to
+the lake layout — that CH→S3 pipeline is not implemented yet.
 
 Examples
 --------
