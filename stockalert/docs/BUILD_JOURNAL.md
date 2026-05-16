@@ -562,6 +562,97 @@ unreferenced.
 
 ---
 
+## Backlog — pick up whenever
+
+Items that aren't blocked by anything and aren't on the critical path.
+Tackle when there's a natural window. Add to the top as new ones come up.
+
+### Schwab API — full pass-through coverage
+
+**Goal:** every Schwab Market Data + Trader API endpoint is reachable
+through our system — both for HTTP routes and (once Step 3 lands) for
+MCP tools so agents can use them. "Pass-through" = the user / agent can
+do anything they could do hitting Schwab's API directly, but with our
+auth handling, retries, and canonical response shapes.
+
+**Currently wrapped** (in [app/providers/schwab_provider.py](../app/providers/schwab_provider.py)):
+
+| Endpoint | Method | Used by |
+|---|---|---|
+| `/pricehistory` | `historical_df` | nightly_schwab_refresh, backfill, agent training |
+| `/quotes` | `get_quotes` | banner, dashboard |
+| `/chains` | `get_option_chains` | (provider has it; not yet routed) |
+| `/expirationchain` | `get_expiration_chain` | (not yet routed) |
+| `/movers/{symbol_id}` | `get_movers` | routes_movers |
+| `/markets` | `get_market_hours` | (not yet routed) |
+| `/accounts` | journal_sync | journal pages |
+| Streaming (CHART_EQUITY, LEVELONE_*) | SchwabStreamer | live watchlist |
+
+**Gaps to close:**
+
+- [ ] **Options data — full ingest path.** `get_option_chains` exists
+      on the provider but there's no service that snapshots option
+      chains into ClickHouse or bronze. Open questions:
+  - What schema? `option_chains` table keyed on
+    `(underlying, expiration, strike, call_or_put, snapshot_ts)`.
+  - Live snapshots or daily end-of-day? Both?
+  - Retention / partition — options blow up row counts fast
+    (~hundreds of strikes × dozens of expirations per underlying).
+  - Bronze table per provider (`bronze.schwab_option_snapshot`) +
+    eventual silver merge.
+- [ ] **Option price history.** Schwab supports historical option
+      pricing for specific contracts. No wrapper yet.
+- [ ] **Option streaming.** Schwab Streamer has option services
+      (`LEVELONE_OPTIONS`, `OPTION`). Not subscribed today.
+- [ ] **Trader API — order placement.** `POST /accounts/{hash}/orders`
+      and cancel. Required for Trading-AI Phase 8 (paper trading) and
+      Phase 9 (live).
+- [ ] **Order status + history.** `GET /accounts/{hash}/orders` for
+      replay / reconciliation.
+- [ ] **Instruments search.** `GET /instruments?symbol=...` for
+      symbol resolution and instrument-type lookup.
+- [ ] **Transactions.** Already pulled by journal_sync but expose as
+      a service + MCP tool for ad-hoc agent queries.
+- [ ] **Streaming for futures** (`CHART_FUTURES`, `LEVELONE_FUTURES`).
+      Partial support exists; no consumer wires it up.
+
+**MCP tool surface to add** (after Step 3 scaffold lands):
+
+```
+get_option_chain(symbol, expiration?, strike_range?)
+get_option_quote(option_symbol)
+list_option_expirations(symbol)
+get_account_positions()                ← read-only, safe for agents
+get_recent_transactions(account_hash, days=30)
+place_order(...)                       ← gated behind execution service
+cancel_order(order_id)
+```
+
+**Design rule.** Each Schwab endpoint becomes:
+1. A method on `SchwabProvider` (already mostly done — keep going).
+2. A wrapper service in `app/services/` if it needs caching /
+   business logic on top.
+3. An optional FastAPI route in `app/api/` for human/UI use.
+4. An MCP tool in `app/mcp/tools/` for agent use.
+
+Each layer is thin — the service has the logic, route + MCP tool are
+adapters. Same pattern as the rest of the codebase.
+
+### Other backlog items
+
+- [ ] **Bronze compaction automation** — scheduled `compact_bronze_monthly.py`
+      via asyncio background task or external cron. Currently manual.
+      (See Phase 1 deferred items.)
+- [ ] **`/health/services` JSON endpoint** — per-subsystem status,
+      so dashboards / monitoring don't have to parse logs.
+      (See STARTUP_FLOW.md proposed improvements.)
+- [ ] **Tier-grouped startup logs** — `[HOT]` / `[COLD]` / `[OPS]`
+      prefixes for clearer ops view.
+- [ ] **Cleaner soft-fail logging** when provider creds are missing —
+      single WARNING instead of ERROR + WARNING + ✅.
+
+---
+
 ## Trading AI track (parallel)
 
 See [trading-ai-build-plan.md](trading-ai-build-plan.md) Phases 1–9.
