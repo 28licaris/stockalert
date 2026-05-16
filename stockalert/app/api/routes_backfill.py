@@ -7,7 +7,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.services.backfill_service import backfill_service
+from app.services.ingest.backfill_service import backfill_service
 
 logger = logging.getLogger(__name__)
 

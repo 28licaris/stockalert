@@ -1,5 +1,5 @@
 """
-Sinks for the flat-files backfill pipeline.
+Sinks for the ingest pipeline.
 
 The flat-files backfill service downloads one day's worth of bars,
 canonicalises the DataFrame, and hands it to a list of ``Sink`` objects.
@@ -7,30 +7,34 @@ Each sink is independent — it owns its own success criteria, its own
 failure semantics, and its own storage. Adding a new destination (e.g.
 DuckDB, Snowflake, Parquet-on-local-disk for dev) is "implement Sink".
 
-Two production sinks live here today:
+Two production-friendly sinks live here today:
 
   - ``ClickHouseSink``   — writes to the hot cache (``ohlcv_1m`` / ``ohlcv_daily``)
-  - ``LakeSink``         — writes to the canonical S3 lake via LakeArchiveWriter
+  - ``BronzeIcebergSink`` — see ``app.services.bronze.sink`` (the canonical
+    cold-tier writer; lives in the bronze service so it can own its
+    schemas alongside)
+
+A third, **legacy** sink (``LakeSink`` → ``raw/provider=*/...parquet``) lives
+in ``app.services.legacy.lake_sink``. Do not use it for new work; it is
+slated for removal in Phase 6.
 
 Design rules:
 
   1. Sinks consume the **same canonical DataFrame**. The canonical shape
-     is defined in ``app.services.flatfiles_backfill._canonicalize_frame``
-     (single source of truth) so the two writes are guaranteed
-     consistent — if both succeed, both stores hold the same bytes' worth
-     of bars for that day.
+     is defined in ``app.services.ingest.flatfiles_backfill._canonicalize_frame``
+     (single source of truth) so the writes are guaranteed consistent —
+     if both succeed, both stores hold the same bytes' worth of bars.
   2. Sinks are **independent**. A sink's failure does NOT stop the next
-     sink from running. The caller aggregates per-sink ``SinkResult``s
+     sink from running. The caller aggregates per-sink ``SinkResult`` s
      into the day's ``DayResult.status``.
   3. Sinks are **idempotent**. Re-running a sink on the same day is a
      no-op or an overwrite, not a duplicate. ClickHouse provides this
-     via ``ReplacingMergeTree(version)``; the lake provides it via the
-     canonical key + watermark short-circuit in LakeArchiveWriter.
+     via ``ReplacingMergeTree(version)``; bronze provides this via the
+     upstream watermark + append model (see bronze service README).
   4. Sinks are **microservice-ready**. No singletons, no FastAPI imports,
      no implicit ``app.config`` access in the hot path. Construction is
      explicit; ``from_settings()`` factories on each sink are the *only*
-     point where the global settings touch the code path. A future
-     "lake-archive-service" pod can use ``LakeSink`` standalone.
+     point where the global settings touch the code path.
 """
 from __future__ import annotations
 
@@ -40,8 +44,6 @@ from datetime import date
 from typing import Awaitable, Callable, List, Literal, Optional, Protocol
 
 import pandas as pd
-
-from app.services.lake_archive import LakeArchiveError, LakeArchiveWriter
 
 logger = logging.getLogger(__name__)
 
@@ -61,12 +63,10 @@ class SinkResult:
     Sinks always *return* a result (never raise) so a single sink's
     explosion can't poison the run; severity is encoded in ``status``.
     """
-    sink: str            # human-readable name (e.g. "clickhouse", "lake")
+    sink: str            # human-readable name (e.g. "clickhouse", "bronze_iceberg")
     status: str          # "ok" | "skipped" | "error"
     bars_written: int = 0
     error: Optional[str] = None
-    # Free-form per-sink metadata for telemetry. ClickHouseSink populates
-    # ``batches``; LakeSink populates ``s3_key`` and ``bytes_written``.
     metadata: dict = field(default_factory=dict)
 
 
@@ -177,9 +177,6 @@ class ClickHouseSink:
                 metadata={"batches": batches},
             )
         except Exception as e:
-            # Caught here (rather than at the backfill-service layer) so
-            # a CH outage on one day doesn't abort the whole range. The
-            # caller sees the error in SinkResult and decides what to do.
             logger.exception(
                 "clickhouse_sink: insert failed for %s %s: %s",
                 kind, file_date, e,
@@ -201,70 +198,6 @@ class ClickHouseSink:
             await insert_fn(records[i : i + self._batch_size])
             batches += 1
         return batches
-
-
-# ---------- LakeSink ----------
-
-
-class LakeSink:
-    """
-    Canonical S3 lake sink. Wraps ``LakeArchiveWriter.write_day`` to
-    satisfy the ``Sink`` Protocol.
-
-    No DataFrame transform happens here — the writer enforces the
-    canonical schema. This sink is essentially just protocol-adaptation
-    plus the metadata mapping for the ``SinkResult``.
-    """
-    name = "lake"
-
-    def __init__(self, *, writer: LakeArchiveWriter, force: bool = False) -> None:
-        if writer is None:
-            raise ValueError("LakeSink: writer is required")
-        self._writer = writer
-        self._force = bool(force)
-
-    @classmethod
-    def from_settings(cls, *, force: bool = False) -> "LakeSink":
-        return cls(writer=LakeArchiveWriter.from_settings(), force=force)
-
-    @property
-    def force(self) -> bool:
-        return self._force
-
-    @property
-    def writer(self) -> LakeArchiveWriter:
-        return self._writer
-
-    async def write(
-        self,
-        df: pd.DataFrame,
-        *,
-        file_date: date,
-        kind: Kind,
-        provider: str,
-    ) -> SinkResult:
-        try:
-            result = await self._writer.write_day(
-                df, file_date=file_date, kind=kind, provider=provider,
-                force=self._force,
-            )
-        except LakeArchiveError as e:
-            # Writer already stamped an error watermark; we just surface
-            # the failure to the backfill service.
-            return SinkResult(
-                sink=self.name, status="error", bars_written=0,
-                error=str(e),
-            )
-        return SinkResult(
-            sink=self.name,
-            status=result.status,
-            bars_written=result.bars_written,
-            error=result.error,
-            metadata={
-                "s3_key": result.s3_key,
-                "bytes_written": result.bytes_written,
-            },
-        )
 
 
 # ---------- canonical record conversion ----------
@@ -293,10 +226,7 @@ def _frame_to_records(df: pd.DataFrame, *, kind: Kind) -> List[dict]:
         raise ValueError(
             f"_frame_to_records: canonical frame missing columns: {missing}"
         )
-    # Use dict orient so we don't allocate a per-row index Series.
     records: List[dict] = []
-    # Fast positional iteration to minimise per-row Python overhead on
-    # the full ~1.9M-row tape.
     columns = df.loc[:, list(cols)]
     for row in columns.itertuples(index=False, name=None):
         if kind == "minute":
@@ -336,7 +266,6 @@ __all__ = [
     "ClickHouseSink",
     "InsertFn",
     "Kind",
-    "LakeSink",
     "Sink",
     "SinkResult",
     "_frame_to_records",

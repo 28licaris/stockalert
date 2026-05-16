@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import List
 import logging
 
-from app.services.monitor_manager import monitor_manager
+from app.services.live.monitor_manager import monitor_manager
 
 logger = logging.getLogger(__name__)
 

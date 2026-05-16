@@ -77,17 +77,17 @@ from app.config import settings  # noqa: E402
 from app.data.seed_universe import SEED_SYMBOLS  # noqa: E402
 from app.db.lake_watermarks import WatermarkRepo  # noqa: E402
 from app.providers.polygon_flatfiles import PolygonFlatFilesClient  # noqa: E402
-from app.services.flatfiles_backfill import (  # noqa: E402
+from app.services.ingest.flatfiles_backfill import (  # noqa: E402
     DayResult,
     FlatFilesBackfillService,
 )
-from app.services.flatfiles_sinks import (  # noqa: E402
+from app.services.ingest.sinks import (  # noqa: E402
     ClickHouseSink,
-    LakeSink,
     Sink,
 )
-from app.services.lake_archive import LakeArchiveWriter  # noqa: E402
-from app.services.s3_lake_client import S3LakeClient  # noqa: E402
+from app.services.legacy.lake_sink import LakeSink  # noqa: E402
+from app.services.legacy.lake_archive import LakeArchiveWriter  # noqa: E402
+from app.services.legacy.s3_lake_client import S3LakeClient  # noqa: E402
 
 
 # ---------- argument parsing ----------

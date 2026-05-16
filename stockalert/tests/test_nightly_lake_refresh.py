@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.services.nightly_lake_refresh import (
+from app.services.ingest.nightly_polygon_refresh import (
     _parse_nightly_kind,
     _seconds_until_next_run,
     resolve_nightly_lake_symbols,

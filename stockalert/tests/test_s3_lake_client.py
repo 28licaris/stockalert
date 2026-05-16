@@ -27,7 +27,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 import pytest
 
-from app.services.s3_lake_client import (
+from app.services.legacy.s3_lake_client import (
     S3LakeClient,
     S3LakeClientError,
     S3Object,

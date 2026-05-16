@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.db import queries, watchlist_repo
-from app.services.watchlist_service import watchlist_service
+from app.services.live.watchlist_service import watchlist_service
 
 logger = logging.getLogger(__name__)
 

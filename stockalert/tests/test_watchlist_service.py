@@ -14,8 +14,8 @@ import pandas as pd
 import pytest
 
 from app.providers.base import DataProvider
-from app.services import watchlist_service as wls_module
-from app.services.watchlist_service import WatchlistService
+from app.services.live import watchlist_service as wls_module
+from app.services.live.watchlist_service import WatchlistService
 
 
 # ----- Fakes -----

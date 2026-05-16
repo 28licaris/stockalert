@@ -20,7 +20,7 @@ import pytest
 
 from app.db import queries
 from app.db.client import get_client
-from app.services.backfill_service import BackfillService
+from app.services.ingest.backfill_service import BackfillService
 
 
 TEST_SYMBOL_PREFIX = "__TEST_GAPS_"

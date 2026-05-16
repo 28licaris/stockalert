@@ -1,10 +1,16 @@
 """
 Market overview — index / futures tape for the dashboard banner.
 
-Implemented against **Schwab** `GET /marketdata/v1/quotes` via
-`SchwabProvider.get_quotes` (symbol-keyed JSON). Symbols come from
-`settings.market_banner_symbols` (comma-separated). Requests are batched in
-chunks so one bad symbol or URL limits do not drop the whole strip.
+Provider-agnostic: works against any `DataProvider` that exposes a
+`get_quotes(symbols)` method. Currently that's **Schwab** and **Polygon**;
+Alpaca does not implement `get_quotes` (the factory in `app.config.
+get_market_quotes_provider` falls back to Schwab when the active
+`DATA_PROVIDER` lacks the method, so the tape still works as long as
+*some* provider on the box has working quote creds).
+
+Symbols come from `settings.market_banner_symbols` (comma-separated).
+Requests are batched in chunks so one bad symbol or URL limits do not
+drop the whole strip.
 """
 from __future__ import annotations
 

@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Iterable, Optional
 
 from app.db.client import get_client
-from app.services.journal_parser import TradeRecord
+from app.services.journal.journal_parser import TradeRecord
 
 logger = logging.getLogger(__name__)
 

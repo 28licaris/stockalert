@@ -27,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.config import settings  # noqa: E402
-from app.services.nightly_lake_refresh import refresh_polygon_lake_yesterday  # noqa: E402
+from app.services.ingest.nightly_polygon_refresh import refresh_polygon_lake_yesterday  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,

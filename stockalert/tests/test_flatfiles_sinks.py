@@ -25,13 +25,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pandas as pd
 import pytest
 
-from app.services.flatfiles_sinks import (
+from app.services.ingest.sinks import (
     ClickHouseSink,
-    LakeSink,
     SinkResult,
     _frame_to_records,
 )
-from app.services.lake_archive import LakeArchiveError, LakeWriteResult
+from app.services.legacy.lake_sink import LakeSink
+from app.services.legacy.lake_archive import LakeArchiveError, LakeWriteResult
 
 
 # ---------- helpers ----------

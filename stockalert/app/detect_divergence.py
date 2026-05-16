@@ -40,7 +40,7 @@ from app.divergence import (
     detect_regular_bearish
 )
 
-from app.services.historical_loader import HistoricalDataLoader
+from app.services.ingest.historical_loader import HistoricalDataLoader
 
 logging.basicConfig(
     level=logging.INFO,

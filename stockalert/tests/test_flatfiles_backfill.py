@@ -27,7 +27,7 @@ import pandas as pd
 import pytest
 
 from app.providers.polygon_flatfiles import FlatFileInfo, PolygonFlatFilesError
-from app.services.flatfiles_backfill import (
+from app.services.ingest.flatfiles_backfill import (
     BackfillRangeResult,
     DayResult,
     FlatFilesBackfillService,
@@ -469,7 +469,10 @@ class TestBackfillRange:
 # ---------- C2: multi-sink fan-out ----------
 
 
-from app.services.flatfiles_sinks import Sink, SinkResult  # noqa: E402
+from app.services.ingest.sinks import (
+    Sink,
+    SinkResult,
+)# noqa: E402
 
 
 class _RecorderSink:

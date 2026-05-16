@@ -42,7 +42,7 @@ load_dotenv(override=False)
 from app.config import get_provider, settings  # noqa: E402
 from app.data.seed_universe import SEED_SYMBOLS  # noqa: E402
 from app.db import init_schema  # noqa: E402
-from app.services.lake_archive import LakeArchiveWriter  # noqa: E402
+from app.services.legacy.lake_archive import LakeArchiveWriter  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

@@ -20,7 +20,7 @@ from app.config import settings
 from app.data.seed_universe import SEED_SYMBOLS
 from app.db.lake_watermarks import WatermarkRepo
 from app.providers.polygon_flatfiles import PolygonFlatFilesClient
-from app.services.flatfiles_backfill import FlatFilesBackfillService
+from app.services.ingest.flatfiles_backfill import FlatFilesBackfillService
 from app.services.bronze import BronzeIcebergSink
 
 logger = logging.getLogger(__name__)

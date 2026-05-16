@@ -30,7 +30,7 @@ from typing import Iterable, Optional
 from app.config import get_stream_provider, settings
 from app.db import get_bar_batcher, watchlist_repo
 from app.providers.base import DataProvider
-from app.services.backfill_service import backfill_service
+from app.services.ingest.backfill_service import backfill_service
 
 logger = logging.getLogger(__name__)
 

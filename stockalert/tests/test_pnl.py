@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.services.pnl import (
+from app.services.journal.pnl import (
     compute_realized_pnl,
     overall_summary,
     summarize_by_day,

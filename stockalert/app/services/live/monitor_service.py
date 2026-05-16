@@ -23,7 +23,7 @@ from app.divergence import (
     detect_regular_bearish
 )
 from app.providers.base import DataProvider
-from app.services.historical_loader import HistoricalDataLoader
+from app.services.ingest.historical_loader import HistoricalDataLoader
 
 logger = logging.getLogger(__name__)
 

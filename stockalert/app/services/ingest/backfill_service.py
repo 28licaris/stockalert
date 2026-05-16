@@ -45,7 +45,7 @@ import pandas as pd
 from app.config import settings
 from app.db import queries
 from app.providers.base import DataProvider
-from app.services.historical_loader import HistoricalDataLoader
+from app.services.ingest.historical_loader import HistoricalDataLoader
 
 logger = logging.getLogger(__name__)
 
@@ -614,7 +614,7 @@ class BackfillService:
         if self._flatfiles_service is not None:
             return self._flatfiles_service
         try:
-            from app.services.flatfiles_backfill import FlatFilesBackfillService
+            from app.services.ingest.flatfiles_backfill import FlatFilesBackfillService
             self._flatfiles_service = FlatFilesBackfillService.from_settings()
             return self._flatfiles_service
         except Exception as e:

@@ -57,7 +57,7 @@ from app.providers.polygon_flatfiles import (
     PolygonFlatFilesClient,
     PolygonFlatFilesError,
 )
-from app.services.flatfiles_sinks import (
+from app.services.ingest.sinks import (
     ClickHouseSink,
     InsertFn,
     Kind,
@@ -226,7 +226,7 @@ class FlatFilesBackfillService:
             if settings.stock_lake_bucket:
                 # Lazy import to avoid pulling boto3 into modules that
                 # never run a backfill.
-                from app.services.flatfiles_sinks import LakeSink
+                from app.services.legacy.lake_sink import LakeSink
                 try:
                     sinks.append(LakeSink.from_settings())
                 except Exception as e:

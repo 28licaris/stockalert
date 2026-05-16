@@ -62,7 +62,7 @@ load_dotenv(override=False)
 from app.config import settings  # noqa: E402
 from app.data.seed_universe import SEED_SYMBOLS  # noqa: E402
 from app.db import init_schema  # noqa: E402
-from app.services.backfill_service import backfill_service  # noqa: E402
+from app.services.ingest.backfill_service import backfill_service  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

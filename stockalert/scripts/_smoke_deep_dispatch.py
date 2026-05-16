@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from app.config import settings  # noqa: E402
-from app.services.backfill_service import backfill_service  # noqa: E402
+from app.services.ingest.backfill_service import backfill_service  # noqa: E402
 
 
 async def main(symbol: str, days: int) -> int:

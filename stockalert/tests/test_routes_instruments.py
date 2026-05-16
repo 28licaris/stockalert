@@ -217,7 +217,7 @@ async def test_search_provider_error_returns_empty(monkeypatch: pytest.MonkeyPat
 def app_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     """TestClient with FastAPI lifespan disabled and a fake provider injected."""
     from app.main_api import app
-    from app.services.watchlist_service import watchlist_service
+    from app.services.live.watchlist_service import watchlist_service
 
     @asynccontextmanager
     async def noop_lifespan(_app):
@@ -250,7 +250,7 @@ def test_route_caches_repeat_query(app_client: TestClient, monkeypatch: pytest.M
     from app.api import routes_instruments
     routes_instruments._cache.clear()
 
-    from app.services.watchlist_service import watchlist_service
+    from app.services.live.watchlist_service import watchlist_service
     spy = watchlist_service._provider.search_instruments  # type: ignore[union-attr]
 
     r1 = app_client.get("/api/instruments/search", params={"q": "AAPL"})
@@ -275,7 +275,7 @@ def test_route_returns_empty_when_provider_missing(
     """No provider configured -> route returns 200 with empty results."""
     from app.api import routes_instruments
     routes_instruments._cache.clear()
-    from app.services.watchlist_service import watchlist_service
+    from app.services.live.watchlist_service import watchlist_service
     monkeypatch.setattr(watchlist_service, "_provider", None, raising=False)
 
     r = app_client.get("/api/instruments/search", params={"q": "TSLA"})
@@ -289,7 +289,7 @@ def test_route_swallows_provider_exception(
     """Provider exception must not surface as HTTP 500."""
     from app.api import routes_instruments
     routes_instruments._cache.clear()
-    from app.services.watchlist_service import watchlist_service
+    from app.services.live.watchlist_service import watchlist_service
 
     failing = AsyncMock()
     failing.search_instruments = AsyncMock(side_effect=RuntimeError("oops"))

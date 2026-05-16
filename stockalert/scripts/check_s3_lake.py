@@ -38,7 +38,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from app.config import settings  # noqa: E402
-from app.services.s3_lake_client import S3LakeClient, S3LakeClientError  # noqa: E402
+from app.services.legacy.s3_lake_client import S3LakeClient, S3LakeClientError  # noqa: E402
 
 
 # Use a single timestamped subprefix so concurrent runs never collide.

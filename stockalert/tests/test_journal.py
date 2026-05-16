@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 
 from app.db import journal_repo
 from app.db.client import get_client
-from app.services.journal_parser import TradeRecord
+from app.services.journal.journal_parser import TradeRecord
 
 
 TEST_PREFIX = "__test_jr_"

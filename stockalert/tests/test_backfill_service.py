@@ -20,7 +20,7 @@ from typing import Optional
 import pandas as pd
 import pytest
 
-from app.services.backfill_service import BackfillService
+from app.services.ingest.backfill_service import BackfillService
 
 
 # ---------- Fakes ----------
@@ -119,7 +119,7 @@ def _disable_flatfiles_dispatch_by_default(monkeypatch):
     default; the flat-files tests at the bottom of this file opt back in
     explicitly via their own fixture.
     """
-    import app.services.backfill_service as bs_mod
+    import app.services.ingest.backfill_service as bs_mod
     monkeypatch.setattr(
         bs_mod.settings, "polygon_flatfiles_enabled", False, raising=False,
     )
@@ -557,7 +557,7 @@ def _ff_settings(monkeypatch):
     """Helper to set the env-var-driven flags ``_should_use_flatfiles_for_deep``
     checks. Returns a single ``apply(provider, enabled, key, secret)`` that
     callers use to express the test's intent compactly."""
-    import app.services.backfill_service as bs_mod
+    import app.services.ingest.backfill_service as bs_mod
 
     def apply(*, provider: str, enabled: bool, key: str = "k", secret: str = "s"):
         monkeypatch.setattr(bs_mod.settings, "history_provider", provider,

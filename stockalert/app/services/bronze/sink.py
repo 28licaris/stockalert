@@ -51,7 +51,10 @@ from app.services.bronze.tables import (
     ensure_bronze_polygon_minute,
     ensure_bronze_schwab_minute,
 )
-from app.services.flatfiles_sinks import Kind, SinkResult
+from app.services.ingest.sinks import (
+    Kind,
+    SinkResult,
+)
 from app.services.iceberg_catalog import get_catalog
 
 logger = logging.getLogger(__name__)

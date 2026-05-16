@@ -9,7 +9,7 @@ import logging
 from typing import Dict, Optional, List
 
 from app.config import get_provider
-from app.services.monitor_service import MonitorService
+from app.services.live.monitor_service import MonitorService
 
 logger = logging.getLogger(__name__)
 

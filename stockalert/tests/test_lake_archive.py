@@ -31,12 +31,12 @@ from app.db.lake_watermarks import (
     WatermarkRepo,
     _day_bounds,
 )
-from app.services.lake_archive import (
+from app.services.legacy.lake_archive import (
     LakeArchiveError,
     LakeArchiveWriter,
     LakeWriteResult,
 )
-from app.services.s3_lake_client import S3LakeClient, S3LakeClientError
+from app.services.legacy.s3_lake_client import S3LakeClient, S3LakeClientError
 
 
 # ---------- helpers ----------

@@ -22,7 +22,7 @@ load_dotenv(ROOT / "scripts" / ".env")
 
 import pandas as pd  # noqa: E402
 
-from app.services.s3_lake_client import S3LakeClient  # noqa: E402
+from app.services.legacy.s3_lake_client import S3LakeClient  # noqa: E402
 
 
 KEY = "raw/provider=polygon-flatfiles/kind=minute/year=2026/date=2026-05-08.parquet"

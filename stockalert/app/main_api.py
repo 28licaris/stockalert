@@ -20,9 +20,9 @@ from app.db import (
     ping,
     reset_bar_batcher,
 )
-from app.services.backfill_service import backfill_service
-from app.services.monitor_manager import monitor_manager
-from app.services.watchlist_service import watchlist_service
+from app.services.ingest.backfill_service import backfill_service
+from app.services.live.monitor_manager import monitor_manager
+from app.services.live.watchlist_service import watchlist_service
 from app.api import (
     routes_backfill,
     routes_instruments,
@@ -32,7 +32,7 @@ from app.api import (
     routes_movers,
     routes_watchlist,
 )
-from app.services.journal_sync import journal_sync_service
+from app.services.journal.journal_sync import journal_sync_service
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,10 +43,29 @@ logger = logging.getLogger(__name__)
 active_connections = []
 
 
+async def _safe_start(label: str, coro_factory):
+    """Run a subsystem startup in isolation: if it raises, log and continue.
+
+    Service isolation is a deliberate design choice — a failure in any one
+    subsystem (journal sync, watchlist, a nightly job) must not block the
+    others or take down the FastAPI process. This wraps each `start()` call
+    so the rest of the lifecycle proceeds.
+    """
+    try:
+        return await coro_factory()
+    except Exception as exc:
+        logger.exception("✗ %s failed to start: %s — continuing without it", label, exc)
+        return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("🚀 Starting StockAlert API...")
 
+    # Foundation tasks — these are intentionally NOT isolated. If the
+    # ClickHouse schema can't init or the bar batcher can't start, the
+    # app genuinely has nothing useful to serve, and a hard fail surfaces
+    # the problem immediately.
     await asyncio.to_thread(init_schema)
     logger.info("✅ ClickHouse schema ready")
 
@@ -62,29 +81,46 @@ async def lifespan(app: FastAPI):
     await batcher.start()
     logger.info("✅ OHLCV batch writer started")
 
-    await backfill_service.start()
-    logger.info("✅ Backfill service ready")
+    # ── Subsystem startup, each isolated ───────────────────────────────
+    # One subsystem's failure must not affect the others.
 
-    await watchlist_service.start()
-    status = watchlist_service.status()
-    logger.info(
-        "✅ Watchlist service started (provider=%s, symbols=%d, streaming=%d)",
-        status["provider"], status["symbol_count"], status.get("subscribed_count", 0),
+    backfill_started = await _safe_start(
+        "Backfill service", lambda: backfill_service.start()
     )
+    if backfill_started is not None or True:
+        # backfill_service.start() returns None on success; the gap sweeper
+        # is wired below only if start succeeded.
+        try:
+            status = backfill_service.status() if hasattr(backfill_service, "status") else None
+            if status is None:
+                logger.info("✅ Backfill service ready")
+        except Exception:
+            logger.info("✅ Backfill service ready")
+
+    await _safe_start("Watchlist service", lambda: watchlist_service.start())
+    try:
+        status = watchlist_service.status()
+        logger.info(
+            "✅ Watchlist service started (provider=%s, symbols=%d, streaming=%d)",
+            status["provider"], status["symbol_count"], status.get("subscribed_count", 0),
+        )
+    except Exception as e:
+        logger.warning("watchlist_service.status() failed: %s", e)
 
     # Wire the periodic gap sweeper: every 15 min the backfill service will
     # ask `watchlist_service` for the current streaming set and auto-enqueue
-    # gap-fill jobs for any symbol with within-session holes. Importing here
-    # (rather than at module top) avoids constructing the service at import
-    # time when env vars may not yet be loaded.
+    # gap-fill jobs for any symbol with within-session holes.
     def _streaming_symbols_for_sweeper() -> list[str]:
         try:
             return list(watchlist_service.status().get("streaming_symbols") or [])
         except Exception as e:
             logger.warning("gap sweeper: could not enumerate streaming symbols: %s", e)
             return []
-    backfill_service.set_symbol_provider(_streaming_symbols_for_sweeper)
-    logger.info("✅ Backfill gap sweeper armed (daily at 06:00 UTC, 7d window)")
+    try:
+        backfill_service.set_symbol_provider(_streaming_symbols_for_sweeper)
+        logger.info("✅ Backfill gap sweeper armed (daily at 06:00 UTC, 7d window)")
+    except Exception as e:
+        logger.warning("gap sweeper arming failed: %s", e)
 
     # Kick a one-shot sweep shortly after startup so any holes that opened up
     # while the app was down (or while a provider switch was in flight) get
@@ -114,7 +150,7 @@ async def lifespan(app: FastAPI):
         and _settings.get_schwab_refresh_token()
     )
     if _settings.journal_enabled and _journal_has_creds:
-        await journal_sync_service.start()
+        await _safe_start("Journal sync", lambda: journal_sync_service.start())
         logger.info("✅ Journal sync started (every 5min: balances + trades)")
     elif not _settings.journal_enabled:
         logger.info("ℹ️  Journal sync disabled (JOURNAL_ENABLED=false)")
@@ -126,35 +162,47 @@ async def lifespan(app: FastAPI):
 
     nightly_lake_task: asyncio.Task | None = None
     if _settings.polygon_nightly_enabled and (_settings.stock_lake_bucket or "").strip():
-        from app.services.nightly_lake_refresh import run_lake_refresh_loop
+        try:
+            from app.services.ingest.nightly_polygon_refresh import run_lake_refresh_loop
 
-        nightly_lake_task = asyncio.create_task(
-            run_lake_refresh_loop(),
-            name="nightly_polygon_refresh",
-        )
-        app.state.nightly_lake_task = nightly_lake_task
-        logger.info(
-            "nightly_polygon_refresh: background loop started "
-            "(POLYGON_NIGHTLY_RUN_HOUR_UTC=%s, symbols=%s)",
-            _settings.polygon_nightly_run_hour_utc,
-            _settings.polygon_nightly_symbols,
-        )
+            nightly_lake_task = asyncio.create_task(
+                run_lake_refresh_loop(),
+                name="nightly_polygon_refresh",
+            )
+            app.state.nightly_lake_task = nightly_lake_task
+            logger.info(
+                "nightly_polygon_refresh: background loop started "
+                "(POLYGON_NIGHTLY_RUN_HOUR_UTC=%s, symbols=%s)",
+                _settings.polygon_nightly_run_hour_utc,
+                _settings.polygon_nightly_symbols,
+            )
+        except Exception as exc:
+            logger.exception(
+                "✗ nightly_polygon_refresh failed to start: %s — continuing without it",
+                exc,
+            )
 
     nightly_schwab_task: asyncio.Task | None = None
     if _settings.schwab_nightly_enabled and (_settings.stock_lake_bucket or "").strip():
-        from app.services.nightly_schwab_refresh import run_schwab_refresh_loop
+        try:
+            from app.services.ingest.nightly_schwab_refresh import run_schwab_refresh_loop
 
-        nightly_schwab_task = asyncio.create_task(
-            run_schwab_refresh_loop(),
-            name="nightly_schwab_refresh",
-        )
-        app.state.nightly_schwab_task = nightly_schwab_task
-        logger.info(
-            "nightly_schwab_refresh: background loop started "
-            "(SCHWAB_NIGHTLY_RUN_HOUR_UTC=%s, symbols=%s)",
-            _settings.schwab_nightly_run_hour_utc,
-            _settings.schwab_nightly_symbols,
-        )
+            nightly_schwab_task = asyncio.create_task(
+                run_schwab_refresh_loop(),
+                name="nightly_schwab_refresh",
+            )
+            app.state.nightly_schwab_task = nightly_schwab_task
+            logger.info(
+                "nightly_schwab_refresh: background loop started "
+                "(SCHWAB_NIGHTLY_RUN_HOUR_UTC=%s, symbols=%s)",
+                _settings.schwab_nightly_run_hour_utc,
+                _settings.schwab_nightly_symbols,
+            )
+        except Exception as exc:
+            logger.exception(
+                "✗ nightly_schwab_refresh failed to start: %s — continuing without it",
+                exc,
+            )
 
     async def broadcast_signal(signal_data: dict):
         logger.info(f"📡 Broadcasting signal: {signal_data}")

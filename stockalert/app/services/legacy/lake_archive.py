@@ -48,7 +48,7 @@ from app.db.lake_watermarks import (
     WatermarkRepo,
     WatermarkRepoProtocol,
 )
-from app.services.s3_lake_client import S3LakeClient, S3LakeClientError
+from app.services.legacy.s3_lake_client import S3LakeClient, S3LakeClientError
 
 logger = logging.getLogger(__name__)
 

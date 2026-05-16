@@ -21,8 +21,8 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.db import journal_repo
-from app.services.journal_sync import journal_sync_service
-from app.services.pnl import (
+from app.services.journal.journal_sync import journal_sync_service
+from app.services.journal.pnl import (
     compute_realized_pnl,
     overall_summary,
     summarize_by_day,

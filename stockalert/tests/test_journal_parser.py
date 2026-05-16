@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.services.journal_parser import (
+from app.services.journal.journal_parser import (
     FEE_TYPES,
     TradeRecord,
     parse_transaction,

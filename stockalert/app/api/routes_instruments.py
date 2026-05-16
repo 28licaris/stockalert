@@ -21,7 +21,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.services.watchlist_service import watchlist_service
+from app.services.live.watchlist_service import watchlist_service
 
 logger = logging.getLogger(__name__)
 

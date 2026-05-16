@@ -27,7 +27,7 @@ from typing import Callable, Optional
 
 from app.db import journal_repo
 from app.providers.base import DataProvider
-from app.services.journal_parser import TradeRecord, parse_transaction
+from app.services.journal.journal_parser import TradeRecord, parse_transaction
 
 logger = logging.getLogger(__name__)
 
