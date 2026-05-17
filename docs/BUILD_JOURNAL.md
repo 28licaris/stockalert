@@ -1364,15 +1364,51 @@ can call `compute_indicators` / `compute_indicator` / `get_chart_data`
 and get the same Pydantic shape. Both surfaces use the same
 `IndicatorReader` — single source of truth for indicator math.
 
-### Phase TA-3.3+ — Strategy bake-off (after TA-3.2)
+### Phase TA-3.3 — RSI Extreme Reversion strategy (LANDED 2026-05-17)
 
-Per [trading_subsystem_design.md §10](trading_subsystem_design.md#10-phasing):
+Mean-revert baseline — buy on oversold, exit on neutral recovery.
+First comparison ground for the trend-following SMA canary.
 
-- TA-3.3: RSI Extreme Reversion strategy + config + tests.
-- TA-3.4: Bollinger Mean-Revert strategy + config + tests.
-- TA-3.5: EMA Crossover strategy + config + tests.
-- TA-3.6: All 4 baselines (incl. SMA canary) run on the same
-  window → comparison table in journal.
+- [x] `app/services/sim/strategies/rsi_reversion.py` —
+      `RsiReversionStrategy` via `BaseStrategy`. Long-only,
+      interval-configurable.
+      - Entry: `len(history) >= rsi_period + 2` AND no position
+        AND `rsi(period) < oversold_threshold` → BUY
+        `floor(cash * position_size_pct / price)` integer shares.
+      - Exit: position held AND `rsi(period) > exit_threshold` →
+        SELL full position.
+      - Param validation: oversold < exit (otherwise the strategy
+        would buy and sell the same bar).
+- [x] `configs/rsi_reversion.yaml` — AAPL 2023-2024 daily,
+      RSI(14), oversold=30, exit=50, $40k start.
+- [x] CLI loader + MCP `run_backtest` `strategy_name` literal +
+      `_instantiate` updated.
+- [x] Tests `tests/test_rsi_reversion.py` — 12 strategy cases:
+      param validation (overlap + equal thresholds), warmup
+      hold, buy-on-dip, no-buy-when-long, no-buy-when-RSI-high,
+      sell-on-recovery, no-sell-when-flat, integer-share sizing,
+      zero-buy-when-cash-insufficient, metadata fields, Strategy
+      Protocol satisfaction. Plus the existing structural purity
+      gate (`test_strategy_is_pure`) still passes — RsiReversion
+      doesn't import `app.db.*` / `app.providers.*`.
+- [x] **Real-data run** — AAPL daily 2023-01-01 → 2024-12-31:
+      - **12 trades, 33% win rate, -0.13% return, Sharpe 0.015,
+        max DD -6.17%.**
+      - **First baseline comparison vs SMA Crossover** on the
+        same window: SMA got +2.65% / 5 trades / Sharpe 0.305.
+        RSI Reversion fires 2.4× more often but underperforms on
+        this trending stock — expected (bare RSI mean-revert is
+        a known mediocre signal in trends). This data point
+        anchors the TA-3.6 bake-off.
+
+### Phase TA-3.4+ — Roadmap
+
+- **TA-3.4**: Bollinger Mean-Revert strategy (different
+  mean-revert mechanic: volatility-envelope vs threshold-based).
+- **TA-3.5**: EMA Crossover strategy (faster signal A/B vs SMA canary).
+- **TA-3.6**: All 4 baselines on the same window → comparison
+  table in journal. Anchors performance metrics before any
+  LLM run.
 
 ### Phase TA-4+ — Roadmap
 

@@ -55,6 +55,15 @@ def _load_strategy(name: str, params: dict[str, Any], interval: str) -> Any:
             params=LLMAgentParams(**params),
             interval=interval,
         )
+    if name == "rsi_reversion":
+        from app.services.sim.strategies.rsi_reversion import (
+            RsiReversionParams,
+            RsiReversionStrategy,
+        )
+        return RsiReversionStrategy(
+            params=RsiReversionParams(**params),
+            interval=interval,
+        )
     raise ValueError(
         f"Unknown strategy {name!r}. Register it in scripts/run_backtest.py::_load_strategy."
     )

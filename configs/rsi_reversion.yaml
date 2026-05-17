@@ -1,0 +1,33 @@
+# TA-3.3 baseline — RSI Extreme Reversion on AAPL daily.
+#
+# Hypothesis: when RSI(14) drops below 30, AAPL has overshot
+# to the downside and is likely to bounce. Go long; exit when
+# RSI recovers past 50 (neutral momentum).
+#
+# Expected behavior: works on choppy/range-bound periods, fails
+# in strong trends ("falling knife"). Side-by-side bake-off
+# with SMA crossover (TA-3.6) will measure both characteristics.
+#
+# Run:
+#   poetry run python scripts/run_backtest.py --config configs/rsi_reversion.yaml
+
+strategy: rsi_reversion
+strategy_params:
+  rsi_period: 14
+  oversold_threshold: 30.0
+  exit_threshold: 50.0
+  position_size_pct: 0.95
+
+config:
+  symbols: [AAPL]
+  start: "2023-01-01T00:00:00Z"
+  end:   "2024-12-31T23:59:59Z"
+  interval: "1d"
+  provider: "polygon"
+  starting_cash: 40000.0
+  history_window: 200
+  fees_model: per_share
+  fees_params:
+    per_share: 0.005
+    min_commission: 1.00
+  slippage_model: next_bar_open

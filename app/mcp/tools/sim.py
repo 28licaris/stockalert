@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 @mcp.tool()
 def run_backtest(
-    strategy_name: Literal["sma_crossover", "llm_agent"],
+    strategy_name: Literal["sma_crossover", "llm_agent", "rsi_reversion"],
     strategy_params: dict[str, Any],
     config: dict[str, Any],
     write_to_registry: bool = True,
@@ -158,6 +158,14 @@ def _instantiate(name: str, params: dict[str, Any], *, interval: str):
         return LLMAgentStrategy(
             params=LLMAgentParams(**params), interval=interval,
         )
+    if name == "rsi_reversion":
+        from app.services.sim.strategies.rsi_reversion import (
+            RsiReversionParams,
+            RsiReversionStrategy,
+        )
+        return RsiReversionStrategy(
+            params=RsiReversionParams(**params), interval=interval,
+        )
     raise ValueError(
-        f"Unknown strategy {name!r}. Supported: 'sma_crossover', 'llm_agent'."
+        f"Unknown strategy {name!r}. Supported: 'sma_crossover', 'llm_agent', 'rsi_reversion'."
     )
