@@ -6,17 +6,43 @@ returning a `pd.Series` aligned to the input index.
 
 ## Current contents
 
-| File | Class | Used by |
-|---|---|---|
-| [base.py](base.py) | `Indicator` (ABC) | All indicators |
-| [rsi.py](rsi.py) | `RSI` | `services/live/monitor_service`, [signals/divergence.py](../signals/divergence.py) |
-| [macd.py](macd.py) | `MACD` | `services/live/monitor_service`, [signals/divergence.py](../signals/divergence.py) |
-| [tsi.py](tsi.py) | `TSI` | `services/live/monitor_service`, [signals/divergence.py](../signals/divergence.py) |
+| Family | File | Class | Notes |
+|---|---|---|---|
+| Base | [base.py](base.py) | `Indicator` (ABC) | All indicators subclass this |
+| MA | [sma.py](sma.py) | `SMA` | Simple moving average |
+| MA | [ema.py](ema.py) | `EMA` | Exponential MA, pandas `ewm(adjust=False)` |
+| MA | [wma.py](wma.py) | `WMA` | Linear-weight MA |
+| Momentum | [rsi.py](rsi.py) | `RSI` | Wilder's RSI |
+| Momentum | [macd.py](macd.py) | `MACD` | Plus `compute_signal` / `compute_histogram` / `compute_full` |
+| Momentum | [tsi.py](tsi.py) | `TSI` | True Strength Index |
+| Momentum | [stochastic.py](stochastic.py) | `StochasticOscillator` | %K + %D via `compute_full` |
+| Volatility | [atr.py](atr.py) | `ATR` | Wilder's true-range smoothing |
+| Volatility | [bollinger.py](bollinger.py) | `BollingerBands` | Upper/middle/lower/bandwidth/%B via `compute_full` |
+| Registry | [registry.py](registry.py) | — | `get_indicator(name, **params)`, `list_indicators()` |
 
-The live monitor wires these via `INDICATOR_MAP` (see
-[monitor_service.py](../services/live/monitor_service.py)). Adding an
-indicator means: implement the class here, then add a `{name: Class}`
-entry to `INDICATOR_MAP`. No further changes needed.
+Consumers reach indicators **by name** via the registry, never by
+importing classes directly:
+
+- **Strategies** call `ctx.indicator("sma", period=20)` inside `Context`.
+- **The live monitor** wires via `INDICATOR_MAP` in
+  [monitor_service.py](../services/live/monitor_service.py).
+- **The dashboard + MCP agents** call the `IndicatorReader` and
+  HTTP/MCP indicator endpoints — see
+  [docs/indicator_exposure_design.md](../../../docs/indicator_exposure_design.md).
+
+## Multi-output indicators
+
+MACD, Bollinger, and Stochastic each produce more than one series.
+Per the convention:
+
+- `compute(...)` returns the canonical single-output series:
+  - MACD → the MACD line
+  - Bollinger → the middle band (SMA)
+  - Stochastic → smoothed %K
+- `compute_full(...)` returns a `dict[str, pd.Series]` of all
+  components. The `IndicatorReader` decomposes this into multiple
+  named `IndicatorSeries` entries in API responses (e.g.
+  `bollinger_upper`, `bollinger_middle`, `bollinger_lower`).
 
 ## Contract
 

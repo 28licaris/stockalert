@@ -25,6 +25,10 @@ Then, in this order:
    **implementation contract** for the trading subsystem: Pydantic
    shapes, Protocols, folder layout, modularity guarantees. Read this
    before writing any code under `app/services/sim/`.
+6. [indicator_exposure_design.md](indicator_exposure_design.md) —
+   how technical indicators get computed and served to the dashboard,
+   MCP agents, and the backtester (single `IndicatorReader` source of
+   truth; Pattern A now, gold-tier pre-compute deferred to Phase 6).
 
 ## Working agreement
 
@@ -52,9 +56,10 @@ README.md (this file)
   ├── BUILD_JOURNAL.md         ← progress + decisions; the live source of truth
   ├── ARCHITECTURE.md          ← system overview; refers to the two plans below
   ├── STARTUP_FLOW.md          ← what the FastAPI process does at boot
-  ├── data_platform_plan.md       (data side: strategic roadmap)
-  ├── trading-ai-build-plan.md    (trading side: strategic roadmap)
-  └── trading_subsystem_design.md (trading side: implementation contract)
+  ├── data_platform_plan.md           (data side: strategic roadmap)
+  ├── trading-ai-build-plan.md        (trading side: strategic roadmap)
+  ├── trading_subsystem_design.md     (trading side: implementation contract)
+  └── indicator_exposure_design.md    (indicator delivery architecture)
 ```
 
 `ARCHITECTURE.md` is the high-level overview. The two plan docs go deep

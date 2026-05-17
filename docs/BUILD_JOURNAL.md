@@ -1229,32 +1229,88 @@ to this server can:
 …with real production data, full reproducibility, and zero API cost
 on replays. **This is the foundation Trading-AI Phases 3+ build on.**
 
-### What's next (TA-3 onward)
+### Phase TA-3.1 — Indicator math expansion (LANDED 2026-05-17)
+
+Adds the four indicators TA-3's strategies need + the
+[indicator_exposure_design.md](indicator_exposure_design.md) doc
+covering how indicators are computed and served (Pattern A:
+compute-on-read via a single `IndicatorReader`; gold-tier
+pre-compute deferred to Phase 6).
+
+- [x] `app/indicators/wma.py` — `WMA` (linear-weight MA).
+- [x] `app/indicators/atr.py` — `ATR` (Wilder's smoothing).
+      Requires `high` + `low` series in addition to `close`.
+- [x] `app/indicators/bollinger.py` — `BollingerBands`. `compute()`
+      returns the middle band (SMA); `compute_full()` returns dict
+      of `{upper, middle, lower, bandwidth, percent_b}` — same
+      multi-output convention as MACD.
+- [x] `app/indicators/stochastic.py` — `StochasticOscillator`.
+      `compute()` returns smoothed `%K`; `compute_full()` returns
+      `{k, d}` for both signal lines in one pass.
+- [x] `app/indicators/registry.py` updated — `INDICATOR_REGISTRY`
+      now has 9 entries: sma, ema, wma, rsi, macd, tsi, stochastic,
+      atr, bollinger. Strategies reach all by name via
+      `ctx.indicator(name, **params)`.
+- [x] `tests/test_indicators_ta3.py` — 20 cases covering math
+      correctness on hand-crafted series, warmup behavior, param
+      validation, multi-output `compute_full` shapes, registry
+      resolution.
+- [x] `docs/indicator_exposure_design.md` (NEW) — full architectural
+      design for the upcoming exposure layer. Three patterns
+      compared (compute-on-read / gold features / cached); decision
+      to ship Pattern A now and defer B to Phase 6; concrete folder
+      layout, Pydantic shapes, HTTP routes, MCP tools, dashboard
+      migration path, multi-output convention, testing strategy.
+- [x] `docs/README.md` + doc-relationship diagram updated.
+- [x] `app/indicators/README.md` — indicator catalog refreshed
+      with all 9 indicators by family (MA / Momentum / Volatility),
+      multi-output convention documented.
+
+**No exposure layer yet — that's TA-3.2.** The math is in place and
+all consumers (`Context.indicator`, the existing `INDICATOR_REGISTRY`,
+the LLM strategy's `IndicatorSpec`) can already request the new
+indicators by name. Next commit builds `IndicatorReader` + HTTP
+routes + MCP tools so the dashboard and agents can see them too.
+
+### Phase TA-3.2 — Indicator exposure layer (NEXT)
+
+Per [indicator_exposure_design.md §4](indicator_exposure_design.md#4-concrete-design-ta-3-implementation):
+
+- [ ] `app/services/readers/indicator_reader.py` — single source of
+      truth for indicator computation across all consumers.
+- [ ] Pydantic shapes: `IndicatorValue`, `IndicatorSeries`,
+      `IndicatorChartData`.
+- [ ] `app/api/routes_indicators.py` — `GET /api/indicators/series`,
+      `POST /api/indicators/chart-data`.
+- [ ] `app/mcp/tools/indicators.py` — `compute_indicator`,
+      `compute_indicators`, `get_chart_data`.
+- [ ] Integration test: real bronze + multi-indicator chart-data
+      request returns plausible series.
+- [ ] **Gate:** `curl POST /api/indicators/chart-data` with AAPL +
+      SMA(20)/SMA(50)/RSI(14) returns bars + 3 series with the
+      correct shapes. Agent equivalent via MCP works too.
+
+### Phase TA-3.3+ — Strategy bake-off (after TA-3.2)
 
 Per [trading_subsystem_design.md §10](trading_subsystem_design.md#10-phasing):
 
-- **TA-3** — More indicators (ATR, Bollinger, Stochastic, MA
-  variants) + more rule-based strategies for comparison baselines.
-  Parallel to LLM agent iteration.
-- **TA-4** — Multi-timeframe (strategy declares `intervals=['1d',
-  '1h']`) + `screener` service for universe scanning.
+- TA-3.3: RSI Extreme Reversion strategy + config + tests.
+- TA-3.4: Bollinger Mean-Revert strategy + config + tests.
+- TA-3.5: EMA Crossover strategy + config + tests.
+- TA-3.6: All 4 baselines (incl. SMA canary) run on the same
+  window → comparison table in journal.
+
+### Phase TA-4+ — Roadmap
+
+Detailed in [trading_subsystem_design.md §10](trading_subsystem_design.md#10-phasing):
+
+- **TA-4** — Multi-timeframe strategies (declare
+  `intervals=['1d', '1h']`) + `screener` service for universe
+  scanning.
 - **TA-5** — RL agent (PPO). Same `Strategy` Protocol — the harness
-  doesn't know it's RL.
-- **TA-6+** — Paper trading → live. Same Strategy class. Different
-  Executor. Kill switches mandatory.
-
-### Phase TA-3+ — Roadmap
-
-Detailed in [trading_subsystem_design.md §10](trading_subsystem_design.md#10-phasing).
-Highlights:
-
-- TA-3: more indicators + more rule-based strategies (parallel work
-  while LLM/RL learn).
-- TA-4: multi-timeframe + screener.
-- TA-5: RL agent (PPO) — same `Strategy` Protocol, just an RL-
-  trained implementation. Reward = stepped Sharpe contribution.
-- TA-6+: paper trading → live. Same Strategy class, different
-  Executor. Kill switches mandatory.
+  doesn't know it's RL. Reward = stepped Sharpe contribution.
+- **TA-6+** — Paper trading → live. Same `Strategy` class, different
+  `Executor`. Kill switches mandatory before any live execution.
 
 ---
 

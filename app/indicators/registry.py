@@ -14,12 +14,16 @@ from __future__ import annotations
 
 from typing import Callable
 
+from app.indicators.atr import ATR
 from app.indicators.base import Indicator
+from app.indicators.bollinger import BollingerBands
 from app.indicators.ema import EMA
 from app.indicators.macd import MACD
 from app.indicators.rsi import RSI
 from app.indicators.sma import SMA
+from app.indicators.stochastic import StochasticOscillator
 from app.indicators.tsi import TSI
+from app.indicators.wma import WMA
 
 
 # Factory entries — each value is a callable that takes the params
@@ -30,10 +34,15 @@ _INDICATOR_REGISTRY: dict[str, Callable[..., Indicator]] = {
     # Moving averages
     "sma": SMA,
     "ema": EMA,
+    "wma": WMA,
     # Momentum
     "rsi": RSI,
     "macd": MACD,
     "tsi": TSI,
+    "stochastic": StochasticOscillator,
+    # Volatility
+    "atr": ATR,
+    "bollinger": BollingerBands,
 }
 
 

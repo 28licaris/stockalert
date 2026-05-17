@@ -1,0 +1,46 @@
+# LLM-agent smoke test — small window for plumbing validation.
+#
+# Cost: ~30 daily bars after warmup (context_bars=15) → at most
+# ~30 LLM calls @ ~$0.001-0.003 each = $0.03 - $0.10 total on
+# first run. Replays from cache are free.
+#
+# Use this BEFORE configs/llm_agent.yaml (which is ~$0.50 for a
+# full year). If this run looks healthy (n_trades >= 1, no
+# parse failures, no API failures), graduate to the full year.
+#
+# Pre-flight:
+#   export ANTHROPIC_API_KEY=sk-ant-...
+#   poetry run python scripts/run_backtest.py --config configs/llm_agent_smoke.yaml
+
+strategy: llm_agent
+strategy_params:
+  model: "claude-sonnet-4-6"
+  context_bars: 15
+  indicators:
+    - name: sma
+      params: { period: 10 }
+      label: "SMA(10)"
+    - name: sma
+      params: { period: 20 }
+      label: "SMA(20)"
+    - name: rsi
+      params: { period: 14 }
+      label: "RSI(14)"
+  temperature: 0.0
+  max_tokens: 256
+  position_size_pct: 0.95
+  cache_path: "data/llm_strategy_cache.sqlite"
+
+config:
+  symbols: [AAPL]
+  start: "2024-09-01T00:00:00Z"
+  end:   "2024-10-31T23:59:59Z"   # ~45 trading days
+  interval: "1d"
+  provider: "polygon"
+  starting_cash: 40000.0
+  history_window: 50
+  fees_model: per_share
+  fees_params:
+    per_share: 0.005
+    min_commission: 1.00
+  slippage_model: next_bar_open
