@@ -548,16 +548,43 @@ gate-blockers.
       catch-up). `/api/lake/symbols?since=2024-08-14&limit=10`
       returned first 10 tickers alphabetically from production bronze.
 
-**Slice 4 — CH-backed readers + refactor** (after CH-independent path proven)
-- [ ] `app/services/readers/bar_reader.py` — CH `ohlcv_1m` reads
-      (`get_recent_bars`, `get_bars_in_range`).
-- [ ] `app/services/readers/signal_reader.py` — CH signals reads
-      (`get_recent_signals`, `get_signals_by_symbol`).
-- [ ] `app/services/readers/quote_service.py` — provider-quote
-      abstraction (works against any provider with `get_quotes`; same
-      fallback chain as the banner already uses).
-- [ ] Refactor existing routes to call the new readers (thin adapters).
-- [ ] Integration tests against real CH.
+**Slice 4a — CH-backed readers + provider quote service** (LANDED 2026-05-16)
+- [x] `app/services/readers/bar_reader.py` — `BarReader` over CH
+      `ohlcv_1m` / `ohlcv_5m` / `ohlcv_daily`. Methods:
+      `get_recent_bars` (DESC → ASC flip), `get_bars_in_range`
+      (interval-routes to direct or resampled query), `get_latest_bar_per_symbol`.
+      Supported intervals: 1m / 5m / 15m / 30m / 1h / 4h / daily.
+      Thin wrappers over `app.db.queries` — no SQL in the reader.
+- [x] `app/services/readers/signal_reader.py` — `SignalReader` over CH
+      `signals`. Methods: `get_recent_signals`, `get_signals_by_symbol`.
+- [x] `app/services/readers/quote_service.py` — `QuoteService` over the
+      `get_market_quotes_provider()` fallback chain. Async; methods:
+      `get_quote(symbol)`, `get_quotes(symbols)`. Normalizes
+      provider-specific field names (Schwab's `lastPrice`/`totalVolume`/
+      epoch-ms `quoteTime`; Polygon's variants; etc.) into the
+      canonical `Quote` shape. invalidSymbols passed through.
+- [x] Pydantic schemas added to `readers/schemas.py`: `LiveBar`,
+      `LiveBarsResponse`, `LatestBarsResponse`, `Signal`,
+      `SignalsResponse`, `Quote`, `QuotesResponse`.
+- [x] Unit tests in `tests/test_readers_unit.py` — 23 cases.
+      Stubbed CH queries via `unittest.mock.patch`, stubbed provider
+      for QuoteService. Covers interval routing, ASC re-sort,
+      unknown-interval ValueError, empty-input short-circuits, field
+      alias fall-through, Schwab epoch-ms vs ISO timestamps, missing
+      `get_quotes` graceful degradation.
+- [x] Combined test run (`test_readers_unit.py` + `test_routes_lake.py`):
+      **36/36 green**. Production-bronze structural CH-independence
+      gate still passes.
+
+**Slice 4b — refactor existing routes to use new readers** (NEXT)
+- [ ] Routes that read CH directly today (`routes_signals`,
+      `routes_market`, `routes_watchlist`, `routes_backfill`) get
+      refactored to depend on the matching reader via `Depends(...)`.
+      Each route becomes a thin adapter: parse request → call reader
+      → return Pydantic response. SQL stays in `app.db.queries`.
+- [ ] No new endpoints in this slice — surface stays the same;
+      implementation gets the contract.
+- [ ] One commit per route file so each refactor is reviewable.
 
 **Gate:** `/api/lake/bars?symbol=AAPL&start=...&end=...` returns rows
 with ClickHouse stopped. Existing CH-backed routes still work normally.

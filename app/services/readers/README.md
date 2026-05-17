@@ -27,17 +27,18 @@ Three goals, in priority order:
 
 | File | Reader | Source | Notes |
 |---|---|---|---|
-| [schemas.py](schemas.py) | — | — | `BronzeBar`, `BronzeBarsResponse` |
-| [bronze_reader.py](bronze_reader.py) | `BronzeReader` | Iceberg `bronze.{provider}_minute` | CH-independent. Provider = `polygon` / `schwab`. |
+| [schemas.py](schemas.py) | — | — | All Pydantic DTOs. `BronzeBar`, `BronzeBarsResponse`, `LakeSymbolsResponse`, `LakeLatestDayResponse`, `LiveBar`, `LiveBarsResponse`, `LatestBarsResponse`, `Signal`, `SignalsResponse`, `Quote`, `QuotesResponse`. |
+| [bronze_reader.py](bronze_reader.py) | `BronzeReader` | Iceberg `bronze.{provider}_minute` | CH-independent. Provider = `polygon` / `schwab`. `get_bars`, `list_symbols`, `latest_trading_day`. |
+| [bar_reader.py](bar_reader.py) | `BarReader` | CH `ohlcv_1m` / `ohlcv_5m` / `ohlcv_daily` | Live tier. `get_recent_bars`, `get_bars_in_range` (supports resampled intervals `15m`/`30m`/`1h`/`4h`), `get_latest_bar_per_symbol`. |
+| [signal_reader.py](signal_reader.py) | `SignalReader` | CH `signals` | `get_recent_signals`, `get_signals_by_symbol`. |
+| [quote_service.py](quote_service.py) | `QuoteService` | Provider REST (Schwab / Polygon — same fallback chain the banner uses) | Async. `get_quote(symbol)`, `get_quotes(symbols)`. Normalizes provider-specific field names into the canonical `Quote` shape. |
 
-## Planned (Step 2 continuation)
+## Planned (Phase 3+)
 
 | File | Reader | Source |
 |---|---|---|
-| `bar_reader.py` | `BarReader` | CH `ohlcv_1m` (live tier) |
-| `signal_reader.py` | `SignalReader` | CH `signals` |
-| `quote_service.py` | `QuoteService` | provider REST (Polygon / Schwab / Alpaca) with same fallback chain the banner uses |
-| `silver_reader.py` (Phase 3+) | `SilverReader` | Iceberg `silver.ohlcv_1m` |
+| `silver_reader.py` | `SilverReader` | Iceberg `silver.ohlcv_1m` (canonical merged) |
+| `feature_reader.py` | `FeatureReader` | Iceberg `gold.features_*` (pre-computed for ML) |
 
 ## Contract
 

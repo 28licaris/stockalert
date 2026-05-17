@@ -104,3 +104,121 @@ class LakeLatestDayResponse(BaseModel):
             "misclassifies them and would advance the counter early."
         ),
     )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Live tier (ClickHouse) — BarReader + SignalReader contracts
+# ─────────────────────────────────────────────────────────────────────
+
+
+class LiveBar(BaseModel):
+    """
+    One row from ClickHouse `ohlcv_*` (the live tier). Schema parallels
+    `BronzeBar` deliberately so consumers can branch on tier and reuse
+    most of their code. `interval` distinguishes 1m / 5m / daily and
+    resampled variants ('15m', '1h', ...).
+    """
+
+    symbol: str
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    vwap: Optional[float] = None
+    trade_count: Optional[int] = None
+    source: Optional[str] = None
+    interval: str = Field(
+        default="1m",
+        description="Bar interval: '1m', '5m', '15m', '1h', '4h', 'daily', etc.",
+    )
+
+
+class LiveBarsResponse(BaseModel):
+    symbol: str
+    interval: str
+    bars: list[LiveBar]
+    count: int
+
+
+class LatestBarsResponse(BaseModel):
+    """
+    Response for `get_latest_bar_per_symbol` — one most-recent bar
+    per requested symbol. Used by the market-banner endpoint and by
+    agents establishing "where each name is right now."
+    """
+
+    bars: dict[str, LiveBar] = Field(
+        ...,
+        description=(
+            "Map from symbol -> the most recent bar in CH. Symbols "
+            "with no rows are omitted (callers can diff against the "
+            "requested set to find gaps)."
+        ),
+    )
+    count: int
+
+
+class Signal(BaseModel):
+    """One row from CH `signals` — divergence/etc detector output."""
+
+    symbol: str
+    signal_type: str = Field(
+        ...,
+        description=(
+            "Detector name, e.g. 'hidden_bullish_divergence', "
+            "'regular_bearish_divergence'."
+        ),
+    )
+    indicator: str = Field(..., description="'rsi', 'macd', 'tsi', etc.")
+    ts_signal: datetime
+    price_at_signal: float
+    indicator_value: float
+    p1_ts: Optional[datetime] = None
+    p2_ts: Optional[datetime] = None
+
+
+class SignalsResponse(BaseModel):
+    symbol: Optional[str] = Field(
+        None, description="Echoed back when the query was symbol-scoped."
+    )
+    signals: list[Signal]
+    count: int
+
+
+# ─────────────────────────────────────────────────────────────────────
+# QuoteService — provider-quote abstraction (REST, not CH)
+# ─────────────────────────────────────────────────────────────────────
+
+
+class Quote(BaseModel):
+    """
+    Current quote from whatever provider answered. Some fields are
+    provider-specific or unavailable depending on the source — all
+    optional except `symbol` and `provider`.
+    """
+
+    symbol: str
+    last: Optional[float] = None
+    bid: Optional[float] = None
+    ask: Optional[float] = None
+    open: Optional[float] = None
+    high: Optional[float] = None
+    low: Optional[float] = None
+    close: Optional[float] = Field(None, description="Previous close.")
+    volume: Optional[float] = None
+    timestamp: Optional[datetime] = None
+    provider: str = Field(
+        ...,
+        description="Which provider answered ('schwab', 'polygon', etc.).",
+    )
+
+
+class QuotesResponse(BaseModel):
+    quotes: dict[str, Quote]
+    count: int
+    invalid_symbols: list[str] = Field(
+        default_factory=list,
+        description="Symbols the provider could not resolve.",
+    )
