@@ -62,3 +62,5 @@ where the ground truth lives.
 - `../README.md` — repo entry point (setup, run commands).
 - `../CONFIG.md` — operator config reference (env vars, defaults).
 - [ISSUES.md](ISSUES.md) — bug + flaky-test tracker.
+- [COMMANDS.md](COMMANDS.md) — copy-paste cheatsheet for the commands
+  you actually run (docker, pytest, AWS, ClickHouse, Schwab OAuth).
