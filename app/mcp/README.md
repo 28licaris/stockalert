@@ -39,16 +39,67 @@ Future write-side tools go in dedicated modules (`tools/writes.py`,
 `tests/test_mcp_layering.py` enforces this — non-mutation tool files
 must not import write-side service methods.
 
-## Tool surface (current)
+## Tool surface (current — 23 tools)
 
-| Tool | Backed by | Returns | When to use |
-|---|---|---|---|
-| `get_bronze_bars` | `BronzeReader.get_bars` | `BronzeBarsResponse` | Historical OHLCV for training/backtests. CH-independent. |
-| `list_bronze_symbols` | `BronzeReader.list_symbols` | `LakeSymbolsResponse` | Universe discovery. |
-| `get_latest_trading_day` | `BronzeReader.latest_trading_day` | `LakeLatestDayResponse` | Anchor "freshest available data" queries. |
+### Lake (Iceberg bronze — CH-independent)
+| Tool | Backed by | When to use |
+|---|---|---|
+| `get_bronze_bars` | `BronzeReader.get_bars` | Historical OHLCV for training/backtests. |
+| `list_bronze_symbols` | `BronzeReader.list_symbols` | Universe discovery. |
+| `get_latest_trading_day` | `BronzeReader.latest_trading_day` | "Freshest available data" anchor. |
 
-More land in Slice 2 (live tier + signals + quotes) and Slice 3
-(watchlist + movers + instruments + coverage + system observability).
+### Live tier (ClickHouse)
+| Tool | When to use |
+|---|---|
+| `get_recent_bars` | Last N 1-minute bars for one symbol, ASC. |
+| `get_bars_in_range` | Explicit window query at any supported interval. |
+| `get_bars_for_chart` | Chart-style — lookback_days + auto-limit + source fallback. |
+| `get_latest_bar_per_symbol` | Snapshot across many symbols at once. |
+
+### Signals (CH detector output)
+| Tool | When to use |
+|---|---|
+| `get_recent_signals` | "What just fired" across all symbols. |
+| `get_signals_by_symbol` | Drill into one symbol's signal history. |
+
+### Quotes (provider REST)
+| Tool | When to use |
+|---|---|
+| `get_quote` | Single symbol current price. |
+| `get_quotes` | Batched (chunked) for many symbols. |
+
+### Watchlists (read-only — write-side in a future `tools/writes.py`)
+| Tool | When to use |
+|---|---|
+| `list_watchlists` | All known watchlists with member counts. |
+| `get_watchlist` | One watchlist with members + metadata. |
+| `get_watchlist_members` | Just the symbol list. |
+
+### Discovery + Schwab pass-through
+| Tool | When to use |
+|---|---|
+| `get_movers` | Top market movers for an index ($SPX, $COMPX, etc.). |
+| `search_instrument` | Fuzzy ticker / company-name lookup. |
+| `get_instruments` | Metadata for known tickers. |
+| `get_market_hours` | Session schedule (open/close, pre/post). |
+
+### Data-quality observability
+| Tool | When to use |
+|---|---|
+| `get_coverage` | actual vs expected bars in a window (validate training set). |
+| `find_intraday_gaps` | Locate contiguous missing-bar ranges. |
+| `get_bronze_table_stats` | Row count / file count / snapshot for a bronze table. |
+
+### System health
+| Tool | When to use |
+|---|---|
+| `get_health` | Pre-flight: is CH up? Is the lake reachable? |
+| `get_lake_freshness` | Latest trading day per bronze table. |
+
+### Future slices
+
+- **Slice 4 (Schwab pass-through):** options chain / expirations / option quote / journal (account + trade history).
+- **Slice 5 (Gated writes):** watchlist mutation, trading. Allowlist-protected.
 
 ## Rules every tool obeys
 

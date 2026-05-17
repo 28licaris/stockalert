@@ -754,13 +754,64 @@ observability. Sliced for incremental delivery.
 bronze, ClickHouse live, and Schwab REST quotes. Same Pydantic
 shapes, same readers, two surfaces (HTTP routes + MCP tools).
 
-**Slice 3 — Discovery + observability tools** (later)
-- [ ] `tools/watchlist.py` — read-only watchlist tools.
-- [ ] `tools/movers.py`, `tools/instruments.py`, `tools/market.py`.
-- [ ] `tools/coverage.py` — gap detection + lake-table stats. ML-quality
-      observability for agents.
-- [ ] `tools/system.py` — `get_health`, `get_service_status`,
-      `get_lake_freshness`. Agents observe the platform itself.
+**Slice 3 — Discovery + observability tools** (LANDED 2026-05-16)
+12 new tools across 6 files. Total tool surface: 23.
+
+- [x] `tools/watchlist.py` — 3 read-only tools:
+      `list_watchlists`, `get_watchlist` (with members),
+      `get_watchlist_members`.
+- [x] `tools/movers.py` — `get_movers(symbol_id, sort, frequency)`.
+      Schwab provider-backed; degraded-mode returns `{}` on any
+      provider error so the agent path never raises.
+- [x] `tools/instruments.py` — `search_instrument(query, limit)` (the
+      fuzzy/ranked symbol resolver), `get_instruments(symbols, projection)`.
+- [x] `tools/market.py` — `get_market_hours(market)`.
+- [x] `tools/coverage.py` — the ML-quality observability layer:
+      - `get_coverage(symbol, start, end, interval)` — actual vs
+        regular-session-expected bar count + first/last bar timestamps.
+      - `find_intraday_gaps(symbol, start, end, min_gap_minutes)` —
+        contiguous missing-bar ranges, with the existing
+        `queries.find_intraday_gaps_async` doing the heavy lifting.
+      - `get_bronze_table_stats(table)` — row count, file count,
+        snapshot ID, on-disk size for a bronze Iceberg table. Iceberg
+        metadata-only; cheap regardless of table size.
+- [x] `tools/system.py` — platform-self-diagnosis:
+      - `get_health()` — aggregate status ('ok'/'degraded'/'down'),
+        per-subsystem `ServiceStatus` rows. Pings CH + Iceberg in
+        parallel via `asyncio.to_thread`.
+      - `get_lake_freshness()` — per-table latest trading day for
+        bronze tables. Per-table error isolation: schwab failing
+        doesn't blank out the polygon entry.
+- [x] New Pydantic schemas in `app/services/readers/schemas.py`:
+      `WatchlistSummary`, `WatchlistDetail`, `WatchlistsResponse`,
+      `CoverageReport`, `IntradayGap`, `GapReport`, `BronzeTableStats`,
+      `LakeFreshnessReport`, `ServiceStatus`, `SystemHealthReport`.
+      The MCP surface is now formally the same Pydantic contract
+      surface that HTTP routes use — 17 models, one source of truth.
+- [x] `register_all_tools()` updated; tests in
+      `tests/test_mcp_discovery.py` — 18 cases including:
+      - Discovery: 12 new tools registered.
+      - Watchlist round-trips with stubbed `watchlist_service`.
+      - Movers/instruments/market_hours with stubbed `get_provider()`.
+      - Degraded-mode contract (bare provider w/o the method → `{}`).
+      - Coverage % calculation across regular-session weekday-bar
+        accounting (`actual / expected` rounded to 4 decimals).
+      - find_intraday_gaps converting CH dicts → IntradayGap models.
+      - get_bronze_table_stats error path (AWS unreachable →
+        BronzeTableStats with `error` populated).
+      - get_health across all three status states.
+      - get_lake_freshness per-table error isolation.
+- [x] **End-to-end live verification** against production data via
+      `mcp.client.streamable_http`:
+      - `get_bronze_table_stats(polygon_minute)`
+        → 2,116,486,243 rows in 68 files, 38GB, real snapshot ID.
+      - `get_lake_freshness()`
+        → polygon_minute + schwab_minute both at 2026-05-15.
+      - `get_health()` → status='ok', both tiers up.
+      - `search_instrument("apple", 3)` → AAPL with Schwab metadata.
+      - `list_watchlists()` → real watchlists.
+      All 23 advertised tools accessible to any MCP client (Claude
+      Desktop / Inspector / programmatic clients) right now.
 
 **Slice 4 — Schwab pass-through** (later, lower priority)
 - [ ] `tools/schwab_options.py` (option chain / expirations / option

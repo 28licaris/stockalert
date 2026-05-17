@@ -226,3 +226,137 @@ class QuotesResponse(BaseModel):
         default_factory=list,
         description="Symbols the provider could not resolve.",
     )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Discovery + observability schemas (Step 3 Slice 3)
+# ─────────────────────────────────────────────────────────────────────
+
+
+class WatchlistSummary(BaseModel):
+    """One watchlist's identity + membership count (no member list)."""
+
+    name: str
+    kind: str = Field(..., description="'user', 'default', 'system', etc.")
+    description: str = ""
+    is_active: bool = True
+    member_count: int = 0
+    updated_at: Optional[datetime] = None
+
+
+class WatchlistDetail(BaseModel):
+    """A watchlist plus its member symbols."""
+
+    name: str
+    kind: str
+    description: str = ""
+    is_active: bool = True
+    members: list[str]
+    member_count: int
+    updated_at: Optional[datetime] = None
+
+
+class WatchlistsResponse(BaseModel):
+    watchlists: list[WatchlistSummary]
+    count: int
+
+
+class CoverageReport(BaseModel):
+    """
+    Data-completeness summary for a symbol's bars in a window.
+
+    Used by agents asking "is the training set complete?" before
+    running a backtest, or "did we miss data on X day?" before
+    investigating a model's bad inference.
+    """
+
+    symbol: str
+    start: datetime
+    end: datetime
+    interval: str = Field(..., description="'1m', '5m', '1d' etc.")
+    actual_bars: int = Field(..., description="Number of bars present in CH.")
+    expected_bars: Optional[int] = Field(
+        None,
+        description=(
+            "Approximate expected bar count for the window at this "
+            "interval (regular-session-only basis). None when the "
+            "underlying query doesn't compute an estimate."
+        ),
+    )
+    coverage_pct: Optional[float] = Field(
+        None,
+        description="actual_bars / expected_bars, rounded to 4 decimals. None when expected is unknown.",
+    )
+    first_bar: Optional[datetime] = None
+    last_bar: Optional[datetime] = None
+
+
+class IntradayGap(BaseModel):
+    """One contiguous missing-bar range."""
+
+    start: datetime = Field(..., description="First missing minute (inclusive).")
+    end: datetime = Field(..., description="Last missing minute (inclusive).")
+    minutes: int = Field(..., description="Length of the gap in minute-bars.")
+
+
+class GapReport(BaseModel):
+    """Intraday gaps for a symbol's bars in a window."""
+
+    symbol: str
+    start: datetime
+    end: datetime
+    interval: str = "1m"
+    gaps: list[IntradayGap]
+    total_missing_minutes: int
+
+
+class BronzeTableStats(BaseModel):
+    """
+    Per-table snapshot of bronze health — row count, file count, last
+    snapshot ID, on-disk size estimate. Useful for agents validating
+    "is bronze caught up?" before running a training job.
+    """
+
+    table_name: str
+    namespace: str = "stock_lake"
+    total_records: Optional[int] = None
+    file_count: Optional[int] = None
+    total_size_bytes: Optional[int] = None
+    current_snapshot_id: Optional[str] = None
+    last_updated: Optional[datetime] = None
+    error: Optional[str] = Field(
+        None,
+        description="Set when the table is unreachable; other fields will be None.",
+    )
+
+
+class LakeFreshnessReport(BaseModel):
+    """Bronze-tier freshness: latest trading day per (provider) table."""
+
+    tables: dict[str, Optional[date]] = Field(
+        ...,
+        description=(
+            "Map from table short name (e.g. 'polygon_minute', "
+            "'schwab_minute') to its most-recent ET trading day with "
+            "≥1 row. Null when the table is empty or unreachable."
+        ),
+    )
+    as_of: datetime
+
+
+class ServiceStatus(BaseModel):
+    """Single subsystem's health snapshot."""
+
+    name: str
+    healthy: bool
+    detail: Optional[str] = None
+
+
+class SystemHealthReport(BaseModel):
+    """Aggregate system health for agent self-diagnosis."""
+
+    status: str = Field(..., description="'ok' | 'degraded' | 'down'")
+    clickhouse: bool
+    iceberg_catalog: bool
+    services: list[ServiceStatus]
+    as_of: datetime

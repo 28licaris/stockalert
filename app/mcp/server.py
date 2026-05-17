@@ -48,12 +48,21 @@ def register_all_tools() -> None:
     module under `app/mcp/tools/` is registered.
     """
     # noqa: F401 — imports are for side effect (tool registration)
+    from app.mcp.tools import coverage  # noqa: F401
+    from app.mcp.tools import instruments  # noqa: F401
     from app.mcp.tools import lake  # noqa: F401
     from app.mcp.tools import live  # noqa: F401
+    from app.mcp.tools import market  # noqa: F401
+    from app.mcp.tools import movers  # noqa: F401
     from app.mcp.tools import quotes  # noqa: F401
     from app.mcp.tools import signals  # noqa: F401
+    from app.mcp.tools import system  # noqa: F401
+    from app.mcp.tools import watchlist  # noqa: F401
 
-    logger.info("MCP tools registered (lake + live + quotes + signals)")
+    logger.info(
+        "MCP tools registered (lake + live + quotes + signals + "
+        "watchlist + movers + instruments + market + coverage + system)"
+    )
 
 
 def mount_on(app: "FastAPI", path: str = "/mcp") -> None:
