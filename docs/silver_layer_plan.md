@@ -125,75 +125,112 @@ The provider topology is asymmetric on **two axes** at once:
 | **Corp actions** | **Polygon REST** | **Whole market** | Polygon's corp-actions API is canonical. Snapshot once into `silver.corp_actions`. |
 | **Polygon stream (live)** | **NOT USED** | n/a | Costs extra; live is solved by Schwab. |
 
-### 2.3 Three temporal regimes — what the silver layer looks like over time
+### 2.3 Providers are pluggable — subscriptions can pause and resume
 
-The architecture handles the Polygon-subscription lifecycle gracefully.
-There are three regimes the system passes through:
+The architecture treats every provider as **pluggable**. A provider
+is just a (`provider_name`, factory) tuple in the precedence config.
+Bronze tables are partitioned by provider; silver build merges
+whatever providers have data for a given `(symbol, ts)`. **There is
+no "drop"** — only "subscription paused" and "subscription resumed."
 
-**Regime 1 — Today** (Polygon active, 5y historical):
+This works because:
+
+- Provider precedence is config-driven (silver_layer_plan §14.1).
+  Adding/removing a provider is editing the precedence list, not
+  a schema change.
+- Bronze tables are per-provider (`bronze.polygon_minute`,
+  `bronze.schwab_minute`). Pausing a provider just means that
+  table stops getting new appends; existing data stays queryable
+  forever.
+- The silver_build job operates on whatever bronze tables have
+  new partitions. Missing-provider days are silently skipped (the
+  merge step finds no rows from that provider for that slice).
+- No backend code path branches on "is provider X subscribed."
+  Provider availability is implicit — handled by the existence/
+  absence of bronze partitions.
+
+The same logic applies to adding a new provider later (IEX, Databento,
+custom feed): add the bronze table + ingestion script + an entry in
+the precedence config. No silver code changes; no consumer code
+changes.
+
+### 2.4 Three operational states — what silver looks like over time
+
+The pluggable model passes the system through three operational
+states cleanly:
+
+**State A — Polygon active (today, 5y historical):**
 
 | Data | Source | Scope |
 |---|---|---|
-| `bronze.polygon_minute` | Polygon flat-files, **nightly** | Whole market × 5 years (growing) |
+| `bronze.polygon_minute` | Polygon flat-files, nightly | Whole market × 5 years (growing) |
 | `bronze.schwab_minute` | Schwab stream + REST | 100 seed × ongoing live + 48 days REST history |
-| `silver.ohlcv_1m` | merged from both bronzes | Whole market × 5 years (Polygon-derived) + seed live overlay |
+| `silver.ohlcv_1m` | merged from both | Whole market × 5y |
 
-Adding any ticker to a watchlist: silver has it → `silver_to_ch_backfill`
-populates the chart in ~10s.
-
-**Regime 2 — During the 20-year upgrade** (one-shot bulk pull):
+**State B — Polygon active + 20y bulk upgrade complete:**
 
 | Data | Source | Scope |
 |---|---|---|
-| `bronze.polygon_minute` | Polygon flat-files bulk backfill | Whole market × **20 years** (extends back to ~2003) |
+| `bronze.polygon_minute` | Polygon flat-files bulk backfill | Whole market × **20 years** (back to ~2003) |
 | Other tables | unchanged | unchanged |
+| `silver.ohlcv_1m` | merged from both | Whole market × 20y |
 
-This is a one-shot operator action while Polygon subscription is
-upgraded. Bronze grows to ~40-80 GB (still trivial). Silver build
-processes the new partitions on subsequent nightly runs (or
-operator-triggered catch-up).
-
-**Regime 3 — After Polygon subscription drops** (steady state):
+**State C — Polygon subscription paused** (Schwab-only steady state):
 
 | Data | Source | Scope |
 |---|---|---|
-| `bronze.polygon_minute` | **FROZEN** — no new appends after Polygon-drop date | Whole market × 20y, static |
+| `bronze.polygon_minute` | (no new appends while paused) | Whole market × 20y, static at pause date |
 | `bronze.schwab_minute` | Schwab stream + REST | Seed universe (~100, growing) × ongoing |
-| `silver.ohlcv_1m` | merged from both | Whole market × 20y (Polygon-derived) **plus** seed × ongoing (Schwab-derived) |
+| `silver.ohlcv_1m` | merged from both | Whole market × 20y (Polygon-derived) + seed × ongoing (Schwab-derived) |
 
-**No backend code changes** at the Polygon-drop moment. The nightly
-Polygon job stops naturally (no new flat-files arriving / subscription
-inactive). Silver build keeps running on whatever bronze provides.
-Backtests over historical windows work unchanged (silver still has
-the data). Only consequence: a non-seed ticker added AFTER the drop
-sees its silver history frozen at Polygon-drop date for everything
-prior, plus a `[Polygon-drop, now-48d]` gap for the period between
-drop and Schwab REST's 48-day reach.
+**State D — Polygon resumed** (after a pause):
 
-### 2.4 The two-tier universe (refined for the temporal regimes)
+| Data | Source | Scope |
+|---|---|---|
+| `bronze.polygon_minute` | Polygon flat-files, nightly (resumed) + one-shot gap-fill for the pause window | Whole market × continuous (gap filled in) |
+| Other tables | unchanged | unchanged |
+| `silver.ohlcv_1m` | merged from both | Whole market × continuous |
 
-The two tiers are about **what continues to grow**, not historical depth:
+The transitions A→B→C and C→D all happen with **zero code changes**.
+A subscription pause is just one provider's ingest job stopping;
+resumption is the same job restarting (plus a gap-fill backfill for
+the pause window).
+
+### 2.5 The two-tier universe — by what continues to grow
+
+The two tiers exist because **Schwab streaming has a per-symbol cost
+in subscription slots, while Polygon historical doesn't**. So
+the operator chooses which symbols are live-streamed (the seed
+universe) — everything else is whatever Polygon has historically
+covered.
 
 | Tier | Membership | Historical depth | Going forward |
 |---|---|---|---|
-| **Seed universe** (~100, growing) | Symbols the operator chooses to stream live | Polygon archive (5→20y, frozen at drop) + Schwab REST tip + Schwab stream (forever) | New bars every minute via Schwab |
-| **Ad-hoc / archive** (everything else Polygon ever covered) | Whatever Polygon flat-files contained | Polygon archive (5→20y, frozen at drop) | **No new bars** after Polygon drop. To get fresh data: promote to seed. |
+| **Seed universe** (~100, growing) | Operator-chosen for live streaming | Polygon archive + Schwab REST tip + Schwab stream | New bars every minute via Schwab |
+| **Polygon-archive symbols** (everything else) | Whatever Polygon flat-files contained | Polygon archive | New bars while Polygon is active; static during Polygon pauses; resumes when Polygon resumes |
 
 The user can **grow the seed universe** by adding symbols to
 `settings.seed_symbols`. Each addition consumes one Schwab stream
-subscription slot (Schwab supports hundreds; functionally
-unlimited at our scale). Schwab has no per-symbol incremental
-cost.
+subscription slot (Schwab supports hundreds; functionally unlimited
+at our scale). No per-symbol cost.
 
-**Why this matters for the cockpit:**
+**Strategic action: maximize seed before any planned Polygon pause.**
+While Polygon is active, `bronze.polygon_minute` covers every symbol
+the flat-files contain — adding a symbol to seed during this window
+gives it Polygon-deep historical depth automatically. If you pause
+Polygon and later promote a non-seed symbol, that symbol has a
+back-gap in its history covering the pause window. The cockpit
+visualizes this gap explicitly so you can see what's missing.
 
-- A symbol's silver coverage is shown on the Status page as one
-  of three states: 🟢 **seed (ongoing)**, 🟡 **archive (frozen at YYYY-MM-DD)**, ⚪ **never seen**.
-- Adding a ticker shows its source: "Schwab stream + Polygon archive
-  (last bar 2030-04-15)" vs "Schwab stream only (no Polygon history)".
-- "Promote to seed" is a single-click operation in the cockpit.
+**Cockpit Status page shows three states per symbol:**
 
-### 2.5 The data flow (live + historical, unified)
+- 🟢 **seed (live-streaming ongoing)**
+- 🟡 **Polygon-archive only** (no live stream; Polygon-historical depth available)
+- ⚪ **never seen** (no data in any provider's bronze)
+
+"Promote to seed" is a single-click operation in the cockpit.
+
+### 2.6 The data flow (live + historical, unified)
 
 ```
                                   PROVIDERS
@@ -271,7 +308,7 @@ cost.
                                 Chart with overlays
 ```
 
-### 2.6 The add_members flow, branched by tier
+### 2.7 The add_members flow, branched by tier
 
 ```python
 def add_members(name: str, symbols: list[str]) -> dict:
@@ -300,7 +337,7 @@ build promotes the data into the canonical store. If the user
 adds the symbol to the seed universe later, a deeper backfill
 runs at that point.
 
-### 2.7 Race conditions and idempotency (the "no bugs" guarantees)
+### 2.8 Race conditions and idempotency (the "no bugs" guarantees)
 
 Six concrete races to defend against:
 
@@ -322,7 +359,7 @@ Six concrete races to defend against:
 6. **CH gets wiped/rebuilt.** The user-visible "no historical data" gap.
    - **Defense:** A `scripts/rebuild_ch_from_silver.py` operator script. Reads silver for all watchlist symbols, bulk-inserts into CH. ~hour wall-clock for a full S&P 500 rebuild. CH is **always** rebuildable from silver because of the ground-truth rule.
 
-### 2.8 Adjusted vs. raw prices
+### 2.9 Adjusted vs. raw prices
 
 Silver carries both `_raw` and `_adj` columns (split + dividend
 adjusted). CH receives only one set — configured globally:
@@ -829,7 +866,7 @@ This:
 - Adds XYZ to `settings.seed_symbols`.
 - Triggers a Polygon flat-files pull for XYZ over the full history
   window (if Polygon subscription is active).
-- After Polygon drop: triggers a Schwab REST pull for whatever
+- If Polygon is **paused**: triggers a Schwab REST pull for whatever
   Schwab's deeper history window provides (multi-year daily,
   multi-month 1-min for some symbols).
 - Marks XYZ for inclusion in all future nightly refresh jobs.
@@ -884,9 +921,9 @@ This:
 3. If Polygon subscription is **still active**: ensures MSFT is in
    the next nightly Polygon flat-files import (already covered —
    the flat-files contain every symbol, importing one more is free).
-4. If Polygon subscription has **already dropped**: triggers a
-   Schwab REST one-shot for whatever Schwab's deeper history
-   provides (multi-year daily, ~48 days 1-min). Bronze gets these.
+4. If Polygon subscription is **paused**: triggers a Schwab REST
+   one-shot for whatever Schwab's deeper history provides (multi-year
+   daily, ~48 days 1-min). Bronze gets these.
 5. Marks MSFT for inclusion in all future nightly Schwab refresh
    jobs (filling minute-bar gaps from the stream if any).
 
@@ -897,8 +934,8 @@ poetry run python scripts/promote_to_seed.py \
     --symbols MSFT,GOOG,META,AMZN,NFLX
 ```
 
-**Maximizing the seed universe before Polygon drops** (recommended
-strategic action):
+**Maximizing the seed universe before a planned Polygon pause**
+(recommended strategic action):
 
 The marginal cost of adding a symbol to seed while Polygon is still
 active is essentially zero — Polygon flat-files cover the whole
@@ -907,19 +944,21 @@ tradeable in the future, add it to seed NOW so it gets the full
 historical depth via Polygon AND ongoing coverage via Schwab.
 
 ```bash
-# Pre-Polygon-drop maximalist expansion: add the S&P 500
+# Pre-pause maximalist expansion: add the S&P 500
 poetry run python scripts/promote_to_seed.py --universe sp500
 
 # Or the Russell 1000:
 poetry run python scripts/promote_to_seed.py --universe russell1000
 ```
 
-After Polygon drops, the seed universe can still grow, but newly
-promoted symbols will have a **back-gap**: their bronze.polygon_minute
-coverage ends at Polygon-drop date, then nothing until ~48 days ago
-(Schwab REST limit), then ongoing. The cockpit shows this gap on
-the Symbol page coverage strip as an explicit "no data — Polygon
-subscription ended before this symbol was promoted" band.
+While Polygon is paused, the seed universe can still grow, but
+newly-promoted symbols will have a **pause-window back-gap**: their
+`bronze.polygon_minute` coverage stops at the pause start date, no
+new data until ~48 days ago (Schwab REST limit), then ongoing
+Schwab. The cockpit shows this gap explicitly. When Polygon resumes
+(per §9.7's resume runbook), the pause-window gap-fill backfill
+covers the missing window — so the back-gap is recoverable, just
+requires the subscription to come back.
 
 ### 9.6 Triggering a silver rebuild after corp-action correction
 
@@ -938,79 +977,94 @@ poetry run python scripts/rebuild_silver.py --symbol AAPL
 poetry run python scripts/silver_to_ch.py --symbol AAPL --days all
 ```
 
-### 9.7 Polygon-drop migration checklist
+### 9.7 Pausing & resuming a provider subscription (e.g. Polygon)
 
-This is the **critical pre-drop window**. Once the Polygon subscription
-ends, anything not in the seed universe is frozen forever (no new
-1-min data after the drop date). The marginal cost of adding symbols
-to seed BEFORE the drop is essentially zero. Run through this
-checklist when planning to cancel Polygon.
+This is the runbook for **pausing** a provider subscription (Polygon
+in the canonical case; same flow applies to any other provider). The
+architecture treats this as a normal operation, not a one-way change.
+Providers are pluggable (§2.3).
 
-**Pre-drop preparation (T-30 days):**
+**Pre-pause preparation (T-30 days):**
 
-- [ ] Confirm the 20-year Polygon flat-files bulk backfill into
-      `bronze.polygon_minute` is complete. Spot-check via
-      `scripts/check_silver_coverage.py --report` — should show
-      ~20 years of coverage for every symbol Polygon covers.
+- [ ] Confirm the deepest available bulk backfill (20-year Polygon
+      flat-files) into `bronze.polygon_minute` is complete. Spot-check
+      via `scripts/check_silver_coverage.py --report` — should show
+      target coverage for every symbol the provider covers.
 - [ ] Run initial `silver_build.py` over the full bronze history if
       not already done. ~6-12 hr overnight job.
-- [ ] **Expand the Schwab nightly-sync universe.** This is the
-      single most important pre-drop action. Options ranked by
-      conservatism:
+- [ ] **Expand the Schwab nightly-sync universe before pausing.**
+      The strategic reason: while Polygon is active, the nightly
+      flat-files cover every symbol Polygon ingests — adding a
+      symbol to seed during this window is free for historical depth.
+      After pausing, newly-promoted symbols will have a back-gap
+      covering the pause window. The cockpit visualizes this gap so
+      you can see what's missing — but you can avoid it entirely by
+      promoting broadly while Polygon is still active.
+      Options ranked by ambition:
       1. **S&P 500** (`promote_to_seed.py --universe sp500`) — minimum
-         viable expansion; covers 80% of market cap and ~90% of
-         operator-relevant trading candidates.
-      2. **Russell 1000** (`--universe russell1000`) — broader; ~85%
-         market cap coverage; includes mid-caps.
+         viable expansion; ~80% market cap.
+      2. **Russell 1000** (`--universe russell1000`) — ~85% market cap;
+         includes mid-caps.
       3. **Russell 3000** (`--universe russell3000`) — small/mid + large
-         caps. Stress-tests Schwab's stream subscription limits;
-         monitor for errors.
+         caps. Stress-tests Schwab's stream subscription limits.
       4. **Custom curation** — whatever symbols you might ever trade
-         or screen against. Erring large is cheap.
+         or screen against. Erring broadly is cheap (no per-symbol cost
+         on Schwab's side).
 - [ ] Verify the Schwab CHART_EQUITY stream handles the expanded
       universe without dropouts. Watch `monitor_service` logs for
-      1-2 days. Schwab supports hundreds of concurrent subscriptions
-      empirically; we have no documented hard cap.
+      1-2 days.
 - [ ] Verify each newly-promoted symbol has Schwab REST history (~48d
       1-min, multi-year daily) backfilled into `bronze.schwab_minute`.
-      `promote_to_seed.py` does this automatically; spot-check via
-      `scripts/check_bronze_schwab_coverage.py`.
 
-**At-drop (T-day):**
+**At-pause (T-day):**
 
 - [ ] Cancel the Polygon subscription on the operator side.
-- [ ] Stop the nightly Polygon flat-files job (or let it stop
-      naturally — it'll fail on the next attempted download).
-- [ ] Mark the drop date in `silver.subscription_history`
-      (new audit table) — used by the cockpit Status page to show
-      "Polygon archive frozen as of YYYY-MM-DD".
+- [ ] Stop the nightly Polygon flat-files job (or let it fail
+      gracefully on the next attempted download — `_safe_start`
+      isolation in the FastAPI startup handles this).
+- [ ] Record the pause start date in `silver.subscription_history`
+      (audit table) — used by the cockpit Status page to show
+      "Polygon paused since YYYY-MM-DD".
 - [ ] Update `settings.polygon_subscription_active = False` so the
-      cockpit + nightly jobs short-circuit Polygon calls gracefully.
+      cockpit + nightly jobs short-circuit Polygon calls cleanly
+      (no errors, no retries, just skip).
 
-**Post-drop (T+1 onward):**
+**Post-pause (T+1 onward, steady state):**
 
 - [ ] Verify nightly `silver_build` continues running over Schwab-only
       bronze updates. The per-night workload shrinks (no Polygon
       flat-files to process) — total time should drop from ~20 min
       to ~5 min.
-- [ ] Cockpit Status page reflects: Polygon = inactive (frozen as of
-      drop date), Schwab seed = active (N symbols streaming).
+- [ ] Cockpit Status page reflects: Polygon = paused, Schwab seed =
+      active (N symbols streaming).
 - [ ] If a new symbol is added to a watchlist (ad-hoc, not in seed):
-      the cockpit Symbol page shows a "no Polygon archive for this
-      symbol" indicator for any pre-Polygon-drop windows the user
-      navigates to. Schwab REST 48-day backfill remains the historical
-      depth available for ad-hoc.
+      the cockpit Symbol page shows a "Polygon paused — historical
+      depth limited to Schwab REST 48d" indicator. Bronze.polygon_minute
+      coverage from before the pause is still available; only the
+      pause-window gap is missing.
 
-**Re-acquiring Polygon later (if needed):**
+**Resuming Polygon later:**
 
-The plan supports re-subscribing to Polygon. The Polygon historical
-ingestion path is fully preserved (just paused). When you re-subscribe:
+The Polygon ingestion path is fully preserved during the pause —
+only the nightly job is dormant. Resumption is symmetric to pause:
 - [ ] Set `settings.polygon_subscription_active = True`.
+- [ ] Reactivate the Polygon subscription.
 - [ ] Run a one-shot `polygon_flatfiles_bulk_backfill.py --start
-      <previous-drop-date> --end <today>` to fill the gap.
+      <pause-start-date> --end <today>` to fill the pause-window
+      gap in `bronze.polygon_minute`.
 - [ ] Nightly Polygon job resumes from there.
 - [ ] Silver build naturally picks up the new bronze rows and rebuilds
       adjusted columns where needed.
+- [ ] Cockpit Status page reflects: Polygon = active (resumed
+      YYYY-MM-DD), pause window from previous-pause-date to
+      this-resume-date now filled in.
+- [ ] Record the resume in `silver.subscription_history`.
+
+**Why this is so smooth:** providers are pluggable (§2.3). No code
+path branches on "is provider X active." Provider availability is
+implicit — handled by the existence/absence of bronze partitions.
+Re-enabling a provider is conceptually identical to *adding a new
+provider* (which is also a supported operation; see §2.3).
 
 ### 9.8 Monitoring
 
@@ -1021,9 +1075,10 @@ The cockpit Status page (FE-1) gets four new health pills powered by
   seed symbols (target <24h). Alert when >36h.
 - **Silver coverage (seed):** % of seed symbols with silver data
   through yesterday (target 100%). Alert when <99%.
-- **Polygon subscription status:** active / inactive / drop date.
-  When inactive, displays "Bronze.polygon_minute frozen as of YYYY-MM-DD"
-  so the operator knows non-seed symbols are static.
+- **Polygon subscription status:** active / paused (with pause-start
+  date) / resumed (with resume date). When paused, displays
+  "Bronze.polygon_minute static at YYYY-MM-DD; re-enable subscription
+  to resume" so the operator can plan around it.
 - **Seed universe size:** symbol count + recent growth. Quick view
   to see "how many symbols am I streaming right now" + a sparkline
   of seed-universe size over the last 30 days.
@@ -1035,8 +1090,9 @@ data tier:
 - 🔵 **Schwab live + REST tip** — current bar(s) from the stream.
 - 🟡 **Polygon archive (frozen)** — bars from before the Polygon
   drop, for a non-seed symbol.
-- 🔴 **Gap** — no data. For non-seed post-Polygon-drop symbols,
-  the `[Polygon-drop, now-48d]` gap is visible.
+- 🔴 **Gap** — no data. For non-seed symbols promoted during a
+  Polygon pause window, the `[pause-start, now-48d]` gap is visible
+  until Polygon resumes and the gap-fill backfill completes.
 
 ---
 
@@ -1178,9 +1234,8 @@ indicators as soon as silver exists.
 
 **Decision: `polygon > schwab`.** Polygon's bar wins when both
 providers have one for `(symbol, ts)`. Schwab fills the gap when
-Polygon has no row (which is the post-Polygon-drop steady state
-for any (symbol, ts) after the drop date, plus the live overlay
-zone).
+Polygon has no row (which happens during the live overlay zone
+and during any pause windows on the Polygon subscription).
 
 This is the merge strategy that builds `silver.ohlcv_1m`.
 Implementation in [§3.3](#33-algorithm-per-symbol-day_partition-slice):
@@ -1198,20 +1253,28 @@ Per-symbol override mechanism plumbed in from day one (config-driven,
 no schema change later) for the rare case where Schwab proves better
 for a specific symbol — but the default holds for everything.
 
-### 14.2 Adjustment default for chart vs. backtest
+### 14.2 Adjustment default — RESOLVED 2026-05-17
 
-When CH ingests bars from silver, does the chart see `_raw` or
-`_adj`?
+**Decision: adjusted everywhere.** Already designed in
+[data_platform_plan.md §6](data_platform_plan.md):
 
-- **Adjusted everywhere** (recommended): chart, screener,
-  indicator overlays, backtest training all see adjusted prices.
-  Backtest replay-accuracy is opt-in via `BacktestConfig.adjusted=False`.
-- **Raw on chart, adjusted on backtest:** "what the trader saw"
-  on the chart; "what the model trains on" in the backtest. More
-  faithful to lived experience; more confusing for ML reproducibility.
-- **Choice per page:** chart has a toggle, backtest has a flag.
-  Most flexible; most surface area to maintain.
+- **Bronze** stores **what the provider sent** — raw, unadjusted
+  bars. No transformation at the bronze boundary. This preserves
+  what the trader actually saw live and gives silver freedom to
+  recompute adjustments when corp-actions land.
+- **Silver** stores **both raw + adjusted columns** in `silver.ohlcv_1m`:
+  - `open_raw / high_raw / low_raw / close_raw / volume_raw`
+  - `open_adj / high_adj / low_adj / close_adj / volume_adj`
+- **All downstream consumers** (chart, screener, indicator overlays,
+  backtest harness, MCP tools, ML training via gold) read the
+  **`_adj` columns by default** — the right choice for AI/ML trading
+  because split discontinuities would otherwise poison everything.
+- **Replay-accuracy opt-in** (rare cases — backtests that need to
+  reproduce the exact trader experience including unadjusted prices):
+  `BacktestConfig.adjusted=False` reads `_raw` instead. Same code
+  path; just a different column set.
 
-My recommendation: **adjusted everywhere**, with `_raw` accessible
-via an opt-in flag for the small set of users (us, today) who care
-about replay-accuracy.
+The bronze-records-raw design (no transformation at boundary) means
+when a new corp action lands, silver re-derives `_adj` columns from
+the unchanged `_raw` columns + updated `silver.corp_actions`. No
+bronze rewrite needed.

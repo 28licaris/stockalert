@@ -25,9 +25,15 @@ Single source of truth for storage and ingestion. Supersedes the previous
   (cross-sectional); (b) one symbol over N years (time series).
 - **Bulletproof.** ACID writes, idempotent ingestion, schema evolution,
   reproducible ML training datasets.
-- **Multi-provider, asymmetric.** Polygon flat-files = one-shot historical
-  archive (drop subscription after pull). Schwab = live + REST tip-fill.
-  Pluggable for more (Databento, IEX) without schema rewrites.
+- **Multi-provider, pluggable, asymmetric.** Providers are pluggable:
+  any subscription can pause (the bronze table for that provider just
+  stops getting new appends) and resume (a one-shot gap-fill backfill
+  + the nightly job restarting). Polygon flat-files = whole-market
+  historical archive (suitable for one-shot bulk pulls during active
+  subscription periods). Schwab = live (1-min stream) + REST tip-fill
+  + REST one-shot historical for ad-hoc symbol adds. New providers
+  (Databento, IEX) plug in without schema rewrites — add a bronze
+  table + ingestion script + an entry in the precedence config.
 - **ML-ready end state.** A `gold/` layer of features + a snapshot-pinned
   silver layer that lets us reproduce any training run.
 
@@ -42,9 +48,9 @@ Single source of truth for storage and ingestion. Supersedes the previous
 | Query engines | PyIceberg + DuckDB locally; Athena for ad-hoc SQL | No new infra. |
 | Hot tier | ClickHouse (existing) | Live divergence detection, UI charts. **Derived cache only — never the canonical store.** Rebuildable from silver. |
 | Data scope | OHLCV bars only (1m + daily) | No tick/quote for now. Bars-only fits all current and near-term use cases. |
-| Corp-actions source | Polygon (one-shot snapshot into `silver.corp_actions`) | Has both raw bars and a corp-actions feed. After Polygon subscription drop, snapshot is frozen + manually updated from public sources. |
+| Corp-actions source | Polygon (one-shot snapshot into `silver.corp_actions`; refreshed nightly while subscription is active) | Has both raw bars and a corp-actions feed. During any Polygon-subscription pause, snapshot is static; resumes refreshing when subscription resumes. |
 | **Live stream provider** | **Schwab CHART_EQUITY WebSocket only** | Already paid for; 1-min bars; no separate live subscription needed. Polygon stream NOT used. |
-| **Historical bulk provider** | **Polygon flat-files (while subscribed)** | Deepest tape (20+ years). One-shot pull, lock into bronze archive, drop subscription. |
+| **Historical bulk provider** | **Polygon flat-files (while subscribed)** | Deepest tape (20+ years). Bulk pulls during active subscription periods lock data into the bronze archive; subscriptions can pause and resume without code changes (providers are pluggable). |
 | **Historical tip provider** | **Schwab REST `pricehistory`** | Bridges silver watermark to live stream first bar. ≤ 48h window typically. |
 
 ## 3. Bucket configuration
@@ -339,11 +345,13 @@ SIP), so they overwrite live bars for the same `(symbol, ts)` during
 the silver build — handled naturally by `MERGE INTO` ordering on
 `ingestion_ts`.
 
-**Scheduled for retirement.** Once the 20-year Polygon historical pull
-is complete (one-shot, while subscribed), this job's role narrows:
-nightly Polygon refresh stops if/when the Polygon subscription drops.
-The bronze.polygon_minute archive then becomes a static, frozen
-contribution to silver.
+**Pluggable lifecycle.** This job runs while the Polygon subscription
+is active. If the subscription is paused (operator choice), the
+nightly job stops; `bronze.polygon_minute` becomes a static
+contribution to silver. If the subscription is resumed later, the
+nightly job restarts and a one-shot gap-fill backfill covers the
+pause window. Detailed runbook in
+[silver_layer_plan.md §9.7](silver_layer_plan.md).
 
 ### Path C — backfills (asymmetric: bulk vs tip)
 

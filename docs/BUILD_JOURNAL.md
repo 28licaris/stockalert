@@ -2068,3 +2068,33 @@ bottom with a date.
     bulk-promote the S&P 500 or Russell 1000 via
     `scripts/promote_to_seed.py --universe sp500` to lock in deep
     history for those symbols ahead of the Polygon drop.
+- **2026-05-17** — **Providers are pluggable; subscriptions pause and
+  resume, they don't "drop".** Reframed earlier "Polygon drop"
+  language across the docs. The architecture already supports this
+  natively: bronze tables are per-provider, silver build operates
+  on whatever bronze partitions exist, provider precedence is
+  config-driven, no code branches on "is provider X subscribed."
+  Pausing the Polygon subscription is just `bronze.polygon_minute`
+  not getting new appends; resuming triggers a one-shot gap-fill
+  backfill for the pause window plus restarting the nightly job.
+  The architecture supports adding entirely new providers later
+  (IEX, Databento, custom feed) with the same plug-in mechanism.
+  Codified in [silver_layer_plan.md §2.3](silver_layer_plan.md);
+  full pause/resume runbook in
+  [silver_layer_plan.md §9.7](silver_layer_plan.md).
+- **2026-05-17** — **§14.2 RESOLVED: adjusted-everywhere with
+  raw-opt-in.** Already implicit in
+  [data_platform_plan.md §6](data_platform_plan.md)'s dual-column
+  silver schema (`*_raw` + `*_adj`), but worth recording:
+  - Bronze stores **what the provider sent** — raw, unadjusted.
+    Bronze is immutable; no transformation at the boundary.
+  - Silver carries **both** column sets. Adjustments computed from
+    `silver.corp_actions` during silver_build; re-derived when
+    corp-actions change (no bronze rewrite needed).
+  - All downstream consumers — chart, screener, indicator overlays,
+    backtest harness, MCP tools, gold features, ML training — read
+    `_adj` by default. Right choice for AI/ML trading; split
+    discontinuities would otherwise poison everything.
+  - `BacktestConfig.adjusted=False` reads `_raw` instead — for the
+    rare replay-accuracy case where you want exactly what the trader
+    saw live.
