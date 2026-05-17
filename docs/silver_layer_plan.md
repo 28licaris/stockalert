@@ -75,53 +75,90 @@ rebuildable from silver byte-identically**.
 Everything else goes through bronze + silver. **No historical
 provider pull ever lands directly in CH.**
 
-### 2.2 Provider strategy (live vs historical)
+### 2.2 Provider strategy (live vs historical) — with volumetric scope
 
-The provider topology is asymmetric on purpose. Live and historical
-have different cost / freshness / reliability constraints.
+The provider topology is asymmetric on **two axes** at once:
+- **Live vs. historical** (cost / freshness needs differ)
+- **Whole-market vs. seed-only** (symbol coverage differs)
 
-| Concern | Provider | Why |
+| Concern | Provider | Volumetric scope | Why |
+|---|---|---|---|
+| **Live 1-min bars** | **Schwab WebSocket** (`CHART_EQUITY`) | **Seed universe only** (~100 today, growing) | We pay for Schwab; stream included; no extra cost per seed symbol. |
+| **Historical bulk archive** (one-shot) | **Polygon flat-files** | **Whole market** (~10K+ symbols × 5-20 years) | Polygon flat-files are per-day files containing every symbol; importing 1 symbol or 10,000 is the same scan cost. |
+| **Historical tip-fill** | **Schwab REST `pricehistory`** | **Per-symbol on demand** (silver-watermark → live, ≤48h) | Schwab REST in the subscription; small windows; no rate-limit pressure. |
+| **Schwab REST one-shot for ad-hoc** | **Schwab REST `pricehistory`** | **Per-symbol on demand** (≤48 days 1-min + multi-year daily) | When user adds a non-seed symbol, this gives Schwab's max-depth historical. |
+| **Corp actions** | **Polygon REST** | **Whole market** | Polygon's corp-actions API is canonical. Snapshot once into `silver.corp_actions`. |
+| **Polygon stream (live)** | **NOT USED** | n/a | Costs extra; live is solved by Schwab. |
+
+### 2.3 Three temporal regimes — what the silver layer looks like over time
+
+The architecture handles the Polygon-subscription lifecycle gracefully.
+There are three regimes the system passes through:
+
+**Regime 1 — Today** (Polygon active, 5y historical):
+
+| Data | Source | Scope |
 |---|---|---|
-| **Live 1-min bars** | **Schwab WebSocket** (`CHART_EQUITY`) | We already pay for Schwab; the stream is included; no Polygon subscription required for live. **This is the only live data source going forward.** |
-| **Historical bulk archive** | **Polygon flat-files** (one-shot 20-year pull) | Polygon has the deepest, cleanest tape. Pull it once while subscribed, lock it into bronze forever. |
-| **Historical tip-fill** (gap between silver watermark + live stream first bar) | **Schwab REST `pricehistory`** | Small window (≤ 48h typically). Schwab's REST is included in the subscription. No rate-limit pressure at this volume. |
-| **Polygon stream (live)** | **NOT USED** | Costs extra; live is solved by Schwab. |
-| **Polygon REST (historical)** | **Schedule for drop** | The one-shot flat-file pull is the only thing we need from Polygon. After that pull, the Polygon subscription can be cancelled. |
-| **Corp actions** | **Polygon REST** while subscribed; then static archive | Polygon's corp-actions API is the canonical source. We keep a snapshot of it in `silver.corp_actions`; new actions can be ingested manually from public sources after Polygon drop. |
+| `bronze.polygon_minute` | Polygon flat-files, **nightly** | Whole market × 5 years (growing) |
+| `bronze.schwab_minute` | Schwab stream + REST | 100 seed × ongoing live + 48 days REST history |
+| `silver.ohlcv_1m` | merged from both bronzes | Whole market × 5 years (Polygon-derived) + seed live overlay |
 
-**The Polygon-drop plan:**
+Adding any ticker to a watchlist: silver has it → `silver_to_ch_backfill`
+populates the chart in ~10s.
 
-1. **While Polygon is active (today):** Run the 20-year flat-files bulk backfill into `bronze.polygon_minute`. Ingest the full corp-actions history into `silver.corp_actions`. Silver build runs nightly merging Polygon (primary) and Schwab (live overlay).
-2. **After Polygon drops:** Bronze archive is frozen for Polygon. Schwab stream + Schwab REST are the only live/historical sources. Silver build still produces canonical silver from the (now-historical) Polygon archive + ongoing Schwab inputs.
-3. **No backend code changes** at the drop moment — provider precedence stays the same; Polygon just stops contributing new rows.
+**Regime 2 — During the 20-year upgrade** (one-shot bulk pull):
 
-### 2.3 Two-tier symbol universe (seed + ad-hoc)
+| Data | Source | Scope |
+|---|---|---|
+| `bronze.polygon_minute` | Polygon flat-files bulk backfill | Whole market × **20 years** (extends back to ~2003) |
+| Other tables | unchanged | unchanged |
 
-Not every symbol gets full historical depth. The system explicitly
-recognizes two tiers:
+This is a one-shot operator action while Polygon subscription is
+upgraded. Bronze grows to ~40-80 GB (still trivial). Silver build
+processes the new partitions on subsequent nightly runs (or
+operator-triggered catch-up).
 
-| Tier | Symbol membership | Bronze | Silver | What the chart shows |
-|---|---|---|---|---|
-| **Seed universe** | Curated list (~100-500 symbols you actively trade) | Polygon flat-files **+** Schwab stream/REST | Full history (20 years) | Years of 1-min + daily; full indicator depth |
-| **Ad-hoc watchlist symbol** | Any other ticker you add for exploration | Schwab stream + Schwab REST historical only | Last ~48 days of 1-min + multi-year daily (Schwab REST limits) | Chart usable immediately; intra-day history limited to ~48 days |
+**Regime 3 — After Polygon subscription drops** (steady state):
 
-The seed universe is configured in `settings.seed_symbols` (today
-already exists). The nightly Polygon flat-files job + the nightly
-Schwab refresh job both operate on this list. Symbols outside the
-seed get on-demand Schwab REST backfill when added.
+| Data | Source | Scope |
+|---|---|---|
+| `bronze.polygon_minute` | **FROZEN** — no new appends after Polygon-drop date | Whole market × 20y, static |
+| `bronze.schwab_minute` | Schwab stream + REST | Seed universe (~100, growing) × ongoing |
+| `silver.ohlcv_1m` | merged from both | Whole market × 20y (Polygon-derived) **plus** seed × ongoing (Schwab-derived) |
 
-**Operator can promote a symbol to the seed universe** via a CLI:
+**No backend code changes** at the Polygon-drop moment. The nightly
+Polygon job stops naturally (no new flat-files arriving / subscription
+inactive). Silver build keeps running on whatever bronze provides.
+Backtests over historical windows work unchanged (silver still has
+the data). Only consequence: a non-seed ticker added AFTER the drop
+sees its silver history frozen at Polygon-drop date for everything
+prior, plus a `[Polygon-drop, now-48d]` gap for the period between
+drop and Schwab REST's 48-day reach.
 
-```bash
-poetry run python scripts/promote_to_seed.py --symbol MSFT
-```
+### 2.4 The two-tier universe (refined for the temporal regimes)
 
-This adds MSFT to `settings.seed_symbols`, kicks off a one-shot
-deeper backfill (Polygon flatfiles if subscription is active,
-Schwab REST otherwise), and ensures MSFT is included in all
-future nightly refreshes.
+The two tiers are about **what continues to grow**, not historical depth:
 
-### 2.4 The data flow (live + historical, unified)
+| Tier | Membership | Historical depth | Going forward |
+|---|---|---|---|
+| **Seed universe** (~100, growing) | Symbols the operator chooses to stream live | Polygon archive (5→20y, frozen at drop) + Schwab REST tip + Schwab stream (forever) | New bars every minute via Schwab |
+| **Ad-hoc / archive** (everything else Polygon ever covered) | Whatever Polygon flat-files contained | Polygon archive (5→20y, frozen at drop) | **No new bars** after Polygon drop. To get fresh data: promote to seed. |
+
+The user can **grow the seed universe** by adding symbols to
+`settings.seed_symbols`. Each addition consumes one Schwab stream
+subscription slot (Schwab supports hundreds; functionally
+unlimited at our scale). Schwab has no per-symbol incremental
+cost.
+
+**Why this matters for the cockpit:**
+
+- A symbol's silver coverage is shown on the Status page as one
+  of three states: 🟢 **seed (ongoing)**, 🟡 **archive (frozen at YYYY-MM-DD)**, ⚪ **never seen**.
+- Adding a ticker shows its source: "Schwab stream + Polygon archive
+  (last bar 2030-04-15)" vs "Schwab stream only (no Polygon history)".
+- "Promote to seed" is a single-click operation in the cockpit.
+
+### 2.5 The data flow (live + historical, unified)
 
 ```
                                   PROVIDERS
@@ -199,7 +236,7 @@ future nightly refreshes.
                                 Chart with overlays
 ```
 
-### 2.5 The add_members flow, branched by tier
+### 2.6 The add_members flow, branched by tier
 
 ```python
 def add_members(name: str, symbols: list[str]) -> dict:
@@ -228,7 +265,7 @@ build promotes the data into the canonical store. If the user
 adds the symbol to the seed universe later, a deeper backfill
 runs at that point.
 
-### 2.6 Race conditions and idempotency (the "no bugs" guarantees)
+### 2.7 Race conditions and idempotency (the "no bugs" guarantees)
 
 Six concrete races to defend against:
 
@@ -250,7 +287,7 @@ Six concrete races to defend against:
 6. **CH gets wiped/rebuilt.** The user-visible "no historical data" gap.
    - **Defense:** A `scripts/rebuild_ch_from_silver.py` operator script. Reads silver for all watchlist symbols, bulk-inserts into CH. ~hour wall-clock for a full S&P 500 rebuild. CH is **always** rebuildable from silver because of the ground-truth rule.
 
-### 2.7 Adjusted vs. raw prices
+### 2.8 Adjusted vs. raw prices
 
 Silver carries both `_raw` and `_adj` columns (split + dividend
 adjusted). CH receives only one set — configured globally:
@@ -792,7 +829,64 @@ recoverable. Silver having a problem is not — which is why silver
 has Iceberg snapshot pinning, MERGE INTO discipline, and the
 `silver.bar_quality` audit ledger.
 
-### 9.5 Triggering a silver rebuild after corp-action correction
+### 9.5 Expanding the seed universe (growing the Schwab stream set)
+
+Over time, the operator grows the seed universe from ~100 symbols
+to whatever's tractable for them (Schwab supports hundreds of
+concurrent CHART_EQUITY subscriptions). Each addition gets ongoing
+live 1-min data via Schwab.
+
+**Promote a single symbol:**
+
+```bash
+poetry run python scripts/promote_to_seed.py --symbol MSFT
+```
+
+This:
+1. Appends MSFT to `settings.seed_symbols`.
+2. Subscribes MSFT on the Schwab CHART_EQUITY stream (live overlay
+   starts immediately).
+3. If Polygon subscription is **still active**: ensures MSFT is in
+   the next nightly Polygon flat-files import (already covered —
+   the flat-files contain every symbol, importing one more is free).
+4. If Polygon subscription has **already dropped**: triggers a
+   Schwab REST one-shot for whatever Schwab's deeper history
+   provides (multi-year daily, ~48 days 1-min). Bronze gets these.
+5. Marks MSFT for inclusion in all future nightly Schwab refresh
+   jobs (filling minute-bar gaps from the stream if any).
+
+**Promote multiple symbols at once:**
+
+```bash
+poetry run python scripts/promote_to_seed.py \
+    --symbols MSFT,GOOG,META,AMZN,NFLX
+```
+
+**Maximizing the seed universe before Polygon drops** (recommended
+strategic action):
+
+The marginal cost of adding a symbol to seed while Polygon is still
+active is essentially zero — Polygon flat-files cover the whole
+market regardless. So if there's any chance you'll want a symbol
+tradeable in the future, add it to seed NOW so it gets the full
+historical depth via Polygon AND ongoing coverage via Schwab.
+
+```bash
+# Pre-Polygon-drop maximalist expansion: add the S&P 500
+poetry run python scripts/promote_to_seed.py --universe sp500
+
+# Or the Russell 1000:
+poetry run python scripts/promote_to_seed.py --universe russell1000
+```
+
+After Polygon drops, the seed universe can still grow, but newly
+promoted symbols will have a **back-gap**: their bronze.polygon_minute
+coverage ends at Polygon-drop date, then nothing until ~48 days ago
+(Schwab REST limit), then ongoing. The cockpit shows this gap on
+the Symbol page coverage strip as an explicit "no data — Polygon
+subscription ended before this symbol was promoted" band.
+
+### 9.6 Triggering a silver rebuild after corp-action correction
 
 If Polygon corrects a stale dividend or we discover a wrong split
 factor:
@@ -809,16 +903,31 @@ poetry run python scripts/rebuild_silver.py --symbol AAPL
 poetry run python scripts/silver_to_ch.py --symbol AAPL --days all
 ```
 
-### 9.6 Monitoring
+### 9.7 Monitoring
 
-The cockpit Status page (FE-1) gets two new health pills powered by
+The cockpit Status page (FE-1) gets four new health pills powered by
 `silver.bar_quality` and the build watermark:
 
-- **Silver freshness:** last successful silver build age (target: <24h).
-- **Silver coverage:** % of watchlist symbols with silver data
-  through yesterday (target: 100%).
+- **Silver freshness (seed):** last successful silver build age for
+  seed symbols (target <24h). Alert when >36h.
+- **Silver coverage (seed):** % of seed symbols with silver data
+  through yesterday (target 100%). Alert when <99%.
+- **Polygon subscription status:** active / inactive / drop date.
+  When inactive, displays "Bronze.polygon_minute frozen as of YYYY-MM-DD"
+  so the operator knows non-seed symbols are static.
+- **Seed universe size:** symbol count + recent growth. Quick view
+  to see "how many symbols am I streaming right now" + a sparkline
+  of seed-universe size over the last 30 days.
 
-Alerts fire when freshness >36h or coverage <99%.
+The Symbol page coverage strip also color-codes per-day cells by
+data tier:
+- 🟢 **Polygon (whole market era)** — historical coverage from
+  flat-files.
+- 🔵 **Schwab live + REST tip** — current bar(s) from the stream.
+- 🟡 **Polygon archive (frozen)** — bars from before the Polygon
+  drop, for a non-seed symbol.
+- 🔴 **Gap** — no data. For non-seed post-Polygon-drop symbols,
+  the `[Polygon-drop, now-48d]` gap is visible.
 
 ---
 

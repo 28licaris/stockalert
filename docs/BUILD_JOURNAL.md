@@ -2041,3 +2041,30 @@ bottom with a date.
     falls back to Schwab REST otherwise.
   Codified in [silver_layer_plan.md §2.3](silver_layer_plan.md)
   and [silver_layer_plan.md §6.3](silver_layer_plan.md).
+- **2026-05-17** — **Volumetric clarity + Polygon-drop strategy.**
+  The provider topology is two-dimensional: live-vs-historical AND
+  whole-market-vs-seed. Concretely:
+  - **Polygon flat-files** = whole market × 5-20 years (one-shot
+    pulls; whole-market because the daily flat-file contains every
+    symbol regardless of which we import). Subscription planned to
+    drop after the 20-year upgrade pull lands. Bronze.polygon_minute
+    becomes a frozen static archive on the drop date.
+  - **Schwab stream** = seed universe × ongoing (~100 today, growing
+    over time). The ONLY source of live data going forward.
+  - **Three temporal regimes** the system passes through smoothly
+    with no code changes: pre-Polygon-drop (today, 5y), during the
+    20y upgrade pull, post-Polygon-drop (steady state).
+  - **Post-Polygon-drop:** a non-seed symbol added to a watchlist has
+    silver coverage frozen at Polygon-drop date plus an explicit
+    `[Polygon-drop, now-48d]` gap, plus Schwab REST 48d + Schwab
+    stream forward. The gap is visualized on the cockpit Symbol
+    page coverage strip.
+  - **Strategic recommendation:** maximize the seed universe BEFORE
+    Polygon drops. The marginal cost of adding a symbol to seed
+    while Polygon is active is essentially zero (flat-files cover
+    everything anyway); after drop, newly promoted symbols have
+    the back-gap forever. Codified in
+    [silver_layer_plan.md §9.5](silver_layer_plan.md): operator can
+    bulk-promote the S&P 500 or Russell 1000 via
+    `scripts/promote_to_seed.py --universe sp500` to lock in deep
+    history for those symbols ahead of the Polygon drop.
