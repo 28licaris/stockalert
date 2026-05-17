@@ -96,6 +96,12 @@ must not import write-side service methods.
 | `get_health` | Pre-flight: is CH up? Is the lake reachable? |
 | `get_lake_freshness` | Latest trading day per bronze table. |
 
+### Strategy execution + history (trading subsystem)
+| Tool | When to use |
+|---|---|
+| `run_backtest` | Run a strategy + config end-to-end; returns canonical RunMetrics. Supports `sma_crossover` and `llm_agent`. The agent-iteration tool. |
+| `list_strategy_runs` | Recent runs from the `agent_runs` registry. Lets an agent self-evaluate over its own history. |
+
 ### Future slices
 
 - **Slice 4 (Schwab pass-through):** options chain / expirations / option quote / journal (account + trade history).

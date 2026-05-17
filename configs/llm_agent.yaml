@@ -1,0 +1,46 @@
+# TA-2 LLM-driven backtest: Claude-as-trader on AAPL daily.
+#
+# Costs: ~$0.001-0.003 per LLM call at temp=0 with ~500 tokens in,
+# ~50 tokens out (Sonnet pricing 2026). 252 trading days/year on
+# daily bars -> ~$0.50-0.75 per full year run. Repeating the same
+# backtest hits the local SQLite response cache and costs $0.
+#
+# Pre-flight:
+#   1. export ANTHROPIC_API_KEY=sk-...
+#   2. poetry run python scripts/run_backtest.py --config configs/llm_agent.yaml
+#
+# Reproducibility: temperature=0.0 + cached prompts means re-running
+# this config produces an identical agent_runs row.
+
+strategy: llm_agent
+strategy_params:
+  model: "claude-sonnet-4-6"
+  context_bars: 30
+  indicators:
+    - name: sma
+      params: { period: 20 }
+      label: "SMA(20)"
+    - name: sma
+      params: { period: 50 }
+      label: "SMA(50)"
+    - name: rsi
+      params: { period: 14 }
+      label: "RSI(14)"
+  temperature: 0.0
+  max_tokens: 256
+  position_size_pct: 0.95
+  cache_path: "data/llm_strategy_cache.sqlite"
+
+config:
+  symbols: [AAPL]
+  start: "2024-01-01T00:00:00Z"
+  end:   "2024-12-31T23:59:59Z"
+  interval: "1d"
+  provider: "polygon"
+  starting_cash: 40000.0
+  history_window: 100
+  fees_model: per_share
+  fees_params:
+    per_share: 0.005
+    min_commission: 1.00
+  slippage_model: next_bar_open

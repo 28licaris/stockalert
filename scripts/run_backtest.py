@@ -46,6 +46,15 @@ def _load_strategy(name: str, params: dict[str, Any], interval: str) -> Any:
             params=SmaCrossoverParams(**params),
             interval=interval,
         )
+    if name == "llm_agent":
+        from app.services.sim.strategies.llm_agent import (
+            LLMAgentParams,
+            LLMAgentStrategy,
+        )
+        return LLMAgentStrategy(
+            params=LLMAgentParams(**params),
+            interval=interval,
+        )
     raise ValueError(
         f"Unknown strategy {name!r}. Register it in scripts/run_backtest.py::_load_strategy."
     )

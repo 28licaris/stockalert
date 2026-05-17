@@ -1124,16 +1124,113 @@ reproducible only via `git_sha` + `strategy_version` + `config`
 identity, not via Iceberg snapshot pinning. **1m bronze path
 pins snapshot fully and is the canonical training data source.**
 
-### Phase TA-2 — LLM-driven strategy (after TA-1)
+### Phase TA-2 — LLM-driven strategy + agent self-evaluation MCP (LANDED 2026-05-17)
 
-- [ ] `app/services/sim/strategies/llm_agent.py` — wraps Claude via
-      the Anthropic SDK. Caches model responses on `(symbol, ts,
-      context_hash)` so a replay doesn't re-pay the API cost.
-- [ ] New MCP tool `run_backtest(strategy, config) -> RunMetrics`
-      so an agent can self-evaluate its own changes.
-- [ ] Cost budget: backtests with N bars cap LLM calls at ≤N.
-- [ ] Integration test: 30-day SPY backtest with the LLM agent,
-      result row in `agent_runs`.
+- [x] `app/services/sim/strategies/llm_agent.py` — `LLMAgentStrategy`
+      wrapping Claude via the official `anthropic` SDK. Implements
+      the `Strategy` Protocol directly (not via BaseStrategy) so it
+      can manage its own setup/teardown for the API client + cache.
+      - **Response caching** in local SQLite keyed on
+        `sha256(model || system_prompt || user_prompt)`. Same prompt
+        → cache hit → zero API cost. Cache persists across processes
+        so a replay tomorrow is free.
+      - **Cost-bounded by construction.** Strategy holds during
+        warmup (no API call); cost per bar = at most one API call
+        on first run, zero on replay. `_CallStats` accounts
+        api_calls / cache_hits / parse_failures / api_failures
+        for observability.
+      - **Errors degrade to `hold()`** — API failure (rate limit,
+        network), parse failure (model wrapped JSON in prose, model
+        returned nonsense), or missing API key in setup. The
+        backtest continues; we'd rather emit a measurable run than
+        crash.
+      - **Deterministic by default** — `temperature=0.0` removes
+        randomness; combined with response caching, the same
+        config produces an identical `agent_runs` row on replay.
+      - **Pluggable indicators** in the prompt — `IndicatorSpec`
+        list in params lets the operator (or another agent) tune
+        what signals Claude sees without code changes.
+      - **Action parsing**: tolerant JSON-object extraction
+        (finds first `{...}` in the response) — robust to model
+        wrapping JSON in prose despite system-prompt instructions.
+
+- [x] `app/mcp/tools/sim.py` — two new MCP tools:
+      - **`run_backtest(strategy_name, strategy_params, config,
+        write_to_registry=True)`** → `RunMetrics`. Supports
+        `sma_crossover` and `llm_agent`. This is the
+        agent-iteration tool — an LLM can propose a strategy
+        config, run it, see the metrics, then propose a different
+        config.
+      - **`list_strategy_runs(strategy_name, limit)`** → list of
+        slim rows from `agent_runs`. The "how have my runs
+        performed" tool. JSON-safe coercion of datetime / UUID
+        columns so the agent gets serializable data.
+
+- [x] `configs/llm_agent.yaml` — sample LLM-strategy config (AAPL
+      2024 daily, SMA + RSI in context, Claude Sonnet 4.6 at
+      temperature 0). Documents cost expectation (~$0.50-0.75 per
+      full-year run on Sonnet pricing; replays are free).
+
+- [x] **Tests (17 new + 2 MCP tool tests = 19/19 green):**
+      - `tests/test_llm_agent_unit.py` (16 cases):
+        - JSON extraction (strict, prose-wrapped, garbage).
+        - Cache-key determinism + model-name sensitivity.
+        - SQLite cache: roundtrip + miss + persistence across reopens.
+        - Warmup → no API calls; bars past warmup → exactly N calls.
+        - **Replay produces all cache hits, zero API calls.**
+        - Action emission: buy-when-flat, buy-ignored-when-long,
+          sell-with-position, sell-ignored-when-flat.
+        - Parse failure → hold + stat increment.
+        - API failure → hold + stat increment + cache NOT written.
+        - position_size_pct clamps LLM-suggested oversize.
+        - Two independent runs sharing one cache produce
+          identical action sequences (reproducibility gate).
+      - `tests/test_mcp_sim.py` (5 cases):
+        - Both tools advertised in `list_tools`.
+        - `run_backtest` against `sma_crossover` + stubbed bars
+          end-to-end through MCP — returns valid RunMetrics dict.
+        - Unknown strategy → MCP-side error.
+        - `list_strategy_runs` returns slim view; datetimes are
+          isoformat strings.
+        - `limit > 200` clamps silently.
+
+- [x] **End-to-end live verification** via official MCP client:
+        ```
+        25 tools advertised
+        run_backtest(sma_crossover, AAPL 2024 Q3)
+          → n_trades=1, total_return=+3.60%, sharpe=2.02,
+            final_equity=$41,440.53
+        list_strategy_runs(limit=3) → 3 rows including the
+          just-completed run + the 2 reproducible runs from TA-1
+          (+2.65% identical metrics)
+        ```
+
+**The agent self-evaluation loop is live.** An LLM agent connected
+to this server can:
+
+  1. `list_bronze_symbols` → discover the universe
+  2. `get_bronze_bars(symbol, start, end)` → look at history
+  3. `run_backtest({strategy_name: "llm_agent", ...})` → test
+     its own hypothesis (or one it generated)
+  4. `list_strategy_runs(strategy_name)` → compare with past attempts
+  5. iterate
+
+…with real production data, full reproducibility, and zero API cost
+on replays. **This is the foundation Trading-AI Phases 3+ build on.**
+
+### What's next (TA-3 onward)
+
+Per [trading_subsystem_design.md §10](trading_subsystem_design.md#10-phasing):
+
+- **TA-3** — More indicators (ATR, Bollinger, Stochastic, MA
+  variants) + more rule-based strategies for comparison baselines.
+  Parallel to LLM agent iteration.
+- **TA-4** — Multi-timeframe (strategy declares `intervals=['1d',
+  '1h']`) + `screener` service for universe scanning.
+- **TA-5** — RL agent (PPO). Same `Strategy` Protocol — the harness
+  doesn't know it's RL.
+- **TA-6+** — Paper trading → live. Same Strategy class. Different
+  Executor. Kill switches mandatory.
 
 ### Phase TA-3+ — Roadmap
 

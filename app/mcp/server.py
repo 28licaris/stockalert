@@ -56,12 +56,14 @@ def register_all_tools() -> None:
     from app.mcp.tools import movers  # noqa: F401
     from app.mcp.tools import quotes  # noqa: F401
     from app.mcp.tools import signals  # noqa: F401
+    from app.mcp.tools import sim  # noqa: F401
     from app.mcp.tools import system  # noqa: F401
     from app.mcp.tools import watchlist  # noqa: F401
 
     logger.info(
         "MCP tools registered (lake + live + quotes + signals + "
-        "watchlist + movers + instruments + market + coverage + system)"
+        "watchlist + movers + instruments + market + coverage + "
+        "system + sim)"
     )
 
 

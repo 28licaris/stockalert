@@ -23,7 +23,8 @@ Read it before changing anything here.
 | [evaluator.py](evaluator.py) | `Evaluator` Protocol + `StandardEvaluator` (returns canonical metrics) |
 | [backtester.py](backtester.py) | `Backtester.run(strategy, config) -> RunResult` — the orchestrator |
 | [registry.py](registry.py) | `agent_runs` CH writer/reader for run history + reproducibility |
-| [strategies/](strategies/) | Concrete strategies — one file each, pluggable |
+| [strategies/sma_crossover.py](strategies/sma_crossover.py) | Canary — long-only SMA crossover. Interval-agnostic. |
+| [strategies/llm_agent.py](strategies/llm_agent.py) | LLM-driven strategy. Wraps Claude via the Anthropic SDK. Response-cached in local SQLite for replay reproducibility + cost control. |
 
 ## How to add a new strategy
 
