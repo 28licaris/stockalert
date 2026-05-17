@@ -660,18 +660,93 @@ Three sub-commits, each reviewable on its own:
 **Gate:** `/api/lake/bars?symbol=AAPL&start=...&end=...` returns rows
 with ClickHouse stopped. Existing CH-backed routes still work normally.
 
-### Step 3 — MCP scaffold mounted on FastAPI (NOT STARTED)
+### Step 3 — MCP scaffold mounted on FastAPI (IN PROGRESS)
 
-- [ ] `app/mcp/` package with FastMCP server
-- [ ] Mount at `/mcp` on the existing FastAPI app (single process)
-- [ ] One MCP tool per read service: `get_bronze_bars`, `get_recent_bars`,
-      `get_recent_signals`, `get_quote`, `list_symbols`, `gap_report`
-- [ ] Tools call the same services that routes call — zero business
-      logic in the tool layer
-- [ ] `app/mcp/README.md` documenting the tool surface
+Scope-up from the original journal plan: every read service in
+`app/services/readers/` will get one tool per public method, plus
+tools wrapping the watchlist/movers/instruments/coverage surfaces,
+plus Schwab pass-through (options/market hours), plus system
+observability. Sliced for incremental delivery.
 
-**Gate:** Claude / an LLM agent can call `get_bronze_bars` via MCP and
-get a DataFrame back. End-to-end "agent reads lake" works.
+**Slice 1 — Foundation + lake tools** (LANDED 2026-05-16)
+- [x] `mcp[cli]>=1.0` added as a dependency (PyPI `mcp` package
+      → `FastMCP`).
+- [x] `app/mcp/server.py` — global `mcp = FastMCP("stockalert")`
+      instance + `register_all_tools()` + `mount_on(app)` helper.
+      Mount composes FastMCP's session-manager lifespan with the
+      FastAPI lifespan so initialization is automatic.
+- [x] `app/mcp/middleware.py` — `tool_call(name, **fields)` context
+      manager. Logs success-with-timing, distinguishes `ValueError`
+      (client problem, WARNING) from other exceptions (server bug,
+      ERROR with traceback). Designed to absorb future hooks
+      (auth, rate limit, cost accounting) without per-tool changes.
+- [x] `app/mcp/tools/lake.py` — 3 tools backing `BronzeReader`:
+      - `get_bronze_bars(symbol, start, end, provider, limit)`
+      - `list_bronze_symbols(provider, since, limit)`
+      - `get_latest_trading_day(provider, lookback_days)`
+      Each tool: docstring with `USE WHEN`, `Args`, `Returns`, `Cost`
+      sections (the LLM-visible affordance). Body is `with tool_call(...)`
+      then one reader call. Returns the exact `schemas.py` Pydantic
+      shape — HTTP and MCP surfaces share the contract byte-for-byte.
+- [x] `app/mcp/README.md` — folder contract, planned tool surface
+      table, "how to add a new tool" recipe, layering rules.
+- [x] `main_api.py` mounts MCP via `_safe_start`-equivalent isolation:
+      a try/except so MCP failures don't break the API. Mounted at
+      `/mcp` → streamable-HTTP endpoint at `/mcp/mcp/`.
+- [x] Tests `tests/test_mcp_lake.py` — 8 cases:
+      - **Discovery:** `list_tools` returns 3 lake tools; descriptions
+        present + one-line summaries; input schemas cover required
+        + optional args.
+      - **Invocation:** `call_tool(...)` against a stubbed reader
+        returns the expected Pydantic shape for all 3 tools.
+      - **Unknown tool:** raises (FastMCP's `ToolError`).
+      - **Structural gate:** AST-walks every `app.*` module reachable
+        from `tools/lake.py` and asserts none sit under `app.db.*`.
+        Same pattern as `test_lake_route_does_not_import_clickhouse`
+        for HTTP routes — CH-independence enforced at the code-
+        structure level for the MCP path too.
+      - 8/8 green.
+- [x] **End-to-end live verification:** booted uvicorn, used the
+      official `mcp.client.streamable_http` Python client to:
+        1. Open a session,
+        2. Call `list_tools()` — returns all 3 with full descriptions,
+        3. Call `call_tool("get_latest_trading_day", {"provider":"polygon"})`
+           — returns `{"provider":"polygon", "latest_trading_day":"2026-05-15"}`
+           from production bronze, sub-second.
+      This is the exact path Claude Desktop / any MCP-compatible
+      agent will take. **The Phase Pre-3 Step 3 gate is GREEN for
+      the bronze slice.**
+
+**Slice 2 — Live tier + signals + quotes** (NEXT)
+- [ ] `app/mcp/tools/live.py` — 4 tools backing `BarReader`:
+      `get_recent_bars`, `get_bars_in_range`, `get_bars_for_chart`,
+      `get_latest_bar_per_symbol`.
+- [ ] `app/mcp/tools/signals.py` — 2 tools backing `SignalReader`:
+      `get_recent_signals`, `get_signals_by_symbol`.
+- [ ] `app/mcp/tools/quotes.py` — 3 tools backing `QuoteService` +
+      the curated banner: `get_quote`, `get_quotes`, `get_market_banner`.
+- [ ] Tests parallel to `test_mcp_lake.py` for each tool file.
+
+**Slice 3 — Discovery + observability tools** (later)
+- [ ] `tools/watchlist.py` — read-only watchlist tools.
+- [ ] `tools/movers.py`, `tools/instruments.py`, `tools/market.py`.
+- [ ] `tools/coverage.py` — gap detection + lake-table stats. ML-quality
+      observability for agents.
+- [ ] `tools/system.py` — `get_health`, `get_service_status`,
+      `get_lake_freshness`. Agents observe the platform itself.
+
+**Slice 4 — Schwab pass-through** (later, lower priority)
+- [ ] `tools/schwab_options.py` (option chain / expirations / option
+      quote).
+- [ ] `tools/journal.py` (Schwab account + trade history).
+
+**Slice 5 — Gated writes** (its own phase, NOT before Trading AI work)
+- [ ] `tools/writes.py` — watchlist mutation with allowlist.
+- [ ] `tools/trading.py` — Schwab Trader API. Kill-switch protected.
+
+**Gate (Step 3):** an LLM agent can call any read tool through MCP
+and get the same Pydantic shape the HTTP route would return — proven
+end-to-end with the official MCP client.
 
 ### What "done" looks like before Phase 3 (Silver)
 

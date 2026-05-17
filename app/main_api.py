@@ -308,6 +308,18 @@ except ImportError:
     logger.info("ℹ️  Backtest routes not available")
 
 
+# ─────────────────────────────────────────────────────────────────────
+# MCP server (Pre-Phase 3 Step 3). Mounted at /mcp — same readers that
+# back HTTP routes back the MCP tools, so agents and humans see the
+# same Pydantic shapes.
+# ─────────────────────────────────────────────────────────────────────
+try:
+    from app.mcp.server import mount_on as _mount_mcp
+    _mount_mcp(app)
+except Exception as _mcp_exc:  # noqa: BLE001 — boundary; isolate startup failure
+    logger.warning("ℹ️  MCP server not mounted: %s", _mcp_exc)
+
+
 _DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "static", "dashboard.html")
 _SYMBOL_PATH = os.path.join(os.path.dirname(__file__), "static", "symbol.html")
 _JOURNAL_PATH = os.path.join(os.path.dirname(__file__), "static", "journal.html")
