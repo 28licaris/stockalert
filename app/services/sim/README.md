@@ -79,13 +79,41 @@ produces an identical metrics row (reproducibility test).
    `strategy_params` + `config`. Re-running with the same triple
    produces the same metrics.
 
-## What's NOT in TA-1
+## Multi-timeframe (TA-4.1 onward)
+
+Strategies that need multiple bar timeframes declare:
+
+```python
+class MyMtfStrategy(BaseStrategy):
+    name = "my_mtf"
+    version = "0.1"
+    interval = "1h"             # execution (finest)
+    intervals = ["1d", "1h"]    # full list, coarsest-to-finest
+```
+
+The Context exposes each via:
+
+- `ctx.history` — execution-interval (back-compat property)
+- `ctx.history_at("1d")` — explicit interval
+- `ctx.indicator("sma", period=200, interval="1d")` — cross-interval indicator
+
+**No look-ahead invariant**: coarser-interval bars are only visible
+when `coarser_bar.timestamp + interval_duration <= execution_bar.timestamp`.
+The Backtester enforces this via `advance_coarser` ordering;
+`tests/test_multi_timeframe.py::test_backtester_releases_coarser_bars_only_when_ready`
+pins it.
+
+Single-TF strategies (only `interval`, no `intervals` attribute)
+work unchanged — the harness wraps them as `[interval]` internally.
+
+## What's NOT in the current build
 
 - Multi-symbol shared portfolio (each `Backtester.run()` runs one
-  symbol at a time; TA-3 adds shared-portfolio multi-symbol).
-- Resampling 1m bronze to 5m/15m/30m/1h/4h (TA-3).
+  symbol at a time; future work adds shared-portfolio multi-symbol).
 - Short selling (TA-5+ alongside RL agent).
 - Live execution (TA-6+).
-- LLM-driven strategy (TA-2 — comes next).
+- Resampling-on-the-fly from minute bronze to 5m/15m/30m/1h/4h
+  inside the backtester (the BarReader handles this for the CH
+  live tier; bronze-side resampling is a future feature).
 
 Don't add these in code until the journal opens the phase.

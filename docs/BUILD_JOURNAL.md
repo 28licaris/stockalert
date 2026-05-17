@@ -1588,13 +1588,114 @@ After the LLM lands its first row, the path forward is:
   doesn't know it's RL. Reward = stepped Sharpe contribution.
 - **TA-6+** — paper trading → live with kill switches.
 
-### Phase TA-4+ — Roadmap
+### Phase TA-4.1 — Multi-timeframe foundation (LANDED 2026-05-17)
+
+Strategies can now declare `intervals: list[str]` (coarsest-to-finest)
+to access multiple bar timeframes within one run. The Backtester
+fetches bars at each, the Context exposes them via
+`history_at(interval)` and `indicator(name, interval=..., **params)`,
+and a **no-look-ahead invariant** ensures coarser bars are only
+released when their window has closed.
+
+Single-timeframe strategies continue to work without ANY code
+changes — the entire 4-baseline + canary + LLM agent suite from
+TA-1/TA-2/TA-3 passes unchanged.
+
+- [x] `app/services/sim/intervals.py` (NEW) —
+      `interval_seconds`, `interval_duration`,
+      `validate_intervals_order` (coarsest-to-finest required,
+      duplicates rejected), `execution_interval`,
+      `supported_intervals`.
+- [x] `app/services/sim/context.py` refactored:
+      - `Context(config, intervals=None)` — `intervals` optional;
+        defaults to `[config.interval]` for back-compat.
+      - `ctx.history` (property) = execution-interval history
+        (back-compat alias).
+      - `ctx.history_at(interval)` (method) = explicit-interval.
+      - `ctx.advance(bar, portfolio)` = execution interval
+        (existing API).
+      - `ctx.advance_coarser(interval, bar)` (NEW) = coarser
+        intervals; harness-only.
+      - `ctx.indicator(name, *, interval=None, **params)` — cache
+        keyed on `(interval, name, sorted_params)`. SMA(20) on
+        daily and SMA(20) on 5m no longer collide.
+      - `ctx.intervals` / `ctx.execution_interval` properties.
+- [x] `app/services/sim/strategy.py` —
+      `required_intervals(strategy)` helper returns
+      `getattr(strategy, 'intervals', None) or [strategy.interval]`.
+      `Strategy` Protocol docstring updated to document the
+      optional `intervals: list[str]` attribute.
+- [x] `app/services/sim/schemas.py` —
+      `BacktestConfig.intervals: list[str] | None = None`
+      (operator override for the strategy's declared intervals).
+- [x] `app/services/sim/backtester.py` rewritten:
+      - `_fetch_bars_multi(config, intervals)` returns
+        `{interval: {symbol: bars}}` — one fetch per declared
+        interval.
+      - `_run_one_symbol` walks execution-interval bars; at each
+        step releases coarser-interval bars whose `ready_time <=
+        execution_bar.timestamp`, then advances execution.
+      - Validates: `strategy.interval == execution_interval` AND
+        `config.interval == execution_interval`. Mismatch raises.
+      - Snapshot pinning still works (only on 1m → bronze).
+- [x] **Tests `tests/test_multi_timeframe.py`** — 24 cases:
+      - Interval helpers (5 cases): duration math, ordering
+        validation (accepts coarsest-to-finest; rejects wrong
+        order, duplicates, empty), execution_interval = last.
+      - `required_intervals` helper (2 cases).
+      - Context multi-TF API (8 cases): default single-TF init,
+        multi-TF init, `history_at` unknown-interval raises,
+        `history` property = execution-interval, `advance_coarser`
+        rejects execution interval + unknown intervals,
+        per-interval indicator cache (SMA(20) daily ≠ SMA(20) 5m),
+        cache clears on `advance()`.
+      - Backtester (4 cases): **the no-look-ahead invariant**
+        (daily Aug-1 bar visible only at hour 24 on Aug-2, not
+        any earlier 23 hours), strategy/config interval mismatch
+        raises (both directions), end-to-end multi-TF run
+        produces a non-trivial RunResult.
+      - Back-compat (1 case): existing SMA Crossover (single-TF,
+        no `intervals` attr) runs unchanged.
+- [x] Existing test suite (118 cases across sim / strategies /
+      MCP / indicators / lake / quotes) all pass without changes
+      to test bodies except 4 tests that patched the old
+      `_fetch_bars`/`_capture_snapshot` signatures — updated to
+      the new `(config, intervals)` and `(config, exec_interval)`
+      shapes.
+- [x] **Reproducibility regression**: re-ran the SMA Crossover
+      canary on AAPL daily 2023-2024. Identical metrics
+      byte-for-byte (+2.65% / 5 trades / Sharpe 0.305 / max DD
+      -5.90% / Sortino 0.190 / annualized +2.10% / longest DD
+      53 days / avg trade -$793.02). The multi-TF refactor
+      preserves single-TF behavior exactly.
+
+### Phase TA-4.2 — First multi-timeframe strategy (NEXT)
+
+- [ ] Concrete strategy: e.g. **EMA Crossover gated by daily
+      trend filter** — 1h execution interval with a daily SMA(200)
+      gate. Only take long signals when daily close > daily
+      SMA(200). Mirrors the canonical swing-trader pattern
+      (regime check on slow timeframe, execution on fast).
+- [ ] Backtest vs the single-TF EMA Crossover (TA-3.5) baseline
+      on AAPL — does the daily trend filter add edge or just
+      cut trade count?
+- [ ] Tests including a structural look-ahead regression
+      (strategy must use `ctx.history_at('1d')` only — gate test
+      asserting it reads from a non-execution interval).
+
+### Phase TA-4.3 — Screener service (after TA-4.2)
+
+- [ ] `app/services/screener/` package with
+      `ScreenerSpec` Pydantic + `Screener.scan(universe, spec)`
+      → ranked candidate list.
+- [ ] HTTP route + MCP tool wrapping the screener.
+- [ ] Universe sources: a hardcoded list, a watchlist, all of
+      bronze, etc.
+
+### Phase TA-5+ — Roadmap
 
 Detailed in [trading_subsystem_design.md §10](trading_subsystem_design.md#10-phasing):
 
-- **TA-4** — Multi-timeframe strategies (declare
-  `intervals=['1d', '1h']`) + `screener` service for universe
-  scanning.
 - **TA-5** — RL agent (PPO). Same `Strategy` Protocol — the harness
   doesn't know it's RL. Reward = stepped Sharpe contribution.
 - **TA-6+** — Paper trading → live. Same `Strategy` class, different

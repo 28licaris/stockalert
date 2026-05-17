@@ -514,10 +514,12 @@ def test_backtester_end_to_end_with_stubbed_source(monkeypatch) -> None:
 
     bars, cfg = _stub_fetch_bars("TEST", _CROSSING_CLOSES)
 
-    monkeypatch.setattr(bt_mod.Backtester, "_fetch_bars",
-                        lambda self, c: {"TEST": bars})
+    monkeypatch.setattr(
+        bt_mod.Backtester, "_fetch_bars_multi",
+        lambda self, c, intervals: {iv: {"TEST": bars} for iv in intervals},
+    )
     monkeypatch.setattr(bt_mod.Backtester, "_capture_snapshot",
-                        lambda self, c: "test-snap")
+                        lambda self, c, exec_interval: "test-snap")
 
     strat = SmaCrossoverStrategy(params=SmaCrossoverParams(
         fast_period=3, slow_period=10, position_size_pct=0.95,
@@ -540,10 +542,12 @@ def test_backtester_deterministic(monkeypatch) -> None:
     from app.services.sim.backtester import Backtester
 
     bars, cfg = _stub_fetch_bars("TEST", _CROSSING_CLOSES)
-    monkeypatch.setattr(bt_mod.Backtester, "_fetch_bars",
-                        lambda self, c: {"TEST": bars})
+    monkeypatch.setattr(
+        bt_mod.Backtester, "_fetch_bars_multi",
+        lambda self, c, intervals: {iv: {"TEST": bars} for iv in intervals},
+    )
     monkeypatch.setattr(bt_mod.Backtester, "_capture_snapshot",
-                        lambda self, c: "test-snap")
+                        lambda self, c, exec_interval: "test-snap")
 
     def _new_strat():
         return SmaCrossoverStrategy(params=SmaCrossoverParams(

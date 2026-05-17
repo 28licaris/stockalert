@@ -86,10 +86,12 @@ def test_run_backtest_canary(monkeypatch) -> None:
     # 12 flat bars + a clean uptrend → guaranteed cross-up.
     bars = _synthetic_bars("TEST", [100.0] * 12 + [105.0, 110.0, 115.0, 120.0, 125.0])
 
-    monkeypatch.setattr(bt_mod.Backtester, "_fetch_bars",
-                        lambda self, c: {"TEST": bars})
+    monkeypatch.setattr(
+        bt_mod.Backtester, "_fetch_bars_multi",
+        lambda self, c, intervals: {iv: {"TEST": bars} for iv in intervals},
+    )
     monkeypatch.setattr(bt_mod.Backtester, "_capture_snapshot",
-                        lambda self, c: "test-snap")
+                        lambda self, c, exec_interval: "test-snap")
 
     # Don't write to CH in the test (it may not be reachable).
     with patch("app.services.sim.registry.write_run"):
@@ -125,9 +127,16 @@ def test_run_backtest_unknown_strategy_raises(monkeypatch) -> None:
     """Unknown strategy name surfaces a clear MCP-side error."""
     from app.services.sim import backtester as bt_mod
 
-    monkeypatch.setattr(bt_mod.Backtester, "_fetch_bars",
-                        lambda self, c: {"TEST": _synthetic_bars("TEST", [100.0, 101.0])})
-    monkeypatch.setattr(bt_mod.Backtester, "_capture_snapshot", lambda self, c: None)
+    monkeypatch.setattr(
+        bt_mod.Backtester, "_fetch_bars_multi",
+        lambda self, c, intervals: {
+            iv: {"TEST": _synthetic_bars("TEST", [100.0, 101.0])} for iv in intervals
+        },
+    )
+    monkeypatch.setattr(
+        bt_mod.Backtester, "_capture_snapshot",
+        lambda self, c, exec_interval: None,
+    )
 
     with pytest.raises(Exception):  # FastMCP wraps the ValueError as a ToolError
         asyncio.run(mcp.call_tool("run_backtest", {

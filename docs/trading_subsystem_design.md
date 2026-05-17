@@ -604,11 +604,33 @@ test).
 - Indicators: ATR, Bollinger, Stochastic, additional MAs.
 - Strategies: RSI-extreme reversion, ATR-breakout, mean-revert pair.
 
-### Phase TA-4: Multi-timeframe + screener
-- A Strategy declares multiple intervals; Context resolves history
-  per interval.
-- `screener` service: scan a universe with a fast strategy, emit
-  candidate set; deeper strategy runs on the short-list.
+### Phase TA-4.1: Multi-timeframe foundation (LANDED 2026-05-17)
+- Strategy declares `intervals: list[str]` (coarsest-to-finest);
+  Context exposes one BarHistory per interval via
+  `history_at(interval)` and indicators by interval via
+  `indicator(name, interval=..., **params)`. Single-TF
+  strategies that declare only `interval: str` continue to
+  work unchanged via the `required_intervals(strategy)` helper.
+- Backtester iterates the EXECUTION interval (the finest one);
+  coarser intervals are released to Context only when
+  `coarser_bar.timestamp + interval_duration <= execution_bar.timestamp`.
+  This is the **no-look-ahead invariant**, regression-tested.
+- `BacktestConfig.intervals: list[str] | None` for operator
+  override; if set, takes precedence over the strategy's
+  declared intervals.
+- Bar fetch resolves per-interval: '1m' → BronzeReader (snapshot
+  pinned), all other intervals → BarReader (CH).
+
+### Phase TA-4.2: First multi-TF strategy (NEXT)
+- Concrete strategy that uses two timeframes — e.g. EMA
+  crossover on intraday gated by a daily trend filter.
+- Live run vs the single-TF EMA Crossover baseline to measure
+  whether the daily filter adds edge.
+
+### Phase TA-4.3: Screener service (after TA-4.2)
+- `screener` service: scan a universe with a fast filter
+  (rule-based or LLM-driven), emit ranked candidate set;
+  deeper strategy then runs on the short-list.
 
 ### Phase TA-5: RL agent (Trading-AI plan Phase 2)
 - PPO trained against the backtest harness as its environment.

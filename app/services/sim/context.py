@@ -1,11 +1,24 @@
 """
 Context object passed to `Strategy.on_bar`. Strategy-facing read-only
-view of the world: current bar, recent history, portfolio snapshot,
-indicator API, structured logging.
+view of the world: current bar, recent history (per interval),
+portfolio snapshot, indicator API, structured logging.
 
 The backtester owns one `Context` per run and mutates it via the
-`advance(bar, portfolio)` method on each iteration. Strategies see
-the same object across calls but treat it as read-only.
+`advance` (execution interval) and `advance_coarser` (other intervals)
+methods. Strategies see the same object across calls but treat it as
+read-only.
+
+Multi-timeframe support (TA-4):
+
+  - Single-timeframe strategies work unchanged: `ctx.history` and
+    `ctx.indicator(name, **params)` operate on the only interval.
+  - Multi-timeframe strategies declare `intervals = ['1d', '1h', '5m']`
+    (coarsest-to-finest). Backtester iterates the finest;
+    coarser-interval bars become visible to the strategy via
+    `ctx.history_at(interval)` and `ctx.indicator(..., interval=)`.
+  - No look-ahead: coarser bars are exposed only when their ready
+    time (timestamp + duration) is <= current execution timestamp.
+    The backtester enforces this via `advance_coarser`.
 """
 from __future__ import annotations
 
@@ -16,21 +29,18 @@ from typing import Any, Optional
 import pandas as pd
 
 from app.indicators.registry import get_indicator
+from app.services.sim.intervals import execution_interval, validate_intervals_order
 from app.services.sim.schemas import Bar, BacktestConfig, PortfolioSnapshot
 
 
 class BarHistory:
     """
-    Rolling window of the most recent `maxlen` bars.
+    Rolling window of the most recent `maxlen` bars at one interval.
 
     Backed by `collections.deque(maxlen=...)` for O(1) appends with
     automatic eviction. Materialized as pandas DataFrame on demand
     (cached and invalidated on each `append`) so indicators can use
     standard pandas APIs.
-
-    Sized to the slowest indicator a strategy uses — for an SMA(200)
-    crossover, history_window=200 is the minimum; ~250 gives some
-    breathing room.
     """
 
     def __init__(self, maxlen: int) -> None:
@@ -51,13 +61,7 @@ class BarHistory:
         return self._bars.maxlen or 0
 
     def to_dataframe(self) -> pd.DataFrame:
-        """
-        Materialize bars as DataFrame indexed by timestamp.
-
-        Cached until the next `append`. Columns: open, high, low,
-        close, volume — the standard OHLCV shape indicators expect.
-        Strategies can also use `df['close']` for indicator input.
-        """
+        """OHLCV DataFrame indexed by timestamp. Cached until the next `append`."""
         if self._df_cache is not None:
             return self._df_cache
 
@@ -84,29 +88,88 @@ class BarHistory:
 
 class Context:
     """
-    Per-bar view passed to `Strategy.on_bar`. Owns the indicator cache.
+    Per-bar view passed to `Strategy.on_bar`. Owns one `BarHistory`
+    per interval and the cross-interval indicator cache.
 
-    Lifecycle:
-      - `__init__` once per run.
+    Lifecycle (single-TF):
+      - `__init__(config)` once per run. Defaults to single interval
+        `config.interval`.
       - `advance(bar, portfolio)` before each `on_bar` call.
-      - Indicator cache keyed on `(name, frozenset(params))` —
-        same call within a bar returns the same series; different
-        bars recompute (history changed).
 
-    Strategies should treat this as read-only. Mutation belongs to
-    the harness.
+    Lifecycle (multi-TF):
+      - `__init__(config, intervals=['1d', '1h', '5m'])` once per run.
+      - Per iteration (executed at `intervals[-1]`, the finest):
+          1. For each coarser interval, the backtester calls
+             `advance_coarser(interval, bar)` for any newly-ready bar.
+          2. `advance(execution_bar, portfolio)` once.
+          3. Strategy.on_bar(ctx) reads from any interval.
+
+    Indicator cache invalidates at every `advance()` call (execution
+    interval) — every fresh execution bar means at least one
+    BarHistory has new data, so all indicator queries recompute.
     """
 
-    def __init__(self, config: BacktestConfig) -> None:
+    def __init__(
+        self,
+        config: BacktestConfig,
+        *,
+        intervals: Optional[list[str]] = None,
+    ) -> None:
         self.config = config
-        self.history = BarHistory(maxlen=config.history_window)
+        # Back-compat: if intervals not given, use [config.interval].
+        # Otherwise honor what the strategy declared.
+        self._intervals = list(intervals) if intervals else [config.interval]
+        validate_intervals_order(self._intervals)
+        self._exec_interval = execution_interval(self._intervals)
+        # One BarHistory per interval, all sized to history_window.
+        # (Coarser intervals need fewer bars to cover the same time
+        # span as the finest, but a uniform maxlen keeps this simple
+        # and is rarely the bottleneck.)
+        self._histories: dict[str, BarHistory] = {
+            iv: BarHistory(maxlen=config.history_window) for iv in self._intervals
+        }
         self._bar: Optional[Bar] = None
         self._portfolio: Optional[PortfolioSnapshot] = None
-        # Indicator cache invalidated on each advance() — indicators
-        # are functions of history, and history changes each bar.
+        # Cross-interval indicator cache. Key = (interval, name_lower,
+        # sorted-params-tuple). Invalidated wholesale on every advance().
         self._indicator_cache: dict[tuple, pd.Series] = {}
-        # Structured per-bar log entries the strategy emits via `log()`
         self._log_entries: list[dict[str, Any]] = []
+
+    # ─────────────────────────────────────────────────────────────────
+    # Public read-only state
+    # ─────────────────────────────────────────────────────────────────
+
+    @property
+    def intervals(self) -> list[str]:
+        """Configured intervals, coarsest-to-finest."""
+        return list(self._intervals)
+
+    @property
+    def execution_interval(self) -> str:
+        """Finest interval — the one the backtester iterates on."""
+        return self._exec_interval
+
+    @property
+    def history(self) -> BarHistory:
+        """
+        BarHistory at the execution interval. Single-TF strategies
+        use this without ever thinking about intervals.
+        """
+        return self._histories[self._exec_interval]
+
+    def history_at(self, interval: str) -> BarHistory:
+        """
+        BarHistory at a specific interval. Multi-TF strategies use
+        this to peek at coarser timeframes:
+            daily_history = ctx.history_at('1d')
+        """
+        try:
+            return self._histories[interval]
+        except KeyError as exc:
+            raise ValueError(
+                f"interval {interval!r} not declared by this strategy/run; "
+                f"available: {self._intervals}"
+            ) from exc
 
     @property
     def bar(self) -> Bar:
@@ -122,38 +185,88 @@ class Context:
 
     @property
     def clock(self) -> datetime:
+        """Timestamp of the current EXECUTION bar."""
         return self.bar.timestamp
 
+    # ─────────────────────────────────────────────────────────────────
+    # Harness-only mutation
+    # ─────────────────────────────────────────────────────────────────
+
     def advance(self, bar: Bar, portfolio: PortfolioSnapshot) -> None:
-        """Mutate the context for a new bar (harness-owned)."""
+        """
+        Advance the execution interval and reset the indicator cache.
+        Called once per iteration step by the backtester.
+        """
         self._bar = bar
         self._portfolio = portfolio
-        self.history.append(bar)
+        self._histories[self._exec_interval].append(bar)
         self._indicator_cache.clear()
 
-    def indicator(self, name: str, **params: Any) -> pd.Series:
+    def advance_coarser(self, interval: str, bar: Bar) -> None:
         """
-        Lazy-compute + per-bar-cache an indicator over the current history.
+        Advance a coarser interval's history. Called by the backtester
+        BEFORE `advance()` when a coarser bar's ready_time has passed.
 
-        Strategies call: `ctx.indicator("sma", period=20)`.
-        Returns a pandas Series aligned to `ctx.history.to_dataframe()`'s index.
-
-        Cache scope: ONE bar. Each `advance()` clears it so the
-        indicator gets recomputed against the updated history on the
-        next call. (Incremental indicators are an optimization for
-        later — this gets us correct semantics first.)
-
-        Raises `ValueError` for unknown indicator names.
+        Does NOT clear the indicator cache — that happens on the
+        next `advance()` call. Multiple coarser advances may happen
+        in sequence (e.g. catching up several days' worth of data).
         """
-        key: tuple = (name.lower(), tuple(sorted(params.items())))
+        if interval == self._exec_interval:
+            raise ValueError(
+                f"advance_coarser called with the execution interval {interval!r}; "
+                "use advance() for execution-interval bars."
+            )
+        if interval not in self._histories:
+            raise ValueError(
+                f"interval {interval!r} not declared; available: {self._intervals}"
+            )
+        self._histories[interval].append(bar)
+
+    # ─────────────────────────────────────────────────────────────────
+    # Strategy-facing computation
+    # ─────────────────────────────────────────────────────────────────
+
+    def indicator(
+        self,
+        name: str,
+        *,
+        interval: Optional[str] = None,
+        **params: Any,
+    ) -> pd.Series:
+        """
+        Lazy-compute + per-bar-cache an indicator at a specific interval.
+
+        Strategies call:
+            ctx.indicator("sma", period=20)              # execution interval
+            ctx.indicator("rsi", period=14, interval="1d")  # daily, multi-TF
+            ctx.indicator("ema", period=12, interval="5m")  # 5-min, multi-TF
+
+        Returns a pandas Series aligned to that interval's
+        `history.to_dataframe()` index. Empty if history is empty.
+
+        Cache scope: ONE bar. Each `advance()` clears it.
+
+        Raises `ValueError` for unknown indicator names OR for an
+        interval not declared in `self.intervals`.
+        """
+        target_interval = interval or self._exec_interval
+        if target_interval not in self._histories:
+            raise ValueError(
+                f"interval {target_interval!r} not declared; "
+                f"available: {self._intervals}"
+            )
+
+        key: tuple = (
+            target_interval,
+            name.lower(),
+            tuple(sorted(params.items())),
+        )
         cached = self._indicator_cache.get(key)
         if cached is not None:
             return cached
 
-        df = self.history.to_dataframe()
+        df = self._histories[target_interval].to_dataframe()
         if df.empty:
-            # Return an empty series with the right name; the strategy
-            # will see len() == 0 and skip.
             result = pd.Series(dtype="float64", name=name)
         else:
             ind = get_indicator(name, **params)
@@ -166,11 +279,7 @@ class Context:
         return result
 
     def log(self, **fields: Any) -> None:
-        """
-        Record a structured per-bar log entry. Captured into the
-        RunResult so strategies can leave breadcrumbs without coupling
-        to a logger.
-        """
+        """Record a structured per-bar log entry."""
         entry = {"timestamp": self.clock, **fields}
         self._log_entries.append(entry)
 

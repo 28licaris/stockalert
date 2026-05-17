@@ -161,14 +161,34 @@ class BacktestConfig(BaseModel):
     symbols: list[str] = Field(..., min_length=1)
     start: datetime
     end: datetime
-    interval: SupportedInterval = "1d"
+    interval: SupportedInterval = Field(
+        "1d",
+        description=(
+            "Single-timeframe interval. For multi-TF strategies this "
+            "must match `intervals[-1]` (the execution interval). The "
+            "Backtester validates strategy/config interval agreement."
+        ),
+    )
+    intervals: Optional[list[SupportedInterval]] = Field(
+        None,
+        description=(
+            "Optional multi-timeframe list (coarsest-to-finest). When "
+            "set, takes precedence over `interval`; bars are fetched "
+            "for every entry, and the Context exposes them via "
+            "`history_at(interval)` and `indicator(..., interval=...)`. "
+            "The execution interval (the one the harness iterates on) "
+            "is `intervals[-1]`. Strategies declare their required "
+            "intervals as a class attribute; this config field is the "
+            "operator's chance to override at runtime."
+        ),
+    )
     provider: SupportedProvider = "polygon"
     starting_cash: float = 40_000.0
     history_window: int = Field(
         200,
         ge=1,
         le=10_000,
-        description="Maximum bars retained in Context.history. Sized to the slowest indicator a strategy uses.",
+        description="Maximum bars retained in Context.history per interval. Sized to the slowest indicator a strategy uses.",
     )
 
     # Fees + slippage are referenced by name; their params live in

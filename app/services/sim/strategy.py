@@ -32,15 +32,22 @@ class Strategy(Protocol):
       - `name: str`        — serializable identifier, recorded in agent_runs.
       - `version: str`     — bump on logic change; invalidates result caches.
       - `interval: str`    — required bar interval ('1d', '1h', '5m', ...).
+        For single-timeframe strategies this is the only one.
+        For multi-timeframe strategies, this is the EXECUTION interval
+        (the finest one the harness iterates on); the full list lives
+        in the optional `intervals` attribute below.
+
+    Optional multi-timeframe attribute:
+      - `intervals: list[str]` (coarsest-to-finest) — declare additional
+        contextual intervals beyond `interval`. The backtester fetches
+        bars at each, the Context exposes them via `history_at(interval)`
+        and `indicator(name, interval=..., **params)`. If absent, the
+        harness treats the strategy as single-TF on `interval`.
 
     Lifecycle:
       - `setup(ctx)`   — once before the run.
-      - `on_bar(ctx)`  — once per bar. Returns one Action.
+      - `on_bar(ctx)`  — once per execution bar. Returns one Action.
       - `teardown(ctx)` — once after the run.
-
-    All three lifecycle methods are required by the Protocol; if you
-    don't need them, inherit from `BaseStrategy` which provides
-    sensible no-ops.
 
     Implementation note: this is a `Protocol` (duck-typed), not an
     ABC. LLM- and RL-driven strategies don't naturally fit Python's
@@ -55,6 +62,23 @@ class Strategy(Protocol):
     def setup(self, ctx: Context) -> None: ...
     def on_bar(self, ctx: Context) -> Action: ...
     def teardown(self, ctx: Context) -> None: ...
+
+
+def required_intervals(strategy: Strategy) -> list[str]:
+    """
+    Return the list of intervals a strategy requires the backtester
+    to fetch.
+
+    Multi-TF strategies declare `intervals: list[str]` (coarsest-to-
+    finest). Single-TF strategies declare only `interval: str`, which
+    we wrap into a single-element list.
+
+    The execution interval is always `intervals[-1]` after this call.
+    """
+    declared = getattr(strategy, "intervals", None)
+    if declared:
+        return list(declared)
+    return [strategy.interval]
 
 
 class BaseStrategy:
