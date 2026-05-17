@@ -25,6 +25,7 @@ from app.services.live.monitor_manager import monitor_manager
 from app.services.live.watchlist_service import watchlist_service
 from app.api import (
     routes_backfill,
+    routes_indicators,
     routes_instruments,
     routes_journal,
     routes_lake,
@@ -292,6 +293,7 @@ app.include_router(routes_instruments.router, prefix="/api", tags=["Instruments"
 app.include_router(routes_market.router, prefix="/api", tags=["Market"])
 app.include_router(routes_journal.router, prefix="/api", tags=["Journal"])
 app.include_router(routes_lake.router, prefix="/api", tags=["Lake"])
+app.include_router(routes_indicators.router, prefix="/api", tags=["Indicators"])
 
 try:
     from app.api import routes_signals

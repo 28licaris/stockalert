@@ -14,7 +14,7 @@ contract in one place enforces that.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -360,3 +360,93 @@ class SystemHealthReport(BaseModel):
     iceberg_catalog: bool
     services: list[ServiceStatus]
     as_of: datetime
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Indicator exposure schemas (TA-3.2)
+# See docs/indicator_exposure_design.md for the full architectural
+# rationale. These are the canonical shapes used by the HTTP routes
+# in `app/api/routes_indicators.py` AND the MCP tools in
+# `app/mcp/tools/indicators.py` — single contract, two surfaces.
+# ─────────────────────────────────────────────────────────────────────
+
+
+class IndicatorValue(BaseModel):
+    """
+    One (timestamp, value) pair from an indicator series.
+
+    `value` is `None` during warmup or wherever the indicator
+    returned NaN (e.g. zero-range Stochastic window, divide-by-zero
+    guarded math). Consumers MUST handle nulls — strategies and
+    charts both skip them.
+    """
+
+    timestamp: datetime
+    value: Optional[float] = None
+
+
+class IndicatorSeries(BaseModel):
+    """
+    A single named series of computed indicator values aligned to
+    its bar window.
+
+    Naming convention:
+      - Single-output indicators (SMA, EMA, RSI, ATR, …) use the
+        indicator name directly: `"sma"`, `"rsi_14"`, etc.
+      - Multi-output indicators (Bollinger, Stochastic, MACD)
+        decompose into one IndicatorSeries per component, suffixed
+        with the component name:
+          - Bollinger -> `bollinger_upper`, `bollinger_middle`,
+            `bollinger_lower`, `bollinger_bandwidth`,
+            `bollinger_percent_b`.
+          - Stochastic -> `stochastic_k`, `stochastic_d`.
+          - MACD -> `macd`, `macd_signal`, `macd_histogram`.
+        This is what the `IndicatorReader` produces; consumers see
+        one series at a time regardless of indicator arity.
+    """
+
+    name: str = Field(
+        ...,
+        description="Series identifier, e.g. 'sma', 'bollinger_upper'.",
+    )
+    params: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Indicator parameters echoed for traceability.",
+    )
+    label: str = Field(
+        ...,
+        description="Display label for charts: 'SMA(20)', 'BB Upper(20, 2.0)', etc.",
+    )
+    values: list[IndicatorValue]
+    count: int = Field(..., description="len(values). Echoed for cheap client-side checks.")
+
+
+class IndicatorChartData(BaseModel):
+    """
+    Bundle of OHLCV bars + one or more indicator series, all aligned
+    to the same time window. Canonical response for chart endpoints
+    and agent batch queries.
+
+    The `bars` list is the same `BronzeBar` shape returned by
+    `/api/lake/bars`. The harness converts CH `LiveBar` to
+    `BronzeBar` when the interval is non-bronze so the response
+    shape stays uniform across data sources.
+    """
+
+    symbol: str
+    interval: str = Field(
+        ...,
+        description="'1m', '5m', '15m', '30m', '1h', '4h', '1d'.",
+    )
+    start: datetime
+    end: datetime
+    bars: list[BronzeBar]
+    series: list[IndicatorSeries]
+    snapshot_id: Optional[str] = Field(
+        None,
+        description=(
+            "Iceberg snapshot_id pinned at fetch time when reading "
+            "from bronze (1m interval). None when reading from CH "
+            "(other intervals) — CH has no snapshot semantics."
+        ),
+    )

@@ -102,6 +102,13 @@ must not import write-side service methods.
 | `run_backtest` | Run a strategy + config end-to-end; returns canonical RunMetrics. Supports `sma_crossover` and `llm_agent`. The agent-iteration tool. |
 | `list_strategy_runs` | Recent runs from the `agent_runs` registry. Lets an agent self-evaluate over its own history. |
 
+### Indicators (compute-on-read)
+| Tool | When to use |
+|---|---|
+| `compute_indicator` | Single indicator series for a symbol over a window. Returns one `IndicatorSeries`. |
+| `compute_indicators` | Multi-indicator bundle — bars + N series in one call. Multi-output indicators (Bollinger / Stochastic / MACD) decompose into per-component series. |
+| `get_chart_data` | Like `compute_indicators` but anchored to a relative lookback (`lookback_days`) instead of explicit timestamps. The "show me a chart from N days back with these overlays" call. |
+
 ### Future slices
 
 - **Slice 4 (Schwab pass-through):** options chain / expirations / option quote / journal (account + trade history).

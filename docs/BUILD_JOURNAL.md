@@ -1272,23 +1272,97 @@ the LLM strategy's `IndicatorSpec`) can already request the new
 indicators by name. Next commit builds `IndicatorReader` + HTTP
 routes + MCP tools so the dashboard and agents can see them too.
 
-### Phase TA-3.2 — Indicator exposure layer (NEXT)
+### Phase TA-3.2 — Indicator exposure layer (LANDED 2026-05-17)
 
 Per [indicator_exposure_design.md §4](indicator_exposure_design.md#4-concrete-design-ta-3-implementation):
 
-- [ ] `app/services/readers/indicator_reader.py` — single source of
-      truth for indicator computation across all consumers.
-- [ ] Pydantic shapes: `IndicatorValue`, `IndicatorSeries`,
-      `IndicatorChartData`.
-- [ ] `app/api/routes_indicators.py` — `GET /api/indicators/series`,
-      `POST /api/indicators/chart-data`.
-- [ ] `app/mcp/tools/indicators.py` — `compute_indicator`,
-      `compute_indicators`, `get_chart_data`.
-- [ ] Integration test: real bronze + multi-indicator chart-data
-      request returns plausible series.
-- [ ] **Gate:** `curl POST /api/indicators/chart-data` with AAPL +
-      SMA(20)/SMA(50)/RSI(14) returns bars + 3 series with the
-      correct shapes. Agent equivalent via MCP works too.
+- [x] **Pydantic shapes** in `app/services/readers/schemas.py`:
+      `IndicatorValue` (timestamp + Optional[float]),
+      `IndicatorSeries` (named series with values + label +
+      params echo), `IndicatorChartData` (bars + multiple
+      series + optional snapshot_id). One contract; HTTP routes
+      and MCP tools both produce these byte-identical shapes.
+
+- [x] **`IndicatorReader`** in
+      `app/services/readers/indicator_reader.py` — single source
+      of truth for indicator computation across all consumers.
+      - `get_series(symbol, indicator, params, start, end, interval, provider)`
+        returns one canonical `IndicatorSeries`. Multi-output
+        indicators return only the canonical component
+        (middle band / %K / MACD line).
+      - `get_chart_data(symbol, indicator_specs, start, end, interval, provider)`
+        returns `IndicatorChartData` with bars + N series.
+        Multi-output indicators decompose into one
+        `IndicatorSeries` per component
+        (`bollinger_upper` / `bollinger_middle` / etc.).
+      - Bar source resolution: `interval='1m'` → `BronzeReader`
+        + snapshot_id pinning; everything else → `BarReader` with
+        `LiveBar` → `BronzeBar` conversion. Uniform response shape.
+      - Error semantics: single-indicator `get_series` raises
+        `ValueError` on unknown indicator; multi-indicator
+        `get_chart_data` degrades to per-spec "error stubs" so
+        one bad indicator doesn't kill a chart of five.
+
+- [x] **HTTP routes** in `app/api/routes_indicators.py`:
+      - `GET /api/indicators/series?symbol=&start=&end=&indicator=&interval=&params=<json>`
+      - `POST /api/indicators/chart-data` with body
+        `{symbol, start, end, interval, provider, indicators[]}`
+      - Both wired into `main_api.py` via `include_router` under
+        `/api` with the `Indicators` tag.
+
+- [x] **MCP tools** in `app/mcp/tools/indicators.py`:
+      - `compute_indicator(symbol, indicator, start, end, interval, params, provider)`
+      - `compute_indicators(symbol, indicators[], start, end, interval, provider)`
+      - `get_chart_data(symbol, interval, lookback_days, indicators[], provider)`
+        — convenience wrapper that resolves `lookback_days` into
+        an explicit window.
+      - Registered via `app.mcp.server.register_all_tools`. Total
+        MCP tools advertised: **28** (was 25).
+
+- [x] **Tests `tests/test_indicator_exposure.py`** — 24 cases:
+      - 5 helper-fn cases (`_bars_to_df`, `_pd_series_to_indicator_values`
+        with NaN-to-None + reindex-on-length-mismatch,
+        `_format_label` including the prefix-strip on
+        `bollinger_upper` → "BB Upper").
+      - 4 `get_series` cases (SMA basic, empty bars, Bollinger
+        canonical-only, unknown indicator raises).
+      - 5 `get_chart_data` cases (multi-indicator, Bollinger →
+        5 series, Stochastic → 2 series, MACD → 3 series, unknown
+        indicator surfaces as an error stub instead of crashing).
+      - 1 ATR-uses-H-L case.
+      - 4 HTTP route cases (basic series, 400 on unknown indicator,
+        400 on malformed params JSON, multi-indicator chart-data).
+      - 4 MCP tool cases (discovery, compute_indicator,
+        compute_indicators decomposes bollinger, get_chart_data
+        lookback resolution).
+      - **1 cross-consumer consistency gate**: same SMA(7) query
+        through HTTP route AND MCP tool produces byte-identical
+        `IndicatorSeries` values. Locks in the single-source-of-
+        truth property at the regression-test level.
+
+- [x] **End-to-end live verification** against real production AAPL:
+
+      ```bash
+      $ curl POST /api/indicators/chart-data with SMA(20) +
+        Bollinger(20, 2.0) + RSI(14)
+        → 44 bars, 7 series:
+            sma                  last=227.07 @ 2024-08-30
+            bollinger_upper      last=229.97
+            bollinger_middle     last=227.07  (= SMA, math check ✓)
+            bollinger_lower      last=224.16
+            bollinger_bandwidth  last=0.03   (3% — quiet period)
+            bollinger_percent_b  last=0.83   (price near upper band)
+            rsi                  last=65.77
+      ```
+
+      Same query via MCP `compute_indicators` returns IDENTICAL
+      values (per cross-consumer test + reconfirmed live).
+
+**The TA-3.2 gate is GREEN.** The dashboard can render indicator
+overlays via `POST /api/indicators/chart-data`. LLM agents over MCP
+can call `compute_indicators` / `compute_indicator` / `get_chart_data`
+and get the same Pydantic shape. Both surfaces use the same
+`IndicatorReader` — single source of truth for indicator math.
 
 ### Phase TA-3.3+ — Strategy bake-off (after TA-3.2)
 

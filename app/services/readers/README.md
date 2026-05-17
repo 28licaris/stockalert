@@ -32,6 +32,7 @@ Three goals, in priority order:
 | [bar_reader.py](bar_reader.py) | `BarReader` | CH `ohlcv_1m` / `ohlcv_5m` / `ohlcv_daily` | Live tier. `get_recent_bars`, `get_bars_in_range` (supports resampled intervals `15m`/`30m`/`1h`/`4h`), `get_latest_bar_per_symbol`. |
 | [signal_reader.py](signal_reader.py) | `SignalReader` | CH `signals` | `get_recent_signals`, `get_signals_by_symbol`. |
 | [quote_service.py](quote_service.py) | `QuoteService` | Provider REST (Schwab / Polygon — same fallback chain the banner uses) | Async. `get_quote(symbol)`, `get_quotes(symbols)`. Normalizes provider-specific field names into the canonical `Quote` shape. |
+| [indicator_reader.py](indicator_reader.py) | `IndicatorReader` | `BronzeReader` / `BarReader` + `INDICATOR_REGISTRY` | Single source of truth for indicator computation across dashboard / MCP / backtester. `get_series(symbol, indicator, params, ...)` and `get_chart_data(symbol, indicator_specs, ...)`. Multi-output indicators (Bollinger / Stochastic / MACD) decompose into multiple `IndicatorSeries` entries per response. See [docs/indicator_exposure_design.md](../../../docs/indicator_exposure_design.md). |
 
 ## Planned (Phase 3+)
 
