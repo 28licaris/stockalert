@@ -472,6 +472,12 @@ projection-pushed and run them in the same region as the bucket.
 - Lake now ingests live data, not just T+1 flat files.
 
 ### Phase 3 — silver + corp actions (3–5 days)
+
+**Detailed implementation contract:** [silver_layer_plan.md](silver_layer_plan.md).
+That doc has supplanted this brief outline with a phased breakdown
+(TA-5.0 corp-actions, TA-5.1 silver build job), the build algorithm,
+adjustment logic, and the operator runbook.
+
 - Build `silver.corp_actions` ingestion from Polygon corp-actions API.
 - Build `silver_build.py` daily job (provider precedence, adjustments,
   `bar_quality`).
@@ -479,9 +485,20 @@ projection-pushed and run them in the same region as the bucket.
 - Wire `bar_quality` alerts.
 
 ### Phase 4 — flip readers (2 days)
-- Backtest + training paths read from silver via PyIceberg + DuckDB.
-- ClickHouse becomes a serving cache: live divergence, UI charts (recent
-  N days). Add a CLI: rebuild CH from silver.
+
+**Detailed implementation contract:** [silver_layer_plan.md](silver_layer_plan.md)
+TA-5.2 (SilverReader) and TA-5.3 (silver_to_ch_backfill).
+
+- Backtest + training paths read from silver via PyIceberg + DuckDB
+  ([silver_layer_plan.md §5](silver_layer_plan.md): `SilverReader`).
+- ClickHouse becomes a serving cache: live divergence, UI charts
+  (recent N days). The `silver_to_ch_backfill` mode
+  ([silver_layer_plan.md §6](silver_layer_plan.md)) replaces today's
+  `watchlist_service`-driven provider-REST backfills on `add_members`.
+  Result: a newly-added ticker's chart renders in seconds instead of
+  90+ seconds, with corp-action-adjusted prices, with no provider
+  rate-limit pressure. This is the **canonical cockpit user story**
+  for the silver layer (silver_layer_plan §1).
 - Retire `lake_archive_watermarks`; replace with `ingestion_runs`.
 
 ### Phase 5 — gold + reproducibility (ongoing)

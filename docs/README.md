@@ -41,6 +41,14 @@ Then, in this order:
    land in FE-1 so a future subscription-service flip is purely
    additive (~2 weeks of integration vs. a 6-8 week refactor).
    Plan only; no code yet.
+9. [silver_layer_plan.md](silver_layer_plan.md) — implementation
+   contract for the silver tier: provider-merged, corp-action-
+   adjusted, dedup'd OHLCV. Phases TA-5.0 (corp-actions) → TA-5.1
+   (build job) → TA-5.2 (SilverReader) → TA-5.3 (silver→CH backfill
+   that replaces today's provider-REST backfill on `add_members`,
+   making the cockpit warming-up UX feasible) → TA-5.4 (shadow
+   validation) → TA-5.5 (retire provider-REST paths). Plan only;
+   no code yet.
 
 ## Working agreement
 
@@ -73,7 +81,8 @@ README.md (this file)
   ├── trading_subsystem_design.md     (trading side: implementation contract)
   ├── indicator_exposure_design.md    (indicator delivery architecture)
   ├── elliott_wave_plan.md            (EW structural analysis — plan only)
-  └── frontend_plan.md                (developer cockpit SPA — plan only)
+  ├── frontend_plan.md                (developer cockpit SPA — plan only)
+  └── silver_layer_plan.md            (silver tier implementation — plan only)
 ```
 
 `ARCHITECTURE.md` is the high-level overview. The two plan docs go deep

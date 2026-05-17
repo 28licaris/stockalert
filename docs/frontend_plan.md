@@ -326,9 +326,15 @@ single ClickHouse/Stream pill with a dense, live view of every
 subsystem.
 
 - ClickHouse, Iceberg/Glue, S3, Schwab, Polygon health (color pills).
+- **Silver-build health:** last-successful-build age (target <24h),
+  coverage % of watchlist symbols (target 100%) — pulled from
+  `silver.bar_quality`. See [silver_layer_plan.md §9.5](silver_layer_plan.md).
 - Live ingestion rate per source (bars/sec by provider).
 - Bronze + silver freshness per symbol (heatmap).
 - Backfill queue: in-flight jobs + ETA.
+- **"Recently added symbols, warming up"** widget — one row per
+  symbol added in the last 5 min, with the silver→CH backfill
+  progress (target completion <30s; see §5.2 below).
 - Monitor service: started monitors, signal rate, error counts.
 - Service-map mini-diagram (read from `docs/ARCHITECTURE.md` service list).
 - Live "log tail" stream over WS (last 50 INFO/ERROR lines from
@@ -336,12 +342,13 @@ subsystem.
 
 Powered by: `/health`, `/stats`, `/api/backfill/status`,
 `/monitors`, `/api/lake/last-day` (existing); + 1 new endpoint
-`/api/health/services` (composite).
+`/api/health/services` (composite); + new `/api/silver/health`
+(after silver lands).
 
-### 5.2 `/symbol/{ticker}` — Symbol (PARITY + extensions)
+### 5.2 `/symbol/{ticker}` — Symbol (PARITY + extensions + warming-up UX)
 
 Successor to `symbol.html`. OHLCV candlestick + indicator overlay
-+ signals/divergence + Iceberg-bronze coverage strip + journal
++ signals/divergence + Iceberg-silver coverage strip + journal
 trades on that ticker.
 
 - Interval picker (1m..1d).
@@ -353,9 +360,33 @@ trades on that ticker.
 - Journal trades on this ticker (in-page).
 - "Open in MCP" button → jumps to MCP page pre-populated with
   `get_chart_data(symbol=…)`.
+- **Adjusted/raw toggle.** Default: adjusted prices (silver
+  `_adj` columns). Toggle to raw (`_raw`) for "what the trader
+  saw live" inspection. See
+  [silver_layer_plan.md §14.2](silver_layer_plan.md).
 
-Powered by: existing routes; one new combined `/api/symbol/{ticker}/overview`
-to reduce roundtrips on first paint.
+**Warming-up state.** When the user navigates to `/symbol/X`
+for a newly-added ticker, the chart area renders a progress card
+until the silver→CH backfill completes (~10s after silver lands;
+~90s today before silver). The card shows:
+
+- Live stream subscription status (✓ subscribed | first bar in ~Ns).
+- Per-interval backfill progress (% done; ETA).
+- Source: "Backfilling from silver (Iceberg) — your own data, no
+  provider API calls."
+- The card swaps to the chart the moment bars are sufficient to
+  render the requested interval.
+
+Live ticks arriving before the historical backfill completes are
+buffered (`bar_buffer` in the Symbol page state) and prepended
+only when the historical context behind them is loaded. No
+floating lonely candles.
+
+Powered by: existing routes; one new combined
+`/api/symbol/{ticker}/overview` to reduce roundtrips on first
+paint; new `/api/backfill/silver-to-ch/progress` for the
+warming-up card (after silver_to_ch backfill mode lands —
+[silver_layer_plan.md §6](silver_layer_plan.md)).
 
 ### 5.3 `/screener` — Screener (NEW)
 
