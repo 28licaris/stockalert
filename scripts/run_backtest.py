@@ -73,6 +73,15 @@ def _load_strategy(name: str, params: dict[str, Any], interval: str) -> Any:
             params=BollingerMeanRevertParams(**params),
             interval=interval,
         )
+    if name == "ema_crossover":
+        from app.services.sim.strategies.ema_crossover import (
+            EmaCrossoverParams,
+            EmaCrossoverStrategy,
+        )
+        return EmaCrossoverStrategy(
+            params=EmaCrossoverParams(**params),
+            interval=interval,
+        )
     raise ValueError(
         f"Unknown strategy {name!r}. Register it in scripts/run_backtest.py::_load_strategy."
     )

@@ -39,7 +39,8 @@ logger = logging.getLogger(__name__)
 @mcp.tool()
 def run_backtest(
     strategy_name: Literal[
-        "sma_crossover", "llm_agent", "rsi_reversion", "bollinger_mean_revert",
+        "sma_crossover", "ema_crossover", "llm_agent",
+        "rsi_reversion", "bollinger_mean_revert",
     ],
     strategy_params: dict[str, Any],
     config: dict[str, Any],
@@ -176,7 +177,15 @@ def _instantiate(name: str, params: dict[str, Any], *, interval: str):
         return BollingerMeanRevertStrategy(
             params=BollingerMeanRevertParams(**params), interval=interval,
         )
+    if name == "ema_crossover":
+        from app.services.sim.strategies.ema_crossover import (
+            EmaCrossoverParams,
+            EmaCrossoverStrategy,
+        )
+        return EmaCrossoverStrategy(
+            params=EmaCrossoverParams(**params), interval=interval,
+        )
     raise ValueError(
         f"Unknown strategy {name!r}. Supported: 'sma_crossover', "
-        "'llm_agent', 'rsi_reversion', 'bollinger_mean_revert'."
+        "'ema_crossover', 'llm_agent', 'rsi_reversion', 'bollinger_mean_revert'."
     )

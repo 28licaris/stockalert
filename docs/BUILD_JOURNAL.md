@@ -1457,12 +1457,53 @@ is the trend-follower signature (rare wins are huge); the
 mean-revert pair's higher win rates with worse total return is
 the mean-revert-in-trend signature (small wins, big losses).
 
-### Phase TA-3.5+ — Roadmap
+### Phase TA-3.5 — EMA Crossover strategy (LANDED 2026-05-17)
 
-- **TA-3.5**: EMA Crossover strategy (faster signal A/B vs SMA canary).
-- **TA-3.6**: All 4 baselines on the same window → final
-  comparison table + journal write-up. Anchors performance
-  metrics before any LLM run.
+Trend-following baseline using EMA instead of SMA. Same crossover
+mechanics; faster signal because EMA weights recent prices more.
+
+- [x] `app/services/sim/strategies/ema_crossover.py` —
+      `EmaCrossoverStrategy` via `BaseStrategy`. Near-clone of
+      `sma_crossover.py` with two diffs: indicator name `"ema"`
+      and default periods `12/26` (MACD's canonical pair).
+- [x] `configs/ema_crossover.yaml` — AAPL 2023-2024 daily,
+      12/26, $40k start.
+- [x] CLI + MCP `run_backtest` loaders + Literal type updated
+      (5 strategies now: sma/ema crossover, llm_agent,
+      rsi_reversion, bollinger_mean_revert).
+- [x] Tests `tests/test_ema_crossover.py` — 11 strategy cases:
+      param validation (overlap + equal), warmup hold,
+      buy-on-cross-up, no-buy-when-long, sell-on-cross-down,
+      no-sell-when-flat, integer-share sizing, metadata,
+      Strategy Protocol satisfaction. Plus a direct A/B
+      invariant: **`test_ema_fires_earlier_than_sma_on_same_cross`**
+      — on the same crossing series with the same fast/slow
+      periods, EMA's first buy index ≤ SMA's. The defining
+      property of EMA (faster reaction) made into a regression
+      gate. Structural purity gate also passes.
+- [x] **Real-data run** (AAPL daily 2023-2024):
+      - **7 trades, 67% win rate, +9.02% return, Sharpe 0.933,
+        max DD -6.67%.**
+      - **By far the best baseline.** ~3.4× the SMA Crossover
+        return on roughly the same trade count.
+      - Caveat: the 12/26 vs 20/50 (SMA canary) comparison
+        isn't a pure EMA-vs-SMA A/B because periods also
+        differ — the gain reflects BOTH "EMA reacts faster"
+        AND "shorter periods catch more moves." A future
+        sensitivity run with matched periods (12/26 EMA vs
+        12/26 SMA, 20/50 EMA vs 20/50 SMA) would isolate
+        the MA-family effect from the period effect.
+
+### Phase TA-3.6 — Bake-off summary (NEXT)
+
+- [ ] Run all 4 rule-based baselines on identical window/fees/
+      slippage. Write the comparison table into the journal
+      as the canonical "where the bar is" before any LLM run
+      lands. Use existing `agent_runs` rows; no new code
+      needed beyond a small CLI / SQL summary script.
+- [ ] Document the takeaways: which family fits this window,
+      where the trade-offs are, what an LLM agent would need
+      to beat to be "worth it."
 
 ### Phase TA-4+ — Roadmap
 
