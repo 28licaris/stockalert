@@ -49,6 +49,19 @@ Then, in this order:
    making the cockpit warming-up UX feasible) → TA-5.4 (shadow
    validation) → TA-5.5 (retire provider-REST paths). Plan only;
    no code yet.
+10. [risk_management_plan.md](risk_management_plan.md) — risk-
+    management layer that sits between strategies and any executor.
+    8 rules (kill-switch, daily-loss halt, max-DD halt, max-position-
+    size, max-concentration, max-leverage, ATR-volatility sizing,
+    cooldown) composed into a `RiskPolicy`. Phases TA-R.1..TA-R.6
+    (~10-12 days). **Prerequisite for any paper or live execution.**
+    Plan only; no code yet.
+11. [SYSTEM_REVIEW_2026-05-17.md](SYSTEM_REVIEW_2026-05-17.md) —
+    independent senior-quant-engineer-style audit identifying 7
+    profitability-gaps (risk mgmt, survivorship bias, weak strategy
+    evidence, regime context, harness tests, execution layer, live
+    observability). Drives the additions in `trading_subsystem_design.md`
+    §10 phasing.
 
 ## Working agreement
 
@@ -82,7 +95,9 @@ README.md (this file)
   ├── indicator_exposure_design.md    (indicator delivery architecture)
   ├── elliott_wave_plan.md            (EW structural analysis — plan only)
   ├── frontend_plan.md                (developer cockpit SPA — plan only)
-  └── silver_layer_plan.md            (silver tier implementation — plan only)
+  ├── silver_layer_plan.md            (silver tier implementation — plan only)
+  ├── risk_management_plan.md         (risk layer — plan only; prereq for execution)
+  └── SYSTEM_REVIEW_2026-05-17.md     (audit + 7 profit-grade gaps)
 ```
 
 `ARCHITECTURE.md` is the high-level overview. The two plan docs go deep

@@ -661,16 +661,136 @@ This is the per-cycle "what to look at" stage. Higher-cost
 strategies (LLM, RL) run only on the screener's short-list, not
 the full universe.
 
-### Phase TA-5: RL agent (Trading-AI plan Phase 2)
-- PPO trained against the backtest harness as its environment.
-- Reward = stepped Sharpe contribution.
-- Same `Strategy` Protocol — RL agent IS a strategy.
+### Phase TA-5: Silver layer (data foundation)
 
-### Phase TA-6+: Paper trading, then live
+**Detailed plan:** [silver_layer_plan.md](silver_layer_plan.md).
+
+- TA-5.0 Corp-actions ingestion → `silver.corp_actions`
+- TA-5.1 Silver build job → `silver.ohlcv_1m` + `silver.bar_quality`
+- TA-5.2 `SilverReader` + flip backtester reads from bronze to silver
+- TA-5.3 `silver_to_ch_backfill` mode (the cockpit warming-up unlock)
+- TA-5.4 Shadow validation + flip-the-default
+- TA-5.5 Retire provider-REST backfills
+
+### Phase TA-R: Risk management (in parallel with TA-5)
+
+**Detailed plan:** [risk_management_plan.md](risk_management_plan.md).
+Added per [SYSTEM_REVIEW_2026-05-17.md §3 #1](SYSTEM_REVIEW_2026-05-17.md).
+**This is a prerequisite for any paper or live execution.**
+
+- TA-R.1 Risk Manager scaffold + state persistence
+- TA-R.2 The 8 rules + composition (kill-switch, daily-loss halt,
+  max-DD halt, max-position-size, max-concentration, max-leverage,
+  ATR-volatility sizing, cooldown)
+- TA-R.3 Backtester integration (`BacktestConfig.risk_policy`)
+- TA-R.4 Adversarial tests
+- TA-R.5 HTTP + MCP surfaces
+- TA-R.6 Decision log + observability
+
+### Phase TA-6: Indicator gap-fill
+
+Per [SYSTEM_REVIEW_2026-05-17.md](SYSTEM_REVIEW_2026-05-17.md) and the
+backlog in [`app/signals/README.md`](../app/signals/README.md):
+
+- Volume indicators (OBV, MFI, VWAP-anchored, VWAP bands)
+- Volatility / channels (Donchian, Keltner)
+- Trend strength (ADX, CCI, ROC)
+- Re-introduce divergence detection as a registered indicator
+- Optional: pivot detection promoted to `app/indicators/pivots.py`
+  (foundation for EW-1)
+
+### Phase TA-7: Gold features tier
+
+**Detailed plan:** [data_platform_plan.md §7](data_platform_plan.md).
+
+- `gold.features_daily` (per `(symbol, date)` — pre-computed
+  indicators + microstructure features)
+- `gold.features_1m` (intraday equivalent)
+- Snapshot-pinned, rebuildable from silver.
+
+### Phase TA-8: Universe history (promoted from later)
+
+Per [SYSTEM_REVIEW_2026-05-17.md §3 #2](SYSTEM_REVIEW_2026-05-17.md).
+**This was originally a much-later phase; the System Review
+promotes it because every backtest is currently survivorship-biased
+without it.**
+
+- `gold.universes` table (S&P 500 / Russell 1000 / Russell 3000
+  membership over time).
+- Ingest from Wikipedia historical S&P 500 deltas (free) or
+  Sharadar (if budget allows).
+- Backtest harness automatically filters strategy universe to
+  the historical universe-as-of-bar-timestamp. Cures survivorship
+  bias.
+
+### Phase TA-9: OOS bake-off harness
+
+Per [SYSTEM_REVIEW_2026-05-17.md §3 #3](SYSTEM_REVIEW_2026-05-17.md).
+**Current strategy results are single-symbol single-window.
+No evidence of real edge. Required gate before any execution.**
+
+- `scripts/run_oos_bakeoff.py` — runs each strategy across ≥5
+  symbols × ≥3 disjoint years.
+- Walk-forward training/validation split for any tuned params.
+- Acceptance threshold for promotion to paper trading: OOS Sharpe > 1.0
+  on at least 3 of the 5 symbols.
+
+### Phase TA-10: Regime classifier
+
+Per [SYSTEM_REVIEW_2026-05-17.md §3 #4](SYSTEM_REVIEW_2026-05-17.md).
+**Today's strategies are regime-agnostic; bake-off proves this is
+fragile (EMA-cross wins in trend, Bollinger-revert wins in range,
+neither survives the other regime).**
+
+- `app/services/regime/` module.
+- Baseline classifier: ADX-based + volatility-quantile.
+- Strategies declare which regimes they work in (`@only_in('trend_up')`).
+- Future: HMM / RL-style state classification.
+
+### Phase TA-11: Execution layer
+
+Per [SYSTEM_REVIEW_2026-05-17.md §3 #6](SYSTEM_REVIEW_2026-05-17.md).
+**Detailed plan to be written: `docs/execution_plan.md`.**
+
+- `Executor` Protocol (already-implicit; formalize it).
+- `BacktestExecutor` (wraps Portfolio — existing).
+- `PaperExecutor` (Schwab paper account; same API).
+- `OrderManagementSystem` (child orders, partials, time-in-force).
+- `ReconciliationJob` (every 5 min: broker positions vs internal).
+- `LiveExecutor` (gated by hard config flag + risk-policy
+  requirements).
+
+### Phase TA-12: Live observability infra
+
+Per [SYSTEM_REVIEW_2026-05-17.md §3 #7](SYSTEM_REVIEW_2026-05-17.md).
+**Detailed addendum:** extend
+[STARTUP_FLOW.md](STARTUP_FLOW.md).
+
+- Prometheus metrics (per-CH-insert counters, per-tick latency
+  histograms, per-monitor gauges).
+- Sentry exception capture.
+- Loki structured log aggregation.
+- Pager integration (PagerDuty or Twilio SMS).
+- Daily "morning brief" email/Slack (yesterday's P&L, current
+  positions, halt-conditions tripped, data freshness).
+
+### Phase TA-RL: RL agent (Trading-AI plan Phase 2)
+
+**Depends on all prior phases.** PPO trained against the backtest
+harness as its environment. Reward = stepped Sharpe contribution.
+Same `Strategy` Protocol — RL agent IS a strategy. EW state +
+regime context + gold features all feed the RL state vector.
+
+### Phase TA-Live: Paper → live trading
+
+**Depends on TA-R (risk) + TA-9 (OOS evidence) + TA-11
+(execution) + TA-12 (observability) — all required.**
+
 - Trading-AI plan Phases 8 + 9.
-- Same Strategy class. Different Executor — `PaperExecutor` writes
-  to a paper-trading account; `LiveExecutor` writes to a real one.
-- Kill switches + execution audit log mandatory.
+- Same Strategy class; LiveExecutor instead of PaperExecutor.
+- Mandatory: kill-switch tested in production; risk policy
+  active; reconciliation green for 30+ days of paper trading
+  with realistic capital; full observability operational.
 
 ---
 
