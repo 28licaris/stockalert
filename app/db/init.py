@@ -268,6 +268,47 @@ def init_schema() -> None:
         """
     )
 
+    # Backtest / agent run registry — one row per completed run.
+    # Reproducibility-enabling fields: snapshot_id pins the Iceberg
+    # data version; git_sha pins the code; strategy_params + config
+    # pin the inputs. Same triple -> same metrics (verified by
+    # test_backtester_is_deterministic).
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS agent_runs (
+            run_id              UUID,
+            started_at          DateTime64(3, 'UTC'),
+            finished_at         DateTime64(3, 'UTC'),
+            strategy_name       LowCardinality(String),
+            strategy_version    String,
+            strategy_params     String DEFAULT '{}',   -- JSON
+            config              String DEFAULT '{}',   -- JSON
+            snapshot_id         String DEFAULT '',     -- Iceberg snapshot, '' if CH-only path
+            symbols             Array(String),
+            interval            LowCardinality(String),
+            start_date          Date,
+            end_date            Date,
+            starting_cash       Float64,
+            total_return        Float64,
+            annualized_return   Float64 DEFAULT 0,
+            sharpe_ratio        Float64 DEFAULT 0,
+            sortino_ratio       Float64 DEFAULT 0,
+            max_drawdown        Float64 DEFAULT 0,
+            win_rate            Float64 DEFAULT 0,
+            profit_factor       Float64 DEFAULT 0,
+            n_trades            UInt32,
+            final_equity        Float64,
+            metrics_full        String DEFAULT '{}',   -- JSON: full RunMetrics
+            git_sha             String DEFAULT '',
+            inserted_at         DateTime64(3, 'UTC') DEFAULT now64(3)
+        )
+        ENGINE = MergeTree
+        PARTITION BY toYYYYMM(started_at)
+        ORDER BY (started_at, strategy_name)
+        SETTINGS index_granularity = 8192
+        """
+    )
+
 
 def _read_legacy_watchlist(path: str) -> Optional[list[str]]:
     """Best-effort read of the old `data/watchlist.json` file. Returns None on any error."""

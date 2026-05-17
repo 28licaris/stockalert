@@ -1,0 +1,27 @@
+# TA-1 canary backtest: SMA crossover on AAPL daily.
+#
+# Purpose: validate the harness end-to-end against real production
+# data. NOT a production trading strategy — SMA crossover is a
+# known mediocre signal, used here only because it's deterministic,
+# produces visible trades on common stocks, and exercises every
+# code path in the harness.
+
+strategy: sma_crossover
+strategy_params:
+  fast_period: 20
+  slow_period: 50
+  position_size_pct: 0.95
+
+config:
+  symbols: [AAPL]
+  start: "2023-01-01T00:00:00Z"
+  end:   "2024-12-31T23:59:59Z"
+  interval: "1d"
+  provider: "polygon"
+  starting_cash: 40000.0
+  history_window: 200
+  fees_model: per_share
+  fees_params:
+    per_share: 0.005
+    min_commission: 1.00
+  slippage_model: next_bar_open

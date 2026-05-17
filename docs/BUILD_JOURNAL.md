@@ -1018,7 +1018,7 @@ Two docs govern this track:
 The data platform's Pre-Phase 3 Step 3 (MCP scaffold) is now done,
 so all gates are clear to start the trading subsystem work.
 
-### Phase TA-1 — Core backtest harness + canary strategy (NOT STARTED)
+### Phase TA-1 — Core backtest harness + canary strategy (LANDED 2026-05-16)
 
 **Goal:** put a working backtest engine in place so every later
 agent / strategy work has somewhere to land. Run the canary
@@ -1027,42 +1027,102 @@ reproducibility contract, and start the `agent_runs` registry.
 
 Scope (per [trading_subsystem_design.md §10 Phase TA-1](trading_subsystem_design.md#phase-ta-1-core-harness--canary-strategy-next-session)):
 
-- [ ] `app/services/sim/` scaffold:
-      - `schemas.py` — `Action`, `Position`, `Trade`, `RunMetrics`,
-        `RunResult`, `BacktestConfig`.
-      - `strategy.py` — `Strategy` Protocol, `BaseStrategy`.
+- [x] `app/services/sim/` scaffold — 9 files, all per the design
+      doc:
+      - `schemas.py` — `Bar` Protocol, `Action`, `Position`, `Trade`,
+        `RunMetrics`, `RunResult`, `BacktestConfig`, `PortfolioSnapshot`.
+      - `strategy.py` — `Strategy` Protocol + `BaseStrategy`.
       - `context.py` — `Context` + `BarHistory` (deque-backed,
-        configurable maxlen).
-      - `portfolio.py` — `Portfolio` + `Position` accounting,
-        mark-to-market per bar.
-      - `fees.py` — `FeeModel` / `SlippageModel` Protocols +
-        `ZeroFees`, `PerShareFees`, `NextBarOpenFill`,
-        `PercentSlippage` defaults.
-      - `backtester.py` — `Backtester.run(strategy, config)`,
-        snapshot pinning, next-bar-open fill semantics.
-      - `evaluator.py` — `StandardEvaluator` producing the canonical
-        `RunMetrics`.
-      - `registry.py` — `agent_runs` CH table writer + reader.
-      - `README.md` documenting the folder + contract.
-- [ ] `app/indicators/` expanded with `sma.py` + `ema.py`. Add
-      `registry.py` for the `INDICATOR_REGISTRY` name→class mapping.
-- [ ] `app/services/sim/strategies/sma_crossover.py` — canary
-      strategy. Pydantic `SmaCrossoverParams`. NOT for production
-      trading — proves the harness.
-- [ ] CH schema: `agent_runs` table init wired into the existing
-      `init_schema()` startup task.
-- [ ] CLI: `scripts/run_backtest.py --config configs/canary.yaml`.
-- [ ] Integration test: run the canary on 1 year of AAPL daily
-      bronze, assert plausible metrics shape, assert reproducibility
-      (re-run same config → same metrics).
-- [ ] Structural gates:
-      - `test_strategy_is_pure` — strategies don't import `app.db.*`,
-        `app.providers.*`, or network libs.
-      - `test_backtester_is_deterministic` — same inputs, same metrics.
+        per-bar indicator cache).
+      - `portfolio.py` — `Portfolio` accounting with cash-clamped
+        buys, position-clamped sells, set_position decomposition,
+        per-bar mark-to-market, fp-epsilon residual cash clamp.
+      - `fees.py` — Protocols + 5 implementations
+        (`ZeroFees`, `PerShareFees`, `PercentFees`,
+        `NextBarOpenFill`, `PercentSlippage`) + name registries.
+      - `backtester.py` — `Backtester.run(strategy, config)` with
+        snapshot pinning for the 1m bronze path, CH-fallback for
+        the 1d path (no snapshot), strict interval-match check,
+        git_sha capture.
+      - `evaluator.py` — `StandardEvaluator` with interval-aware
+        annualization, peak-to-trough drawdown, win-rate/profit-
+        factor guards for degenerate inputs.
+      - `registry.py` — `agent_runs` CH writer + `fetch_run` +
+        `list_runs`. Best-effort `write_run` and strict
+        `write_run_strict` variants.
+      - `README.md` — folder contract, how-to-add-strategy/indicator/
+        fees-model, modularity contracts, what's NOT in TA-1.
+- [x] `app/indicators/` expanded:
+      - `sma.py` — SMA via pandas rolling.mean().
+      - `ema.py` — EMA via pandas ewm(adjust=False) matching every
+        charting platform's convention.
+      - `registry.py` — `get_indicator(name, **params)` +
+        `list_indicators()`. Supports `sma`, `ema`, `rsi`, `macd`,
+        `tsi`.
+- [x] `SmaCrossoverStrategy` — interval-configurable canary
+      (constructor takes `interval` so the same logic runs on `1d`,
+      `1m`, or any future interval). Long-only, full-position-on-
+      cross-up / full-exit-on-cross-down, position_size_pct
+      defaults to 0.95.
+- [x] `agent_runs` CH table wired into `init_schema()`. 24 columns
+      including snapshot_id, git_sha, JSON config + JSON full
+      metrics for the full reproducibility pin.
+- [x] CLI `scripts/run_backtest.py` + `configs/canary.yaml`. YAML
+      → `BacktestConfig`, strategy loader, pretty metrics output,
+      `--no-write` / `--quiet` flags.
+- [x] **Tests (39/39 green):**
+      - `tests/test_sim_unit.py` — 38 unit tests covering schemas
+        round-trip, both indicators against known math, registry
+        name resolution, BarHistory eviction, Context indicator
+        caching + per-bar invalidation, Context.log capture,
+        Portfolio buy/sell/set_position/MTM/cash-clamp/pos-clamp,
+        all fee + slippage models (including the per-share min/max
+        cap precedence), Evaluator (total return, max DD,
+        degenerate-trade guards, no-variance Sharpe), SMA
+        crossover (warmup hold, params validation, cross emission),
+        Backtester (interval mismatch raise, end-to-end with
+        stubbed source, deterministic re-run).
+      - `tests/integration/test_sim_real_bronze.py` — runs the
+        canary against production AAPL minute bronze (RTH of
+        2024-08-01), asserts snapshot_id captured, git_sha captured,
+        equity curve populated, final equity in sane band.
+      - `test_strategy_is_pure` — AST-walks every module reachable
+        from `app/services/sim/strategies/*.py` and asserts none
+        sit under `app.db.*` or `app.providers.*`. Same pattern as
+        the existing `test_lake_route_does_not_import_clickhouse`.
+      - `test_backtester_deterministic` — same inputs → same
+        metrics + same equity curve + same trades.
 
-**Gate:** `python scripts/run_backtest.py --config configs/canary.yaml`
-produces a metrics table, writes one row to `agent_runs`, and the
-reproducibility test passes.
+**Gate (GREEN 2026-05-16):**
+
+```bash
+$ poetry run python scripts/run_backtest.py --config configs/canary.yaml
+  Run: 507b6c6b-a4df-4a2e-adab-3bc6c4b0a8cc
+  Strategy: sma_crossover v0.1
+  Window:   2023-01-01 .. 2024-12-31  (1d, ['AAPL'])
+  Snapshot: (none — CH path)
+  Git SHA:  b70049be8576
+  Starting capital  $     40,000.00
+  Final equity      $     41,059.91
+  Total return               +2.65%
+  Sharpe ratio                0.305
+  Max drawdown               -5.90%
+  N trades                        5
+```
+
+Two consecutive runs of the canary produced **bit-for-bit identical
+metrics** (total_return = 0.026497749999999654, sharpe_ratio =
+0.3052698765608661, final_equity = 41059.90999999999). Both rows
+landed in `agent_runs`. Reproducibility is proven at the production-
+data level.
+
+**Note for daily on `1d` path:** snapshot_id is currently empty
+because CH `ohlcv_daily` has no snapshot semantics. Daily bronze
+table (Phase 1 deferred item) is the path to full daily-tier
+reproducibility — until then daily-interval backtests are
+reproducible only via `git_sha` + `strategy_version` + `config`
+identity, not via Iceberg snapshot pinning. **1m bronze path
+pins snapshot fully and is the canonical training data source.**
 
 ### Phase TA-2 — LLM-driven strategy (after TA-1)
 
