@@ -56,6 +56,7 @@ def register_all_tools() -> None:
     from app.mcp.tools import market  # noqa: F401
     from app.mcp.tools import movers  # noqa: F401
     from app.mcp.tools import quotes  # noqa: F401
+    from app.mcp.tools import screener  # noqa: F401
     from app.mcp.tools import signals  # noqa: F401
     from app.mcp.tools import sim  # noqa: F401
     from app.mcp.tools import system  # noqa: F401
@@ -64,7 +65,7 @@ def register_all_tools() -> None:
     logger.info(
         "MCP tools registered (lake + live + quotes + signals + "
         "watchlist + movers + instruments + market + coverage + "
-        "system + sim + indicators)"
+        "system + sim + indicators + screener)"
     )
 
 

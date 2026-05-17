@@ -1743,14 +1743,80 @@ on the same 7-month window or (b) the MTF strategy replayed on
 the 24-month window with sufficient hourly history (requires
 upstream backfill). Filed as follow-up.
 
-### Phase TA-4.3 — Screener service (NEXT)
+### Phase TA-4.3 — Screener service (LANDED 2026-05-17)
 
-- [ ] `app/services/screener/` package with
-      `ScreenerSpec` Pydantic + `Screener.scan(universe, spec)`
-      → ranked candidate list.
-- [ ] HTTP route + MCP tool wrapping the screener.
-- [ ] Universe sources: a hardcoded list, a watchlist, all of
-      bronze, etc.
+Closes the canonical swing-trade pipeline (universe → screener →
+candidates → strategy) with a declarative, agent-safe spec format.
+A `ScreenerSpec` is plain Pydantic — no eval, no DSL, no code
+strings — so an LLM agent can author one without becoming an RCE
+vector.
+
+- [x] `app/services/screener/` package
+  - `schemas.py` — `ScreenerSpec`, `ScreenerRule`, `Candidate`,
+    `CandidateMetric`, `ScreenerResult` with 13 `RuleKind` literals
+    and 5 `RankBy` modes. Spec validators reject empty universes /
+    empty rule lists.
+  - `rules.py` — one evaluator per rule kind dispatched through the
+    `_RULE_EVALUATORS` table. Spec author errors (unknown kind,
+    missing required param, bad type) raise `ValueError` with a
+    clear message. Per-symbol runtime errors return
+    `RuleEval(passed=False, ...)` so the scan continues.
+  - `screener.py` — `Screener.scan(spec, *, now=None) → ScreenerResult`.
+    Universe resolution unions `spec.universe` + watchlist members.
+    Bar source: `BronzeReader` for `interval="1m"` (Iceberg snapshot
+    pinned), `BarReader` otherwise. Candidates ranked by `rank_by`
+    (`volume` / `atr_pct` / `rsi` / `rsi_desc` / `none`) then
+    truncated to `limit`.
+  - `README.md` — folder contract, rule table, "how to add a rule"
+    recipe, example specs for trend setups and volatility breakouts.
+
+- [x] **HTTP surface**: `POST /api/screener/scan`
+  ([app/api/routes_screener.py](../app/api/routes_screener.py)).
+  `ScreenerSpec` body → `ScreenerResult`. 400 on author error,
+  500 on infra error, 422 on Pydantic validation.
+
+- [x] **MCP surface**: `scan_universe(spec)` tool
+  ([app/mcp/tools/screener.py](../app/mcp/tools/screener.py)).
+  Same Pydantic contract as the HTTP route — single source of
+  truth across surfaces. Visible in `tools/list` (29 total tools
+  registered).
+
+- [x] **Tests**: 28 unit tests in `tests/test_screener.py`:
+  - Per-rule evaluator (12 rule kinds) — hand-crafted DataFrames
+    with known pass/fail outcomes plus warmup behavior.
+  - Spec validation — `ScreenerSpec` rejects empty universe +
+    empty rules; `model_construct` bypass exercises the runtime
+    "unknown rule kind" guard.
+  - Scan orchestration — stubbed `BarReader`/watchlist services;
+    verifies per-symbol fetch errors land in `errors[]` without
+    aborting the scan, ranking + `limit` truncation, watchlist
+    union, mixed-case dedup, multi-rule AND composition,
+    metrics-echo to candidates.
+
+- [x] **Live verification** against the real ClickHouse live tier.
+  `POST /api/screener/scan` with a 10-symbol universe over 60 daily
+  bars returned 7/10 passing the SMA(20) filter, ranked by volume:
+
+  ```
+  NVDA  score=180,977,639  sma_20=210.08
+  TQQQ  score= 81,260,605  sma_20= 71.05
+  SPY   score= 60,410,771  sma_20=731.71
+  AAPL  score= 54,862,836  sma_20=286.95
+  QQQ   score= 51,792,656  sma_20=695.67
+  AMD   score= 29,131,579  sma_20=371.71
+  TSLA  score= 17,195,231  sma_20=400.32
+  ```
+
+  Multi-rule AND test (`close_above_sma` + `rsi_below 70`) cut
+  the passing set to 4/9 — confirms intersection semantics.
+  Missing-param test returned `HTTP 400` with the expected
+  `"rule kind='close_above_sma' missing required int param
+  'period'"` body.
+
+This unblocks **TA-4.4** (screener-as-strategy-input — feed an
+LLM the screener's candidate list as the per-bar universe filter)
+and any future automated discovery jobs that need to filter the
+bronze universe before strategy evaluation.
 
 ### Phase TA-5+ — Roadmap
 

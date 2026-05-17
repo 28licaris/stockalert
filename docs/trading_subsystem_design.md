@@ -621,16 +621,45 @@ test).
 - Bar fetch resolves per-interval: '1m' → BronzeReader (snapshot
   pinned), all other intervals → BarReader (CH).
 
-### Phase TA-4.2: First multi-TF strategy (NEXT)
-- Concrete strategy that uses two timeframes — e.g. EMA
-  crossover on intraday gated by a daily trend filter.
-- Live run vs the single-TF EMA Crossover baseline to measure
-  whether the daily filter adds edge.
+### Phase TA-4.2: First multi-TF strategy (LANDED 2026-05-17)
+- `MtfEmaTrendFiltered` — daily SMA(50) trend filter gates
+  hourly EMA(12)/EMA(26) crossover entries. First strategy to
+  exercise the multi-TF Context.
+- Live run: AAPL Jun-Dec 2024 hourly, 44 trades, -9.75% return,
+  Sharpe -1.168. MTF infrastructure verified; strategy noisy —
+  filed for parameter tuning + a counter-strategy in TA-5+.
 
-### Phase TA-4.3: Screener service (after TA-4.2)
-- `screener` service: scan a universe with a fast filter
-  (rule-based or LLM-driven), emit ranked candidate set;
-  deeper strategy then runs on the short-list.
+### Phase TA-4.3: Screener service (LANDED 2026-05-17)
+
+Closes the canonical swing-trade pipeline:
+
+    universe (1000s) → screener → 10-30 candidates → strategy
+
+- `app/services/screener/` — `ScreenerSpec` (declarative Pydantic;
+  no eval/DSL, agent-safe) + `Screener.scan(spec) → ScreenerResult`.
+  13 rule kinds (`close_above_sma`, `rsi_below`,
+  `close_at_lower_band`, `atr_pct_above`, `price_above`, …) over
+  one OHLCV DataFrame per symbol. Rules compose via logical AND.
+- Universe sources: explicit symbol list, watchlist name, or
+  union of both. Mixed-case input is uppercased + deduped.
+- Bar source mirrors backtester/IndicatorReader: `interval='1m'`
+  → `BronzeReader` (Iceberg snapshot pinned in
+  `ScreenerResult.snapshot_id`); everything else → `BarReader`
+  (CH live tier).
+- Ranking: `volume` / `atr_pct` / `rsi` (ascending — most oversold
+  first) / `rsi_desc` / `none` (universe order). Capped by
+  `spec.limit`.
+- Surfaces: `POST /api/screener/scan` HTTP route and
+  `scan_universe` MCP tool — both consume `ScreenerSpec` and
+  return `ScreenerResult` (one contract, two surfaces).
+- Per-symbol fetch / indicator failures land in
+  `ScreenerResult.errors` so a partial-failure universe still
+  returns useful candidates. Spec-author errors (unknown rule
+  kind, missing param) raise `ValueError` → HTTP 400.
+
+This is the per-cycle "what to look at" stage. Higher-cost
+strategies (LLM, RL) run only on the screener's short-list, not
+the full universe.
 
 ### Phase TA-5: RL agent (Trading-AI plan Phase 2)
 - PPO trained against the backtest harness as its environment.
