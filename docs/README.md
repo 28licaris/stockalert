@@ -29,6 +29,10 @@ Then, in this order:
    how technical indicators get computed and served to the dashboard,
    MCP agents, and the backtester (single `IndicatorReader` source of
    truth; Pattern A now, gold-tier pre-compute deferred to Phase 6).
+7. [elliott_wave_plan.md](elliott_wave_plan.md) — investigation +
+   phased plan for incorporating Elliott Wave structural analysis as
+   indicators, screener rules, strategies, and training-track features
+   (LLM + RL). Plan only; no code yet.
 
 ## Working agreement
 
@@ -59,7 +63,8 @@ README.md (this file)
   ├── data_platform_plan.md           (data side: strategic roadmap)
   ├── trading-ai-build-plan.md        (trading side: strategic roadmap)
   ├── trading_subsystem_design.md     (trading side: implementation contract)
-  └── indicator_exposure_design.md    (indicator delivery architecture)
+  ├── indicator_exposure_design.md    (indicator delivery architecture)
+  └── elliott_wave_plan.md            (EW structural analysis — plan only)
 ```
 
 `ARCHITECTURE.md` is the high-level overview. The two plan docs go deep
