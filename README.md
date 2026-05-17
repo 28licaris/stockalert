@@ -11,10 +11,9 @@ For architecture + active build plans see [docs/](docs/README.md) — start with
 
 ## Setup
 
-From the **git repository root**, enter the application directory (the one that contains `pyproject.toml` and `docker-compose.yml`—often `stockalert/` inside the clone):
+From the repo root:
 
 ```bash
-cd stockalert
 cp .env.example .env   # then edit keys and CLICKHOUSE_*
 poetry install
 ```
