@@ -41,6 +41,7 @@ def run_backtest(
     strategy_name: Literal[
         "sma_crossover", "ema_crossover", "llm_agent",
         "rsi_reversion", "bollinger_mean_revert",
+        "mtf_ema_trend_filtered",
     ],
     strategy_params: dict[str, Any],
     config: dict[str, Any],
@@ -185,7 +186,17 @@ def _instantiate(name: str, params: dict[str, Any], *, interval: str):
         return EmaCrossoverStrategy(
             params=EmaCrossoverParams(**params), interval=interval,
         )
+    if name == "mtf_ema_trend_filtered":
+        from app.services.sim.strategies.mtf_ema_trend_filtered import (
+            MtfEmaTrendFilteredParams,
+            MtfEmaTrendFilteredStrategy,
+        )
+        # Multi-TF strategy; interval set by the class (1h execution).
+        return MtfEmaTrendFilteredStrategy(
+            params=MtfEmaTrendFilteredParams(**params),
+        )
     raise ValueError(
         f"Unknown strategy {name!r}. Supported: 'sma_crossover', "
-        "'ema_crossover', 'llm_agent', 'rsi_reversion', 'bollinger_mean_revert'."
+        "'ema_crossover', 'llm_agent', 'rsi_reversion', "
+        "'bollinger_mean_revert', 'mtf_ema_trend_filtered'."
     )

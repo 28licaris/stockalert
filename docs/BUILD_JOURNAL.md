@@ -1669,21 +1669,81 @@ TA-1/TA-2/TA-3 passes unchanged.
       53 days / avg trade -$793.02). The multi-TF refactor
       preserves single-TF behavior exactly.
 
-### Phase TA-4.2 — First multi-timeframe strategy (NEXT)
+### Phase TA-4.2 — First multi-timeframe strategy (LANDED 2026-05-17)
 
-- [ ] Concrete strategy: e.g. **EMA Crossover gated by daily
-      trend filter** — 1h execution interval with a daily SMA(200)
-      gate. Only take long signals when daily close > daily
-      SMA(200). Mirrors the canonical swing-trader pattern
-      (regime check on slow timeframe, execution on fast).
-- [ ] Backtest vs the single-TF EMA Crossover (TA-3.5) baseline
-      on AAPL — does the daily trend filter add edge or just
-      cut trade count?
-- [ ] Tests including a structural look-ahead regression
-      (strategy must use `ctx.history_at('1d')` only — gate test
-      asserting it reads from a non-execution interval).
+The canonical swing-trade pattern wired up end-to-end:
+**daily SMA trend filter + hourly EMA crossover execution**.
 
-### Phase TA-4.3 — Screener service (after TA-4.2)
+- [x] `app/services/sim/strategies/mtf_ema_trend_filtered.py` —
+      `MtfEmaTrendFilteredStrategy`. Declares
+      `intervals = ["1d", "1h"]` and `interval = "1h"`. Logic:
+      1. Daily regime gate via `ctx.history_at("1d")` and
+         `ctx.indicator("sma", period=N, interval="1d")` — only
+         allow longs when daily close > daily SMA.
+      2. Hourly EMA cross detection on execution interval.
+      3. Entry = cross-up AND trend-up AND flat → BUY.
+      4. Exit = cross-down AND long → SELL (asymmetric; respect
+         exit regardless of regime).
+      5. Skipped entries logged as `signal_skipped_trend_filter`
+         so an agent can ask later "how many cross-ups did the
+         daily gate filter out?"
+- [x] `configs/mtf_ema_trend_filtered.yaml` — AAPL Jun-Dec 2024,
+      `intervals: ["1d", "1h"]`, daily SMA(50), 12/26 hourly EMA,
+      `history_window: 250` for daily warmup.
+- [x] CLI + MCP `run_backtest` loaders + Literal type updated.
+      6 strategies registered.
+- [x] Tests `tests/test_mtf_ema_trend_filtered.py` — 13 cases:
+      metadata (declares 2 intervals, Protocol satisfaction),
+      param validation, **trend-gate behavior** (holds during
+      warmup, buys only when trend up + cross up, **skips buy
+      when trend down + cross up**, exits regardless of trend,
+      no double-up, no sell when flat), end-to-end Backtester
+      run, and the **structural multi-TF gate**
+      `test_strategy_uses_history_at_for_daily` — AST-walks the
+      source and asserts the strategy calls
+      `ctx.history_at("1d")` AND
+      `ctx.indicator(..., interval="1d", ...)`. Without these
+      the strategy would silently degrade to single-TF behavior.
+- [x] **Real-data run** (AAPL hourly Jun-Dec 2024):
+      - **44 trades, 18% win rate, -9.75% return, Sharpe -1.168,
+        max DD -11.69%.**
+      - **Infrastructure validation passes; strategy quality is
+        poor.** The MTF harness pulled hourly + daily from CH,
+        the Context exposed both, the no-look-ahead invariant
+        held, the agent_runs row landed. The strategy itself is
+        a textbook "hourly EMA whipsaw" — 44 trades over 140
+        trading days, 18% win rate. The daily trend filter cut
+        some bad entries (logged as
+        `signal_skipped_trend_filter`) but didn't fix the
+        underlying problem: hourly EMA crosses are too noisy
+        without additional confirmation (volatility filter,
+        time-of-day filter, multi-bar confirmation, etc.).
+      - **The lesson** for future MTF strategies: a trend
+        filter on top of a noisy entry signal is still a noisy
+        signal. Real edge comes from BETTER entries layered on
+        the trend filter — not the trend filter alone. This is
+        a data point worth landing in the registry exactly
+        because it surfaces this lesson.
+
+### TA-3+TA-4 running comparison
+
+| Strategy | Window | Trades | Return | Sharpe | Notes |
+|---|---|---:|---:|---:|---|
+| `sma_crossover` (canary 20/50) | AAPL 2023-2024 daily | 5 | +2.65% | +0.305 | trend; rare-win signature |
+| `ema_crossover` (12/26) ⭐ | AAPL 2023-2024 daily | 7 | +9.02% | +0.933 | best single-TF baseline |
+| `rsi_reversion` (14, 30/50) | AAPL 2023-2024 daily | 12 | -0.13% | +0.015 | mean-revert; fails in trend |
+| `bollinger_mean_revert` (20σ2) | AAPL 2023-2024 daily | 12 | -1.89% | -0.188 | mean-revert; fails in trend |
+| **`mtf_ema_trend_filtered`** (50d/12-26h) | AAPL Jun-Dec 2024 hourly | 44 | **-9.75%** | -1.168 | MTF infra ✓, strategy noisy |
+
+The MTF row is on a **different window** than the daily-only
+baselines (Jun-Dec 2024 hourly vs 2023-2024 daily) due to
+hourly data availability in CH. Direct apples-to-apples
+comparison would need either (a) the daily strategies replayed
+on the same 7-month window or (b) the MTF strategy replayed on
+the 24-month window with sufficient hourly history (requires
+upstream backfill). Filed as follow-up.
+
+### Phase TA-4.3 — Screener service (NEXT)
 
 - [ ] `app/services/screener/` package with
       `ScreenerSpec` Pydantic + `Screener.scan(universe, spec)`

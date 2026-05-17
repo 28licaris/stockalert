@@ -82,6 +82,16 @@ def _load_strategy(name: str, params: dict[str, Any], interval: str) -> Any:
             params=EmaCrossoverParams(**params),
             interval=interval,
         )
+    if name == "mtf_ema_trend_filtered":
+        from app.services.sim.strategies.mtf_ema_trend_filtered import (
+            MtfEmaTrendFilteredParams,
+            MtfEmaTrendFilteredStrategy,
+        )
+        # interval is bound by the strategy itself (1h); ignore CLI override
+        # since this strategy is explicitly multi-TF (1d + 1h).
+        return MtfEmaTrendFilteredStrategy(
+            params=MtfEmaTrendFilteredParams(**params),
+        )
     raise ValueError(
         f"Unknown strategy {name!r}. Register it in scripts/run_backtest.py::_load_strategy."
     )

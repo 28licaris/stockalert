@@ -1,0 +1,43 @@
+# TA-4.2 — first multi-timeframe strategy.
+#
+# Daily SMA(50) trend filter + hourly EMA(12)/EMA(26) crossover entry.
+# Mirrors the canonical swing-trade pattern: regime check on slow
+# timeframe, execution on fast timeframe. Compare vs the single-TF
+# EMA Crossover baseline (configs/ema_crossover.yaml) to measure
+# whether the daily filter adds edge.
+#
+# Window choice: 2024-06-01 → 2024-12-31 (~7 months / ~140 trading
+# days). Daily SMA(50) needs ~50 daily bars to warm up; for the
+# remaining ~90 trading days the strategy is fully actionable.
+#
+# Data-availability note: 1h bars come from CH (BarReader resamples
+# from ohlcv_1m by default — Schwab 1m caps at ~48 days). Older 1h
+# windows may have empty hourly history; if you see "no execution
+# bars" warnings, use a smaller window or upstream-backfill the
+# 1m table first.
+#
+# Run:
+#   poetry run python scripts/run_backtest.py \
+#     --config configs/mtf_ema_trend_filtered.yaml
+
+strategy: mtf_ema_trend_filtered
+strategy_params:
+  daily_trend_period: 50
+  fast_period: 12
+  slow_period: 26
+  position_size_pct: 0.95
+
+config:
+  symbols: [AAPL]
+  start: "2024-06-01T00:00:00Z"
+  end:   "2024-12-31T23:59:59Z"
+  interval: "1h"
+  intervals: ["1d", "1h"]
+  provider: "polygon"
+  starting_cash: 40000.0
+  history_window: 250          # holds 250 daily bars (~1y) for trend SMA warmup
+  fees_model: per_share
+  fees_params:
+    per_share: 0.005
+    min_commission: 1.00
+  slippage_model: next_bar_open
