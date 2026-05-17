@@ -339,15 +339,15 @@ def test_row_to_live_bar_handles_missing_vwap_and_trade_count() -> None:
 
 
 def _signal_row(idx: int = 0) -> dict:
+    """Mirrors the short-key shape `queries.list_signals` actually returns."""
     return {
+        "id": f"00000000-0000-0000-0000-{idx:012d}",
         "symbol": "AAPL",
-        "signal_type": "hidden_bullish_divergence",
+        "type": "hidden_bullish_divergence",
         "indicator": "rsi",
-        "ts_signal": datetime(2024, 8, 1, 14, idx, tzinfo=timezone.utc),
-        "price_at_signal": 100.0 + idx,
+        "ts": datetime(2024, 8, 1, 14, idx, tzinfo=timezone.utc),
+        "price": 100.0 + idx,
         "indicator_value": 30.0 + idx,
-        "p1_ts": datetime(2024, 8, 1, 13, 50, tzinfo=timezone.utc),
-        "p2_ts": datetime(2024, 8, 1, 14, idx, tzinfo=timezone.utc),
     }
 
 

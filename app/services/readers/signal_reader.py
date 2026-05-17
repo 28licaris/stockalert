@@ -21,13 +21,21 @@ logger = logging.getLogger(__name__)
 
 
 def _row_to_signal(row: dict) -> Signal:
-    """Convert a `dict` from `app.db.queries.list_signals` into `Signal`."""
+    """
+    Convert a `dict` from `app.db.queries.list_signals` into `Signal`.
+
+    queries.list_signals uses short column aliases (`type`, `ts`,
+    `price`); the canonical contract uses descriptive names
+    (`signal_type`, `ts_signal`, `price_at_signal`). Reconcile here so
+    consumers depend on the contract, not the SQL aliases.
+    """
     return Signal(
+        id=row.get("id"),
         symbol=row["symbol"],
-        signal_type=row["signal_type"],
+        signal_type=row.get("signal_type") or row.get("type") or "",
         indicator=row.get("indicator") or "",
-        ts_signal=row["ts_signal"],
-        price_at_signal=float(row["price_at_signal"]),
+        ts_signal=row.get("ts_signal") or row.get("ts"),
+        price_at_signal=float(row.get("price_at_signal") or row.get("price") or 0.0),
         indicator_value=float(row.get("indicator_value") or 0.0),
         p1_ts=row.get("p1_ts"),
         p2_ts=row.get("p2_ts"),

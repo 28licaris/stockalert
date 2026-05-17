@@ -163,6 +163,10 @@ class LatestBarsResponse(BaseModel):
 class Signal(BaseModel):
     """One row from CH `signals` — divergence/etc detector output."""
 
+    id: Optional[str] = Field(
+        None,
+        description="ClickHouse signal row id (stringified UUID).",
+    )
     symbol: str
     signal_type: str = Field(
         ...,
