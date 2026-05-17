@@ -27,6 +27,41 @@ becomes ~10× better when it lands.
 - [elliott_wave_plan.md](elliott_wave_plan.md) — depends on silver
   for `gold.elliott_wave_labels`.
 
+## The consumer contract (the silver vs gold split)
+
+The platform has a strict rule about who reads what tier:
+
+| Tier | Who reads it | Why |
+|---|---|---|
+| **Bronze** | `silver_build` only | Raw provider data; not for direct consumption. Every other consumer reads through silver to get deduplication + corp-action adjustment. |
+| **Silver** (`silver.ohlcv_1m`, `silver.corp_actions`, `silver.bar_quality`) | **Chart, screener, indicator computation, backtest harness, MCP tools, cockpit, ad-hoc analysis** — every "show me OHLCV" consumer | Canonical, deduped, adjusted, snapshot-pinnable. The "ground truth" everything else builds on. |
+| **Gold** (`gold.features_*`, `gold.elliott_wave_labels`, `gold.universes`) | **ML training only** (RL agent state vectors, CNN classifiers, LLM strategy feature inputs) | Pre-computed features per `(symbol, ts)` so training doesn't recompute SMA(200) every step. Snapshot-pinned for training reproducibility. |
+| **ClickHouse** | **The chart UI** (and live divergence detection) | Derived hot cache. Live overlay zone fed by Schwab stream; historical zone fed by `silver_to_ch_backfill`. |
+
+Three rules that flow from this:
+
+1. **No consumer reads bronze directly except `silver_build`.** This
+   includes the backtest harness, which today reads `BronzeReader` —
+   it flips to `SilverReader` in TA-5.2.
+2. **ML training never reads silver directly except for gold-build.**
+   The RL agent and CNN classifier load from `gold.features_*`,
+   not from `silver.ohlcv_1m`. Reason: training has to be fast and
+   reproducible; precomputed features deliver both.
+3. **Pure analysis (charts, screener, backtests) reads silver.**
+   These need correctness + reproducibility but not training-grade
+   speed. Silver is the right tier.
+
+The downstream type chain is:
+
+```
+bronze → silver_build → silver → gold_build → gold
+                            │
+                            └──► silver_to_ch_backfill → CH → chart
+                            └──► SilverReader → backtest harness
+                            └──► SilverReader → IndicatorReader → screener
+                            └──► SilverReader → MCP tools
+```
+
 ---
 
 ## 1. The user story that drives this work
@@ -903,7 +938,81 @@ poetry run python scripts/rebuild_silver.py --symbol AAPL
 poetry run python scripts/silver_to_ch.py --symbol AAPL --days all
 ```
 
-### 9.7 Monitoring
+### 9.7 Polygon-drop migration checklist
+
+This is the **critical pre-drop window**. Once the Polygon subscription
+ends, anything not in the seed universe is frozen forever (no new
+1-min data after the drop date). The marginal cost of adding symbols
+to seed BEFORE the drop is essentially zero. Run through this
+checklist when planning to cancel Polygon.
+
+**Pre-drop preparation (T-30 days):**
+
+- [ ] Confirm the 20-year Polygon flat-files bulk backfill into
+      `bronze.polygon_minute` is complete. Spot-check via
+      `scripts/check_silver_coverage.py --report` — should show
+      ~20 years of coverage for every symbol Polygon covers.
+- [ ] Run initial `silver_build.py` over the full bronze history if
+      not already done. ~6-12 hr overnight job.
+- [ ] **Expand the Schwab nightly-sync universe.** This is the
+      single most important pre-drop action. Options ranked by
+      conservatism:
+      1. **S&P 500** (`promote_to_seed.py --universe sp500`) — minimum
+         viable expansion; covers 80% of market cap and ~90% of
+         operator-relevant trading candidates.
+      2. **Russell 1000** (`--universe russell1000`) — broader; ~85%
+         market cap coverage; includes mid-caps.
+      3. **Russell 3000** (`--universe russell3000`) — small/mid + large
+         caps. Stress-tests Schwab's stream subscription limits;
+         monitor for errors.
+      4. **Custom curation** — whatever symbols you might ever trade
+         or screen against. Erring large is cheap.
+- [ ] Verify the Schwab CHART_EQUITY stream handles the expanded
+      universe without dropouts. Watch `monitor_service` logs for
+      1-2 days. Schwab supports hundreds of concurrent subscriptions
+      empirically; we have no documented hard cap.
+- [ ] Verify each newly-promoted symbol has Schwab REST history (~48d
+      1-min, multi-year daily) backfilled into `bronze.schwab_minute`.
+      `promote_to_seed.py` does this automatically; spot-check via
+      `scripts/check_bronze_schwab_coverage.py`.
+
+**At-drop (T-day):**
+
+- [ ] Cancel the Polygon subscription on the operator side.
+- [ ] Stop the nightly Polygon flat-files job (or let it stop
+      naturally — it'll fail on the next attempted download).
+- [ ] Mark the drop date in `silver.subscription_history`
+      (new audit table) — used by the cockpit Status page to show
+      "Polygon archive frozen as of YYYY-MM-DD".
+- [ ] Update `settings.polygon_subscription_active = False` so the
+      cockpit + nightly jobs short-circuit Polygon calls gracefully.
+
+**Post-drop (T+1 onward):**
+
+- [ ] Verify nightly `silver_build` continues running over Schwab-only
+      bronze updates. The per-night workload shrinks (no Polygon
+      flat-files to process) — total time should drop from ~20 min
+      to ~5 min.
+- [ ] Cockpit Status page reflects: Polygon = inactive (frozen as of
+      drop date), Schwab seed = active (N symbols streaming).
+- [ ] If a new symbol is added to a watchlist (ad-hoc, not in seed):
+      the cockpit Symbol page shows a "no Polygon archive for this
+      symbol" indicator for any pre-Polygon-drop windows the user
+      navigates to. Schwab REST 48-day backfill remains the historical
+      depth available for ad-hoc.
+
+**Re-acquiring Polygon later (if needed):**
+
+The plan supports re-subscribing to Polygon. The Polygon historical
+ingestion path is fully preserved (just paused). When you re-subscribe:
+- [ ] Set `settings.polygon_subscription_active = True`.
+- [ ] Run a one-shot `polygon_flatfiles_bulk_backfill.py --start
+      <previous-drop-date> --end <today>` to fill the gap.
+- [ ] Nightly Polygon job resumes from there.
+- [ ] Silver build naturally picks up the new bronze rows and rebuilds
+      adjusted columns where needed.
+
+### 9.8 Monitoring
 
 The cockpit Status page (FE-1) gets four new health pills powered by
 `silver.bar_quality` and the build watermark:
@@ -1065,23 +1174,29 @@ indicators as soon as silver exists.
 
 ## 14. Decisions needed before TA-5.0 starts
 
-Two questions.
+### 14.1 Provider precedence default — RESOLVED 2026-05-17
 
-### 14.1 Provider precedence default
+**Decision: `polygon > schwab`.** Polygon's bar wins when both
+providers have one for `(symbol, ts)`. Schwab fills the gap when
+Polygon has no row (which is the post-Polygon-drop steady state
+for any (symbol, ts) after the drop date, plus the live overlay
+zone).
 
-Default in [data_platform_plan.md §6](data_platform_plan.md):
-`polygon > schwab`. Confirm or change.
+This is the merge strategy that builds `silver.ohlcv_1m`.
+Implementation in [§3.3](#33-algorithm-per-symbol-day_partition-slice):
 
-- **Confirm** → silver build uses Polygon's bar when both providers
-  have one for `(symbol, ts)`; Schwab fills gaps.
-- **Reverse** → Schwab primary, Polygon fallback. Reasonable if you
-  trust Schwab's stream timing more.
-- **Per-symbol** → set up the config table now; decide later
-  per-symbol. Easy to add; mild extra complexity.
+```python
+merged = merge_with_precedence(
+    sources=[
+        ("polygon", polygon_bars),  # primary
+        ("schwab",  schwab_bars),   # fallback for cells polygon has no row for
+    ],
+)
+```
 
-My recommendation: **default to `polygon > schwab`**, with the
-per-symbol override mechanism built into the config plumbing from
-day one (no schema change later, just config).
+Per-symbol override mechanism plumbed in from day one (config-driven,
+no schema change later) for the rare case where Schwab proves better
+for a specific symbol — but the default holds for everything.
 
 ### 14.2 Adjustment default for chart vs. backtest
 
