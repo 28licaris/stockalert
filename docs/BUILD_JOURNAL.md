@@ -576,15 +576,86 @@ gate-blockers.
       **36/36 green**. Production-bronze structural CH-independence
       gate still passes.
 
-**Slice 4b — refactor existing routes to use new readers** (NEXT)
-- [ ] Routes that read CH directly today (`routes_signals`,
-      `routes_market`, `routes_watchlist`, `routes_backfill`) get
-      refactored to depend on the matching reader via `Depends(...)`.
-      Each route becomes a thin adapter: parse request → call reader
-      → return Pydantic response. SQL stays in `app.db.queries`.
-- [ ] No new endpoints in this slice — surface stays the same;
-      implementation gets the contract.
-- [ ] One commit per route file so each refactor is reviewable.
+**Slice 4b — refactor existing routes to use new readers** (LANDED 2026-05-16)
+
+Three sub-commits, each reviewable on its own:
+
+- [x] **Prep commit:** extend `BarReader` + `QuoteService`.
+      - Renamed `BarReader` interval `"daily"` → `"1d"` to match
+        `queries.SUPPORTED_INTERVALS` exactly.
+      - Added `BarReader.get_bars_for_chart(symbol, interval,
+        lookback_days, limit)` — the multi-table fallback + auto-
+        limit logic that used to live in `routes_signals./bars` now
+        lives here, unit-tested in isolation.
+      - Added `QuoteService.get_raw_quotes(symbols, chunk_size)` —
+        returns `(merged_dict, invalid_list)` without forced
+        normalization, for consumers (the banner) that need
+        provider-specific fields the canonical `Quote` doesn't carry.
+      - `get_quotes` and `get_raw_quotes` share a private
+        `_fetch_chunked_merged` helper.
+      - `_row_to_live_bar` made flexible: accepts both `ts` and
+        `timestamp` row keys (different queries use different
+        aliases).
+
+- [x] **`routes_signals.py` refactor.**
+      - `GET /api/signals` → `SignalReader.get_signals_by_symbol`
+        via `Depends(get_signal_reader)`.
+      - `GET /api/bars` → `BarReader.get_bars_for_chart` via
+        `Depends(get_bar_reader)`. ~60 lines of routing/fallback
+        logic deleted from the route layer.
+      - Response shapes preserved verbatim for the dashboard.
+      - Fixed real bug along the way: `_row_to_signal` was reading
+        the wrong column names (`signal_type`/`ts_signal`/
+        `price_at_signal`) when `queries.list_signals` actually
+        returns short aliases (`type`/`ts`/`price`). Unit test was
+        passing on stubbed (wrong) data. `_signal_row` fixture
+        updated to mirror the real shape.
+      - Live-verified `/api/bars?symbol=AAPL` against production CH.
+
+- [x] **`routes_market.py` refactor.**
+      - `GET /api/market/banner` → `QuoteService.get_raw_quotes` via
+        `Depends(get_quote_service)`. The `_fetch_quotes_merged`
+        helper deleted from the route — chunking now lives in
+        `QuoteService`.
+      - Banner-specific extraction (`_extract_row`) stays in the
+        route because Schwab's `regularMarketNetChange` /
+        `assetMainType` etc. are richer than the canonical `Quote`
+        shape MCP tools will consume.
+      - `routes_market.py`: 222 → 196 lines.
+      - Tests migrated from `monkeypatch` of the factory function to
+        FastAPI `app.dependency_overrides[get_quote_service]` — the
+        idiomatic override. Added a new test for invalidSymbols
+        passthrough now that it crosses the service boundary.
+      - Live-verified the banner against production Schwab (SPY at
+        $737.34, full asset_type/net_change/change_pct).
+
+- [x] **`routes_watchlist.py` — deliberately NOT refactored.**
+      The snapshot endpoint includes a `bar_count` field that's a
+      watchlist-quality metric, not a market metric. Forcing it
+      through `BarReader.get_latest_bar_per_symbol` (which only
+      returns canonical `LiveBar`) would require either two SQL
+      queries or a fake "with-metadata" reader variant — both worse
+      than the existing direct query. Added a doc-comment in
+      `_snapshot_for` documenting the decision and pointing at
+      `feedback_platform_design_intent` for the principle: readers
+      own the canonical contract; non-canonical metrics live next
+      to the consumer that needs them.
+
+**Final state for Step 2**
+
+- All four planned readers live in `app/services/readers/` with one
+  shared `schemas.py` contract.
+- All three lake endpoints (`/api/lake/bars`, `/api/lake/symbols`,
+  `/api/lake/last-day`) operate via `BronzeReader`.
+- Three of four CH-bound endpoints (`/api/signals`, `/api/bars`,
+  `/api/market/banner`) now go through reader services; the fourth
+  (`/api/watchlists/.../snapshot`) keeps direct query access by
+  design.
+- Combined test surface: 87 green across reader unit tests + lake +
+  market + watchlist + instruments route tests. Structural
+  CH-independence gate on `routes_lake` still passes.
+
+**Step 2 done.** Ready for Step 3 (MCP scaffold).
 
 **Gate:** `/api/lake/bars?symbol=AAPL&start=...&end=...` returns rows
 with ClickHouse stopped. Existing CH-backed routes still work normally.

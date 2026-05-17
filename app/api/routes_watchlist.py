@@ -58,6 +58,20 @@ def _serialize_wl(wl: dict, *, with_members: bool = False) -> dict:
 
 
 async def _snapshot_for(symbols: list[str]) -> list[dict]:
+    """
+    Latest-bar snapshot for a watchlist's symbols.
+
+    Note: this helper intentionally uses `queries.latest_bar_per_symbol_async`
+    directly rather than `BarReader.get_latest_bar_per_symbol`. The
+    snapshot includes a `bar_count` field that's a watchlist-quality
+    metric, not a market metric — so it doesn't belong on the canonical
+    `LiveBar` shape. Going through the reader would either require two
+    SQL queries or a fake-abstraction "with-metadata" variant. Direct
+    query access keeps one query, one response shape, and matches the
+    pattern documented in feedback_platform_design_intent: readers own
+    the canonical contract; non-canonical metrics live next to the
+    consumer that needs them.
+    """
     rows = await queries.latest_bar_per_symbol_async(symbols) if symbols else []
     by_symbol = {r["symbol"]: r for r in rows}
     snapshot = []
