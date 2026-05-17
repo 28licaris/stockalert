@@ -37,6 +37,9 @@ Then, in this order:
    plan: evolve the static-HTML dashboard into a typed React +
    TanStack + shadcn/ui SPA that exposes every backend capability
    (screener, backtests, MCP tools, Iceberg lake, runs registry).
+   **Built SaaS-ready** — auth / tenancy / billing / quota seams
+   land in FE-1 so a future subscription-service flip is purely
+   additive (~2 weeks of integration vs. a 6-8 week refactor).
    Plan only; no code yet.
 
 ## Working agreement

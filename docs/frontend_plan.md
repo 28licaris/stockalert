@@ -7,9 +7,23 @@ backtests, agents, MCP tools, monitoring — in one cohesive UI.
 
 **Status:** plan only. No code written yet.
 
-**Goal:** a developer-first cockpit. This is YOUR control surface,
-not a public-facing app. Prioritize introspection, debuggability,
-keyboard speed, and density over polish.
+**Goal:** a developer-first cockpit built to **production-grade
+modular standards** so it can graduate into a subscription product
+later without a rewrite. For now you're the only user — but every
+abstraction we introduce is designed so adding multi-tenancy, auth,
+billing, and quotas is a *purely additive* change, not a rip-up.
+
+This is the explicit two-mode contract:
+
+| Mode | When | What's different |
+|---|---|---|
+| **Single-tenant dev mode** | Today | No login, no tenant context, your local machine, all data yours by construction |
+| **Multi-tenant SaaS mode** | Future | Login wall, tenant-scoped everything, per-tenant quotas, billing, audit log |
+
+The same codebase serves both. Every page, every API call, every
+piece of persisted state goes through abstractions (`useCurrentUser`,
+`tenantId`, `withQuota`) that are no-ops in dev mode and load-bearing
+in SaaS mode. See §7 (SaaS-Readiness Contract) for the seams.
 
 **Companion docs:**
 - [trading_subsystem_design.md](trading_subsystem_design.md) — strategy
@@ -85,19 +99,31 @@ requires hand-vendoring scripts via CDN URLs.
    form-generated args — this is how the agent surface stays
    debuggable as it grows.
 
-### Non-goals (explicit)
+### Non-goals (explicit) — for now
 
-- **No marketing/landing page.** This is internal tooling, not a SaaS
-  front door.
-- **No mobile-first responsive design.** Desktop is the target. Light
-  responsiveness for tablet inspection; we will not optimize for phones.
-- **No authentication / multi-tenancy.** Single-user developer tool;
-  if it ever ships externally we add auth as a separate phase.
-- **No accessibility beyond basic.** WCAG-AA color contrast + keyboard
-  navigation get done; screen-reader testing does not (until users
-  appear).
-- **No SSR / Next.js.** API-backed, dev tool, no SEO needs. Adding
-  SSR doubles operational complexity for zero benefit.
+- **Don't build a marketing/landing page yet.** Defer until SaaS
+  gating. The cockpit IS the product surface today.
+- **Don't optimize mobile-first.** Desktop is the dev target. The
+  layout primitives we pick (CSS grid, container queries, sidebar
+  drawer pattern) are mobile-capable so the future SaaS push doesn't
+  re-architect anything; we just don't *invest* in mobile until users
+  appear.
+- **Don't implement auth UI / login flow.** But — **DO** scaffold
+  the auth seam (`useCurrentUser` hook, FastAPI dependency
+  injection, tenant-scoped DB queries). See §7. Adding a real auth
+  provider later becomes wiring up the seam, not rewriting pages.
+- **Don't implement billing or quota enforcement.** Same logic — the
+  *seam* exists (every long-running operation flows through a
+  `withQuota` decorator that's a no-op today); the enforcement is
+  the SaaS-mode flip.
+- **Don't pursue strict accessibility / WCAG audit.** WCAG-AA color
+  contrast + keyboard navigation are free side-effects of shadcn/ui
+  + Radix; we get them without effort. Screen-reader testing waits
+  for real users.
+- **No SSR / Next.js.** API-backed cockpit; no SEO. Adding SSR
+  doubles ops complexity for zero benefit. If we ever need a
+  marketing/landing site, that's a *separate* Next.js site at the
+  marketing subdomain — the cockpit SPA stays its own deployable.
 
 ---
 
@@ -543,7 +569,257 @@ separate terminal.
 
 ---
 
-## 7. Type chain — the closing of the loop
+## 7. SaaS-Readiness Contract
+
+The single most important architectural commitment of this plan:
+**every abstraction we use today is the same abstraction the SaaS
+version uses.** Dev mode is "every value is `null` / `default` /
+no-op" mode. SaaS mode is "values get populated by middleware."
+No code path branches on `if SAAS_MODE`.
+
+This section documents every seam. Adding multi-tenancy, auth,
+billing, and per-tenant quotas later is a matter of *implementing*
+each seam — not introducing new ones.
+
+### 7.1 The single-tenant / multi-tenant boundary
+
+Three categories of data + state. Each has a clear future migration:
+
+| Category | Examples | Today | Future SaaS |
+|---|---|---|---|
+| **Platform-global** | Bronze tables, indicator math, MCP tool schemas, market hours, instrument catalog | Public to everyone | Public, unchanged |
+| **Tenant-scoped** | Watchlists, screener spec drafts, backtest configs, journals, agent runs, MCP invocation history, UI prefs | One implicit "owner" (you) | Tagged with `tenant_id`; only visible to that tenant |
+| **Per-user-in-tenant** | Last-viewed symbol, command-palette history, panel layout | Browser localStorage | Same + cross-device sync |
+
+The plan: **tag the tenant-scoped category from day one** with an
+explicit `owner_id` column on every relevant table. In dev mode the
+column defaults to a single sentinel value (`"default"`). In SaaS
+mode the auth middleware populates it.
+
+### 7.2 Backend seams (FastAPI side)
+
+Even though this is the *frontend* plan, the seams have to exist on
+both sides. The corresponding backend work goes into the journal as
+companion phase **TA-SaaS** (not yet scheduled, but spec'd here so
+neither side surprises the other):
+
+```python
+# app/auth/principal.py  ← NEW
+class Principal(BaseModel):
+    """Who is making this request. In dev mode, always the default
+    principal. In SaaS mode, derived from the auth middleware."""
+    user_id: str = "default-user"
+    tenant_id: str = "default-tenant"
+    roles: list[str] = ["owner"]
+    plan: str = "dev"  # 'dev' | 'free' | 'pro' | 'enterprise'
+
+async def get_principal(request: Request) -> Principal:
+    """FastAPI dependency. Today returns DEFAULT_PRINCIPAL.
+    Tomorrow reads from session/JWT/etc."""
+    return DEFAULT_PRINCIPAL
+```
+
+Every tenant-scoped route adds one dep:
+
+```python
+# app/api/routes_watchlist.py
+@router.get("/watchlists")
+def list_watchlists(principal: Principal = Depends(get_principal)):
+    return watchlist_repo.list_watchlists(owner=principal.tenant_id)
+```
+
+Three rules that hold from day one:
+
+1. **No tenant-scoped query lacks an owner filter.** Even today, with
+   one tenant, every query filters by `owner_id="default-tenant"`. A
+   lint check enforces this at PR time.
+2. **The data layer accepts the owner column even on read.** Migration
+   step at SaaS-time = backfill `owner_id` columns on existing rows
+   + flip middleware on. Zero ORM/query rewrite.
+3. **The Principal flows into MCP tools too.** MCP tools that touch
+   tenant-scoped data (`list_strategy_runs`, `get_watchlist_members`)
+   take a `principal` arg; today it's the default. The agent eventually
+   gets a per-tenant agent identity in SaaS mode.
+
+### 7.3 Frontend seams (React side)
+
+```typescript
+// frontend/src/auth/useCurrentUser.ts
+export function useCurrentUser(): CurrentUser {
+  // Today: returns DEV_USER. Tomorrow: reads from an auth context
+  // wrapped around the router root.
+  return DEV_USER;
+}
+
+// frontend/src/api/client.ts
+export const apiClient = createClient<paths>({
+  baseUrl: API_BASE,
+  // Today: no-op. Tomorrow: adds Authorization header.
+  fetch: withAuth(fetch),
+});
+```
+
+Persisted state goes through one abstraction:
+
+```typescript
+// frontend/src/lib/storage.ts
+// Today: localStorage with key `stockalert:{userId}:{key}`
+// Tomorrow: cloud-synced via /api/me/prefs with same key
+export function useUserSetting<T>(key: string, default: T): [T, (v: T) => void] {
+  const user = useCurrentUser();
+  // ...
+}
+```
+
+Routes that need to be protected later are pre-marked:
+
+```typescript
+// frontend/src/routes/watchlists.tsx
+export const Route = createFileRoute('/watchlists')({
+  meta: { protected: true },   // ← no-op today, gates redirect tomorrow
+  component: WatchlistsPage,
+});
+```
+
+### 7.4 Public API vs Cockpit API separation
+
+Two endpoint families, with explicit naming:
+
+| Prefix | Audience | Stability | Versioning |
+|---|---|---|---|
+| `/api/v1/...` | **External**: the future SaaS REST API. Stable; semver. Documented OpenAPI. Auth required in SaaS mode. | High; breaking change = new major version | `/api/v1`, `/api/v2`, ... |
+| `/cockpit/...` | **Internal**: the React SPA. Whatever shape is most efficient for the UI (composed responses, etc.). Same auth gating but UI-shaped, not API-product-shaped. | Medium; can break with cockpit deploy | None (deploys together with the SPA) |
+| `/mcp/...` | **Agent surface**: MCP tools. Same Pydantic contracts as `/api/v1` to keep the agent surface a first-class citizen. | High; matches `/api/v1` | Matched to `/api/v1` |
+
+Today we have only `/api/*`. The plan rebases existing routes onto
+`/api/v1/*` (one-shot rename) and adds a new `/cockpit/*` family for
+UI-composed endpoints (the "give me everything for the Symbol page
+in one call" pattern) when needed. The MCP server already lives at
+`/mcp` — kept as-is. The historical static-HTML pages keep working
+behind `/legacy/*`.
+
+**Why this matters:** when SaaS lands, you don't have to retroactively
+classify which endpoints are public, which are cockpit-internal, and
+which are agent. They're already separated by URL prefix and naming
+discipline.
+
+### 7.5 Feature flags
+
+Every gated capability flows through one provider:
+
+```typescript
+const canRunBacktest = useFeatureFlag('backtest.runner');
+const llmModel = useFeatureFlag('strategy.llm.model', 'claude-sonnet-4');
+```
+
+Today: flags resolve from a static config file (`frontend/src/flags.ts`).
+Tomorrow: flags resolve per-tenant from a flags service (LaunchDarkly,
+or our own table). Same `useFeatureFlag` signature.
+
+This is how the eventual "Pro tier unlocks the RL agent" gating works
+without touching component code.
+
+### 7.6 Quotas + cost controls
+
+Long-running operations (backtests, screener scans over wide universes,
+LLM strategy runs) flow through a quota seam:
+
+```typescript
+// frontend
+const { mutate, isPending, quotaInfo } = useQuotaMutation('backtest.run', {
+  // ...
+});
+// quotaInfo.remaining_today, quotaInfo.plan_limit, etc.
+```
+
+```python
+# backend
+@router.post("/api/v1/backtest")
+async def run_backtest(
+    config: BacktestConfig,
+    principal: Principal = Depends(get_principal),
+    quota: QuotaCheck = Depends(check_quota("backtest.run", cost=1)),
+):
+    ...
+```
+
+Today: `check_quota` always returns OK. Tomorrow: it checks the
+tenant's plan, decrements counters, returns 429 with quota-info
+headers when exceeded. **The cost-control machinery we already use
+for the LLM agent (the SQLite cache + per-run budget cap in
+[app/services/sim/strategies/llm_agent.py](../app/services/sim/strategies/llm_agent.py)
+TA-2) is the same pattern, applied earlier in the stack.**
+
+### 7.7 Observability + audit (built in from day 0)
+
+Three subsystems, hooked to no-op providers today, real providers in
+SaaS mode:
+
+| Subsystem | Today | SaaS mode |
+|---|---|---|
+| **Error tracking** | Console + a `useErrorBoundary` fallback page | Sentry (or PostHog) wired to the same boundary |
+| **Audit log** | `app/audit/log.py` writes structured rows to a CH `audit_events` table (already useful for dev — "what did I do yesterday?") | Same table, tenant-scoped; per-tenant audit export |
+| **Usage metrics** | Same `audit_events` table feeds a `/usage` cockpit page | Per-tenant usage dashboards; basis for billing |
+
+The audit log lands **today**, not later. Every cockpit page emits
+a `view` event; every mutation emits an action event; every MCP
+invocation emits a tool-call event. This is operator-debuggable value
+on day 1 ("why did the screener fire 50 times yesterday?") and becomes
+the SaaS audit trail without re-architecture.
+
+### 7.8 Branding + theming
+
+White-labeling later is purely additive:
+
+- All color tokens, the logo SVG, and the product name live in one
+  config file (`frontend/src/branding.ts`).
+- Every component reads from that file, not from hardcoded strings.
+- Today: hard-coded "StockAlert" / current slate-and-indigo palette.
+- Future: branding swappable per-tenant or per-deployment without
+  recompiling.
+
+### 7.9 Deployment topology readiness
+
+The current FastAPI + ClickHouse + Iceberg stack is single-process,
+single-box. SaaS-grade deployment needs:
+
+| Concern | Today's posture | Future-ready means |
+|---|---|---|
+| Stateless API tier | Mostly true — state lives in CH + S3 + SQLite | Move the LLM response cache out of local SQLite to CH (planned anyway for replay-across-machines reproducibility) |
+| Background workers | In-process asyncio tasks | Externalize to a queue (Redis Streams or NATS); workers as separate processes. Schemas already typed. |
+| WebSocket fan-out | Single process | Pub/Sub via Redis when we cross 1 instance |
+| Database per-tenant isolation | Single CH cluster | Either shared schema with `owner_id` filter (planned) OR per-tenant tables (only if compliance demands it). The owner-column-everywhere discipline supports both. |
+
+We are **not** doing any of this work now. We are flagging it so the
+choices we make today (e.g. where the LLM cache lives) don't paint
+us into a corner. The data-platform plan already covers most of this
+(silver/gold are designed multi-tenant-friendly because Iceberg's
+partition-by-something model maps cleanly to `partition by owner_id`).
+
+### 7.10 The minimum-viable-additions for SaaS launch (one-day-rough estimate)
+
+When the SaaS day arrives, the work to flip the switch (assuming
+the seams above are in place):
+
+| Item | Effort |
+|---|---|
+| Auth provider integration (Clerk / Supabase Auth / WorkOS) | 1 day |
+| Backfill `owner_id` on existing tenant-scoped tables (CH migration) | 0.5 day |
+| `get_principal` reads from session/JWT | 0.5 day |
+| Feature-flag provider integration | 1 day |
+| Stripe (or Lemon Squeezy) billing webhook handler | 2 days |
+| Quota-table + decrement logic on plan-gated endpoints | 1 day |
+| Public landing page on marketing subdomain (Next.js, separate repo) | 3-5 days |
+| SOC2 minimums (audit log already exists, just need retention + access policies) | 2 days |
+| **Total** | **~2 weeks** |
+
+Without the seams: that same flip is a 6-8 week refactor. **The
+seams cost us approximately 3% extra effort today for a 5× cost
+reduction on the SaaS-flip day.**
+
+---
+
+## 8. Type chain — the closing of the loop (Pydantic → React)
 
 The single most important architectural property of this plan:
 
@@ -586,13 +862,18 @@ killed the static-HTML approach.
 
 ---
 
-## 8. Phasing
+## 9. Phasing
 
 Each phase delivers operator-visible value and leaves the app in a
-shippable state. Total estimated effort: 4-6 weeks of focused work
-(but elastic — every phase ships value on its own).
+shippable state. Total estimated effort: 5-7 weeks of focused work
+for FE-1..FE-10 (the cockpit), plus FE-11..FE-13 (~1-2 weeks) which
+land the SaaS-readiness seams alongside. The seams are **threaded
+through** the cockpit phases, not deferred — see notes on each phase.
 
-### Phase FE-1 — Foundation + Status page (5–7 days)
+### Phase FE-1 — Foundation + Status page + seams (6–8 days)
+
+The foundation phase lands the SaaS-readiness seams. They cost ~1
+extra day here and save weeks later.
 
 - Scaffold `frontend/` with Vite + React + TS + TanStack Router +
   TanStack Query + Tailwind + shadcn/ui base components + biome.
@@ -601,14 +882,35 @@ shippable state. Total estimated effort: 4-6 weeks of focused work
 - App shell: sidebar nav + topbar + global status bar.
 - **`/` Status page** with all the live subsystem indicators
   (§5.1).
+- **SaaS-readiness seams** (§7):
+  - `useCurrentUser` hook + `DEV_USER` constant.
+  - `apiClient` with `withAuth` no-op wrapper.
+  - `useFeatureFlag` reading from `frontend/src/flags.ts`.
+  - `useUserSetting` localStorage wrapper.
+  - `useQuotaMutation` no-op wrapper.
+  - `branding.ts` config file with color/logo/product-name tokens
+    used everywhere (no hardcoded strings).
+  - `protected` route metadata (no-op today).
+- **Backend seams** (companion TA-SaaS-1 work, can be a separate PR
+  or bundled):
+  - `app/auth/principal.py` with `Principal` Pydantic + `DEFAULT_PRINCIPAL`.
+  - `get_principal` FastAPI dependency.
+  - Audit-log table in CH (`audit_events`) + middleware that writes
+    one row per request.
+  - Rename `/api/*` → `/api/v1/*` (one-shot; legacy redirects to
+    new for the static-HTML transition).
 - Production build → `app/static/dist/`; FastAPI redirect `/` →
   `/app`.
 - Legacy bridge: old pages stay at `/legacy/*`.
 - CI: frontend-build job; type errors fail the build.
 
-**Gate:** new `/` page renders all subsystem health badges live
-(WS-driven, no polling), Vite dev server proxies cleanly, type
-codegen is reproducible.
+**Gates:**
+- `/` page renders all subsystem health badges live (WS-driven).
+- Vite dev server proxies cleanly to FastAPI.
+- Type codegen reproducible (CI re-generates and confirms no drift).
+- Every `useCurrentUser()` call returns `DEV_USER`; every `useQuotaMutation`
+  flows through the no-op wrapper.
+- Audit log records every cockpit page view + mutation.
 
 ### Phase FE-2 — Symbol page parity (4–5 days)
 
@@ -626,7 +928,10 @@ Legacy URL remains accessible.
 
 - Visual `ScreenerSpec` builder (§5.3).
 - Live scan + candidate table with sparklines.
-- Draft persistence in localStorage.
+- Draft persistence via `useUserSetting('screener.drafts', [])` —
+  the seam abstraction, not raw `localStorage`.
+- Backend: `screener_specs` CH table gets the `owner_id` column on
+  creation (always `"default-tenant"` today; ready for SaaS).
 
 **Gate:** the example specs in `app/services/screener/README.md` can
 be reconstructed in the UI builder and produce the same results as
@@ -637,6 +942,11 @@ the API direct.
 - Strategy picker, parameter form, run button, equity curve,
   metrics, trade log, save-to-`agent_runs`.
 - Reproducibility "Replay" button.
+- Mutation flows through `useQuotaMutation('backtest.run')` —
+  no-op cost-check today; real one when SaaS lands.
+- `agent_runs` CH table gets `owner_id` column (already designed
+  this way in `app/services/sim/registry.py` — confirm; if not,
+  add).
 
 **Gate:** running the canary SMA backtest from the UI produces a
 metrics row in `agent_runs` byte-identical to the CLI run.
@@ -686,12 +996,67 @@ on Enter.
 - Backend WS publisher integrates with backfill progress + backtest
   progress + monitor state changes.
 - Front-end query invalidation triggered by WS events.
+- WS subscription auth: today the connection is unauthenticated;
+  the WS handshake gets the same `get_principal` treatment as HTTP
+  routes (in dev, returns `DEFAULT_PRINCIPAL`).
 
 **Gate:** no polling on any page; everything updates from WS pushes.
 
+### Phase FE-11 — Auth-provider integration (when SaaS launches; ~3 days)
+
+The first "flip the seam" phase. Single concrete provider, not a
+configurable abstraction (we resist over-engineering — pick a stack
+and commit).
+
+**Recommendation: Clerk** (or Supabase Auth as the OSS alternative).
+
+- `get_principal` reads from a Clerk session JWT instead of returning
+  `DEFAULT_PRINCIPAL`.
+- `useCurrentUser` calls Clerk's `useUser()` hook.
+- Routes marked `protected: true` redirect to `/login` when there's no session.
+- Add `/login`, `/signup`, `/account` cockpit pages (Clerk's React
+  components do most of the work).
+- Owner backfill migration: every existing tenant-scoped CH row gets
+  `owner_id = (your_user_id_from_clerk)`. One-shot DDL+DML script.
+- WS handshake: validate JWT from query param or first message.
+
+**Gate:** A fresh dev machine cannot access cockpit data without
+logging in. Existing data still loads when you log in as yourself.
+
+### Phase FE-12 — Plans + quotas + billing (when SaaS launches; ~5 days)
+
+- `plans` CH table: `plan_id, name, price_cents, quotas (JSON)`.
+- `tenant_plans` CH table: `tenant_id, plan_id, status, period_end, ...`.
+- `quota_check` middleware actually checks: read tenant plan's quota
+  for the named operation, decrement a CH counter, return 429 if exceeded.
+- Stripe Checkout integration (`/api/v1/billing/checkout-session`,
+  webhook handler at `/api/v1/billing/webhook`).
+- `/billing` cockpit page: current plan, usage, upgrade button.
+- Feature-flag provider integration: gate the RL agent, the LLM
+  strategy, advanced screener rules behind plan tiers via
+  `useFeatureFlag('feature.id')`.
+
+**Gate:** the Stripe webhook creates a `tenant_plans` row; the cockpit
+reflects the new plan within 1 minute; quota enforcement applies
+immediately for the new tenant.
+
+### Phase FE-13 — SOC2 minimums + audit retention (when SaaS launches; ~3 days)
+
+- Audit-log retention policy (rolling 1 year per tenant; longer for
+  paid tiers).
+- Per-tenant audit export endpoint (`GET /api/v1/audit/export.csv`).
+- Soft-delete instead of hard-delete on all tenant-scoped tables.
+- Privacy-policy + ToS pages (cockpit footer links).
+- Data-deletion endpoint (`DELETE /api/v1/me`) implementing
+  scrubbing across all tenant tables (GDPR right-to-be-forgotten).
+
+**Gate:** documented data flow for SOC2 light evidence (audit log,
+access patterns, retention policy). Not a full SOC2 cert — just the
+foundation that makes a future audit tractable.
+
 ---
 
-## 9. Risks & open questions
+## 10. Risks & open questions
 
 ### "Frontend complexity" risk
 
@@ -725,14 +1090,23 @@ auto-renderer needs heuristics. Mitigation: per-tool "render hint"
 metadata can be added to the tool decorator if the heuristics
 aren't enough (lazy — only add if needed).
 
-### Authentication
+### Auth + multi-tenancy (the SaaS-readiness wager)
 
-No auth in the plan. If this ever moves off `localhost`, we add:
-- Single-user dev mode: nothing (current).
-- Hosted: GitHub OAuth or magic-link, gated at the FastAPI middleware
-  level (not at the SPA — never trust the client).
+This plan bets that landing the auth/tenancy/quota/billing **seams**
+in FE-1 (~1 extra day) saves a 6-8 week refactor later. The bet
+fails if:
+- We never go SaaS. → ~1 day overhead wasted, no harm done.
+- The seams diverge from the real eventual auth provider's shape. →
+  the seams are deliberately minimal (`Principal` Pydantic, `useCurrentUser`
+  hook, `withQuota` decorator) so they're close to ANY provider's shape.
+  Clerk / Supabase Auth / Auth0 / Authentik all expose the same
+  primitives.
+- The "owner_id on every tenant table" discipline slips. → enforced by
+  a lint check on PR (planned for FE-1).
 
-Filed as future concern.
+Track this in the journal: if we get to FE-5 without ever using the
+seams (i.e. they remained no-ops the whole time), the bet is still
+winning — they cost ~1 day of FE-1 effort and they're now permanent.
 
 ### When to delete the legacy HTML
 
@@ -743,7 +1117,7 @@ in the build journal.
 
 ---
 
-## 10. Decisions deferred until we hit them
+## 11. Decisions deferred until we hit them
 
 1. **Theme tokens** — Bloomberg-style amber-on-black is iconic but
    doesn't auto-apply to charts. Decide during FE-1 (probably
@@ -764,7 +1138,7 @@ in the build journal.
 
 ---
 
-## 11. Where this fits in the overall roadmap
+## 12. Where this fits in the overall roadmap
 
 The frontend track is **fully independent of the silver-layer /
 gold-features / EW tracks.** No frontend phase blocks or is blocked
@@ -777,7 +1151,7 @@ Recommended insertion in [trading_subsystem_design.md §10](trading_subsystem_de
 Data / TA / Trading track       │   Frontend track (parallel)
                                 │
 TA-4.3 Screener (LANDED)        │
-TA-5   Silver layer (next)      │   FE-1 Foundation + Status
+TA-5   Silver layer (next)      │   FE-1 Foundation + Status + seams
 TA-6   TA gap-fill              │   FE-2 Symbol parity
                                 │   FE-3 Screener UI
 TA-7   Gold features            │   FE-4 Backtest UI
@@ -788,7 +1162,11 @@ EW-2   Wave engine              │   FE-8 Remaining parity
                                 │   FE-9 Polish
 EW-3..5  Wave integrations      │   FE-10 Real-time everywhere
 TA-RL  RL agent                 │
-TA-Live Paper → live            │
+TA-Live Paper → live            │   ┌─ SaaS flip (when ready) ─┐
+                                │   │ FE-11 Auth integration   │
+                                │   │ FE-12 Plans/quotas/Stripe│
+                                │   │ FE-13 SOC2 minimums      │
+                                │   └──────────────────────────┘
 ```
 
 **Recommendation:** start FE-1 in parallel with TA-5 (silver). The
@@ -798,22 +1176,41 @@ running ad-hoc CH queries.
 
 ---
 
-## 12. Decision needed from operator
+## 13. Decision needed from operator
 
 This plan assumes:
 
-1. **React + TypeScript + Vite** (over HTMX or staying with Alpine).
-   Confirm or veto.
-2. **shadcn/ui** (over Mantine / MUI). Confirm or veto.
-3. **Run FE-1 in parallel with TA-5 (silver)**, or sequentially
-   (silver first, then frontend). Sequential is safer; parallel is
-   faster.
+1. **React + TypeScript + Vite + shadcn/ui** (over HTMX, Mantine,
+   or staying with Alpine). The SaaS-readiness commitment makes
+   the stack-pick more lopsided — the React+TS chain gives us
+   end-to-end types (Pydantic → OpenAPI → TS → Zod) that HTMX
+   can't. **Confirm or pick a different combo.**
+
+2. **Run FE-1 in parallel with TA-5 (silver), with seams included.**
+   The seams cost ~1 day of FE-1 effort. Skipping them is a 6-8
+   week refactor when SaaS launches. Confirm or override
+   (sequential silver-first; or skip seams to save the day).
+
+3. **Auth provider preference** when SaaS time comes.
+   Recommendation: **Clerk** for fastest path (React components +
+   FastAPI middleware in 2-3 hrs); **Supabase Auth** if you want
+   OSS / self-hostable; **WorkOS** if enterprise SSO is in the
+   roadmap. Decide before FE-1 lands the seams so the `Principal`
+   shape matches the chosen provider. (No commitment now; just
+   a paper choice.)
+
 4. **MCP Explorer (FE-6) priority** — bump earlier if agent
    development is the bottleneck. Currently slotted after
    Screener/Backtest/Runs; could be moved up to FE-2 if MCP
    debuggability is the higher pain.
-5. **HTMX alternative** — if the React stack feels too heavy for
-   "one developer's tool," the HTMX path is real. The cockpit
-   ambition (command palette, MCP explorer, optimistic updates on
-   long-running operations) is harder there; the "cleaner
-   dashboard" ambition is easier. Operator's call.
+
+5. **HTMX alternative** — open offer; with the SaaS-readiness
+   ambition added the React choice becomes more justified, but
+   HTMX is still doable if you want to dial back ambition.
+
+6. **Public marketing site (Next.js, separate repo)** — when SaaS
+   time comes, do we want a marketing landing page (Next.js, SEO,
+   marketing copy) at `stockalert.example.com` with the cockpit at
+   `app.stockalert.example.com`? Or skip the marketing site and
+   onboard SaaS users through GitHub / direct link? Decide before
+   FE-11. (No commitment now.)
