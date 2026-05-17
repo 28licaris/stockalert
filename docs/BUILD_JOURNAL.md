@@ -1494,16 +1494,99 @@ mechanics; faster signal because EMA weights recent prices more.
         12/26 SMA, 20/50 EMA vs 20/50 SMA) would isolate
         the MA-family effect from the period effect.
 
-### Phase TA-3.6 — Bake-off summary (NEXT)
+### Phase TA-3.6 — Bake-off summary (LANDED 2026-05-17)
 
-- [ ] Run all 4 rule-based baselines on identical window/fees/
-      slippage. Write the comparison table into the journal
-      as the canonical "where the bar is" before any LLM run
-      lands. Use existing `agent_runs` rows; no new code
-      needed beyond a small CLI / SQL summary script.
-- [ ] Document the takeaways: which family fits this window,
-      where the trade-offs are, what an LLM agent would need
-      to beat to be "worth it."
+All 4 rule-based baselines on identical window/fees/slippage.
+The canonical "where the bar is" before any LLM agent run.
+
+- [x] `scripts/run_bakeoff.py` — small CLI that reads from
+      `agent_runs` and prints a side-by-side table. Filters
+      by strategy / symbol / interval / limit-per-strategy.
+      No recomputation; uses the registry rows from prior
+      backtest runs.
+- [x] `app/services/sim/registry.py::list_runs` now SELECTs
+      `symbols` column too (was missing — needed for the
+      bake-off symbol filter).
+- [x] Bake-off run executed; results below.
+
+**Baselines on AAPL daily 2023-01-01 → 2024-12-31** ($40k start,
+per-share fees @ $0.005/share, $1 min commission, next-bar-open
+fill):
+
+| Strategy | Trades | Return | Sharpe | Max DD | Win Rate | Final Equity |
+|---|---:|---:|---:|---:|---:|---:|
+| `sma_crossover` (canary, 20/50) | 5 | +2.65% | +0.305 | -5.90% | 0% | $41,059.91 |
+| `ema_crossover` (12/26) ⭐ | 7 | **+9.02%** | **+0.933** | -6.67% | 67% | $43,609.77 |
+| `rsi_reversion` (14, 30/50) | 12 | -0.13% | +0.015 | -6.17% | 33% | $39,949.72 |
+| `bollinger_mean_revert` (20, 2σ) | 12 | -1.89% | -0.188 | -7.82% | 50% | $39,244.58 |
+
+**Reproducibility:** every row above is pinned in `agent_runs`
+with `git_sha` + strategy version + strategy params + full
+`BacktestConfig` JSON. `reproduce(run_id)` (CLI follow-up)
+will re-run any row from the registry.
+
+#### Takeaways
+
+1. **Trend-following won this window.** EMA Crossover (12/26)
+   produced +9.02% with Sharpe 0.933, ~3.4× SMA Crossover's
+   +2.65%. Both mean-revert strategies underperformed
+   (-0.13% RSI, -1.89% Bollinger). AAPL 2023-2024 had two
+   strong leg-ups (Q2 2023, Q1 2024); mean-revert in a
+   trending market fights the dominant direction.
+
+2. **Trade count vs profit factor** — the canonical asymmetry:
+   - Trend-followers: low trade count, low win rate, BIG winners.
+     SMA Crossover had 0% win rate on 5 trades but still made
+     +2.65% — the rare wins were huge enough to offset every
+     small loser. Classic trend signature.
+   - Mean-reverters: 2.4× more trades, higher win rates (33%,
+     50%), but losers bigger than winners (profit factor < 1).
+     Lots of small "reverted to mean" wins giving back the gains
+     on the larger "trend kept going" losers.
+
+3. **The EMA-vs-SMA delta isn't a clean A/B.** EMA's 12/26
+   defaults are shorter than SMA's 20/50, so part of EMA's
+   edge here is "faster periods catch more moves" rather than
+   pure "EMA reacts faster." A future sensitivity run (12/26
+   EMA vs 12/26 SMA AND 20/50 EMA vs 20/50 SMA) would isolate
+   the MA-family effect from the period effect. Filed as
+   follow-up.
+
+4. **What an LLM agent needs to beat.** The bar:
+   - **Hurdle:** beat `ema_crossover` at +9.02% / Sharpe 0.933
+     on the same window to claim "worth the API cost."
+   - **Floor:** beat `sma_crossover` at +2.65% / Sharpe 0.305
+     to claim "the LLM is adding something over the
+     simplest possible strategy."
+   - **Anti-floor:** under-perform both mean-revert baselines
+     (-0.13% / -1.89%) and the LLM is actively destructive
+     on this window — turn off the API, save the money.
+
+5. **Single-symbol single-window limitations.** These are
+   four data points on ONE symbol on ONE window. Bake-off
+   #2 (post-TA-4) will run multi-symbol multi-window
+   sensitivities to surface which baselines are
+   regime-robust vs window-lucky. For now this is enough
+   to anchor "where the bar is" before any LLM iteration.
+
+#### Where to next
+
+The platform is **complete enough to start measurable LLM
+iteration**. To do that we need the deferred TA-2 live run
+(see [ISSUES.md `ta2-live-anthropic-run-deferred`](ISSUES.md))
+to actually call Claude against bronze and produce an
+`agent_runs` row to put in the bake-off.
+
+After the LLM lands its first row, the path forward is:
+
+- **TA-4** — multi-timeframe + screener service. Lets a
+  strategy declare `intervals=['1d', '1h']` and gets the
+  context object resolving history per-interval. The screener
+  picks "interesting today" symbols so an LLM doesn't burn
+  context on the whole universe.
+- **TA-5** — RL agent (PPO). Same Strategy Protocol — harness
+  doesn't know it's RL. Reward = stepped Sharpe contribution.
+- **TA-6+** — paper trading → live with kill switches.
 
 ### Phase TA-4+ — Roadmap
 

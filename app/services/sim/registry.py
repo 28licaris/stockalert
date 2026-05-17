@@ -134,7 +134,7 @@ def list_runs(
         f"""
         SELECT
             run_id, started_at, strategy_name, strategy_version,
-            interval, start_date, end_date, n_trades,
+            symbols, interval, start_date, end_date, n_trades,
             total_return, sharpe_ratio, max_drawdown, final_equity
         FROM agent_runs
         {where}
