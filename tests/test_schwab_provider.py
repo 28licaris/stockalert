@@ -330,7 +330,35 @@ class TestHistoricalDf:
         assert PRICE_HISTORY_PATH in url
         params = call_kwargs.get("params", {})
         assert params.get("symbol") == "AAPL"
-        assert params.get("period") == 1
+        # Explicit window is sent; `period` must NOT be sent — see
+        # docs/ISSUES.md::schwab-pricehistory-period-window-conflict.
+        # Passing both `period` and an explicit startDate/endDate can return
+        # HTTP 400 "Enddate ... is before startDate" (Schwab quirk).
+        assert "period" not in params
+        assert "startDate" in params and "endDate" in params
+
+    @pytest.mark.asyncio
+    async def test_single_day_window_does_not_send_period(self):
+        """Regression for the 2026-04-03 Phase 2 backfill gap.
+
+        A 1-day Schwab pricehistory window used to fail with HTTP 400 when
+        the provider sent `period=1` alongside explicit `startDate`/`endDate`.
+        Pin that we never send `period` even on a degenerate same-day window.
+        """
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        p._access_token = "tok"
+        session = make_session(get_resp=make_resp(200, {"candles": []}))
+        # Same calendar day, 1-minute window — what the backfill CLI sends
+        # when invoked with `--start 2026-04-03 --end 2026-04-03`.
+        start = datetime(2026, 4, 3, 13, 30, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 4, 3, 20, 0, 0, tzinfo=timezone.utc)
+        with patch("app.providers.schwab_provider.aiohttp.ClientSession", return_value=make_session_cm(session)):
+            await p.historical_df("AAPL", start, end, timeframe="1Min")
+        params = session.get.call_args.kwargs.get("params", {})
+        assert "period" not in params
+        assert params["periodType"] == "day"
+        assert params["frequencyType"] == "minute"
+        assert params["frequency"] == 1
 
 
 class TestMarketDataGet:

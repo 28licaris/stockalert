@@ -758,10 +758,20 @@ class SchwabProvider(DataProvider):
         start_ms = int(start.timestamp() * 1000) if start.tzinfo else int(start.replace(tzinfo=timezone.utc).timestamp() * 1000)
         end_ms = int(end.timestamp() * 1000) if end.tzinfo else int(end.replace(tzinfo=timezone.utc).timestamp() * 1000)
 
-        # For ``periodType=day``, Schwab defaults ``period`` to 10 when omitted
-        # (market_data_api.md). That clashes with explicit ``startDate``/``endDate``
-        # and can yield HTTP 400 ("Enddate ... is before startDate"). Send an
-        # explicit ``period`` for day charts only: calendar span capped at 10.
+        # `period` is intentionally OMITTED.
+        #
+        # Per the Schwab market_data_api docs (see docs/schwab-api/market_data_api.md):
+        #     "If not specified startDate will be (endDate - period) ..."
+        # — `period` exists only to derive a default `startDate` when one
+        # isn't passed. We always pass `startDate` AND `endDate` explicitly,
+        # so `period` is purely advisory.
+        #
+        # Empirically (Phase 2 backfill, 2026-04-03), passing both `period`
+        # and an explicit window can return HTTP 400 with
+        # "Enddate ... is before startDate" — an internal date-math conflict
+        # in Schwab's server when reconciling the two. Tracked in
+        # docs/ISSUES.md::schwab-pricehistory-period-window-conflict.
+        # Dropping `period` entirely cured the gap.
         params = {
             "symbol": symbol.upper(),
             "periodType": period_type,
@@ -771,9 +781,6 @@ class SchwabProvider(DataProvider):
             "endDate": end_ms,
             "needExtendedHoursData": "true",
         }
-        if period_type == "day":
-            d0, d1 = start.date(), end.date()
-            params["period"] = max(1, min(10, (d1 - d0).days + 1))
         data = await self._market_data_get(PRICE_HISTORY_PATH, params)
         if not data:
             return pd.DataFrame()

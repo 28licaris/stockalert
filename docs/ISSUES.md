@@ -115,24 +115,6 @@ increase, etc.) and note what's blocking.
   read-back path (e.g. an ops health check that verifies lifecycle is
   applied). Trivial one-line policy update.
 
-### `schwab-pricehistory-period-window-conflict`
-
-- **Area:** provider:schwab, ingest
-- **Filed:** 2026-05-15 (Phase 2 backfill)
-- **Status:** open (not blocking)
-- **Symptom:** Schwab's `/pricehistory` returns HTTP 400 with
-  `"Enddate ... is before startDate"` when called with `period=1`
-  *together* with explicit `startDate`/`endDate` on certain dates. Cost
-  us all of 2026-04-03 in the Phase 2 seed-100 backfill.
-- **Root cause:** Quirk in how `historical_df` in
-  [app/providers/schwab_provider.py:732](../app/providers/schwab_provider.py)
-  combines `period` with explicit window params. Live-streaming path is
-  unaffected (uses streaming, not pricehistory).
-- **Suggested fix:** Drop `period` when explicit window is passed (or
-  vice versa); then re-run the Schwab bronze backfill with
-  `--start 2026-04-03 --end 2026-04-03` to backfill the missing day.
-  Silver dedup handles single-provider gaps gracefully, so not urgent.
-
 ---
 
 ## Resolved
@@ -182,6 +164,40 @@ functionality:
 - Production websocket (`/ws/signals` on `app/main_api.py`):
   currently uncovered. Filed as separate follow-up — not the
   same thing the deleted scaffold was attempting.
+
+### `schwab-pricehistory-period-window-conflict` — resolved 2026-05-17
+
+Two findings, both addressed:
+
+**1. Code fix (correctness).** `historical_df` in
+[app/providers/schwab_provider.py](../app/providers/schwab_provider.py)
+used to send `period` alongside explicit `startDate`/`endDate` for
+`periodType=day` (minute charts). Per
+[docs/schwab-api/market_data_api.md](schwab-api/market_data_api.md):
+*"If not specified startDate will be (endDate - period) ..."* —
+`period` is purely a default-startDate derivation, ignored when
+`startDate` is explicit. Sending both can confuse Schwab's internal
+date math. Dropped `period` entirely from the request payload;
+pinned the new behavior with
+`tests/test_schwab_provider.py::TestHistoricalDf::test_single_day_window_does_not_send_period`
+and updated the existing assertion in
+`test_uses_market_data_base_url_and_symbol_param` from
+`period == 1` → `"period" not in params`.
+
+**2. Root cause of the original 2026-04-03 gap (not a code bug).**
+Live-tested against Schwab: Apr 2 (Thu) and Apr 6 (Mon) return data
+normally; Apr 3 returns HTTP 400 with the same inverted-date error
+even after the code fix. **April 3, 2026 was Good Friday — US
+equity markets were closed.** Schwab's pricehistory returns a
+confusing 400 for closed-market days instead of empty bars. The
+provider's `_market_data_get` already maps non-200 → `{}`, so
+`historical_df` returns an empty DataFrame and the backfill simply
+counts "0 rows" for that day (with one ERROR log line). There's no
+data to backfill — Polygon also doesn't have minute bars for
+Apr 3 2026 because no trades occurred.
+
+Net: code is now spec-compliant; the perceived missing day was a
+market holiday. Resolved by [commit on main, push pending].
 
 ### `watchlist-repo-containing-test-failure` — resolved 2026-05-17
 
