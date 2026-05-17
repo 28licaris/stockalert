@@ -105,6 +105,12 @@ app/
 │   │   ├── journal_sync.py / journal_parser.py / pnl.py
 │   │   └── README.md
 │   │
+│   ├── readers/             READ services — one Pydantic contract,
+│   │   │                    consumed by HTTP routes AND MCP tools
+│   │   ├── schemas.py           BronzeBar, BronzeBarsResponse
+│   │   ├── bronze_reader.py     CH-independent Iceberg reads
+│   │   └── README.md            (more readers added in Step 2 slices)
+│   │
 │   └── legacy/              Pre-Iceberg raw/ writers — Phase 7 removal
 │       ├── lake_archive.py / lake_sink.py / s3_lake_client.py
 │       └── README.md

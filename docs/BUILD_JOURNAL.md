@@ -467,30 +467,59 @@ build AND agent (MCP) access cleanly. Three sub-steps; each its own commit.
 - `routes_market.py` docstring corrected — banner is provider-agnostic.
 - 38 files updated for imports; 144/144 in-scope tests pass.
 
-### Step 2 — Read services + CH-independent lake routes (NOT STARTED)
+### Step 2 — Read services + CH-independent lake routes (IN PROGRESS)
 
 **Why:** Today routes mostly read directly from ClickHouse, and lake
 reads happen inline via PyIceberg. To support (a) agents reading the
 lake without CH up, and (b) MCP tools as thin wrappers around services,
 we need explicit read services with Pydantic contracts.
 
+Sequencing: build the gate-critical path first (bronze reader + its
+contract + route + gate test), then the supporting CH readers and the
+existing-route refactor. Lets us validate the agent-readiness design
+end-to-end before touching production-facing routes.
+
+**Slice 1 — bronze reader + contract** (LANDED 2026-05-16)
+- [x] `app/services/readers/schemas.py` — `BronzeBar`, `BronzeBarsResponse`
+      Pydantic models. The contract MCP tools will reuse verbatim.
+- [x] `app/services/readers/bronze_reader.py` — `BronzeReader.get_bars()`
+      over `bronze.{provider}_minute` Iceberg tables. Provider routing
+      via `_PROVIDER_TABLE`; half-open intervals; UTC at the boundary;
+      Pydantic shape out. CH-independent.
+- [x] `app/services/readers/README.md` — folder contract + roadmap of
+      planned readers (`bar_reader`, `signal_reader`, `quote_service`,
+      future `silver_reader`).
+- [x] Integration test `tests/integration/test_bronze_reader.py` — 8
+      cases against a real Glue catalog + S3 temp table: happy path,
+      empty windows, unknown symbol, half-open interval edges, naive-
+      datetime UTC coercion, `limit=N` returns most-recent-N,
+      `ValueError` on unknown provider. AWS-free unit case passes
+      locally; AWS-gated cases pending an integration run.
+
+**Slice 2 — `/api/lake/*` routes + gate** (NEXT)
+- [ ] `app/api/routes_lake.py` — `/api/lake/bars` over `BronzeReader`.
+      Thin adapter; no business logic in the route.
+- [ ] Wire into `main_api.py` (`_safe_start` pattern).
+- [ ] **Gate test:** stop ClickHouse, hit
+      `/api/lake/bars?symbol=AAPL&start=...&end=...`, assert rows
+      come back. This is the Phase Pre-3 Step 2 gate.
+
+**Slice 3 — list/discovery surface** (after gate green)
+- [ ] `BronzeReader.list_symbols(provider, since)` + route
+      `/api/lake/symbols`.
+- [ ] `BronzeReader.latest_trading_day(provider)` + route
+      `/api/lake/last-day`.
+
+**Slice 4 — CH-backed readers + refactor** (after CH-independent path proven)
 - [ ] `app/services/readers/bar_reader.py` — CH `ohlcv_1m` reads
-      (`get_recent_bars`, `get_bars_in_range`)
+      (`get_recent_bars`, `get_bars_in_range`).
 - [ ] `app/services/readers/signal_reader.py` — CH signals reads
-      (`get_recent_signals`, `get_signals_by_symbol`)
-- [ ] `app/services/readers/quote_service.py` — provider-quote abstraction
-      (works against any provider with `get_quotes`; same fallback chain
-      as the banner already uses)
-- [ ] `app/services/readers/bronze_reader.py` — Iceberg lake reads
-      via PyIceberg + DuckDB (`get_bronze_bars`, `list_symbols`,
-      `latest_trading_day`). **Critical: this is the "works when CH is
-      down" path** for agent historical access.
+      (`get_recent_signals`, `get_signals_by_symbol`).
+- [ ] `app/services/readers/quote_service.py` — provider-quote
+      abstraction (works against any provider with `get_quotes`; same
+      fallback chain as the banner already uses).
 - [ ] Refactor existing routes to call the new readers (thin adapters).
-- [ ] New routes `app/api/routes_lake.py` — `/api/lake/bars`,
-      `/api/lake/symbols`, `/api/lake/last-day`. CH-free path.
-- [ ] Pydantic schemas for each reader's input/output (the contract
-      MCP tools will reuse).
-- [ ] Integration tests against real CH + real bronze.
+- [ ] Integration tests against real CH.
 
 **Gate:** `/api/lake/bars?symbol=AAPL&start=...&end=...` returns rows
 with ClickHouse stopped. Existing CH-backed routes still work normally.
