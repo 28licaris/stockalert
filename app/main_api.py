@@ -27,6 +27,7 @@ from app.api import (
     routes_backfill,
     routes_instruments,
     routes_journal,
+    routes_lake,
     routes_market,
     routes_monitors,
     routes_movers,
@@ -290,6 +291,7 @@ app.include_router(routes_backfill.router, prefix="/api", tags=["Backfill"])
 app.include_router(routes_instruments.router, prefix="/api", tags=["Instruments"])
 app.include_router(routes_market.router, prefix="/api", tags=["Market"])
 app.include_router(routes_journal.router, prefix="/api", tags=["Journal"])
+app.include_router(routes_lake.router, prefix="/api", tags=["Lake"])
 
 try:
     from app.api import routes_signals

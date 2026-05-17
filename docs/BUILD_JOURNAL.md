@@ -496,13 +496,34 @@ end-to-end before touching production-facing routes.
       `ValueError` on unknown provider. AWS-free unit case passes
       locally; AWS-gated cases pending an integration run.
 
-**Slice 2 — `/api/lake/*` routes + gate** (NEXT)
-- [ ] `app/api/routes_lake.py` — `/api/lake/bars` over `BronzeReader`.
-      Thin adapter; no business logic in the route.
-- [ ] Wire into `main_api.py` (`_safe_start` pattern).
-- [ ] **Gate test:** stop ClickHouse, hit
-      `/api/lake/bars?symbol=AAPL&start=...&end=...`, assert rows
-      come back. This is the Phase Pre-3 Step 2 gate.
+**Slice 2 — `/api/lake/bars` route + gate** (LANDED 2026-05-16)
+- [x] `app/api/routes_lake.py` — `/api/lake/bars` over `BronzeReader`,
+      `Depends(get_bronze_reader)` so tests override cleanly. Thin
+      adapter; no business logic in the route.
+- [x] Wired into `main_api.py` (46 routes total, up from 45).
+- [x] Unit + gate test `tests/test_routes_lake.py` — 6 cases:
+      happy path with response-shape assertion, empty-window 200/[],
+      unknown-provider 400, infra-failure 500, missing-params 422,
+      and the **structural CH-independence gate**:
+      `test_lake_route_does_not_import_clickhouse` walks every
+      `app.*` module transitively reachable from `routes_lake` via
+      AST + `importlib.util.find_spec` and asserts NONE sit under
+      `app.db.*` (ClickHouse). This regression-guards the
+      CH-independence promise at the code-structure level — even if
+      a future change accidentally adds a CH import to the bronze
+      read path, this test will fail before production breakage.
+      All 6/6 pass.
+- [x] **End-to-end live verification:** booted uvicorn, curled
+      `/api/lake/bars?symbol=AAPL&start=2024-08-01T14:00:00Z&end=2024-08-01T14:05:00Z&limit=5`,
+      got HTTP 200 with real production AAPL bars
+      (`source: "polygon-flatfiles"`, sub-second). Confirmed Pydantic
+      response shape matches `BronzeBarsResponse`.
+
+**The Phase Pre-3 Step 2 gate is GREEN.** Agent-readiness for
+historical reads is proven: bronze data flows through a typed contract
+without any ClickHouse code in the call path. Slices 3 and 4 below
+are scope-completion (more endpoints + the CH-backed readers), not
+gate-blockers.
 
 **Slice 3 — list/discovery surface** (after gate green)
 - [ ] `BronzeReader.list_symbols(provider, since)` + route
