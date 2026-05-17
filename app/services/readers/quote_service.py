@@ -22,6 +22,12 @@ from app.services.readers.schemas import Quote, QuotesResponse
 logger = logging.getLogger(__name__)
 
 
+# Schwab accepts long comma-separated `symbols=` lists, but very large
+# batches sometimes fail closed (token / URL limits). Chunk + accumulate
+# partial successes so one bad chunk doesn't drop the whole tape.
+_DEFAULT_QUOTE_CHUNK_SIZE = 25
+
+
 # Provider-quote field-name fallback chain. Different providers use
 # different keys for the same concept (Schwab: `lastPrice`; Polygon
 # tickers endpoint: `last_quote.p` / `day.c`). We try each candidate
@@ -132,10 +138,20 @@ class QuoteService:
         response = await self.get_quotes([symbol])
         return response.quotes.get(symbol)
 
-    async def get_quotes(self, symbols: list[str]) -> QuotesResponse:
+    async def get_quotes(
+        self,
+        symbols: list[str],
+        *,
+        chunk_size: int = _DEFAULT_QUOTE_CHUNK_SIZE,
+    ) -> QuotesResponse:
         """
         Return current quotes for the requested symbols. Symbols the
         provider couldn't resolve land in `invalid_symbols`.
+
+        Chunked: large batches are split into `chunk_size`-sized
+        requests so one bad chunk (network blip, URL-length limit,
+        one symbol the provider chokes on) doesn't drop the entire
+        tape. Per-chunk failures log a warning and continue.
 
         Empty input -> empty response (no provider call).
         """
@@ -150,26 +166,34 @@ class QuoteService:
             )
             return QuotesResponse(quotes={}, count=0, invalid_symbols=list(symbols))
 
-        try:
-            raw = await getter(symbols)
-        except Exception as exc:  # noqa: BLE001 — boundary
-            logger.warning("QuoteService.get_quotes failed: %s", exc)
-            raise
-
-        if not isinstance(raw, dict):
-            return QuotesResponse(quotes={}, count=0, invalid_symbols=list(symbols))
-
-        errors = raw.get("errors") if isinstance(raw.get("errors"), dict) else {}
-        invalid: list[str] = list(errors.get("invalidSymbols") or [])
-
-        quotes: dict[str, Quote] = {}
-        for sym, payload in raw.items():
-            if sym == "errors" or not isinstance(payload, dict):
+        merged: dict[str, dict[str, Any]] = {}
+        invalid_acc: list[str] = []
+        for i in range(0, len(symbols), chunk_size):
+            chunk = symbols[i : i + chunk_size]
+            try:
+                part = await getter(chunk)
+            except Exception as exc:  # noqa: BLE001 — boundary; partial-success semantics
+                logger.warning(
+                    "QuoteService chunk %d-%d (%d syms) failed: %s",
+                    i, i + len(chunk), len(chunk), exc,
+                )
                 continue
-            quotes[sym] = _normalize_quote(sym, payload, self._provider_name)
+            if not isinstance(part, dict):
+                continue
+            err = part.get("errors")
+            if isinstance(err, dict):
+                invalid_acc.extend(err.get("invalidSymbols") or [])
+            for k, v in part.items():
+                if k == "errors" or not isinstance(v, dict):
+                    continue
+                merged[k] = v
 
+        quotes: dict[str, Quote] = {
+            sym: _normalize_quote(sym, payload, self._provider_name)
+            for sym, payload in merged.items()
+        }
         return QuotesResponse(
             quotes=quotes,
             count=len(quotes),
-            invalid_symbols=invalid,
+            invalid_symbols=invalid_acc,
         )
