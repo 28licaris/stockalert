@@ -1117,28 +1117,7 @@ in the build journal.
 
 ---
 
-## 11. Decisions deferred until we hit them
-
-1. **Theme tokens** — Bloomberg-style amber-on-black is iconic but
-   doesn't auto-apply to charts. Decide during FE-1 (probably
-   slate-darks-with-indigo-accent, matching current static dashboard).
-2. **Chart library mixing** — Lightweight Charts for OHLCV;
-   Recharts for everything else? Or unify on one? Decide during
-   FE-2 (probably keep both; LC is irreplaceable for finance).
-3. **Form library scope** — Zod schemas for forms only, or for
-   runtime validation of WS messages too? Decide during FE-6 (when
-   the MCP Explorer surfaces dynamic schemas).
-4. **Mobile** — fully decline, or graceful degradation? Decide
-   during FE-9 (probably graceful: pages collapse to single column,
-   nav becomes a drawer, but no mobile-specific designs).
-5. **State persistence scope** — only UI state in localStorage, or
-   also cache hot query results? Decide during FE-3 (probably
-   UI-only; TanStack Query handles query-cache freshness better
-   than localStorage).
-
----
-
-## 12. Where this fits in the overall roadmap
+## 11. Where this fits in the overall roadmap
 
 The frontend track is **fully independent of the silver-layer /
 gold-features / EW tracks.** No frontend phase blocks or is blocked
@@ -1176,41 +1155,84 @@ running ad-hoc CH queries.
 
 ---
 
-## 13. Decision needed from operator
+## 12. Decisions needed before FE-1 starts
 
-This plan assumes:
+Three questions. Only these block FE-1; everything else gets
+decided when we hit it.
 
-1. **React + TypeScript + Vite + shadcn/ui** (over HTMX, Mantine,
-   or staying with Alpine). The SaaS-readiness commitment makes
-   the stack-pick more lopsided — the React+TS chain gives us
-   end-to-end types (Pydantic → OpenAPI → TS → Zod) that HTMX
-   can't. **Confirm or pick a different combo.**
+### 13.1 Stack: confirm or change
 
-2. **Run FE-1 in parallel with TA-5 (silver), with seams included.**
-   The seams cost ~1 day of FE-1 effort. Skipping them is a 6-8
-   week refactor when SaaS launches. Confirm or override
-   (sequential silver-first; or skip seams to save the day).
+Plan recommends **React + TypeScript + Vite + TanStack + shadcn/ui +
+Tailwind**. Rationale in §3.
 
-3. **Auth provider preference** when SaaS time comes.
-   Recommendation: **Clerk** for fastest path (React components +
-   FastAPI middleware in 2-3 hrs); **Supabase Auth** if you want
-   OSS / self-hostable; **WorkOS** if enterprise SSO is in the
-   roadmap. Decide before FE-1 lands the seams so the `Principal`
-   shape matches the chosen provider. (No commitment now; just
-   a paper choice.)
+- **Confirm** → I start scaffolding FE-1.
+- **Pick HTMX instead** → I rewrite §3 and §4 for a Jinja-templates +
+  HTMX path. Simpler, but the cockpit ambitions (command palette,
+  MCP Explorer with live form generation, optimistic updates on
+  long-running backtests) are harder to deliver. Plan still works,
+  ceiling is lower.
+- **Pick a different React combo** (e.g. Mantine instead of
+  shadcn/ui; Redux Toolkit instead of TanStack Query) → tell me
+  which substitution; I update §3.
 
-4. **MCP Explorer (FE-6) priority** — bump earlier if agent
-   development is the bottleneck. Currently slotted after
-   Screener/Backtest/Runs; could be moved up to FE-2 if MCP
-   debuggability is the higher pain.
+### 13.2 SaaS-readiness seams: include in FE-1, or skip?
 
-5. **HTMX alternative** — open offer; with the SaaS-readiness
-   ambition added the React choice becomes more justified, but
-   HTMX is still doable if you want to dial back ambition.
+The plan recommends including the seams (§7) in FE-1. Cost: ~1
+extra day of FE-1 effort. Benefit: a future SaaS flip is ~2
+weeks of integration work instead of 6-8 weeks of refactor.
 
-6. **Public marketing site (Next.js, separate repo)** — when SaaS
-   time comes, do we want a marketing landing page (Next.js, SEO,
-   marketing copy) at `stockalert.example.com` with the cockpit at
-   `app.stockalert.example.com`? Or skip the marketing site and
-   onboard SaaS users through GitHub / direct link? Decide before
-   FE-11. (No commitment now.)
+- **Include them** → FE-1 lands the seams. Plan as written.
+- **Skip them** → I remove §7 and treat the cockpit as
+  permanently-internal. If SaaS day ever comes, expect a
+  significant refactor. Faster today; more expensive later.
+
+### 13.3 Order: parallel with silver, or after?
+
+- **Parallel** → FE-1 starts now, runs alongside TA-5 (silver
+  layer). The new Status page makes silver-build progress
+  observable as it happens.
+- **Sequential** → silver first, frontend after. Safer (one focus
+  area at a time), slower (you don't see the cockpit until
+  TA-5..TA-8 complete).
+
+---
+
+## 13. Decisions deferred until we hit them
+
+These DON'T need answers before FE-1 — they get decided on the day
+we actually build the feature, because the seams in FE-1 are
+deliberately generic enough to fit any reasonable choice.
+
+- **Auth provider** (Clerk / Supabase Auth / WorkOS / Auth0). The
+  `Principal` Pydantic model in §7.2 has `user_id: str, tenant_id:
+  str, roles: list[str], plan: str` — every mainstream provider
+  produces those four fields, so we pick when we wire it up.
+  Decided during FE-11 (the day SaaS launches).
+
+- **Marketing site posture** (separate Next.js site at
+  `stockalert.com` with cockpit at `app.stockalert.com`, OR no
+  marketing site, OR cockpit + landing at one domain). The URL
+  separation in §7.4 (`/api/v1`, `/cockpit`, `/mcp`) is path-based
+  and can move to subdomains later without code changes.
+  Decided during FE-11 or later.
+
+- **MCP Explorer priority** — currently FE-6. If during FE-2 or
+  FE-3 you discover MCP debuggability is the actual bottleneck,
+  bump it earlier. No need to decide now.
+
+- **Theme tokens** — slate-darks-with-indigo-accent (matching current
+  static dashboard) is the default. Decided during FE-1.
+
+- **Chart library mixing** — Lightweight Charts for OHLCV, Recharts
+  for everything else. Reconsidered during FE-2 only if a unified
+  library is desirable.
+
+- **Mobile** — fully decline now, graceful degradation considered
+  during FE-9.
+
+- **State persistence scope** — UI state only (theme, panel layouts,
+  recent symbols) in localStorage via `useUserSetting`. Hot query
+  results stay in TanStack Query's in-memory cache.
+
+- **Form library scope** — Zod for form validation. Whether to also
+  validate WS messages at runtime: decide during FE-10.
