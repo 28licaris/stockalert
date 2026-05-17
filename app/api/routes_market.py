@@ -1,16 +1,16 @@
 """
 Market overview — index / futures tape for the dashboard banner.
 
-Provider-agnostic: works against any `DataProvider` that exposes a
-`get_quotes(symbols)` method. Currently that's **Schwab** and **Polygon**;
-Alpaca does not implement `get_quotes` (the factory in `app.config.
-get_market_quotes_provider` falls back to Schwab when the active
-`DATA_PROVIDER` lacks the method, so the tape still works as long as
-*some* provider on the box has working quote creds).
-
-Symbols come from `settings.market_banner_symbols` (comma-separated).
-Requests are batched in chunks so one bad symbol or URL limits do not
-drop the whole strip.
+The endpoint is a thin adapter over `QuoteService`:
+  - QuoteService owns the chunking + invalidSymbols accumulation
+    (replaces the old `_fetch_quotes_merged` helper that used to live
+    here).
+  - QuoteService also surfaces the provider name (Schwab fallback
+    aware) so the response can include `provider:` for the dashboard.
+  - This module keeps the banner-specific extraction (label,
+    description, asset_type, net_change/change_pct from regular- vs
+    quote-block fallbacks) because those fields are richer than the
+    canonical `Quote` shape MCP tools will consume.
 """
 from __future__ import annotations
 
@@ -18,42 +18,18 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
-from app.config import get_market_quotes_provider, settings
+from app.config import settings
 from app.db import watchlist_repo
+from app.services.readers.quote_service import QuoteService
 
 logger = logging.getLogger(__name__)
 
-# Schwab accepts long comma-separated `symbols=` lists, but very large batches
-# can fail closed; chunking keeps the tape resilient.
-_QUOTE_CHUNK_SIZE = 25
 
-
-async def _fetch_quotes_merged(getter, symbols: list[str]) -> dict[str, Any]:
-    """Call `get_quotes` in chunks and merge symbol blocks + invalidSymbols."""
-    merged: dict[str, Any] = {}
-    invalid_acc: list[str] = []
-    for i in range(0, len(symbols), _QUOTE_CHUNK_SIZE):
-        chunk = symbols[i : i + _QUOTE_CHUNK_SIZE]
-        try:
-            part = await getter(chunk)
-        except Exception as e:
-            logger.warning("market_banner chunk get_quotes failed: %s", e)
-            continue
-        if not isinstance(part, dict):
-            continue
-        err = part.get("errors")
-        if isinstance(err, dict):
-            invalid_acc.extend(err.get("invalidSymbols") or [])
-        for k, v in part.items():
-            if k == "errors":
-                continue
-            if isinstance(v, dict):
-                merged[k] = v
-    if invalid_acc:
-        merged["errors"] = {"invalidSymbols": invalid_acc}
-    return merged
+def get_quote_service() -> QuoteService:
+    """FastAPI dependency provider — override in tests."""
+    return QuoteService.from_settings()
 
 
 router = APIRouter()
@@ -129,93 +105,83 @@ async def market_banner(
         None,
         description="Override comma-separated symbols (else settings.market_banner_symbols)",
     ),
+    quote_service: QuoteService = Depends(get_quote_service),
 ) -> dict:
+    """
+    Index / futures tape for the dashboard banner. Returns one item
+    per requested symbol with last/net_change/change_pct/close and a
+    short display label.
+
+    Response shape preserved verbatim for the dashboard:
+      {as_of, provider, items: [...], errors: [...]}
+    """
     want = _split_symbols(symbols) if symbols else _split_symbols(settings.market_banner_symbols)
-    provider = get_market_quotes_provider()
-    # Surface which provider actually backed this response so the dashboard
-    # (and humans staring at the JSON) can confirm the configured DATA_PROVIDER
-    # is the one serving the tape. ``provider_class`` is more robust than
-    # ``DATA_PROVIDER`` because it survives the Schwab fallback inside
-    # ``get_market_quotes_provider`` when the primary lacks ``get_quotes``.
-    provider_class = type(provider).__name__ if provider is not None else None
-    provider_name = (provider_class or "").replace("Provider", "").lower() or None
+    provider_name = quote_service.provider_name or None
 
     if not want:
-        return {
-            "as_of": datetime.now(timezone.utc).isoformat(),
-            "provider": provider_name,
-            "items": [],
-            "errors": [],
-        }
+        return _empty_response(provider_name, errors=[])
 
-    getter = getattr(provider, "get_quotes", None)
-    if getter is None:
-        return {
-            "as_of": datetime.now(timezone.utc).isoformat(),
-            "provider": provider_name,
-            "items": [],
-            "errors": [{"message": "provider has no get_quotes"}],
-        }
+    if not _provider_supports_get_quotes(quote_service):
+        return _empty_response(
+            provider_name,
+            errors=[{"message": "provider has no get_quotes"}],
+        )
 
     try:
-        raw = await _fetch_quotes_merged(getter, want)
-    except Exception as e:
-        logger.warning("market_banner get_quotes failed: %s", e)
-        return {
-            "as_of": datetime.now(timezone.utc).isoformat(),
-            "provider": provider_name,
-            "items": [],
-            "errors": [{"message": str(e)}],
-        }
+        raw, invalid = await quote_service.get_raw_quotes(want)
+    except Exception as exc:  # noqa: BLE001 — boundary; preserve original behavior
+        logger.warning("market_banner get_quotes failed: %s", exc)
+        return _empty_response(provider_name, errors=[{"message": str(exc)}])
 
-    if raw == {} and want:
-        errors = [{"message": "empty quotes response (token expired, network, or unsupported batch)"}]
-        return {
-            "as_of": datetime.now(timezone.utc).isoformat(),
-            "provider": provider_name,
-            "items": [],
-            "errors": errors,
-        }
+    if not raw and want:
+        return _empty_response(
+            provider_name,
+            errors=[
+                {"message": "empty quotes response (token expired, network, or unsupported batch)"},
+            ],
+        )
+
+    errors: list[dict[str, Any]] = [
+        {"symbol": sym, "message": "invalid or unsupported symbol"}
+        for sym in invalid
+    ]
+
+    # Index by top-level key and by nested `symbol` (defensive for API variants).
+    by_inner: dict[str, dict[str, Any]] = {}
+    for k, v in raw.items():
+        if not isinstance(v, dict):
+            continue
+        by_inner[str(k).upper()] = v
+        inner_sym = v.get("symbol")
+        if inner_sym:
+            by_inner[str(inner_sym).upper()] = v
 
     items: list[dict[str, Any]] = []
-    errors: list[dict[str, Any]] = []
-    if isinstance(raw, dict):
-        err = raw.get("errors")
-        if isinstance(err, dict):
-            inv = err.get("invalidSymbols") or []
-            for sym in inv:
-                errors.append({"symbol": sym, "message": "invalid or unsupported symbol"})
-        # Index by top-level key and by nested `symbol` (defensive for API variants).
-        by_inner: dict[str, dict[str, Any]] = {}
-        for k, v in raw.items():
-            if k == "errors" or not isinstance(v, dict):
-                continue
-            by_inner[str(k).upper()] = v
-            inner_sym = v.get("symbol")
-            if inner_sym:
-                by_inner[str(inner_sym).upper()] = v
-        for sym in want:
-            block = raw.get(sym) or by_inner.get(sym.upper())
-            if not isinstance(block, dict):
-                continue
-            row = _extract_row(sym, block)
-            if row and row.get("last") is not None:
-                items.append(row)
-    elif isinstance(raw, list):
-        # Rare list-shaped quote payloads: [{ "symbol": "SPY", ... }, ...]
-        by_sym: dict[str, dict[str, Any]] = {}
-        for entry in raw:
-            if isinstance(entry, dict) and entry.get("symbol"):
-                by_sym[str(entry["symbol"]).upper()] = entry
-        for sym in want:
-            block = by_sym.get(sym.upper())
-            if isinstance(block, dict):
-                row = _extract_row(sym, block)
-                if row and row.get("last") is not None:
-                    items.append(row)
+    for sym in want:
+        block = raw.get(sym) or by_inner.get(sym.upper())
+        if not isinstance(block, dict):
+            continue
+        row = _extract_row(sym, block)
+        if row and row.get("last") is not None:
+            items.append(row)
+
     return {
         "as_of": datetime.now(timezone.utc).isoformat(),
         "provider": provider_name,
         "items": items,
+        "errors": errors,
+    }
+
+
+def _provider_supports_get_quotes(svc: QuoteService) -> bool:
+    """True iff the wrapped provider has a callable `get_quotes`."""
+    return callable(getattr(svc._provider, "get_quotes", None))  # noqa: SLF001
+
+
+def _empty_response(provider_name: Optional[str], *, errors: list[dict[str, Any]]) -> dict:
+    return {
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "provider": provider_name,
+        "items": [],
         "errors": errors,
     }

@@ -145,8 +145,8 @@ class QuoteService:
         chunk_size: int = _DEFAULT_QUOTE_CHUNK_SIZE,
     ) -> QuotesResponse:
         """
-        Return current quotes for the requested symbols. Symbols the
-        provider couldn't resolve land in `invalid_symbols`.
+        Return current quotes for the requested symbols as canonical
+        `Quote` objects.
 
         Chunked: large batches are split into `chunk_size`-sized
         requests so one bad chunk (network blip, URL-length limit,
@@ -154,9 +154,53 @@ class QuoteService:
         tape. Per-chunk failures log a warning and continue.
 
         Empty input -> empty response (no provider call).
+
+        For raw provider payloads (when you need provider-specific
+        fields the `Quote` model doesn't carry — e.g. the banner's
+        `assetMainType` / `regularMarketPercentChange`), use
+        `get_raw_quotes` instead.
+        """
+        merged, invalid = await self._fetch_chunked_merged(symbols, chunk_size=chunk_size)
+        quotes: dict[str, Quote] = {
+            sym: _normalize_quote(sym, payload, self._provider_name)
+            for sym, payload in merged.items()
+        }
+        return QuotesResponse(
+            quotes=quotes,
+            count=len(quotes),
+            invalid_symbols=invalid,
+        )
+
+    async def get_raw_quotes(
+        self,
+        symbols: list[str],
+        *,
+        chunk_size: int = _DEFAULT_QUOTE_CHUNK_SIZE,
+    ) -> tuple[dict[str, dict[str, Any]], list[str]]:
+        """
+        Same chunking + invalidSymbols handling as `get_quotes`, but
+        returns the **raw provider payload** as `(merged_dict, invalid)`
+        without normalizing to `Quote`. Use only when the consumer
+        needs provider-specific fields the canonical model omits.
+
+        `merged_dict` is `{symbol -> provider_payload_dict}`. `invalid`
+        is the accumulated `invalidSymbols` list across all chunks.
+        """
+        return await self._fetch_chunked_merged(symbols, chunk_size=chunk_size)
+
+    async def _fetch_chunked_merged(
+        self,
+        symbols: list[str],
+        *,
+        chunk_size: int,
+    ) -> tuple[dict[str, dict[str, Any]], list[str]]:
+        """
+        Internal: chunked provider.get_quotes call with per-chunk
+        exception handling and invalidSymbols accumulation. Shared by
+        get_quotes (normalizes) and get_raw_quotes (passes through).
         """
         if not symbols:
-            return QuotesResponse(quotes={}, count=0, invalid_symbols=[])
+            return ({}, [])
 
         getter = getattr(self._provider, "get_quotes", None)
         if getter is None:
@@ -164,7 +208,7 @@ class QuoteService:
                 "QuoteService: provider %r has no get_quotes — returning empty",
                 self._provider_name,
             )
-            return QuotesResponse(quotes={}, count=0, invalid_symbols=list(symbols))
+            return ({}, list(symbols))
 
         merged: dict[str, dict[str, Any]] = {}
         invalid_acc: list[str] = []
@@ -187,13 +231,9 @@ class QuoteService:
                 if k == "errors" or not isinstance(v, dict):
                     continue
                 merged[k] = v
+        return (merged, invalid_acc)
 
-        quotes: dict[str, Quote] = {
-            sym: _normalize_quote(sym, payload, self._provider_name)
-            for sym, payload in merged.items()
-        }
-        return QuotesResponse(
-            quotes=quotes,
-            count=len(quotes),
-            invalid_symbols=invalid_acc,
-        )
+    @property
+    def provider_name(self) -> str:
+        """Lower-case provider class basename — surfaced to consumers."""
+        return self._provider_name
