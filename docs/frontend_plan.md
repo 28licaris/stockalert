@@ -365,22 +365,36 @@ trades on that ticker.
   saw live" inspection. See
   [silver_layer_plan.md §14.2](silver_layer_plan.md).
 
-**Warming-up state.** When the user navigates to `/symbol/X`
-for a newly-added ticker, the chart area renders a progress card
-until the silver→CH backfill completes (~10s after silver lands;
-~90s today before silver). The card shows:
+**Warming-up state.** Branches by whether the symbol is in the
+seed universe (silver_layer_plan §2.3):
 
-- Live stream subscription status (✓ subscribed | first bar in ~Ns).
-- Per-interval backfill progress (% done; ETA).
-- Source: "Backfilling from silver (Iceberg) — your own data, no
-  provider API calls."
-- The card swaps to the chart the moment bars are sufficient to
-  render the requested interval.
+- **Seed-universe symbol** (full silver history exists): chart area
+  renders a progress card. Shows live-stream subscription status,
+  silver→CH backfill progress (~10s ETA), bars-loaded count.
+  Card swaps to chart when bars are sufficient. Source label:
+  "Backfilling from silver (Iceberg) — your own data, no provider
+  API calls."
+
+- **Ad-hoc symbol** (NOT in seed universe; silver has no history
+  yet): chart area shows a banner: "Exploration mode — fetching
+  ~48 days from Schwab REST. Promote to seed universe for deeper
+  history." Live ticks appear immediately as overlays; Schwab REST
+  history fills in over ~30s. After the next nightly silver_build,
+  the chart automatically switches to silver-derived data.
 
 Live ticks arriving before the historical backfill completes are
 buffered (`bar_buffer` in the Symbol page state) and prepended
 only when the historical context behind them is loaded. No
 floating lonely candles.
+
+**"Promote to seed" button** on the Symbol page header for ad-hoc
+symbols. Clicking it calls `POST /api/seed/promote` which:
+1. Adds the symbol to `settings.seed_symbols`.
+2. Kicks off a deeper one-shot backfill (Polygon flat-files if
+   subscribed; Schwab REST otherwise).
+3. Marks the symbol for nightly refresh inclusion.
+
+The button hides once the symbol is in seed.
 
 Powered by: existing routes; one new combined
 `/api/symbol/{ticker}/overview` to reduce roundtrips on first

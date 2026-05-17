@@ -9,14 +9,25 @@ Single source of truth for storage and ingestion. Supersedes the previous
 
 - **Source of truth on S3.** ClickHouse becomes a rebuildable serving cache,
   not the canonical store. Drop a CH table, replay from the lake.
+- **The ground-truth rule:** S3 silver is canonical; ClickHouse is derived.
+  Historical data (>48h old) **NEVER** enters CH directly from a provider
+  — only via the `silver_to_ch_backfill` path. See
+  [silver_layer_plan.md §2.1](silver_layer_plan.md). This rule cures the
+  consistency-bug class where provider-fed CH and provider-fed silver
+  silently drift apart.
+- **Live data path:** Schwab CHART_EQUITY WebSocket (1-min bars) is the
+  ONLY live source going forward. Live ticks dual-write to bronze + CH
+  live overlay zone; nightly silver_build claims the previous day's CH
+  rows overnight.
 - **Cheap.** Storage is rounding-error at this scale; spend the budget on
   query speed and data quality, not byte-shaving.
 - **Fast for the two queries that matter:** (a) whole universe on date X
   (cross-sectional); (b) one symbol over N years (time series).
 - **Bulletproof.** ACID writes, idempotent ingestion, schema evolution,
   reproducible ML training datasets.
-- **Multi-provider.** Polygon, Schwab, Alpaca today. Pluggable for more
-  (Databento, IEX) without schema rewrites.
+- **Multi-provider, asymmetric.** Polygon flat-files = one-shot historical
+  archive (drop subscription after pull). Schwab = live + REST tip-fill.
+  Pluggable for more (Databento, IEX) without schema rewrites.
 - **ML-ready end state.** A `gold/` layer of features + a snapshot-pinned
   silver layer that lets us reproduce any training run.
 
@@ -29,9 +40,12 @@ Single source of truth for storage and ingestion. Supersedes the previous
 | Catalog | **AWS Glue Data Catalog** | Zero ops; native Athena integration; free at our scale. |
 | File format | Parquet + Snappy | Iceberg default; good compression + fast decode. |
 | Query engines | PyIceberg + DuckDB locally; Athena for ad-hoc SQL | No new infra. |
-| Hot tier | ClickHouse (existing) | Live divergence detection, UI charts. Cache only. |
+| Hot tier | ClickHouse (existing) | Live divergence detection, UI charts. **Derived cache only — never the canonical store.** Rebuildable from silver. |
 | Data scope | OHLCV bars only (1m + daily) | No tick/quote for now. Bars-only fits all current and near-term use cases. |
-| Corp-actions source | Polygon | Has both raw bars and a corp-actions feed. |
+| Corp-actions source | Polygon (one-shot snapshot into `silver.corp_actions`) | Has both raw bars and a corp-actions feed. After Polygon subscription drop, snapshot is frozen + manually updated from public sources. |
+| **Live stream provider** | **Schwab CHART_EQUITY WebSocket only** | Already paid for; 1-min bars; no separate live subscription needed. Polygon stream NOT used. |
+| **Historical bulk provider** | **Polygon flat-files (while subscribed)** | Deepest tape (20+ years). One-shot pull, lock into bronze archive, drop subscription. |
+| **Historical tip provider** | **Schwab REST `pricehistory`** | Bridges silver watermark to live stream first bar. ≤ 48h window typically. |
 
 ## 3. Bucket configuration
 
@@ -270,8 +284,11 @@ we have traded today." Prevents survivorship bias in backtests.
 
 ## 8. Ingestion paths
 
-All three paths produce the same `CanonicalBar` and write to **bronze only**.
-Silver and gold are built by separate jobs, never by ingest.
+Under the ground-truth rule (§1), all ingestion paths produce the same
+`CanonicalBar` and write to **bronze**. CH ingestion happens only via
+two paths: (a) live stream (dual-write live overlay zone) and (b)
+`silver_to_ch_backfill` (historical zone, derived from silver).
+No other code path writes directly to CH.
 
 ```python
 class CanonicalBar:
@@ -289,47 +306,65 @@ class CanonicalBar:
     raw_payload_hash: str
 ```
 
-### Path A — live streaming (T+0 → T+5min lake)
+### Path A — live streaming (Schwab CHART_EQUITY, ONLY live source)
 
-1. Provider WebSocket → existing async batcher → ClickHouse `ohlcv_1m`.
+1. **Schwab CHART_EQUITY WebSocket** → existing async batcher
    ([app/services/live/monitor_service.py](../app/services/live/monitor_service.py),
-   [app/db/batcher.py](../app/db/batcher.py))
-2. **New** `live_lake_writer` job runs every 5 minutes:
-   - Reads CH `ohlcv_1m` for the last 15 minutes
-   - Groups by provider
-   - `MERGE INTO bronze.{provider}_minute` per group
-   - Records run in `ingestion_runs`
+   [app/db/batcher.py](../app/db/batcher.py)).
+2. **Dual-write** in the batcher's `flush()`:
+   - Writes to ClickHouse `ohlcv_1m` (live overlay zone, `is_live=true`).
+   - Writes to `bronze.schwab_minute` via Iceberg append.
+3. Live ticks become visible on the cockpit chart immediately.
+4. **Nightly `silver_build` (Path D)** materializes silver from bronze,
+   then `silver_to_ch_refresh` overwrites the previous day's live-overlay
+   rows in CH with the canonical silver-derived rows (adjusted, deduped).
 
-Replaces the current "lake gets data only at T+1 day via Polygon flat
-files" gap. Schwab and Alpaca streamed bars now land in the lake too.
+Polygon stream is **NOT used**. Reason: we already pay for Schwab; an
+extra stream subscription doubles cost for no incremental signal.
 
-### Path B — nightly flat-file archive (T+1)
+### Path B — nightly flat-file archive (Polygon, while subscribed)
 
-Existing [nightly_lake_refresh.py](../app/services/nightly_lake_refresh.py)
-job, retargeted:
+Existing [nightly_polygon_refresh.py](../app/services/ingest/nightly_polygon_refresh.py)
+job, scope-limited to the seed universe:
 
 1. At 07:00 UTC pull Polygon flat files for yesterday.
 2. Canonicalize via existing
    [PolygonFlatFilesClient](../app/providers/polygon_flatfiles.py).
 3. `MERGE INTO bronze.polygon_minute` and `bronze.polygon_day`.
-4. Trigger silver build for that date.
+   **Writes to bronze only — NEVER to CH.**
+4. Trigger silver build for that date (Path D).
 
 Polygon flat files are higher quality than the live WS feed (consolidated
-SIP), so they overwrite live bars for the same `(symbol, ts)` — handled
-naturally by `MERGE INTO` ordering on `ingestion_ts`.
+SIP), so they overwrite live bars for the same `(symbol, ts)` during
+the silver build — handled naturally by `MERGE INTO` ordering on
+`ingestion_ts`.
 
-### Path C — gap-fill backfill (T+anything)
+**Scheduled for retirement.** Once the 20-year Polygon historical pull
+is complete (one-shot, while subscribed), this job's role narrows:
+nightly Polygon refresh stops if/when the Polygon subscription drops.
+The bronze.polygon_minute archive then becomes a static, frozen
+contribution to silver.
 
-Existing [backfill_service.py](../app/services/backfill_service.py)
-two-path job queue, retargeted:
+### Path C — backfills (asymmetric: bulk vs tip)
 
-- Quick (30d latency-first) and deep (365d completeness-first) paths
-  remain. Output goes through the canonical sink contract into
-  `bronze.{provider}_{kind}`.
-- Per-symbol job dedup remains.
-- Sink fan-out pattern from
-  [flatfiles_sinks.py](../app/services/flatfiles_sinks.py) is generalized:
-  `BronzeIcebergSink` replaces `LakeSink`.
+Two purposes, two providers, both bronze-only:
+
+| Mode | Provider | When fired | Scope |
+|---|---|---|---|
+| **Bulk historical (one-shot)** | Polygon flat-files | Operator-triggered; once per major universe expansion | Years of 1-min data per symbol; writes to `bronze.polygon_minute`. Default behavior: `--no-write-clickhouse` (CH is silver-derived only). |
+| **Schwab REST one-shot (ad-hoc symbol add)** | Schwab REST `pricehistory` | When user adds a non-seed symbol to a watchlist | ≤ 48 days 1-min + multi-year daily; writes to `bronze.schwab_minute` |
+| **Schwab REST tip-fill** | Schwab REST `pricehistory` | After `silver_to_ch_backfill` completes; bridges silver watermark → live stream first bar | ≤ 48 hours, ~600 bars; writes to bronze + CH (the bounded-tip exception per silver_layer_plan.md §6.4) |
+
+Per-symbol job dedup remains. `BronzeIcebergSink` is the canonical
+writer. The `quick`/`intraday`/`daily` modes today in `backfill_service.py`
+are scheduled for retirement after silver_to_ch backfill replaces them
+(silver_layer_plan.md TA-5.5).
+
+### Path E — silver→CH (the only historical write into CH)
+
+[silver_layer_plan.md §6](silver_layer_plan.md). Reads silver Iceberg,
+bulk-inserts into CH. ~10s wall-clock per symbol for 2y of 1-min data.
+This is the **only** path by which historical data enters CH.
 
 ### Silver build (daily, separate job)
 

@@ -47,81 +47,217 @@ That's the bar. Every architectural choice below traces back to it.
 
 ---
 
-## 2. Architecture (the silver→CH flow on add)
+## 2. Architecture (the canonical pipeline, no bugs)
+
+### 2.1 The ground-truth rule
+
+> **S3 silver is canonical ground truth. ClickHouse is a derived
+> hot cache. Historical data NEVER enters CH directly from a
+> provider — only via silver→CH backfill.**
+
+Every architectural choice below derives from this rule. The rule
+eliminates an entire class of consistency bugs (provider-fed CH
+vs. provider-fed silver disagreeing) and makes CH **fully
+rebuildable from silver byte-identically**.
+
+| Source → destination | Bronze | Silver | CH |
+|---|---|---|---|
+| Polygon flatfiles bulk historical | **YES** | derived by silver_build (nightly) | **NO** |
+| Schwab REST historical backfill | **YES** | derived by silver_build (nightly) | **NO** |
+| Live stream (Schwab, 1-min) | **YES** (real-time append) | derived by silver_build (nightly, claims overnight) | **YES** (live overlay zone) |
+| `silver_to_ch_backfill` (on user add_members) | — (read source) | — (read source) | **YES** (silver→CH path) |
+| User-driven historical chart expansion | — | — (read source) | **YES** (silver→CH path) |
+
+**Only two paths write to CH:**
+1. **Live stream**: Schwab 1-min WebSocket → CH `ohlcv_1m` (real-time, marked `is_live=true`).
+2. **silver_to_ch_backfill**: on `add_members` or chart-window expand.
+
+Everything else goes through bronze + silver. **No historical
+provider pull ever lands directly in CH.**
+
+### 2.2 Provider strategy (live vs historical)
+
+The provider topology is asymmetric on purpose. Live and historical
+have different cost / freshness / reliability constraints.
+
+| Concern | Provider | Why |
+|---|---|---|
+| **Live 1-min bars** | **Schwab WebSocket** (`CHART_EQUITY`) | We already pay for Schwab; the stream is included; no Polygon subscription required for live. **This is the only live data source going forward.** |
+| **Historical bulk archive** | **Polygon flat-files** (one-shot 20-year pull) | Polygon has the deepest, cleanest tape. Pull it once while subscribed, lock it into bronze forever. |
+| **Historical tip-fill** (gap between silver watermark + live stream first bar) | **Schwab REST `pricehistory`** | Small window (≤ 48h typically). Schwab's REST is included in the subscription. No rate-limit pressure at this volume. |
+| **Polygon stream (live)** | **NOT USED** | Costs extra; live is solved by Schwab. |
+| **Polygon REST (historical)** | **Schedule for drop** | The one-shot flat-file pull is the only thing we need from Polygon. After that pull, the Polygon subscription can be cancelled. |
+| **Corp actions** | **Polygon REST** while subscribed; then static archive | Polygon's corp-actions API is the canonical source. We keep a snapshot of it in `silver.corp_actions`; new actions can be ingested manually from public sources after Polygon drop. |
+
+**The Polygon-drop plan:**
+
+1. **While Polygon is active (today):** Run the 20-year flat-files bulk backfill into `bronze.polygon_minute`. Ingest the full corp-actions history into `silver.corp_actions`. Silver build runs nightly merging Polygon (primary) and Schwab (live overlay).
+2. **After Polygon drops:** Bronze archive is frozen for Polygon. Schwab stream + Schwab REST are the only live/historical sources. Silver build still produces canonical silver from the (now-historical) Polygon archive + ongoing Schwab inputs.
+3. **No backend code changes** at the drop moment — provider precedence stays the same; Polygon just stops contributing new rows.
+
+### 2.3 Two-tier symbol universe (seed + ad-hoc)
+
+Not every symbol gets full historical depth. The system explicitly
+recognizes two tiers:
+
+| Tier | Symbol membership | Bronze | Silver | What the chart shows |
+|---|---|---|---|---|
+| **Seed universe** | Curated list (~100-500 symbols you actively trade) | Polygon flat-files **+** Schwab stream/REST | Full history (20 years) | Years of 1-min + daily; full indicator depth |
+| **Ad-hoc watchlist symbol** | Any other ticker you add for exploration | Schwab stream + Schwab REST historical only | Last ~48 days of 1-min + multi-year daily (Schwab REST limits) | Chart usable immediately; intra-day history limited to ~48 days |
+
+The seed universe is configured in `settings.seed_symbols` (today
+already exists). The nightly Polygon flat-files job + the nightly
+Schwab refresh job both operate on this list. Symbols outside the
+seed get on-demand Schwab REST backfill when added.
+
+**Operator can promote a symbol to the seed universe** via a CLI:
+
+```bash
+poetry run python scripts/promote_to_seed.py --symbol MSFT
+```
+
+This adds MSFT to `settings.seed_symbols`, kicks off a one-shot
+deeper backfill (Polygon flatfiles if subscription is active,
+Schwab REST otherwise), and ensures MSFT is included in all
+future nightly refreshes.
+
+### 2.4 The data flow (live + historical, unified)
 
 ```
-                       ┌─────────────────────────┐
-USER  ──► add NVDA ──► │ watchlist_service       │
-                       │ .add_members()          │
-                       └────────────┬────────────┘
-                                    │
-                  ┌─────────────────┴──────────────────┐
-                  │                                    │
-                  ▼                                    ▼
-        ┌─────────────────┐               ┌──────────────────────────┐
-        │ provider stream │               │ silver_to_ch_backfill    │
-        │ subscribe       │               │ (NEW — replaces today's  │
-        │ (Schwab/        │               │  3-job provider REST     │
-        │  Polygon ws)    │               │  backfill)               │
-        └────────┬────────┘               └────────────┬─────────────┘
-                 │                                     │
-                 │                                     ▼
-                 │                       ┌──────────────────────────┐
-                 │                       │ SilverReader.get_bars(   │
-                 │                       │   symbol, start, end,    │
-                 │                       │   *, snapshot_id=None    │
-                 │                       │ )                        │
-                 │                       │                          │
-                 │                       │ Reads Iceberg            │
-                 │                       │ silver.ohlcv_1m via      │
-                 │                       │ PyIceberg + DuckDB       │
-                 │                       └────────────┬─────────────┘
-                 │                                    │
-                 ▼                                    ▼
-        ┌────────────────────────────────────────────────────┐
-        │  ClickHouse ohlcv_1m (the hot cache)               │
-        │                                                    │
-        │  - Live bars (next-minute onward) from stream      │
-        │  - Historical bars (years) from silver→CH backfill │
-        │  - Resampled views: ohlcv_5m, ohlcv_15m, ...,      │
-        │    ohlcv_daily                                     │
-        └────────────────────┬───────────────────────────────┘
-                             │
-                             ▼
-              ┌──────────────────────────────┐
-              │  IndicatorReader (Pattern A) │
-              │  computes overlays on demand │
-              └──────────────────────────────┘
-                             │
-                             ▼
-                  Chart with SMA, RSI, …
+                                  PROVIDERS
+            ┌──────────────────────────────────────────────────────┐
+            │ Schwab CHART_EQUITY stream    Schwab REST pricehistory│
+            │ (live 1m, every ticker        (historical, ≤ 48d 1m, │
+            │  in any watchlist)              multi-year daily)    │
+            │                                                       │
+            │ Polygon flat-files (nightly, seed universe ONLY,      │
+            │ while Polygon subscription is active)                 │
+            │                                                       │
+            │ Polygon corp-actions REST (while subscribed)          │
+            └──────────────────────┬───────────────────────────────┘
+                                   │
+                  ┌────────────────┼──────────────────┐
+                  │                │                  │
+                  ▼                ▼                  ▼
+       ┌──────────────────┐  ┌──────────────┐  ┌──────────────────┐
+       │ Live tick to CH  │  │  Append to   │  │ Append to        │
+       │ (Schwab stream)  │  │  bronze.     │  │ silver.          │
+       │                  │  │  *_minute    │  │ corp_actions     │
+       │ Bar batcher      │  │  (Iceberg,   │  │ (Iceberg)        │
+       │ → ohlcv_1m       │  │  append-only)│  │                  │
+       │ (is_live=true,   │  │              │  │                  │
+       │  live overlay    │  │              │  │                  │
+       │  zone)           │  │              │  │                  │
+       └────────┬─────────┘  └──────┬───────┘  └────────┬─────────┘
+                │                   │                   │
+                │                   └────────┬──────────┘
+                │                            │
+                │             ┌──────────────▼─────────────┐
+                │             │ silver_build (nightly)     │
+                │             │ - merge provider precedence │
+                │             │ - apply corp-action adjust │
+                │             │ - MERGE INTO silver.ohlcv_1m│
+                │             │ - APPEND silver.bar_quality │
+                │             │ - claims overnight any      │
+                │             │   live-overlay rows from    │
+                │             │   prior day                 │
+                │             └──────────────┬─────────────┘
+                │                            │
+                │                            ▼
+                │                ┌────────────────────────┐
+                │                │  silver.ohlcv_1m       │
+                │                │  (Iceberg, canonical,  │
+                │                │   snapshot-pinnable)   │
+                │                └───────────┬────────────┘
+                │                            │
+                │                            │ silver_to_ch_backfill
+                │                            │ on add_members + on chart-window
+                │                            │ expand. NEVER from a provider.
+                │                            ▼
+                └─────────►┌────────────────────────────────┐
+                           │  ClickHouse ohlcv_1m            │
+                           │  ─────────────────────         │
+                           │  LIVE OVERLAY ZONE              │
+                           │  (Schwab stream, is_live=true,  │
+                           │   ~24h sliding window)          │
+                           │                                 │
+                           │  HISTORICAL ZONE                │
+                           │  (silver-derived only)          │
+                           │                                 │
+                           │  Resampled: ohlcv_5m, ohlcv_15m │
+                           │   … ohlcv_daily (MV-driven)     │
+                           └───────────────┬─────────────────┘
+                                           │
+                                           ▼
+                            ┌──────────────────────────────┐
+                            │  IndicatorReader on demand   │
+                            │  SMA, EMA, RSI, MACD, ATR,   │
+                            │  Bollinger, …                │
+                            └──────────────┬───────────────┘
+                                           │
+                                           ▼
+                                Chart with overlays
 ```
 
-Three points to call out:
+### 2.5 The add_members flow, branched by tier
 
-1. **The stream subscription doesn't change.** Provider WebSocket
-   still feeds live 1-min bars into `ohlcv_1m`. Silver fills history;
-   stream fills now-and-after.
-2. **There's a brief overlap zone** where the most-recent silver row
-   is older than the first streamed bar. Two cases:
-   - **First live bar arrives BEFORE silver→CH backfill writes the
-     most recent silver row**: the stream-side writer is idempotent
-     (REPLACE on `(symbol, ts)`); silver-side writer is INSERT IGNORE.
-     Whichever lands first wins the cell.
-   - **Silver's latest row is older than the cutoff** where live
-     stream started (e.g. silver built yesterday at 22:00 UTC, you
-     added NVDA today at 14:00 UTC): there's a 16-hour gap. The
-     stream fills bars from now; silver covers everything up to its
-     watermark. **The gap between silver's watermark and the live
-     stream's first bar is filled by a small "tip" backfill from
-     the provider REST** (the same code path as today, but only for
-     the silver-stale tail, not the full history).
-3. **Adjusted vs. raw prices.** Silver carries both. CH receives a
-   choice: either ingest the `_adj` columns (what charts + ML want)
-   or the `_raw` columns (what the trader saw live). The default for
-   the chart layer is `_adj`. The default for the backtest harness
-   is also `_adj` for ML; `_raw` available behind a flag for replay
-   accuracy.
+```python
+def add_members(name: str, symbols: list[str]) -> dict:
+    # 1. Standard watchlist DB row + stream subscribe.
+    newly = watchlist_repo.add_members(name, symbols)
+    self._reconcile()  # subscribes Schwab stream → CH live overlay
+
+    # 2. For each newly added symbol, pick the right backfill path.
+    for sym in newly:
+        if sym in settings.seed_symbols:
+            # SEED PATH — silver has full history.
+            silver_to_ch_backfill.enqueue(sym, days=730)
+            schwab_tip_backfill.enqueue(sym)  # silver-watermark gap
+        else:
+            # AD-HOC PATH — silver may have nothing for this symbol.
+            schwab_rest_one_shot.enqueue(sym, days=48)  # → bronze
+            # ↑ silver picks this up on next nightly build.
+            # In the meantime, the chart shows live + Schwab REST
+            # (read via SchwabReader, not CH) until silver populates.
+            silver_to_ch_backfill_when_ready.enqueue(sym, days=48)
+```
+
+The ad-hoc path is graceful: the chart works immediately (live
+stream + what Schwab REST gives us), and the next nightly silver
+build promotes the data into the canonical store. If the user
+adds the symbol to the seed universe later, a deeper backfill
+runs at that point.
+
+### 2.6 Race conditions and idempotency (the "no bugs" guarantees)
+
+Six concrete races to defend against:
+
+1. **Live tick arrives in CH before silver→CH backfill completes for the same minute.**
+   - **Defense:** silver→CH backfill writes only rows where `ts < latest_live_tick_ts - 1m`. Live and historical zones don't overlap in time.
+
+2. **silver→CH backfill writes a stale row over a fresher live row.**
+   - **Defense:** Same as #1. silver→CH never touches the live overlay zone.
+
+3. **Nightly silver_build claims a CH live-overlay row that's "wrong" (provider correction came in later).**
+   - **Defense:** silver_build is idempotent via Iceberg `MERGE INTO`. Late corrections (Polygon pricehistory revisions for the previous day) trigger the affected silver slice to rebuild and the next silver→CH refresh to overwrite CH. CH stays eventually-consistent with silver within 24h.
+
+4. **Operator adds the same symbol to two watchlists.**
+   - **Defense:** `watchlist_service` is already refcount-based (existing TA-3.x work). One stream subscription per symbol regardless of watchlist count. silver→CH backfill is idempotent (CH `INSERT IGNORE` on `(symbol, ts)`).
+
+5. **Two parallel silver_build runs.**
+   - **Defense:** Watermark table uses a lease (per-symbol-per-day). Second run sees "already in flight" and skips. Pinned by `tests/test_silver_build_concurrency.py`.
+
+6. **CH gets wiped/rebuilt.** The user-visible "no historical data" gap.
+   - **Defense:** A `scripts/rebuild_ch_from_silver.py` operator script. Reads silver for all watchlist symbols, bulk-inserts into CH. ~hour wall-clock for a full S&P 500 rebuild. CH is **always** rebuildable from silver because of the ground-truth rule.
+
+### 2.7 Adjusted vs. raw prices
+
+Silver carries both `_raw` and `_adj` columns (split + dividend
+adjusted). CH receives only one set — configured globally:
+
+- **Chart, indicator overlays, screener, backtest training:** see `_adj`.
+- **Backtest replay-accuracy mode:** opt-in via `BacktestConfig.adjusted=False` → reads `_raw` from silver.
+- **Default everywhere:** `_adj`.
 
 ---
 
@@ -322,7 +458,7 @@ class SilverToChBackfill:
 Per-symbol budget for one call: ~2 years × 390 bars/day × 252 days/yr
 ≈ 200k bars. Bulk insert into CH takes ~5-15s wall-clock.
 
-### 6.2 The "tip" provider backfill
+### 6.2 The "tip" provider backfill (Schwab REST)
 
 The silver build runs nightly. There's always a gap between silver's
 watermark and "now." When `add_members()` runs at 14:00 ET, silver's
@@ -330,13 +466,22 @@ freshest row is ~38 hours old (last night's build, 02:00 ET). That
 gap has to be filled from the provider.
 
 - After `silver_to_ch_backfill` completes, the SAME service triggers
-  a small provider-REST backfill for the window
+  a small **Schwab REST `pricehistory`** backfill for the window
   `[silver_watermark, now)`. This is small (max ~1.5 days of bars
   ≈ 600 1-min bars). Done in seconds; no rate-limit pressure.
+- The tip-backfill writes to **both** bronze (`bronze.schwab_minute`)
+  and CH (`ohlcv_1m`). Bronze gets the canonical row for silver to
+  consume on the next nightly build; CH gets the row immediately so
+  the chart works now.
+- Writes to bronze here is the **one exception** to the
+  "no-historical-to-CH-from-provider" rule — but it's not really
+  historical. It's the "near-live" tip that bridges silver's
+  watermark to the live-stream's first bar. The window is bounded
+  to ≤ ~48 hours.
 - Once the live stream subscription is active, "now" is covered
   organically by the stream.
 
-### 6.3 Replacing the watchlist-service call
+### 6.3 The two add_members paths (seed vs ad-hoc)
 
 The change inside `watchlist_service.add_members()` (today calls
 `_enqueue_backfill(symbols, kind="quick", days=30)` etc.):
@@ -348,11 +493,50 @@ if newly:
     self._enqueue_backfill(newly, kind="intraday", days=270)
     self._enqueue_backfill(newly, kind="daily", days=365 * 2)
 
-# AFTER (TA-5 lands)
-if newly:
-    self._enqueue_silver_to_ch_backfill(newly, days=365 * 2)
-    self._enqueue_silver_watermark_tip_backfill(newly)  # provider, small
+# AFTER (TA-5 lands) — branches by seed-universe membership
+for sym in newly:
+    if sym in settings.seed_symbols:
+        # SEED PATH (deep history available in silver)
+        self._enqueue_silver_to_ch_backfill(sym, days=365 * 2)
+        self._enqueue_schwab_tip_backfill(sym)
+    else:
+        # AD-HOC PATH (no silver history; Schwab REST one-shot)
+        self._enqueue_schwab_rest_one_shot(sym, days=48)
+        # ↑ Writes to bronze. Silver picks it up on next nightly.
+        # Until then, the chart reads live (CH) + Schwab REST
+        # (via a SchwabRestReader fallback). After silver is built,
+        # silver_to_ch_backfill catches up to silver-watermark
+        # in the chart.
 ```
+
+The seed path is what 90%+ of additions look like (you have a
+curated watchlist of ~100-500 active trading candidates). The
+ad-hoc path is for exploration: a friend mentions a ticker, you
+add it, you see live data immediately + ~48d of Schwab REST 1-min
+history within seconds. If it earns its keep, you promote it to
+the seed universe (`scripts/promote_to_seed.py --symbol X`) and
+the next nightly Polygon flat-file pull (while Polygon is active)
+gives you the deeper history.
+
+### 6.4 Why this never violates the ground-truth rule
+
+A reader might worry: "ad-hoc path writes to CH from Schwab REST,
+which sounds like a violation."
+
+It isn't, by two arguments:
+
+1. **The tip-backfill writes to BOTH bronze and CH.** Bronze is the
+   canonical landing; the CH write is a parallel-path optimization.
+   On the next nightly silver_build, silver materializes from
+   bronze and the silver→CH refresh "blesses" those CH rows. The
+   path from provider → CH always has a bronze co-write.
+
+2. **The volume is bounded.** ≤ 48 hours of 1-min data. Compare to
+   the historical bulk pull, which is 20 years. The rule's intent
+   ("historical archive never goes direct to CH") is about the
+   *bulk archive*, not the *near-live tip*. Make this explicit in
+   the rule statement: **"Historical archive (>48h old) never goes
+   direct to CH. Near-live tip may dual-write."**
 
 Same fire-and-forget posture; same idempotency guarantees; ~10×
 faster end-to-end.
@@ -535,18 +719,80 @@ universe.
 
 ### 9.3 Adding the Nth symbol after silver lands
 
+**Case A — symbol is in seed universe** (deep silver history exists):
+
 1. User clicks "Add MSFT" in the cockpit (or `POST /api/watchlists/...`).
-2. `watchlist_service.add_members()` runs as today.
-3. **NEW:** `silver_to_ch_backfill.backfill("MSFT", days=730)`
+2. `watchlist_service.add_members()` runs.
+3. Schwab CHART_EQUITY stream subscribes to MSFT → CH live overlay
+   begins.
+4. **NEW:** `silver_to_ch_backfill.backfill("MSFT", days=730)`
    reads ~2 yrs of silver bars, bulk-inserts into CH `ohlcv_1m`
    (~10s).
-4. **NEW:** `silver_watermark_tip_backfill` covers the gap
-   between silver's watermark and now (~600 bars, <2s).
-5. Stream subscription is active; live ticks flow into CH from
-   here on.
-6. Chart on `/symbol/MSFT` renders within seconds.
+5. **NEW:** `schwab_tip_backfill("MSFT")` covers the gap between
+   silver's watermark (last night) and now (~600 bars, <5s). Writes
+   to both bronze and CH; next nightly silver_build absorbs.
+6. Chart on `/symbol/MSFT` renders within ~10s with full 2y history.
 
-### 9.4 Triggering a silver rebuild after corp-action correction
+**Case B — symbol is NOT in seed universe** (ad-hoc exploration):
+
+1-3. Same as Case A.
+4. **DIFFERENT:** `schwab_rest_one_shot("XYZ", days=48)` fetches
+   ~48 days of 1-min from Schwab REST → bronze. ~20-30s.
+5. Symbol page chart populates progressively as bars land:
+   - Live ticks visible immediately (overlay zone).
+   - Schwab REST history fills in as backfill completes.
+6. **Next nightly silver_build** (~hours from now) materializes
+   silver from the new bronze rows.
+7. **Following day's `silver_to_ch_refresh`** rewrites the CH rows
+   from silver (with corp-action adjustment etc.).
+8. The chart looks the same to the user from day 2 forward.
+
+**Promote ad-hoc to seed** (for deeper history):
+
+```bash
+poetry run python scripts/promote_to_seed.py --symbol XYZ
+```
+
+This:
+- Adds XYZ to `settings.seed_symbols`.
+- Triggers a Polygon flat-files pull for XYZ over the full history
+  window (if Polygon subscription is active).
+- After Polygon drop: triggers a Schwab REST pull for whatever
+  Schwab's deeper history window provides (multi-year daily,
+  multi-month 1-min for some symbols).
+- Marks XYZ for inclusion in all future nightly refresh jobs.
+
+### 9.4 Rebuilding ClickHouse from scratch (the ground-truth recovery)
+
+Because S3 silver is canonical, CH can be wiped and reconstructed
+at any time. Operator runbook:
+
+```bash
+# 1. Stop the live stream (so we don't race during rebuild)
+poetry run python scripts/stop_live_stream.py
+
+# 2. Wipe CH ohlcv_1m (or the entire CH schema if needed)
+poetry run python scripts/wipe_ch_ohlcv.py --confirm
+
+# 3. Rebuild from silver for every symbol in any watchlist
+poetry run python scripts/rebuild_ch_from_silver.py \
+    --symbols watchlist \
+    --days 730
+
+# 4. Restart live stream
+poetry run python scripts/start_live_stream.py
+```
+
+Wall-clock for a 100-symbol watchlist rebuild: ~30 min (CH ingest
+bound). Wall-clock for an S&P 500 rebuild: ~2 hours.
+
+This procedure exists because of the ground-truth rule. CH having
+a problem (corruption, mistaken schema migration, bad rollout) is
+recoverable. Silver having a problem is not — which is why silver
+has Iceberg snapshot pinning, MERGE INTO discipline, and the
+`silver.bar_quality` audit ledger.
+
+### 9.5 Triggering a silver rebuild after corp-action correction
 
 If Polygon corrects a stale dividend or we discover a wrong split
 factor:
@@ -563,7 +809,7 @@ poetry run python scripts/rebuild_silver.py --symbol AAPL
 poetry run python scripts/silver_to_ch.py --symbol AAPL --days all
 ```
 
-### 9.5 Monitoring
+### 9.6 Monitoring
 
 The cockpit Status page (FE-1) gets two new health pills powered by
 `silver.bar_quality` and the build watermark:

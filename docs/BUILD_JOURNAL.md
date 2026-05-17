@@ -1996,3 +1996,48 @@ bottom with a date.
   monthly writer. Phase 1 makes compaction a first-class task, not
   maintenance. Avoids the "wait until month-end to write" trap that
   breaks incremental ingest.
+- **2026-05-17** — **The ground-truth rule:** S3 silver is the
+  canonical store; ClickHouse is a derived hot cache. Historical
+  data (>48h old) never enters CH directly from a provider — only
+  via `silver_to_ch_backfill`. CH is rebuildable from silver
+  byte-identically. Eliminates the consistency-bug class where
+  provider-fed CH and provider-fed silver silently disagree.
+  Codified in [silver_layer_plan.md §2.1](silver_layer_plan.md)
+  and [data_platform_plan.md §1](data_platform_plan.md). Concrete
+  consequence: `polygon_flatfiles_bulk_backfill.py`'s default
+  flips from dual-write (CH + bronze) to bronze-only; same for
+  `schwab_bronze_backfill.py`. The `quick`/`intraday`/`daily`
+  provider-REST backfill modes in `backfill_service.py` are
+  scheduled for retirement (TA-5.5) once `silver_to_ch_backfill`
+  replaces them.
+- **2026-05-17** — **Asymmetric provider strategy.** Live and
+  historical have different cost/freshness/reliability needs:
+  - **Live 1-min bars:** Schwab CHART_EQUITY WebSocket ONLY. We
+    already pay for Schwab; the stream is included. Polygon
+    stream NOT used.
+  - **Historical bulk archive:** Polygon flat-files, one-shot
+    20-year pull while subscribed, lock into bronze archive,
+    then drop the Polygon subscription. Bronze becomes a frozen
+    historical contribution to silver; no ongoing Polygon cost.
+  - **Tip-fill (silver-watermark → live-stream first bar):**
+    Schwab REST `pricehistory`. ≤48h windows, no rate-limit
+    pressure. The ONE exception to the ground-truth rule (writes
+    to bronze + CH in parallel because the data is near-live, not
+    historical archive).
+  - **Corp actions:** Polygon REST one-shot snapshot into
+    `silver.corp_actions`. After Polygon drop: snapshot is
+    frozen + manually updated.
+- **2026-05-17** — **Two-tier symbol universe.** `seed` and
+  `ad-hoc` tiers handled differently on `add_members`:
+  - **Seed universe:** ~100-500 actively-traded symbols. Full
+    historical depth via the Polygon flat-files pipeline.
+    `silver_to_ch_backfill` populates CH from silver in ~10s.
+  - **Ad-hoc:** Any other ticker added for exploration. Schwab
+    REST one-shot (~48 days 1-min + multi-year daily) → bronze.
+    Silver picks it up on next nightly build. Chart works
+    immediately on live ticks + Schwab REST history.
+  - **Promote ad-hoc → seed** via `scripts/promote_to_seed.py`.
+    Kicks off a deeper backfill if Polygon is still subscribed;
+    falls back to Schwab REST otherwise.
+  Codified in [silver_layer_plan.md §2.3](silver_layer_plan.md)
+  and [silver_layer_plan.md §6.3](silver_layer_plan.md).
