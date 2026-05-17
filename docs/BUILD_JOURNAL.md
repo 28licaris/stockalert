@@ -525,11 +525,28 @@ without any ClickHouse code in the call path. Slices 3 and 4 below
 are scope-completion (more endpoints + the CH-backed readers), not
 gate-blockers.
 
-**Slice 3 — list/discovery surface** (after gate green)
-- [ ] `BronzeReader.list_symbols(provider, since)` + route
-      `/api/lake/symbols`.
-- [ ] `BronzeReader.latest_trading_day(provider)` + route
-      `/api/lake/last-day`.
+**Slice 3 — list/discovery surface** (LANDED 2026-05-16)
+- [x] `BronzeReader.list_symbols(provider, since, limit)` — distinct
+      symbol scan with default 30-day window, sorted output, null/
+      empty filtered out. Reads only the `symbol` column for cost.
+- [x] `BronzeReader.latest_trading_day(provider, lookback_days)` —
+      delegates to `bronze.gaps.latest_bronze_date` so gap-detection
+      and the read surface share one source of truth. ET-basis
+      trading day per the `feedback_et_vs_utc_trading_day` rule.
+- [x] `GET /api/lake/symbols` route with `provider`, `since`, `limit`
+      query params; echoes effective `since` (resolved default) in
+      the response so consumers can record what was queried.
+- [x] `GET /api/lake/last-day` route with `provider`, `lookback_days`
+      query params. 200 with `latest_trading_day: null` when no rows
+      exist in window (no 404).
+- [x] Tests in `tests/test_routes_lake.py`: 7 new cases covering
+      both routes (happy paths, default-since echo, unknown provider
+      400, null-when-no-data, lookback bounds 422). Total now 13/13
+      green, including the unchanged CH-independence structural gate.
+- [x] **Live verification:** `/api/lake/last-day?provider=polygon`
+      returned `2026-05-15` (correct — yesterday ET, matches nightly
+      catch-up). `/api/lake/symbols?since=2024-08-14&limit=10`
+      returned first 10 tickers alphabetically from production bronze.
 
 **Slice 4 — CH-backed readers + refactor** (after CH-independent path proven)
 - [ ] `app/services/readers/bar_reader.py` — CH `ohlcv_1m` reads

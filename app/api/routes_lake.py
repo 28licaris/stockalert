@@ -21,14 +21,18 @@ Design rules (see `feedback_platform_design_intent` memory):
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.services.readers.bronze_reader import BronzeReader
-from app.services.readers.schemas import BronzeBarsResponse
+from app.services.readers.schemas import (
+    BronzeBarsResponse,
+    LakeLatestDayResponse,
+    LakeSymbolsResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -119,3 +123,106 @@ def get_lake_bars(
         bars=bars,
         count=len(bars),
     )
+
+
+@router.get("/lake/symbols", response_model=LakeSymbolsResponse)
+def get_lake_symbols(
+    provider: str = Query(
+        "polygon",
+        description="Bronze provider table to scan. 'polygon' or 'schwab'.",
+    ),
+    since: Optional[datetime] = Query(
+        None,
+        description=(
+            "Only return symbols with at least one bar at-or-after this "
+            "timestamp. Naive datetimes treated as UTC. Defaults to "
+            "30 days back if omitted — keeps the scan bounded against a "
+            "2B-row bronze table."
+        ),
+    ),
+    limit: Optional[int] = Query(
+        None,
+        ge=1,
+        le=50_000,
+        description="Cap on number of symbols returned. Sorted alphabetically before truncation.",
+    ),
+    reader: BronzeReader = Depends(get_bronze_reader),
+) -> LakeSymbolsResponse:
+    """
+    Distinct symbols known to bronze within the time window.
+    Universe discovery for screeners and agents.
+
+    **Does not touch ClickHouse.**
+
+    Status codes:
+      - 200 — query succeeded; `symbols` may be empty if no rows.
+      - 400 — unknown provider.
+      - 500 — infra failure.
+    """
+    try:
+        symbols = reader.list_symbols(provider=provider, since=since, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — boundary; convert to 500
+        logger.exception("lake.list_symbols failed for provider=%s since=%s", provider, since)
+        raise HTTPException(
+            status_code=500,
+            detail=f"bronze read failed: {type(exc).__name__}: {exc}",
+        ) from exc
+
+    # Echo the effective `since` back so consumers can record what was queried.
+    effective_since = since if since is not None else (
+        datetime.now(timezone.utc) - timedelta(days=30)
+    )
+
+    return LakeSymbolsResponse(
+        provider=provider,
+        since=effective_since,
+        symbols=symbols,
+        count=len(symbols),
+    )
+
+
+@router.get("/lake/last-day", response_model=LakeLatestDayResponse)
+def get_lake_last_day(
+    provider: str = Query(
+        "polygon",
+        description="Bronze provider table to inspect. 'polygon' or 'schwab'.",
+    ),
+    lookback_days: int = Query(
+        14,
+        ge=1,
+        le=365,
+        description=(
+            "How far back to scan for the most-recent bar. Defaults to 14 — "
+            "long enough to span weekends and short trading-day gaps, "
+            "short enough to keep the metadata scan cheap."
+        ),
+    ),
+    reader: BronzeReader = Depends(get_bronze_reader),
+) -> LakeLatestDayResponse:
+    """
+    Most recent trading day (ET basis) with at least one bar in
+    bronze. Useful for gap detection and for agents anchoring queries
+    to "freshest available."
+
+    Returns `latest_trading_day: null` if no rows are present within
+    `lookback_days`. Does NOT touch ClickHouse.
+
+    Status codes:
+      - 200 — query succeeded (date may be null).
+      - 400 — unknown provider.
+      - 500 — infra failure.
+    """
+    try:
+        latest = reader.latest_trading_day(provider=provider, lookback_days=lookback_days)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("lake.latest_trading_day failed for provider=%s", provider)
+        raise HTTPException(
+            status_code=500,
+            detail=f"bronze read failed: {type(exc).__name__}: {exc}",
+        ) from exc
+
+    return LakeLatestDayResponse(provider=provider, latest_trading_day=latest)

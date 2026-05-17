@@ -13,7 +13,7 @@ contract in one place enforces that.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -64,3 +64,43 @@ class BronzeBarsResponse(BaseModel):
     provider: str
     bars: list[BronzeBar]
     count: int = Field(..., description="Number of bars in `bars`.")
+
+
+class LakeSymbolsResponse(BaseModel):
+    """
+    Response for `list_symbols` — distinct tickers known to bronze
+    within a time window. Used for universe discovery by screeners,
+    agents, and the dashboard.
+    """
+
+    provider: str
+    since: datetime = Field(
+        ...,
+        description=(
+            "Lower bound of the scan window (inclusive). Defaults to "
+            "30 days back if the caller doesn't specify, to keep the "
+            "scan tractable against a 2B-row bronze table."
+        ),
+    )
+    symbols: list[str]
+    count: int = Field(..., description="Number of distinct symbols.")
+
+
+class LakeLatestDayResponse(BaseModel):
+    """
+    Response for `latest_trading_day` — the most recent trading day
+    (ET basis) that has at least one bar in bronze. Used by gap
+    detectors and by agents establishing "what's the freshest data
+    I can train on."
+    """
+
+    provider: str
+    latest_trading_day: Optional[date] = Field(
+        ...,
+        description=(
+            "ET-basis trading day with at least one row in the bronze "
+            "table. Null if no rows in the lookback window. Why ET, "
+            "not UTC: after-hours bars cross midnight UTC, so UTC date "
+            "misclassifies them and would advance the counter early."
+        ),
+    )

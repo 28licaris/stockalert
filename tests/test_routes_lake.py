@@ -22,7 +22,7 @@ AND the manual procedure has been run once.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
@@ -43,23 +43,50 @@ def _make_app() -> FastAPI:
 
 class _StubReader:
     """
-    Stand-in for BronzeReader. Records the last call args so tests can
-    verify the route passes parameters through correctly.
+    Stand-in for BronzeReader. Records the last call args per method so
+    tests can verify the route passes parameters through correctly.
     """
 
-    def __init__(self, bars: list[BronzeBar] | None = None, raises: Exception | None = None) -> None:
+    def __init__(
+        self,
+        bars: list[BronzeBar] | None = None,
+        symbols: list[str] | None = None,
+        latest_day=None,
+        raises: Exception | None = None,
+    ) -> None:
         self._bars = bars or []
+        self._symbols = symbols if symbols is not None else []
+        self._latest_day = latest_day
         self._raises = raises
         self.last_call: dict | None = None
 
     def get_bars(self, symbol, start, end, *, provider="polygon", limit=None):
         self.last_call = {
+            "method": "get_bars",
             "symbol": symbol, "start": start, "end": end,
             "provider": provider, "limit": limit,
         }
         if self._raises:
             raise self._raises
         return self._bars
+
+    def list_symbols(self, *, provider="polygon", since=None, limit=None):
+        self.last_call = {
+            "method": "list_symbols",
+            "provider": provider, "since": since, "limit": limit,
+        }
+        if self._raises:
+            raise self._raises
+        return self._symbols
+
+    def latest_trading_day(self, *, provider="polygon", lookback_days=14):
+        self.last_call = {
+            "method": "latest_trading_day",
+            "provider": provider, "lookback_days": lookback_days,
+        }
+        if self._raises:
+            raise self._raises
+        return self._latest_day
 
 
 def _bars_fixture() -> list[BronzeBar]:
@@ -191,6 +218,130 @@ def test_lake_bars_validates_query_params() -> None:
     missing_locs = {tuple(e["loc"]) for e in detail}
     assert ("query", "start") in missing_locs
     assert ("query", "end") in missing_locs
+
+
+# ---------------------------------------------------------------------
+# /api/lake/symbols
+# ---------------------------------------------------------------------
+def test_lake_symbols_happy_path() -> None:
+    """Route returns the symbols the reader produced, with provider + since echoed."""
+    app = _make_app()
+    stub = _StubReader(symbols=["AAPL", "MSFT", "NVDA", "SPY"])
+    app.dependency_overrides[get_bronze_reader] = lambda: stub
+
+    with TestClient(app) as client:
+        resp = client.get(
+            "/api/lake/symbols",
+            params={"provider": "polygon", "since": "2024-08-01T00:00:00Z", "limit": 100},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["provider"] == "polygon"
+    assert body["count"] == 4
+    assert body["symbols"] == ["AAPL", "MSFT", "NVDA", "SPY"]
+    # Reader got the parsed datetime, not the string.
+    assert stub.last_call["method"] == "list_symbols"
+    assert isinstance(stub.last_call["since"], datetime)
+    assert stub.last_call["limit"] == 100
+
+
+def test_lake_symbols_default_since_uses_30d_window() -> None:
+    """When `since` is omitted, the response echoes a 30-day-back default."""
+    app = _make_app()
+    app.dependency_overrides[get_bronze_reader] = lambda: _StubReader(symbols=["AAPL"])
+
+    before = datetime.now(timezone.utc)
+    with TestClient(app) as client:
+        resp = client.get("/api/lake/symbols", params={"provider": "polygon"})
+    after = datetime.now(timezone.utc)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    # Parse echoed `since` and check it's roughly 30 days ago.
+    echoed_since = datetime.fromisoformat(body["since"].replace("Z", "+00:00"))
+    expected_lo = before - timedelta(days=30, minutes=1)
+    expected_hi = after - timedelta(days=29, hours=23, minutes=59)
+    assert expected_lo <= echoed_since <= expected_hi, (
+        f"echoed since {echoed_since} not in expected window {expected_lo}..{expected_hi}"
+    )
+
+
+def test_lake_symbols_unknown_provider_returns_400() -> None:
+    app = _make_app()
+    app.dependency_overrides[get_bronze_reader] = lambda: _StubReader(
+        raises=ValueError("Unknown provider 'madeup'. Supported: polygon, schwab.")
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/api/lake/symbols", params={"provider": "madeup"})
+
+    assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------
+# /api/lake/last-day
+# ---------------------------------------------------------------------
+def test_lake_last_day_happy_path() -> None:
+    """Route returns the date the reader produced, ISO-formatted."""
+    from datetime import date as _date
+
+    app = _make_app()
+    stub = _StubReader(latest_day=_date(2024, 8, 14))
+    app.dependency_overrides[get_bronze_reader] = lambda: stub
+
+    with TestClient(app) as client:
+        resp = client.get(
+            "/api/lake/last-day",
+            params={"provider": "polygon", "lookback_days": 30},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["provider"] == "polygon"
+    assert body["latest_trading_day"] == "2024-08-14"
+    assert stub.last_call["method"] == "latest_trading_day"
+    assert stub.last_call["lookback_days"] == 30
+
+
+def test_lake_last_day_returns_null_when_no_data() -> None:
+    """No data in window -> 200 with latest_trading_day: null, not 404."""
+    app = _make_app()
+    app.dependency_overrides[get_bronze_reader] = lambda: _StubReader(latest_day=None)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/lake/last-day", params={"provider": "polygon"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["latest_trading_day"] is None
+    assert body["provider"] == "polygon"
+
+
+def test_lake_last_day_unknown_provider_returns_400() -> None:
+    app = _make_app()
+    app.dependency_overrides[get_bronze_reader] = lambda: _StubReader(
+        raises=ValueError("Unknown provider 'madeup'.")
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/api/lake/last-day", params={"provider": "madeup"})
+
+    assert resp.status_code == 400
+
+
+def test_lake_last_day_validates_lookback_bounds() -> None:
+    """lookback_days bounded to [1, 365]."""
+    app = _make_app()
+    app.dependency_overrides[get_bronze_reader] = lambda: _StubReader(latest_day=None)
+
+    with TestClient(app) as client:
+        # 0 below min
+        resp = client.get("/api/lake/last-day", params={"lookback_days": 0})
+        assert resp.status_code == 422
+        # 366 above max
+        resp = client.get("/api/lake/last-day", params={"lookback_days": 366})
+        assert resp.status_code == 422
 
 
 # ---------------------------------------------------------------------
