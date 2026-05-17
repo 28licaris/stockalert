@@ -1205,7 +1205,18 @@ pins snapshot fully and is the canonical training data source.**
           (+2.65% identical metrics)
         ```
 
-**The agent self-evaluation loop is live.** An LLM agent connected
+**DEFERRED:** end-to-end live verification against real Anthropic API.
+Pre-flight checks passed (smoke config prepared at
+[configs/llm_agent_smoke.yaml](../configs/llm_agent_smoke.yaml),
+unit tests cover the API-call path with stubs, env-var loading
+verified). Awaiting `ANTHROPIC_API_KEY` in
+`/Users/licaris/dev/stockalert/.env`. Cost when done: ~$0.05 for
+smoke (45 trading days AAPL), ~$0.50 for full-year. Tracked in
+[ISSUES.md `ta2-live-anthropic-run-deferred`](ISSUES.md).
+
+**The agent self-evaluation loop is live** (in stub form — proven by
+the 21 unit + MCP tests + the reproducibility regression).
+An LLM agent connected
 to this server can:
 
   1. `list_bronze_symbols` → discover the universe

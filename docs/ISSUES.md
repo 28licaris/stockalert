@@ -74,6 +74,33 @@ increase, etc.) and note what's blocking.
 
 ## Open
 
+### `ta2-live-anthropic-run-deferred`
+
+- **Area:** tests, mcp
+- **Filed:** 2026-05-17
+- **Status:** open (operator-action required)
+- **Symptom:** Phase TA-2 (LLM strategy + MCP `run_backtest`) is
+  fully tested with stubbed Anthropic responses — 21 green tests
+  including a replay-reproducibility regression. The live
+  end-to-end verification against the real Anthropic API was
+  deferred because no `ANTHROPIC_API_KEY` is present in
+  `/Users/licaris/dev/stockalert/.env`.
+- **Root cause:** missing operator-supplied credential. Not a
+  code issue.
+- **Suggested fix:** Add `ANTHROPIC_API_KEY=sk-ant-...` to the
+  main `.env` (never paste into chat — use
+  `echo 'ANTHROPIC_API_KEY=...' >> ~/dev/stockalert/.env`
+  in the terminal). Then:
+    ```
+    poetry run python scripts/run_backtest.py \
+      --config configs/llm_agent_smoke.yaml
+    ```
+  Expected cost: ~$0.05 for the smoke (45 trading days AAPL),
+  ~$0.50 for the full year ([configs/llm_agent.yaml](../configs/llm_agent.yaml))
+  if smoke passes. Replays from the local SQLite cache are $0.
+  Verify health markers: `n_trades >= 1`, `api_failures == 0`,
+  `parse_failures` low single digits, an `agent_runs` row written.
+
 ### `schwab-chart-fields-test-drift`
 
 - **Area:** tests, provider:schwab
