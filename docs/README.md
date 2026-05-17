@@ -33,6 +33,11 @@ Then, in this order:
    phased plan for incorporating Elliott Wave structural analysis as
    indicators, screener rules, strategies, and training-track features
    (LLM + RL). Plan only; no code yet.
+8. [frontend_plan.md](frontend_plan.md) — the developer's cockpit
+   plan: evolve the static-HTML dashboard into a typed React +
+   TanStack + shadcn/ui SPA that exposes every backend capability
+   (screener, backtests, MCP tools, Iceberg lake, runs registry).
+   Plan only; no code yet.
 
 ## Working agreement
 
@@ -64,7 +69,8 @@ README.md (this file)
   ├── trading-ai-build-plan.md        (trading side: strategic roadmap)
   ├── trading_subsystem_design.md     (trading side: implementation contract)
   ├── indicator_exposure_design.md    (indicator delivery architecture)
-  └── elliott_wave_plan.md            (EW structural analysis — plan only)
+  ├── elliott_wave_plan.md            (EW structural analysis — plan only)
+  └── frontend_plan.md                (developer cockpit SPA — plan only)
 ```
 
 `ARCHITECTURE.md` is the high-level overview. The two plan docs go deep
