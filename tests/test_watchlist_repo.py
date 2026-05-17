@@ -140,7 +140,12 @@ def test_watchlists_containing(clickhouse_ready) -> None:
 
         names = watchlist_repo.watchlists_containing("SPY")
         assert a in names and b in names
-        assert watchlist_repo.watchlists_containing("QQQ") == [b]
+        # QQQ may live in the production-seeded `default` watchlist (CH is
+        # shared with the running app, not an isolated test DB), so the
+        # assertion checks containment, not exact equality.
+        qqq_containers = watchlist_repo.watchlists_containing("QQQ")
+        assert b in qqq_containers
+        assert a not in qqq_containers
     finally:
         _wipe_watchlist(a)
         _wipe_watchlist(b)

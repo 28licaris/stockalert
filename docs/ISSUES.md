@@ -101,82 +101,6 @@ increase, etc.) and note what's blocking.
   Verify health markers: `n_trades >= 1`, `api_failures == 0`,
   `parse_failures` low single digits, an `agent_runs` row written.
 
-### `schwab-chart-fields-test-drift`
-
-- **Area:** tests, provider:schwab
-- **Filed:** (pre-existing)
-- **Status:** open
-- **Symptom:** Three tests in
-  [tests/test_schwab_provider.py](../tests/test_schwab_provider.py) fail
-  with values shifted by one field:
-  - `TestChartContentToBar::test_maps_key_and_numeric_fields`
-  - `TestChartContentToBar::test_maps_string_keys`
-  - `TestDataProviderContract::test_bar_has_required_attributes`
-- **Root cause:** Test fixtures use the *documented* Schwab CHART_EQUITY
-  field map (`1=Open, 2=High, …`). The implementation in
-  [app/providers/schwab_provider.py](../app/providers/schwab_provider.py)
-  intentionally uses the empirically-validated map
-  (`2=Open, 3=High, 4=Low, 5=Close, 6=Volume, 7=ChartTime(ms)`;
-  `CHART_EQUITY_FIELDS = "0,2,3,4,5,6,7"`) because Schwab's published
-  field table is wrong. Tests were never updated to match the live
-  behavior.
-- **Suggested fix:** Update the three test fixtures to use field IDs
-  `2..7` (and add a comment pointing back to the production constant).
-  Don't change the implementation — it's correct.
-
-### `schwab-streamer-url-key-test-drift`
-
-- **Area:** tests, provider:schwab
-- **Filed:** (pre-existing)
-- **Status:** open
-- **Symptom:** Two tests in
-  [tests/test_schwab_provider.py](../tests/test_schwab_provider.py) fail
-  asserting `_streamer_url` was discovered:
-  - `TestGetUserPrincipals::test_sets_streamer_url_from_list`
-  - `TestGetUserPrincipals::test_sets_streamer_url_from_dict_nested`
-- **Root cause:** Tests build mock payloads using the legacy
-  `streamerConnectionInfo` key (TD-Ameritrade era). Schwab's current
-  Trader API returns the connection details under `streamerInfo[]`, and
-  the production parser only reads from there (see
-  `_get_user_principals` in
-  [app/providers/schwab_provider.py](../app/providers/schwab_provider.py)).
-- **Suggested fix:** Update the test payloads to use `streamerInfo` with
-  `streamerSocketUrl`. The newer
-  `TestGetUserPrincipals::test_sets_streamer_url_from_streamer_info`
-  already covers the production-shape happy path, so the two
-  legacy-shape tests should either be rewritten against `streamerInfo`
-  or deleted as superseded.
-
-### `pre-existing-test-collection-errors`
-
-- **Area:** tests
-- **Filed:** 2026-05-14 (called out during Phase 0 gate)
-- **Status:** open
-- **Symptom:** Three test files fail to collect under pytest:
-  [tests/test_alert_flow.py](../tests/test_alert_flow.py),
-  [tests/test_indicators.py](../tests/test_indicators.py),
-  [tests/test_websocket.py](../tests/test_websocket.py).
-- **Root cause:** They reference modules that have never existed in the
-  repo (`app.services.alert_service`, etc.). Errors date back to the
-  initial commit `ab6e71d`.
-- **Suggested fix:** Either rewrite each against the modules that
-  actually exist (`app/indicators/`, `app/signals/`,
-  `app/services/live/monitor_service.py`) or delete them. The
-  `test_indicators.py` case imports `app.indicators.divergence` which is
-  the old pre-`signals/`-split path; the rewritten target is
-  `app.signals.divergence`.
-
-### `watchlist-repo-containing-test-failure`
-
-- **Area:** tests, db
-- **Filed:** 2026-05-14 (called out during Phase 0 gate)
-- **Status:** open
-- **Symptom:**
-  `tests/test_watchlist_repo.py::test_watchlists_containing` fails.
-  One failure, not yet diagnosed.
-- **Root cause:** unknown — needs investigation.
-- **Suggested fix:** unknown.
-
 ### `bronze-iam-missing-getlifecycleconfiguration`
 
 - **Area:** infra
@@ -218,3 +142,54 @@ increase, etc.) and note what's blocking.
 
 Brief summary + commit / PR link.
 -->
+
+### `schwab-chart-fields-test-drift` — resolved 2026-05-17
+
+Three `TestChartContentToBar` / `TestDataProviderContract` fixtures
+in `tests/test_schwab_provider.py` were rewritten to use the
+empirical CHART_EQUITY field map (`2=Open, 3=High, 4=Low, 5=Close,
+6=Volume, 7=ChartTime(ms)`) that the production constant
+`CHART_EQUITY_FIELDS = "0,2,3,4,5,6,7"` uses. Implementation
+unchanged — it was already correct. A header comment in the test
+class points back to the production constant so the rationale
+travels with the code.
+
+### `schwab-streamer-url-key-test-drift` — resolved 2026-05-17
+
+`TestGetUserPrincipals::test_sets_streamer_url_from_dict_nested`
+deleted (tested a legacy `streamerConnectionInfo` nested shape
+production has zero support for).
+`test_sets_streamer_url_from_list` rewritten as
+`test_sets_streamer_url_from_streamer_info_uri_fallback` —
+verifies the production parser's `uri` fallback under the
+`streamerInfo[]` key, complementing the existing
+`test_sets_streamer_url_from_streamer_info` (streamerSocketUrl
+happy path).
+
+### `pre-existing-test-collection-errors` — resolved 2026-05-17
+
+`tests/test_alert_flow.py`, `tests/test_indicators.py`, and
+`tests/test_websocket.py` deleted. All three referenced modules
+that never existed in this repo (`app.services.alert_service`,
+`app.indicators.rsi.calculate_rsi`, `app.main`) and tested
+designs that have been superseded. Coverage of the equivalent
+functionality:
+- RSI: `tests/test_indicators_ta3.py` + the screener, MTF, and
+  MCP-live test suites.
+- Divergence: now at `app/signals/divergence.py`; covered by
+  `tests/test_monitors_manual.py`, `tests/test_mcp_live.py`,
+  `tests/test_readers_unit.py`.
+- Production websocket (`/ws/signals` on `app/main_api.py`):
+  currently uncovered. Filed as separate follow-up — not the
+  same thing the deleted scaffold was attempting.
+
+### `watchlist-repo-containing-test-failure` — resolved 2026-05-17
+
+`tests/test_watchlist_repo.py::test_watchlists_containing`
+asserted `watchlists_containing("QQQ") == [b]` (exact equality)
+but the production-seeded `default` watchlist also contains QQQ
+(seeded by `migrate_default_watchlist` on app startup; CH is
+shared with the running app, not an isolated test DB). Rewrote
+the assertion as containment (`b in qqq_containers and a not in
+qqq_containers`), matching the resilient pattern already used by
+`test_list_all_active_symbols_filters_by_kind` above it.

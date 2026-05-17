@@ -55,10 +55,16 @@ def make_session_cm(session):
 class TestChartContentToBar:
     """Test CHART_EQUITY content -> bar mapping."""
 
+    # Schwab CHART_EQUITY empirical field map (see CHART_EQUITY_FIELDS in
+    # app/providers/schwab_provider.py): 0=key, 1=Sequence (unused),
+    # 2=Open, 3=High, 4=Low, 5=Close, 6=Volume, 7=ChartTime(ms).
+    # Schwab's published table is wrong — these tests follow what the
+    # live stream actually emits.
+
     def test_maps_key_and_numeric_fields(self):
         content = {
             "key": "AAPL",
-            1: 150.0, 2: 151.0, 3: 149.0, 4: 150.5, 5: 1000000,
+            2: 150.0, 3: 151.0, 4: 149.0, 5: 150.5, 6: 1000000,
             7: 1700000000000,  # ms epoch
         }
         bar = SchwabProvider._chart_content_to_bar(content)
@@ -70,14 +76,14 @@ class TestChartContentToBar:
         assert bar.ts == bar.timestamp
 
     def test_maps_string_keys(self):
-        content = {"key": "SPY", "1": 400.0, "2": 401.0, "3": 399.0, "4": 400.5, "5": 5000, "7": 1700000000000}
+        content = {"key": "SPY", "2": 400.0, "3": 401.0, "4": 399.0, "5": 400.5, "6": 5000, "7": 1700000000000}
         bar = SchwabProvider._chart_content_to_bar(content)
         assert bar.symbol == "SPY"
         assert bar.open == 400.0 and bar.close == 400.5
         assert bar.volume == 5000
 
     def test_missing_timestamp_uses_now(self):
-        content = {"key": "X", "1": 1.0, "2": 1.0, "3": 1.0, "4": 1.0}
+        content = {"key": "X", "2": 1.0, "3": 1.0, "4": 1.0, "5": 1.0}
         bar = SchwabProvider._chart_content_to_bar(content)
         assert bar.symbol == "X"
         assert bar.timestamp is not None
@@ -198,11 +204,16 @@ class TestGetUserPrincipals:
     """Test _get_user_principals with mocked token + GET."""
 
     @pytest.mark.asyncio
-    async def test_sets_streamer_url_from_list(self):
+    async def test_sets_streamer_url_from_streamer_info_uri_fallback(self):
+        """Production parser tries streamerSocketUrl first, then `uri`, then
+        `websocketUrl` (see `_get_user_principals` in
+        app/providers/schwab_provider.py). Covers the `uri` fallback path —
+        the streamerSocketUrl happy path is exercised by
+        test_sets_streamer_url_from_streamer_info below."""
         p = SchwabProvider("cid", "secret", refresh_token="rt")
         p._access_token = "tok"
         principals = {
-            "streamerConnectionInfo": [
+            "streamerInfo": [
                 {"uri": "wss://stream.example.com"},
             ],
             "streamerSubscriptionKeys": {"schwabClientCustomerId": "c", "schwabClientCorrelId": "r"},
@@ -215,23 +226,6 @@ class TestGetUserPrincipals:
         assert data == principals
         assert p._streamer_url == "wss://stream.example.com"
         assert p._user_prefs == principals
-
-    @pytest.mark.asyncio
-    async def test_sets_streamer_url_from_dict_nested(self):
-        p = SchwabProvider("cid", "secret", refresh_token="rt")
-        p._access_token = "tok"
-        principals = {
-            "streamerConnectionInfo": {
-                "streamerConnectionInfo": [
-                    {"streamerSocketUrl": "wss://nested.example.com"},
-                ]
-            },
-            "streamerSubscriptionKeys": {},
-        }
-        session = make_session(get_resp=make_resp(200, principals))
-        with patch("app.providers.schwab_provider.aiohttp.ClientSession", return_value=make_session_cm(session)):
-            await p._get_user_principals()
-        assert p._streamer_url == "wss://nested.example.com"
 
     @pytest.mark.asyncio
     async def test_sets_streamer_url_from_streamer_info(self):
@@ -582,7 +576,8 @@ class TestDataProviderContract:
     """Ensure SchwabProvider satisfies DataProvider contract (bar attributes)."""
 
     def test_bar_has_required_attributes(self):
-        content = {"key": "T", 1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0, 5: 0, 7: 1700000000000}
+        # Empirical CHART_EQUITY field map: 2=Open, 3=High, 4=Low, 5=Close, 6=Volume.
+        content = {"key": "T", 2: 1.0, 3: 1.0, 4: 1.0, 5: 1.0, 6: 0, 7: 1700000000000}
         bar = SchwabProvider._chart_content_to_bar(content)
         # App contract: symbol or ticker, timestamp or ts, open, high, low, close, volume
         assert getattr(bar, "symbol", None) or getattr(bar, "ticker", None) == "T"
