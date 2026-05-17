@@ -47,9 +47,13 @@ def register_all_tools() -> None:
     discoverability one-stop. The structural test asserts that every
     module under `app/mcp/tools/` is registered.
     """
-    from app.mcp.tools import lake  # noqa: F401 — import for side effect
+    # noqa: F401 — imports are for side effect (tool registration)
+    from app.mcp.tools import lake  # noqa: F401
+    from app.mcp.tools import live  # noqa: F401
+    from app.mcp.tools import quotes  # noqa: F401
+    from app.mcp.tools import signals  # noqa: F401
 
-    logger.info("MCP tools registered (lake)")
+    logger.info("MCP tools registered (lake + live + quotes + signals)")
 
 
 def mount_on(app: "FastAPI", path: str = "/mcp") -> None:

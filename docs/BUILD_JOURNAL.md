@@ -717,15 +717,42 @@ observability. Sliced for incremental delivery.
       agent will take. **The Phase Pre-3 Step 3 gate is GREEN for
       the bronze slice.**
 
-**Slice 2 — Live tier + signals + quotes** (NEXT)
-- [ ] `app/mcp/tools/live.py` — 4 tools backing `BarReader`:
-      `get_recent_bars`, `get_bars_in_range`, `get_bars_for_chart`,
-      `get_latest_bar_per_symbol`.
-- [ ] `app/mcp/tools/signals.py` — 2 tools backing `SignalReader`:
-      `get_recent_signals`, `get_signals_by_symbol`.
-- [ ] `app/mcp/tools/quotes.py` — 3 tools backing `QuoteService` +
-      the curated banner: `get_quote`, `get_quotes`, `get_market_banner`.
-- [ ] Tests parallel to `test_mcp_lake.py` for each tool file.
+**Slice 2 — Live tier + signals + quotes** (LANDED 2026-05-16)
+- [x] `app/mcp/tools/live.py` — 4 tools backing `BarReader`:
+      - `get_recent_bars(symbol, limit)` — newest N 1-minute bars ASC.
+      - `get_bars_in_range(symbol, start, end, interval, source_table)` —
+        explicit window; supports forced source_table for power users.
+      - `get_bars_for_chart(symbol, interval, lookback_days, limit)` —
+        chart-friendly with multi-table fallback + auto-limit.
+      - `get_latest_bar_per_symbol(symbols)` — snapshot across many
+        symbols at once; omits symbols with no rows.
+- [x] `app/mcp/tools/signals.py` — 2 tools backing `SignalReader`:
+      - `get_recent_signals(limit)` — newest N across all symbols.
+      - `get_signals_by_symbol(symbol, limit)` — drill-into-one or
+        all-symbols sweep with bigger default limit.
+- [x] `app/mcp/tools/quotes.py` — 2 tools backing `QuoteService`:
+      - `get_quote(symbol)` — single quote; returns null when
+        provider can't resolve.
+      - `get_quotes(symbols)` — chunked batched. `QuoteService` does
+        the chunking under the hood, so this is one call from the
+        agent's perspective. (Curated `get_market_banner` deferred to
+        Slice 3 — needs the dashboard-shape extraction logic.)
+- [x] `register_all_tools()` updated to import all 4 tool modules.
+- [x] `tests/test_mcp_live.py` — 11 cases parallel to test_mcp_lake.py:
+      discovery (all 8 new tools advertised + descriptions), invocation
+      (each tool's stub-reader round-trip), the `Optional[Quote]`
+      return-wrapping quirk pinned in two assertions.
+- [x] **End-to-end live verification** via official `mcp.client`
+      streamable-HTTP client (the same one Claude Desktop uses):
+      - `list_tools` → 11 tools advertised
+      - `call_tool("get_recent_bars", {"symbol":"AAPL","limit":3})`
+        → 3 real CH bars; last at 2026-05-15 23:59, close=299.846
+      - `call_tool("get_quote", {"symbol":"SPY"})`
+        → last=737.34, provider=schwab (real Schwab REST call)
+
+**The MCP agent path is live across all three tiers** — Iceberg
+bronze, ClickHouse live, and Schwab REST quotes. Same Pydantic
+shapes, same readers, two surfaces (HTTP routes + MCP tools).
 
 **Slice 3 — Discovery + observability tools** (later)
 - [ ] `tools/watchlist.py` — read-only watchlist tools.
