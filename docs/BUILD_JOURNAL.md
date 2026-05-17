@@ -1006,8 +1006,87 @@ indicator first).
 
 ## Trading AI track (parallel)
 
-See [trading-ai-build-plan.md](trading-ai-build-plan.md) Phases 1–9.
-Cannot start before Phase 0 of the data platform is green.
+Two docs govern this track:
+
+- [trading-ai-build-plan.md](trading-ai-build-plan.md) — **strategic
+  roadmap** (services, phases 1–9, reward engineering, deployment).
+- [trading_subsystem_design.md](trading_subsystem_design.md) —
+  **implementation contract** (Pydantic shapes, Protocols,
+  folder layout, modularity guarantees). Read this before writing
+  trading-subsystem code.
+
+The data platform's Pre-Phase 3 Step 3 (MCP scaffold) is now done,
+so all gates are clear to start the trading subsystem work.
+
+### Phase TA-1 — Core backtest harness + canary strategy (NOT STARTED)
+
+**Goal:** put a working backtest engine in place so every later
+agent / strategy work has somewhere to land. Run the canary
+(SMA crossover) end-to-end on real bronze data, prove the
+reproducibility contract, and start the `agent_runs` registry.
+
+Scope (per [trading_subsystem_design.md §10 Phase TA-1](trading_subsystem_design.md#phase-ta-1-core-harness--canary-strategy-next-session)):
+
+- [ ] `app/services/sim/` scaffold:
+      - `schemas.py` — `Action`, `Position`, `Trade`, `RunMetrics`,
+        `RunResult`, `BacktestConfig`.
+      - `strategy.py` — `Strategy` Protocol, `BaseStrategy`.
+      - `context.py` — `Context` + `BarHistory` (deque-backed,
+        configurable maxlen).
+      - `portfolio.py` — `Portfolio` + `Position` accounting,
+        mark-to-market per bar.
+      - `fees.py` — `FeeModel` / `SlippageModel` Protocols +
+        `ZeroFees`, `PerShareFees`, `NextBarOpenFill`,
+        `PercentSlippage` defaults.
+      - `backtester.py` — `Backtester.run(strategy, config)`,
+        snapshot pinning, next-bar-open fill semantics.
+      - `evaluator.py` — `StandardEvaluator` producing the canonical
+        `RunMetrics`.
+      - `registry.py` — `agent_runs` CH table writer + reader.
+      - `README.md` documenting the folder + contract.
+- [ ] `app/indicators/` expanded with `sma.py` + `ema.py`. Add
+      `registry.py` for the `INDICATOR_REGISTRY` name→class mapping.
+- [ ] `app/services/sim/strategies/sma_crossover.py` — canary
+      strategy. Pydantic `SmaCrossoverParams`. NOT for production
+      trading — proves the harness.
+- [ ] CH schema: `agent_runs` table init wired into the existing
+      `init_schema()` startup task.
+- [ ] CLI: `scripts/run_backtest.py --config configs/canary.yaml`.
+- [ ] Integration test: run the canary on 1 year of AAPL daily
+      bronze, assert plausible metrics shape, assert reproducibility
+      (re-run same config → same metrics).
+- [ ] Structural gates:
+      - `test_strategy_is_pure` — strategies don't import `app.db.*`,
+        `app.providers.*`, or network libs.
+      - `test_backtester_is_deterministic` — same inputs, same metrics.
+
+**Gate:** `python scripts/run_backtest.py --config configs/canary.yaml`
+produces a metrics table, writes one row to `agent_runs`, and the
+reproducibility test passes.
+
+### Phase TA-2 — LLM-driven strategy (after TA-1)
+
+- [ ] `app/services/sim/strategies/llm_agent.py` — wraps Claude via
+      the Anthropic SDK. Caches model responses on `(symbol, ts,
+      context_hash)` so a replay doesn't re-pay the API cost.
+- [ ] New MCP tool `run_backtest(strategy, config) -> RunMetrics`
+      so an agent can self-evaluate its own changes.
+- [ ] Cost budget: backtests with N bars cap LLM calls at ≤N.
+- [ ] Integration test: 30-day SPY backtest with the LLM agent,
+      result row in `agent_runs`.
+
+### Phase TA-3+ — Roadmap
+
+Detailed in [trading_subsystem_design.md §10](trading_subsystem_design.md#10-phasing).
+Highlights:
+
+- TA-3: more indicators + more rule-based strategies (parallel work
+  while LLM/RL learn).
+- TA-4: multi-timeframe + screener.
+- TA-5: RL agent (PPO) — same `Strategy` Protocol, just an RL-
+  trained implementation. Reward = stepped Sharpe contribution.
+- TA-6+: paper trading → live. Same Strategy class, different
+  Executor. Kill switches mandatory.
 
 ---
 

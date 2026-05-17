@@ -21,6 +21,10 @@ Then, in this order:
    (S3 + Iceberg + Glue, bronze/silver/gold).
 4. [trading-ai-build-plan.md](trading-ai-build-plan.md) — AI trading
    services structured as deployable units with Pydantic contracts.
+5. [trading_subsystem_design.md](trading_subsystem_design.md) —
+   **implementation contract** for the trading subsystem: Pydantic
+   shapes, Protocols, folder layout, modularity guarantees. Read this
+   before writing any code under `app/services/sim/`.
 
 ## Working agreement
 
@@ -48,8 +52,9 @@ README.md (this file)
   ├── BUILD_JOURNAL.md         ← progress + decisions; the live source of truth
   ├── ARCHITECTURE.md          ← system overview; refers to the two plans below
   ├── STARTUP_FLOW.md          ← what the FastAPI process does at boot
-  ├── data_platform_plan.md
-  └── trading-ai-build-plan.md
+  ├── data_platform_plan.md       (data side: strategic roadmap)
+  ├── trading-ai-build-plan.md    (trading side: strategic roadmap)
+  └── trading_subsystem_design.md (trading side: implementation contract)
 ```
 
 `ARCHITECTURE.md` is the high-level overview. The two plan docs go deep
