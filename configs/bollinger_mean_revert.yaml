@@ -1,0 +1,34 @@
+# TA-3.4 baseline — Bollinger Mean-Revert on AAPL daily.
+#
+# Hypothesis: when close touches the lower Bollinger Band (2 stdev
+# below the 20-day SMA), AAPL is statistically stretched and a
+# reversion to the mean is more likely than not. Exit when close
+# reverts to the SMA midline (the "fair value" line).
+#
+# Complementary to rsi_reversion: same mean-revert family but
+# different signal source (volatility envelope vs momentum
+# threshold). Expect different trades on the same window.
+#
+# Run:
+#   poetry run python scripts/run_backtest.py \
+#     --config configs/bollinger_mean_revert.yaml
+
+strategy: bollinger_mean_revert
+strategy_params:
+  period: 20
+  std_multiplier: 2.0
+  position_size_pct: 0.95
+
+config:
+  symbols: [AAPL]
+  start: "2023-01-01T00:00:00Z"
+  end:   "2024-12-31T23:59:59Z"
+  interval: "1d"
+  provider: "polygon"
+  starting_cash: 40000.0
+  history_window: 200
+  fees_model: per_share
+  fees_params:
+    per_share: 0.005
+    min_commission: 1.00
+  slippage_model: next_bar_open

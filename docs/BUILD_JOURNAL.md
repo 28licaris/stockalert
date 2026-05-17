@@ -1401,14 +1401,68 @@ First comparison ground for the trend-following SMA canary.
         a known mediocre signal in trends). This data point
         anchors the TA-3.6 bake-off.
 
-### Phase TA-3.4+ — Roadmap
+### Phase TA-3.4 — Bollinger Mean-Revert strategy (LANDED 2026-05-17)
 
-- **TA-3.4**: Bollinger Mean-Revert strategy (different
-  mean-revert mechanic: volatility-envelope vs threshold-based).
+Volatility-envelope mean-revert baseline — complementary to the
+RSI-threshold variant. Different signal source, different trades,
+different PnL profile.
+
+- [x] `app/services/sim/strategies/bollinger_mean_revert.py` —
+      `BollingerMeanRevertStrategy` via `BaseStrategy`. Long-only,
+      interval-configurable.
+      - Entry: `close <= lower_band` AND flat → BUY
+        `floor(cash * pct / price)` integer shares.
+      - Exit: `close >= middle_band` (SMA midline) AND long →
+        SELL full position.
+      - SMA midline via `ctx.indicator("sma", period=...)` for
+        single-source-of-truth; rolling stdev computed locally
+        with `ddof=0` (matches `BollingerBands.compute_full`).
+- [x] Test `test_strategy_bands_match_bollinger_indicator` pins
+      the math equivalence: the strategy's internal bands MUST
+      match what `BollingerBands.compute_full` produces. If
+      these diverge, the strategy and dashboard would show
+      different bands for the same window.
+- [x] `configs/bollinger_mean_revert.yaml` — AAPL 2023-2024
+      daily, period=20, std=2.0.
+- [x] CLI + MCP `run_backtest` loaders updated (4 strategies
+      total: sma_crossover, llm_agent, rsi_reversion,
+      bollinger_mean_revert).
+- [x] Tests `tests/test_bollinger_mean_revert.py` — 11 strategy
+      cases: warmup, entry on lower-band touch, no-buy-when-long,
+      no-buy-when-close-above-lower-band, exit on middle-band
+      recovery, no-sell-when-flat, integer-share sizing,
+      zero-buy-when-cash-insufficient, bands-equivalence
+      regression, metadata, Strategy Protocol. Plus the
+      structural purity gate. All 12 green.
+- [x] **Real-data run** (AAPL daily 2023-2024):
+      - **12 trades, 50% win rate, -1.89% return, Sharpe -0.188,
+        max DD -7.82%.**
+      - Profit factor 0.778 (losers > winners despite the 50%
+        win rate). Classic mean-revert problem in trending
+        markets: small winners reverting to mean, big losers
+        when the trend continues against you.
+
+### TA-3.x running comparison (updated through 3.4)
+
+| Strategy | Trades | Return | Sharpe | Max DD | Win Rate |
+|---|---|---|---|---|---|
+| `sma_crossover` (canary) | 5 | +2.65% | 0.305 | -5.90% | 0% |
+| `rsi_reversion` | 12 | -0.13% | 0.015 | -6.17% | 33% |
+| `bollinger_mean_revert` | 12 | -1.89% | -0.188 | -7.82% | 50% |
+
+Same window (AAPL daily 2023-01-01 → 2024-12-31), same fees
+(per_share=$0.005, min=$1.00), same slippage (next bar open),
+same $40k start. SMA Crossover's 0% win rate + positive return
+is the trend-follower signature (rare wins are huge); the
+mean-revert pair's higher win rates with worse total return is
+the mean-revert-in-trend signature (small wins, big losses).
+
+### Phase TA-3.5+ — Roadmap
+
 - **TA-3.5**: EMA Crossover strategy (faster signal A/B vs SMA canary).
-- **TA-3.6**: All 4 baselines on the same window → comparison
-  table in journal. Anchors performance metrics before any
-  LLM run.
+- **TA-3.6**: All 4 baselines on the same window → final
+  comparison table + journal write-up. Anchors performance
+  metrics before any LLM run.
 
 ### Phase TA-4+ — Roadmap
 

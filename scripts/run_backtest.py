@@ -64,6 +64,15 @@ def _load_strategy(name: str, params: dict[str, Any], interval: str) -> Any:
             params=RsiReversionParams(**params),
             interval=interval,
         )
+    if name == "bollinger_mean_revert":
+        from app.services.sim.strategies.bollinger_mean_revert import (
+            BollingerMeanRevertParams,
+            BollingerMeanRevertStrategy,
+        )
+        return BollingerMeanRevertStrategy(
+            params=BollingerMeanRevertParams(**params),
+            interval=interval,
+        )
     raise ValueError(
         f"Unknown strategy {name!r}. Register it in scripts/run_backtest.py::_load_strategy."
     )

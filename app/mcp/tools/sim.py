@@ -38,7 +38,9 @@ logger = logging.getLogger(__name__)
 
 @mcp.tool()
 def run_backtest(
-    strategy_name: Literal["sma_crossover", "llm_agent", "rsi_reversion"],
+    strategy_name: Literal[
+        "sma_crossover", "llm_agent", "rsi_reversion", "bollinger_mean_revert",
+    ],
     strategy_params: dict[str, Any],
     config: dict[str, Any],
     write_to_registry: bool = True,
@@ -166,6 +168,15 @@ def _instantiate(name: str, params: dict[str, Any], *, interval: str):
         return RsiReversionStrategy(
             params=RsiReversionParams(**params), interval=interval,
         )
+    if name == "bollinger_mean_revert":
+        from app.services.sim.strategies.bollinger_mean_revert import (
+            BollingerMeanRevertParams,
+            BollingerMeanRevertStrategy,
+        )
+        return BollingerMeanRevertStrategy(
+            params=BollingerMeanRevertParams(**params), interval=interval,
+        )
     raise ValueError(
-        f"Unknown strategy {name!r}. Supported: 'sma_crossover', 'llm_agent', 'rsi_reversion'."
+        f"Unknown strategy {name!r}. Supported: 'sma_crossover', "
+        "'llm_agent', 'rsi_reversion', 'bollinger_mean_revert'."
     )
