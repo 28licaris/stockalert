@@ -38,7 +38,7 @@ via the AWS Glue catalog.
       unrelated to Phase 0 — see Follow-ups below)
 - [x] Full test suite excluding pre-existing failures green
       (416 passed, 6 pre-existing failures, 5 skipped — confirmed
-      pre-existing via `ISSUES.md` and git history)
+      pre-existing via [ISSUES.md](ISSUES.md) and git history)
 - [x] New gate test skips gracefully without AWS creds
 
 #### Requires user (AWS-side) — DONE
@@ -125,7 +125,8 @@ Phase 0 status complete.
 - **Pre-existing failures** in `tests/test_schwab_provider.py` (5
   failures) and `tests/test_watchlist_repo.py::test_watchlists_containing`
   (1 failure). Schwab failures match `schwab-chart-fields-test-drift` +
-  `schwab-streamer-url-key-test-drift` already tracked in `ISSUES.md`.
+  `schwab-streamer-url-key-test-drift` already tracked in
+  [ISSUES.md](ISSUES.md).
   Watchlist failure not yet diagnosed.
 
 ---
@@ -638,6 +639,38 @@ cancel_order(order_id)
 Each layer is thin — the service has the logic, route + MCP tool are
 adapters. Same pattern as the rest of the codebase.
 
+### Technical-analysis indicator library expansion
+
+**Goal:** expand `app/indicators/` from the current three (RSI, MACD,
+TSI — which is all divergence detection needs) into a full TA toolkit
+that agents and strategies can pick from without pulling in external
+deps. Full target list lives in
+[app/indicators/README.md](../app/indicators/README.md) — momentum,
+trend, MAs, volatility, volume, cycles. Each gets its own file + class
++ unit tests, following the `Indicator(ABC)` contract in
+[base.py](../app/indicators/base.py). Wiring is one-line per indicator
+into `INDICATOR_MAP` in `services/live/monitor_service.py`.
+
+Not on the critical path for Phase 3 (silver). Pick up when a specific
+strategy or agent needs an indicator that isn't there yet.
+
+### Signal-detector library expansion
+
+**Goal:** expand `app/signals/` from the current one (divergence) into
+a catalog of named pattern detectors that strategies and agents can
+compose. Full target list lives in
+[app/signals/README.md](../app/signals/README.md) — trend reversals,
+continuations, MA crossovers, threshold crossings, volatility breakouts,
+volume confirmations, candlestick patterns, mean-reversion triggers.
+Each gets its own file (or grouped file) + unit tests, following the
+pure-function detector contract in the README. Wiring is one-line per
+detector into `DETECTOR_MAP` in `services/live/monitor_service.py`.
+
+Not on the critical path for Phase 3 (silver). Pick up when a specific
+strategy needs a pattern that isn't there yet. Often paired with an
+indicator add (e.g. Stochastic RSI %K/%D detector needs the Stochastic
+indicator first).
+
 ### Other backlog items
 
 - [ ] **Bronze compaction automation** — scheduled `compact_bronze_monthly.py`
@@ -808,6 +841,17 @@ bottom with a date.
   internals, not the inconsistency the user flagged. Hard rename
   with no backward-compat shim (single-user codebase; .env files
   updated in the same change).
+- **2026-05-16** — TA code split into three layers, each a candidate
+  microservice boundary later:
+  `app/indicators/` (pure math: price → series),
+  `app/signals/` (pattern detectors: price + indicator → event),
+  and a future `app/strategies/` (compose signals → trade decision).
+  `app/divergence.py` moved into `app/signals/` to enforce the
+  separation; it returns events, not series, so it was never an
+  indicator. Detectors are pure functions taking tuning knobs as
+  arguments (not reading `settings` directly), so they're testable in
+  isolation — the caller (`services/live/monitor_service.py`) pulls
+  config and passes it in.
 - **2026-05-14** — Write cadence vs partition layout decoupled.
   Writer cadence stays daily (one append per trading day's Polygon
   flat file; the nightly job and live 5-min flush both write

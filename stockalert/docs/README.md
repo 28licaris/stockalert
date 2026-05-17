@@ -61,4 +61,4 @@ where the ground truth lives.
 
 - `../README.md` — repo entry point (setup, run commands).
 - `../CONFIG.md` — operator config reference (env vars, defaults).
-- `../ISSUES.md` — bug + flaky-test backlog.
+- [ISSUES.md](ISSUES.md) — bug + flaky-test tracker.

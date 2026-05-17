@@ -16,7 +16,7 @@ from app.config import settings
 from app.indicators.rsi import RSI
 from app.indicators.macd import MACD
 from app.indicators.tsi import TSI
-from app.divergence import (
+from app.signals.divergence import (
     detect_hidden_bullish,
     detect_hidden_bearish,
     detect_regular_bullish,

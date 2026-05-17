@@ -292,7 +292,8 @@ class CanonicalBar:
 ### Path A — live streaming (T+0 → T+5min lake)
 
 1. Provider WebSocket → existing async batcher → ClickHouse `ohlcv_1m`.
-   ([app/streamer.py](../app/streamer.py), [app/db/batcher.py](../app/db/batcher.py))
+   ([app/services/live/monitor_service.py](../app/services/live/monitor_service.py),
+   [app/db/batcher.py](../app/db/batcher.py))
 2. **New** `live_lake_writer` job runs every 5 minutes:
    - Reads CH `ohlcv_1m` for the last 15 minutes
    - Groups by provider

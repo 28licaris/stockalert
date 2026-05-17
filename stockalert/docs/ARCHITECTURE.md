@@ -109,26 +109,25 @@ app/
 │       ├── lake_archive.py / lake_sink.py / s3_lake_client.py
 │       └── README.md
 │
-├── indicators/              technical indicator math
+├── indicators/              pure TA math (price → series)
 │   ├── base.py
-│   ├── rsi.py
-│   ├── macd.py
-│   └── tsi.py
+│   ├── rsi.py / macd.py / tsi.py
+│   └── README.md
 │
-├── api/                     FastAPI routers
-│   ├── routes_market.py
-│   ├── routes_signals.py
-│   ├── routes_watchlist.py
-│   ├── routes_monitors.py
-│   ├── routes_backfill.py
-│   ├── routes_backtest.py
-│   ├── routes_instruments.py
-│   ├── routes_movers.py
-│   └── routes_journal.py
+├── signals/                 pattern detectors (price + indicator → event)
+│   ├── divergence.py
+│   └── README.md
 │
-├── streamer.py              DivergenceTracker (live signal detection)
-├── divergence.py            divergence rules
-└── detect_divergence.py
+└── api/                     FastAPI routers
+    ├── routes_market.py
+    ├── routes_signals.py
+    ├── routes_watchlist.py
+    ├── routes_monitors.py
+    ├── routes_backfill.py
+    ├── routes_backtest.py
+    ├── routes_instruments.py
+    ├── routes_movers.py
+    └── routes_journal.py
 ```
 
 Backed by ClickHouse (Docker) and the existing `STOCK_LAKE_BUCKET` S3
@@ -302,7 +301,7 @@ swapped for an HTTP client without changing callers.
 |---|---|
 | **Purpose** | Push live bars, indicator updates, fired alerts to the React UI. |
 | **Owns** | WebSocket connection manager, fan-out queue. |
-| **Depends on** | In-process pub/sub from streamer + signal detector. |
+| **Depends on** | In-process pub/sub from `services/live/monitor_service` + signal detector. |
 | **Contract** | WS messages: `{type: "candle_update" \| "alert_fired" \| "indicator_update", symbol, data}`. |
 | **Deploys as** | Co-located with FastAPI today; could be lifted to a Redis pub/sub fan-out service later. |
 
@@ -371,7 +370,7 @@ Single ClickHouse `ingestion_runs` table (audit) plus structlog → stdout
 Polygon WS message
   → polygon_provider._parse_bar()
   → CanonicalBar(symbol, ts, ohlcv, provider="polygon", payload_hash, ...)
-  → streamer.py (computes indicators, evaluates rules)
+  → services/live/monitor_service.py (computes indicators, evaluates rules)
   → batcher → ClickHouse.ohlcv_1m (T+0)
   → ws-broadcaster → React UI
 

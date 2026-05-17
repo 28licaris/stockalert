@@ -16,7 +16,7 @@ Layer 1 of the medallion architecture (bronze → silver → gold).
   trading day (idempotent re-runs).
 
 What it does NOT own:
-- Live streaming (in [streamer.py](../../streamer.py) +
+- Live streaming (in [live/monitor_service.py](../live/monitor_service.py) +
   [batcher.py](../../db/batcher.py)).
 - Flat-file ingestion logic (in
   [flatfiles_backfill.py](../flatfiles_backfill.py)).
