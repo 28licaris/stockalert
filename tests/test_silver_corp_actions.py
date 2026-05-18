@@ -166,12 +166,21 @@ class TestDividendMapping:
         assert action.announced_at is None
 
     def test_dividend_type_map_coverage(self) -> None:
-        """Sanity: the five known dividend types map to a CorpActionKind."""
+        """Sanity: the five known dividend types each map to a DISTINCT
+        CorpActionKind.
+
+        Why distinct: collapsing LT/ST under cash_dividend produces
+        duplicate-key upsert errors when a fund issues both an ordinary
+        cash div AND a capital-gains distribution on the same ex_date
+        (real case caught by the TA-5.0 live verification).
+        """
         assert _DIVIDEND_TYPE_MAP["CD"] == "cash_dividend"
-        assert _DIVIDEND_TYPE_MAP["LT"] == "cash_dividend"
-        assert _DIVIDEND_TYPE_MAP["ST"] == "cash_dividend"
+        assert _DIVIDEND_TYPE_MAP["LT"] == "lt_capital_gain"
+        assert _DIVIDEND_TYPE_MAP["ST"] == "st_capital_gain"
         assert _DIVIDEND_TYPE_MAP["SC"] == "stock_dividend"
         assert _DIVIDEND_TYPE_MAP["SP"] == "spinoff"
+        # All five mappings should be unique destinations.
+        assert len(set(_DIVIDEND_TYPE_MAP.values())) == 5
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -242,6 +251,87 @@ class TestBronzeIngestArrowSerialization:
             actions, ingestion_run_id="r1",
         )
         assert arrow.num_rows == 2
+
+
+class TestDedupeActions:
+    """`_dedupe_actions` collapses same-day same-symbol same-kind rows.
+
+    Regression: TA-5.0 live verification (2026-05-17) found Polygon's
+    /dividends endpoint returns multiple cash dividends on the same
+    ex_date for some tickers (regular + special). PyIceberg upsert
+    rejects duplicate-key sources, so we must dedupe at ingest time.
+    """
+
+    def test_no_duplicates_passthrough(self) -> None:
+        actions = [
+            CorpAction(symbol="AAPL", ex_date=date(2020, 8, 31),
+                       action_type="split", factor=4.0),
+        ]
+        out, n = PolygonCorpActionsBronzeIngest._dedupe_actions(actions)
+        assert len(out) == 1
+        assert n == 0
+
+    def test_empty_passthrough(self) -> None:
+        out, n = PolygonCorpActionsBronzeIngest._dedupe_actions([])
+        assert out == [] and n == 0
+
+    def test_duplicate_cash_dividends_summed(self) -> None:
+        """Regular + special cash dividend on same ex_date → one row
+        with combined cash_amount."""
+        actions = [
+            CorpAction(symbol="CIVI", ex_date=date(2024, 6, 12),
+                       action_type="cash_dividend", cash_amount=1.0),
+            CorpAction(symbol="CIVI", ex_date=date(2024, 6, 12),
+                       action_type="cash_dividend", cash_amount=0.5),
+        ]
+        out, n = PolygonCorpActionsBronzeIngest._dedupe_actions(actions)
+        assert len(out) == 1
+        assert n == 1
+        assert out[0].cash_amount == 1.5
+        assert out[0].symbol == "CIVI"
+
+    def test_announced_at_takes_latest(self) -> None:
+        """When duplicates have different announced_at, keep the latest
+        (most up-to-date filing)."""
+        actions = [
+            CorpAction(symbol="X", ex_date=date(2024, 6, 12),
+                       action_type="cash_dividend", cash_amount=0.5,
+                       announced_at=datetime(2024, 5, 1, tzinfo=timezone.utc)),
+            CorpAction(symbol="X", ex_date=date(2024, 6, 12),
+                       action_type="cash_dividend", cash_amount=0.3,
+                       announced_at=datetime(2024, 5, 20, tzinfo=timezone.utc)),
+        ]
+        out, _ = PolygonCorpActionsBronzeIngest._dedupe_actions(actions)
+        assert out[0].announced_at == datetime(2024, 5, 20, tzinfo=timezone.utc)
+
+    def test_different_action_types_not_collapsed(self) -> None:
+        """Same symbol+date but different action_type → kept separate."""
+        actions = [
+            CorpAction(symbol="FUND", ex_date=date(2024, 12, 30),
+                       action_type="cash_dividend", cash_amount=0.10),
+            CorpAction(symbol="FUND", ex_date=date(2024, 12, 30),
+                       action_type="lt_capital_gain", cash_amount=2.50),
+            CorpAction(symbol="FUND", ex_date=date(2024, 12, 30),
+                       action_type="st_capital_gain", cash_amount=0.50),
+        ]
+        out, n = PolygonCorpActionsBronzeIngest._dedupe_actions(actions)
+        assert len(out) == 3
+        assert n == 0
+
+    def test_three_way_duplicate_collapsed(self) -> None:
+        """Three duplicates → one row with all summed."""
+        actions = [
+            CorpAction(symbol="X", ex_date=date(2024, 1, 1),
+                       action_type="cash_dividend", cash_amount=0.1),
+            CorpAction(symbol="X", ex_date=date(2024, 1, 1),
+                       action_type="cash_dividend", cash_amount=0.2),
+            CorpAction(symbol="X", ex_date=date(2024, 1, 1),
+                       action_type="cash_dividend", cash_amount=0.3),
+        ]
+        out, n = PolygonCorpActionsBronzeIngest._dedupe_actions(actions)
+        assert len(out) == 1
+        assert n == 2
+        assert abs(out[0].cash_amount - 0.6) < 1e-9
 
 
 # ─────────────────────────────────────────────────────────────────────

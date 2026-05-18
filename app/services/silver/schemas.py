@@ -57,11 +57,20 @@ def silver_table_id(name: str) -> str:
 
 
 CorpActionKind = Literal[
-    "split",            # forward stock split (factor > 1) or reverse (factor < 1)
-    "cash_dividend",    # regular or special cash dividend
-    "stock_dividend",   # stock dividend ("dividend" paid in shares)
-    "spinoff",          # spin-off distribution (recorded as cash-equivalent if convertible)
+    "split",                # forward stock split (factor > 1) or reverse (factor < 1)
+    "cash_dividend",        # ordinary cash dividend (Polygon dividend_type CD)
+    "lt_capital_gain",      # long-term capital-gains distribution (Polygon dividend_type LT)
+    "st_capital_gain",      # short-term capital-gains distribution (Polygon dividend_type ST)
+    "stock_dividend",       # stock dividend (paid in shares) (Polygon dividend_type SC)
+    "spinoff",              # spin-off distribution (Polygon dividend_type SP)
 ]
+# Why these are separate (not collapsed under cash_dividend):
+# A fund/ETF can issue MULTIPLE distributions on the same ex_date —
+# e.g. an ordinary cash dividend (CD) + a long-term cap-gains
+# distribution (LT) + a short-term cap-gains distribution (ST), all
+# on the same day. Collapsing them collides on the silver identifier
+# (symbol, ex_date, action_type). They're also semantically distinct
+# for tax + ML feature purposes. Keep them as separate kinds.
 
 
 class CorpAction(BaseModel):

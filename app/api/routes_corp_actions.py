@@ -31,8 +31,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# Valid action_type values — narrow Literal for OpenAPI clarity.
-_VALID_KINDS = frozenset({"split", "cash_dividend", "stock_dividend", "spinoff"})
+# Valid action_type values — matches the CorpActionKind Literal in
+# app/services/silver/schemas.py. Keep in sync.
+_VALID_KINDS = frozenset({
+    "split",
+    "cash_dividend",
+    "lt_capital_gain",
+    "st_capital_gain",
+    "stock_dividend",
+    "spinoff",
+})
 
 
 @lru_cache(maxsize=1)
@@ -62,9 +70,9 @@ def get_corp_actions(
     action_types: Optional[str] = Query(
         None,
         description=(
-            "Comma-separated action kinds to filter on "
-            "(split, cash_dividend, stock_dividend, spinoff). "
-            "Omit for all kinds."
+            "Comma-separated action kinds to filter on. Valid: "
+            "split, cash_dividend, lt_capital_gain, st_capital_gain, "
+            "stock_dividend, spinoff. Omit for all kinds."
         ),
     ),
     reader: CorpActionsReader = Depends(get_corp_actions_reader),

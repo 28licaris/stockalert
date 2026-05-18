@@ -47,14 +47,19 @@ _PAGE_LIMIT = 1000
 
 
 # Polygon dividend_type values — empirically what /dividends returns.
-# `CD` is the catch-all for ordinary cash dividends; the rest are
-# distinguishable distributions we want to preserve as separate kinds.
+#
+# Each maps to a distinct CorpActionKind. CD, LT, ST were originally
+# collapsed under "cash_dividend" but that produced duplicate-key
+# upsert errors when a fund/ETF issued multiple distributions on the
+# same ex_date. Keeping them separate also matches their actual
+# semantic distinctness (different tax treatments + different
+# triggers).
 _DIVIDEND_TYPE_MAP: dict[str, CorpActionKind] = {
-    "CD": "cash_dividend",      # regular cash dividend
-    "SC": "stock_dividend",     # stock dividend
-    "LT": "cash_dividend",      # long-term capital gains distribution
-    "ST": "cash_dividend",      # short-term capital gains distribution
-    "SP": "spinoff",            # spin-off
+    "CD": "cash_dividend",      # ordinary cash dividend
+    "LT": "lt_capital_gain",    # long-term capital-gains distribution
+    "ST": "st_capital_gain",    # short-term capital-gains distribution
+    "SC": "stock_dividend",     # stock dividend (paid in shares)
+    "SP": "spinoff",            # spin-off distribution
 }
 
 

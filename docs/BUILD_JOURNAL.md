@@ -2233,3 +2233,72 @@ bottom with a date.
   both corp-actions correctness and live-data freshness are
   prerequisites for the silver build to produce production-grade
   silver.ohlcv_1m.
+- **2026-05-17** — **TA-5.0 LANDED**: corp-actions ingestion (bronze
+  + silver) is end-to-end production-grade.
+
+  **Live verification** against the operator's Polygon subscription
+  (canary window 2024-06-10 to 2024-06-14, the week of NVDA's
+  10-for-1 split):
+  - **Bronze ingest:** 32 splits + 5,089 dividends pulled from
+    Polygon REST in ~17s. 13 duplicate (symbol, ex_date, action_type)
+    rows collapsed by summing cash_amount (see below). 5,076 rows
+    upserted into bronze.polygon_corp_actions.
+  - **Silver build:** 5,108 rows merged from polygon bronze (only
+    provider present), 5,108 upserted into silver.corp_actions
+    (table auto-created on first run). ~8s.
+  - **Reader verification:** `CorpActionsReader.get_corp_actions(NVDA, ...)`
+    returned the correct 2 events: split on 2024-06-10 (factor=10.0)
+    + cash_dividend on 2024-06-11 ($0.01).
+  - **Idempotency verification:** silver-only re-run on the same
+    window produced the same 5,108 rows in silver, NVDA count
+    unchanged at 2. No double-write.
+
+  **Two real bugs caught by the live test that unit tests had no
+  way of finding:**
+
+  1. **CorpActionKind needed expansion.** The original mapping
+     collapsed `CD`, `LT`, `ST` (Polygon's dividend_type values
+     for ordinary cash div, long-term cap gains, short-term cap
+     gains) all under `cash_dividend`. A fund/ETF that pays BOTH
+     a regular div and a capital-gains distribution on the same
+     ex_date produces two rows with identical identifier
+     `(symbol, ex_date, "cash_dividend")` — PyIceberg's upsert
+     refused to write. Fixed by giving LT and ST their own
+     CorpActionKind values (`lt_capital_gain`, `st_capital_gain`).
+
+  2. **Same-ex_date duplicate cash dividends are real.** Even with
+     the type expansion above, some symbols (CIVI, HUABF, SARDF,
+     INSW, IGPYF) pay TWO ordinary cash dividends — a regular and
+     a special — on the same ex_date. Polygon labels BOTH as `CD`,
+     so the type expansion doesn't separate them. Fix: added
+     `_dedupe_actions()` to the bronze ingest that groups by
+     identifier and sums `cash_amount` (regular + special →
+     combined). 13/5089 dividends (~0.25%) had this pattern in
+     this one week, projecting to ~7,500 across the 3M dividends
+     since 2003. The summed total is correct for adjustment math
+     (which is what silver consumers need).
+
+  Six new unit tests in `tests/test_silver_corp_actions.py` pin
+  the dedup behavior (passthrough, summation, three-way merge,
+  announced_at takes latest, different action_types not collapsed,
+  empty input).
+
+  **What you can do now:**
+  - Trigger a full backfill: `poetry run python scripts/run_corp_actions_backfill.py --full`
+    (~30-60 min; pulls ~50K splits + ~3M dividends since 2003).
+  - Schedule nightly: cron `01:30 ET` calling the same script with
+    `--nightly`.
+  - Query via reader: `CorpActionsReader().get_corp_actions(symbol, ...)`.
+  - Query via HTTP: `GET /api/corp-actions/AAPL?since=2020-01-01`.
+  - Query via MCP: `get_corp_actions(symbol="AAPL", since=...)`.
+
+  Test count summary at end of TA-5.0:
+  - tests/test_silver_corp_actions.py: 37 tests
+  - tests/test_silver_probes.py: 22 tests
+  - tests/test_bronze_audit.py: 18 tests
+  Total: 77 tests pinning the bronze→silver corp-actions pipeline,
+  the universal probe framework, and the universal bronze audit
+  framework.
+
+  Next: TA-5.7 (live_lake_writer to close the 8-24h Schwab live →
+  bronze gap), then TA-5.1 (silver OHLCV build).

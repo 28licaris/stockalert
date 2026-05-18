@@ -203,6 +203,64 @@ class PolygonCorpActionsBronzeIngest:
         }
         return pa.Table.from_pydict(arrays, schema=_CORP_ACTIONS_ARROW)
 
+    @staticmethod
+    def _dedupe_actions(actions: list[CorpAction]) -> tuple[list[CorpAction], int]:
+        """Collapse rows with the same `(symbol, ex_date, action_type)`.
+
+        Real-world finding (TA-5.0 live verification, 2026-05-17):
+        Polygon's /dividends endpoint can return **multiple cash
+        dividends on the same ex_date** for a single ticker —
+        typically a regular cash dividend + a special/variable
+        distribution announced together. Both rows arrive labeled
+        with the same `dividend_type=CD`, producing identical
+        identifiers in our schema.
+
+        For adjustment math, what matters is the **total cash
+        distributed** on the ex_date — silver consumers want one row
+        per identifier with the combined amount. We sum:
+
+          - cash_amount: sum across duplicates
+          - factor: take max (splits never duplicate; defensive)
+          - announced_at: take max (latest announcement wins)
+          - source_provider: first
+
+        Returns (deduplicated_list, n_collapsed).
+        """
+        if not actions:
+            return [], 0
+
+        # Group by identifier
+        from collections import defaultdict
+
+        groups: dict[tuple, list[CorpAction]] = defaultdict(list)
+        for a in actions:
+            key = (a.symbol, a.ex_date, a.action_type)
+            groups[key].append(a)
+
+        deduped: list[CorpAction] = []
+        n_collapsed = 0
+        for key, rows in groups.items():
+            if len(rows) == 1:
+                deduped.append(rows[0])
+                continue
+            n_collapsed += len(rows) - 1
+            # Combine the duplicates.
+            cash_amounts = [r.cash_amount for r in rows if r.cash_amount is not None]
+            factors = [r.factor for r in rows if r.factor is not None]
+            announced = [r.announced_at for r in rows if r.announced_at is not None]
+            deduped.append(
+                CorpAction(
+                    symbol=rows[0].symbol,
+                    ex_date=rows[0].ex_date,
+                    action_type=rows[0].action_type,
+                    factor=max(factors) if factors else None,
+                    cash_amount=sum(cash_amounts) if cash_amounts else None,
+                    announced_at=max(announced) if announced else None,
+                    source_provider=rows[0].source_provider,
+                )
+            )
+        return deduped, n_collapsed
+
     @classmethod
     def _upsert(
         cls,
@@ -213,17 +271,26 @@ class PolygonCorpActionsBronzeIngest:
     ) -> None:
         """Write actions to bronze via Iceberg `upsert`.
 
-        Uses the identifier fields (symbol, ex_date, action_type) as
-        the join condition automatically. When matched, updates
-        non-key columns (handles Polygon revising a prior announcement).
-        When not matched, inserts.
+        Dedupes input first (same-day same-symbol same-kind events get
+        their cash_amount summed; see `_dedupe_actions`). Then writes
+        with PyIceberg's `upsert`, which uses the identifier fields
+        (symbol, ex_date, action_type) for the join. When matched,
+        updates non-key columns (handles Polygon revising a prior
+        announcement). When not matched, inserts.
         """
         if not actions:
             return
-        arrow = cls._actions_to_arrow(actions, ingestion_run_id=ingestion_run_id)
+        deduped, n_collapsed = cls._dedupe_actions(actions)
+        if n_collapsed > 0:
+            logger.info(
+                "polygon_corp_actions_ingest: collapsed %d duplicate "
+                "(symbol, ex_date, action_type) rows by summing cash_amount",
+                n_collapsed,
+            )
+        arrow = cls._actions_to_arrow(deduped, ingestion_run_id=ingestion_run_id)
         result = table.upsert(arrow)
         logger.info(
             "polygon_corp_actions_ingest: upsert complete "
-            "rows_updated=%d rows_inserted=%d",
-            result.rows_updated, result.rows_inserted,
+            "rows_updated=%d rows_inserted=%d (post-dedup rows=%d)",
+            result.rows_updated, result.rows_inserted, len(deduped),
         )
