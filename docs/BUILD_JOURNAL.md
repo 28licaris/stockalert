@@ -2136,3 +2136,45 @@ bottom with a date.
   might want to trade later — Polygon flat-files are free at the
   marginal symbol while subscribed, but once Polygon is paused only
   Schwab-streamed symbols get fresh bronze data.
+- **2026-05-17** — **Empirical provider-adjustment probe — bronze
+  adjustment status is heterogeneous.** Operator flagged the design's
+  "bronze stores what the provider sent — raw" assumption as
+  potentially wrong for Schwab. Built `app/services/silver/probes/`
+  package (universal probe framework: `ProviderAdjustmentProbe`
+  Protocol + registry, `ProbeSpec` library of 5 well-known historical
+  splits) + `scripts/probe_provider_adjustment.py` runner.
+
+  Probe run against AAPL 2020-08-31 (4-for-1) AND NVDA 2024-06-10
+  (10-for-1) — both confirm:
+  - **`bronze.polygon_minute` (Polygon flat-files): RAW** ✅
+    (matches the design assumption)
+  - **`bronze.schwab_minute` (Schwab REST + stream): SPLIT_ADJUSTED** ❌
+    (breaks the design assumption — Schwab adjusts splits in their API)
+  - Polygon REST adjusted=true returns split-adjusted; adjusted=false
+    returns raw (matches Polygon's documented behavior).
+
+  Schwab's official docs (`docs/schwab-api/market_data_api.md`)
+  contain zero mention of "adjust" or "split" — without the probe,
+  this would have surfaced only when a backtest showed wrong prices
+  on Schwab-sourced bars.
+
+  Impact on silver build (TA-5.1):
+  - Bronze schemas now carry per-provider ADJUSTMENT_STATUS constants
+    (`BRONZE_POLYGON_MINUTE_ADJUSTMENT_STATUS = "raw"`,
+    `BRONZE_SCHWAB_MINUTE_ADJUSTMENT_STATUS = "split_adjusted"`).
+  - silver_layer_plan §2.9 + §3.3 updated: build must NORMALIZE each
+    provider's bars to both `_raw` and `_adj` BEFORE the precedence
+    merge. Per-provider, the build either applies corp-action factors
+    (raw → adj) or un-adjusts via cumulative split factors (adj → raw).
+  - Discovered before TA-5.1 was written — cheap fix.
+
+  Universal probe framework:
+  - 5 pre-curated probe specs (AAPL 2020, NVDA 2024, AMZN 2022,
+    GOOGL 2022, TSLA 2022). Operator picks via `--probe NAME` CLI.
+  - Adding a new provider's probe = drop new
+    `app/services/silver/probes/<provider>.py` + register via
+    `@register_probe(name)`. No runner changes.
+  - Rules for what's needed when onboarding a new provider:
+    `app/services/silver/probes/README.md` "How to add a new
+    provider's probe" + "Decide if the provider needs corp-actions
+    ingest" sections.

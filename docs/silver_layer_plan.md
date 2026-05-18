@@ -359,14 +359,56 @@ Six concrete races to defend against:
 6. **CH gets wiped/rebuilt.** The user-visible "no historical data" gap.
    - **Defense:** A `scripts/rebuild_ch_from_silver.py` operator script. Reads silver for all watchlist symbols, bulk-inserts into CH. ~hour wall-clock for a full S&P 500 rebuild. CH is **always** rebuildable from silver because of the ground-truth rule.
 
-### 2.9 Adjusted vs. raw prices
+### 2.9 Adjusted vs. raw prices — and the per-provider adjustment status
 
-Silver carries both `_raw` and `_adj` columns (split + dividend
-adjusted). CH receives only one set — configured globally:
+Silver carries both `_raw` and `_adj` columns (split-adjusted; cash
+dividends optional). CH receives only one set — configured globally:
 
 - **Chart, indicator overlays, screener, backtest training:** see `_adj`.
 - **Backtest replay-accuracy mode:** opt-in via `BacktestConfig.adjusted=False` → reads `_raw` from silver.
 - **Default everywhere:** `_adj`.
+
+**Critical: each bronze provider's adjustment status differs.** This
+was empirically determined by `scripts/probe_provider_adjustment.py`
+on 2026-05-17 against AAPL 2020-08-31 (4-for-1) and NVDA 2024-06-10
+(10-for-1); both probes agreed:
+
+| Bronze source | Adjustment status | Silver build path |
+|---|---|---|
+| `bronze.polygon_minute` (Polygon flat-files) | **RAW** | Apply corp_actions to compute `_adj`; pass through as `_raw` |
+| `bronze.schwab_minute` (Schwab REST + stream) | **SPLIT_ADJUSTED** | Pass through as `_adj`; un-adjust via corp_actions cumulative factor to compute `_raw` |
+| (future) bronze.{provider}_minute | TBD — run probe at onboarding | per the probe result |
+
+This is encoded in `app/services/bronze/schemas.py` as
+`ADJUSTMENT_STATUS_RAW` / `ADJUSTMENT_STATUS_SPLIT_ADJUSTED` constants
++ a per-table `BRONZE_*_MINUTE_ADJUSTMENT_STATUS` variable. The silver
+OHLCV build (TA-5.1) reads these constants to decide how to populate
+silver's `_raw` and `_adj` columns per provider.
+
+**Why this matters:** before the probe, the design assumed all
+providers send raw. If we'd kept that assumption, Schwab-sourced
+cells would have populated silver's `_raw` columns with split-adjusted
+data — every backtest using `_raw` (e.g. replay-accuracy mode) would
+have silently used wrong prices. The probe catches this class of
+bug at silver-build time.
+
+**Un-adjustment math** (for split-adjusted → raw):
+
+```
+raw_price = adjusted_price * cumulative_split_factor(symbol, from_date=bar_date, to_date=today)
+```
+
+Where `cumulative_split_factor` walks `silver.corp_actions` rows
+between `bar_date` and `today`, multiplying split factors and
+ignoring cash dividends (since the Schwab API does not appear to
+dividend-adjust per the probe results — only split-adjust).
+
+**Run the probe regularly:**
+- At CI gate before any silver_build CI run.
+- After any provider API version change.
+- When `silver.bar_quality.disagreements` spikes.
+- At every new provider onboarding (mandatory; see
+  `app/services/silver/probes/README.md`).
 
 ---
 
@@ -395,41 +437,67 @@ via watermarks.
 ### 3.3 Algorithm (per `(symbol, day_partition)` slice)
 
 ```python
-# Pseudocode — see app/services/silver/silver_build.py when built
+# Pseudocode — see app/services/silver/ohlcv/build.py when built (TA-5.1).
 def build_silver_slice(symbol: str, day: date) -> None:
-    # 1. Read all provider bronze rows for this day.
+    # 1. Read each provider's bronze rows for this day. Each provider
+    #    has its OWN adjustment status (from bronze/schemas.py constants).
     polygon_bars = read_bronze("polygon_minute", symbol, day)
     schwab_bars  = read_bronze("schwab_minute",  symbol, day)
 
-    # 2. Merge with provider precedence.
-    # Default order: polygon > schwab. First-with-row wins per minute.
+    # 2. Normalize each provider's bars to BOTH (_raw, _adj). Use the
+    #    per-provider ADJUSTMENT_STATUS constant to decide which way
+    #    the corp_actions factors apply.
+    #
+    #    Polygon is RAW (per the 2026-05-17 probe):
+    #      _raw = polygon's prices (pass-through)
+    #      _adj = polygon's prices * factor_to_today(symbol, ex_date <= day)
+    #    Schwab is SPLIT_ADJUSTED:
+    #      _adj = schwab's prices (pass-through)
+    #      _raw = schwab's prices * cumulative_split_factor(symbol, day → today)
+    factors_to_today = compute_adjustment_factors_to_today(
+        symbol, as_of=date.today(),
+        corp_actions=read_corp_actions(symbol),
+    )
+    polygon_normalized = normalize_provider_bars(
+        polygon_bars,
+        adjustment_status=BRONZE_POLYGON_MINUTE_ADJUSTMENT_STATUS,  # "raw"
+        factors=factors_to_today,
+    )
+    schwab_normalized = normalize_provider_bars(
+        schwab_bars,
+        adjustment_status=BRONZE_SCHWAB_MINUTE_ADJUSTMENT_STATUS,   # "split_adjusted"
+        factors=factors_to_today,
+    )
+
+    # 3. Merge with provider precedence on the normalized rows.
+    #    First-with-row wins per (symbol, ts). Both _raw and _adj are
+    #    now correctly populated regardless of which provider's cell
+    #    wins.
     merged = merge_with_precedence(
-        sources=[("polygon", polygon_bars), ("schwab", schwab_bars)],
+        sources=[("polygon", polygon_normalized), ("schwab", schwab_normalized)],
         precedence=settings.silver_provider_precedence,
     )
 
-    # 3. Look up corp-action factors for THIS symbol on EARLIER dates.
-    factors = compute_adjustment_factors(
-        symbol,
-        as_of=date.today(),   # "today's view" of historical adjustments
-        corp_actions=read_corp_actions(symbol),
+    # 4. Compute bar-quality metrics for this slice.
+    quality = compute_bar_quality(
+        symbol, day, merged, polygon_bars, schwab_bars,
     )
 
-    # 4. Compute adjusted columns. Raw columns pass through unchanged.
-    adjusted = apply_adjustment_factors(merged, factors)
+    # 5. MERGE INTO silver.ohlcv_1m  (PyIceberg upsert by (symbol, ts)).
+    silver_table.merge_into(merged, key=("symbol", "ts"))
 
-    # 5. Compute bar-quality metrics for this slice.
-    quality = compute_bar_quality(symbol, day, merged, polygon_bars, schwab_bars)
-
-    # 6. MERGE INTO silver.ohlcv_1m  (PyIceberg upsert by (symbol, ts))
-    silver_table.merge_into(adjusted, key=("symbol", "ts"))
-
-    # 7. Append to silver.bar_quality
+    # 6. Append to silver.bar_quality.
     quality_table.append([quality])
 
-    # 8. Update watermark
+    # 7. Update watermark.
     mark_silver_built(symbol, day)
 ```
+
+**The per-provider normalization step is what makes the silver
+build correct in the face of mixed-adjustment-status providers.**
+Step 2 is new vs. the original design (which assumed all bronze
+sources were raw). Discovered + fixed via the empirical probe
+on 2026-05-17.
 
 ### 3.4 Adjustment recomputation
 

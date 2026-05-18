@@ -24,6 +24,24 @@ What it does NOT own:
 
 ## Tables
 
+### Per-provider adjustment status (empirically determined)
+
+| Bronze source | Returns prices in | Verified |
+|---|---|---|
+| `bronze.polygon_minute` (Polygon flat-files) | **RAW** | Empirically by `scripts/probe_provider_adjustment.py` on 2026-05-17 — AAPL 2020 + NVDA 2024 |
+| `bronze.schwab_minute` (Schwab REST + stream) | **SPLIT_ADJUSTED** | Same probe |
+
+Encoded as `BRONZE_*_MINUTE_ADJUSTMENT_STATUS` constants in
+`schemas.py`. The silver build (TA-5.1) reads these to decide how to
+normalize each provider's bars into `_raw` + `_adj` columns. Without
+this distinction, Schwab-sourced cells would silently populate
+silver's `_raw` column with adjusted data — every replay-accuracy
+backtest would use wrong prices.
+
+**Run the probe regularly** — at CI, at every provider API version
+change, and at every new-provider onboarding. See
+[app/services/silver/probes/README.md](../silver/probes/README.md).
+
 ### Two data types in bronze
 
 Bronze holds **two kinds of data**, both raw, both per-provider:

@@ -34,6 +34,36 @@ def bronze_table_id(name: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Per-provider adjustment status (empirically determined)
+# ─────────────────────────────────────────────────────────────────────
+#
+# Each bronze.{provider}_minute table carries prices in one of these
+# adjustment states. The silver OHLCV build reads this constant to
+# decide how to populate silver.ohlcv_1m's `_raw` and `_adj` columns:
+#
+#   - "raw":            provider sends unadjusted prices. silver_build
+#                       applies corp_actions factors to compute `_adj`;
+#                       provider's prices pass through as `_raw`.
+#   - "split_adjusted": provider's prices already have splits applied.
+#                       silver_build passes through as `_adj`; computes
+#                       `_raw` by UN-adjusting via the corp_actions
+#                       cumulative-factor table.
+#
+# Verified empirically by `scripts/probe_provider_adjustment.py` on
+# 2026-05-17 against AAPL 2020-08-31 (4-for-1) + NVDA 2024-06-10 (10-for-1).
+# Both probes agreed.
+#
+# If a provider's adjustment behavior ever changes (API revision, etc.),
+# the probe will catch it on the next CI run — see
+# `app/services/silver/probes/README.md`.
+ADJUSTMENT_STATUS_RAW = "raw"
+ADJUSTMENT_STATUS_SPLIT_ADJUSTED = "split_adjusted"
+
+BRONZE_POLYGON_MINUTE_ADJUSTMENT_STATUS = ADJUSTMENT_STATUS_RAW
+BRONZE_SCHWAB_MINUTE_ADJUSTMENT_STATUS = ADJUSTMENT_STATUS_SPLIT_ADJUSTED
+
+
+# ─────────────────────────────────────────────────────────────────────
 # bronze.polygon_minute
 # ─────────────────────────────────────────────────────────────────────
 #
