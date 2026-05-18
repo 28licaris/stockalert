@@ -896,10 +896,13 @@ flat `silver_build.py` originally sketched).
   `scripts/run_silver_ohlcv_build.py` operator CLI (--nightly /
   --full / --since/--until / --symbols / --out-json). Wired into
   FastAPI lifespan gated on `SILVER_OHLCV_BUILD_ENABLED`.
-- **TA-5.1.7** — operator validation + initial full backfill
-  (next). Flip env toggle to true; run `scripts/run_silver_ohlcv_build.py
-  --full` once; spot-check silver counts + Yahoo-adjusted-close on
-  10 random symbols.
+- **TA-5.1.7 ✅ (tooling)** — `scripts/preflight_silver_build.py`
+  (7-check pipeline-readiness validator), `scripts/verify_silver_build.py`
+  (post-run audit + cross-check sample), and
+  [`docs/runbook_silver_ohlcv_build.md`](runbook_silver_ohlcv_build.md)
+  (operator 5-step procedure). Operator-go-live step remains:
+  preflight → `--full` overnight → verify → enable nightly →
+  Yahoo-adj spot-check.
 
 **Tests:** 102 silver tests green across schemas, normalize math,
 merge precedence, orchestrator pipeline, reader+routes, MCP, nightly
@@ -964,28 +967,33 @@ After 30 days on `silver_to_ch` default with no incidents:
 
 ## 9. Operator runbook
 
-### 9.1 First-time silver build (initial backfill)
+### 9.1 First-time silver build (initial backfill) — TA-5.1.7
 
-Once Phase TA-5.1 lands:
+**See the focused runbook at
+[runbook_silver_ohlcv_build.md](runbook_silver_ohlcv_build.md)** for
+the full 5-step operator procedure (preflight, multi-hour `--full`,
+verification, nightly-loop enable, Yahoo-adj spot-check). Quick
+summary:
 
 ```bash
-# Generate corp-actions baseline (~15 min)
-poetry run python scripts/run_corp_actions_backfill.py --since 2003-01-01
+# 1. Preflight (~30s). Validates every wire end-to-end.
+poetry run python scripts/preflight_silver_build.py
 
-# Run silver build for all symbols, all history (~6-12 hr)
-poetry run python scripts/run_silver_initial_backfill.py \
-    --symbols all \
-    --start 2021-01-01 \
-    --end yesterday \
-    --parallel 8
+# 2. Multi-hour initial backfill (~18-25 hr, run overnight).
+poetry run python scripts/run_silver_ohlcv_build.py --full --symbols active
 
-# Verify
-poetry run python scripts/check_silver_coverage.py --report
+# 3. Post-run verification (~1 min).
+poetry run python scripts/verify_silver_build.py --since 2021-01-04
+
+# 4. Enable nightly loop:  set SILVER_OHLCV_BUILD_ENABLED=true + restart.
+
+# 5. Yahoo-adj spot-check (NVDA 2024-06-10 split, etc.) via /api/silver/bars.
 ```
 
 Expected output: per-symbol `(silver_rows, bronze_rows,
-disagreement_pct)` table. Anything with `disagreement_pct > 0.5%`
-gets investigated before flipping the default.
+disagreement_pct)` distribution from the verify script. Anything
+with `disagreement_count > 0` or `gap_count > 5` gets investigated
+before flipping the production default.
 
 ### 9.2 Ongoing operations
 

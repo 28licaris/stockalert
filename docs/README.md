@@ -83,6 +83,11 @@ Then, in this order:
     universe; G2 silver OHLCV build; G3 nightly schedule; G4
     silver→CH backfill; G5 delete legacy + wipe-rebuild; G6
     gap-handling UX). Includes 4 operator decisions to confirm.
+16. [runbook_silver_ohlcv_build.md](runbook_silver_ohlcv_build.md) —
+    operator runbook for TA-5.1.7: 5-step procedure to validate
+    + initial-backfill silver from bronze. Pre-flight script,
+    multi-hour `--full` run, post-run verification, nightly-loop
+    enablement, Yahoo-adj spot-check.
 
 ## Working agreement
 

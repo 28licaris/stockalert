@@ -2559,3 +2559,52 @@ bottom with a date.
   by default.
 
   120 tests green across the silver + universe surface area.
+
+- **2026-05-18** — **TA-5.1.7 tooling LANDED**: preflight + verify +
+  runbook. The remaining step is the actual operator-go-live action,
+  but the tooling that makes that action safe + auditable is now in
+  place.
+
+  NEW `scripts/preflight_silver_build.py`:
+    7-check pipeline-readiness validator (~30s). Catalog reachable,
+    bronze tables populated, silver.corp_actions present, silver
+    tables creatable, end-to-end build slice runs, silver readback
+    confirms, CH ingestion_runs audit row recorded. Skips downstream
+    checks when catalog is unreachable. Exit 0 = safe to `--full`;
+    exit 2 = block. JSON-report option.
+
+  NEW `scripts/verify_silver_build.py`:
+    Post-run audit (~1 min). Reads silver.bar_quality for [since,
+    until] × symbols and surfaces:
+      - zero-actual-bar weekdays (suspect coverage gap)
+      - gap_count / max_gap_minutes outliers (default thresholds:
+        5 gaps, 10 min — operator-configurable)
+      - disagreement_count > 0 (cross-provider mismatch)
+      - cross-check sample (N random cells: bars sorted, unique
+        timestamps, valid provider tags, _adj populated)
+      - ingestion_runs CH audit summary (run counts, status dist,
+        total rows written)
+    Exit 0 = no issues; exit 2 = issues found with top-N list.
+
+  NEW `docs/runbook_silver_ohlcv_build.md`:
+    Operator runbook for the 5-step TA-5.1.7 procedure: preflight →
+    `--full` overnight → verify → enable nightly loop → Yahoo-adj
+    spot-check. Includes idempotency notes (Ctrl-C safe, re-running
+    same window safe via PyIceberg identifier upsert) +
+    troubleshooting matrix.
+
+  18 tests cover: CheckResult glyphs, parser defaults, orchestration
+  (catalog-fail short-circuits downstream; all-pass returns 7 OKs),
+  symbol resolution (default = SEED), gap-outlier classification,
+  disagreement classification, weekday-vs-weekend zero-bar
+  treatment, VerificationFindings.has_issues toggles.
+
+  Why this is "tooling for an operator step, not code TA-5.1.7
+  itself": the actual operator-go-live is irreversible (flips the
+  production toggle + seeds silver from bronze for the first time).
+  Splitting it out keeps the code commits surgical and the operator
+  action explicit. After the operator runs the 5-step procedure
+  successfully, TA-5.1.7 closes and TA-5.3 (silver→CH backfill +
+  tip-fill) becomes the next code block.
+
+  150 silver + universe + operator-tool tests green.
