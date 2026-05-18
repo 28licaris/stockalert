@@ -212,6 +212,36 @@ ready.
 
 ---
 
+## Scheduling architecture — in-process, not external cron
+
+**All ingest jobs are in-process asyncio background tasks wired
+into the FastAPI lifespan.** Confirmed by the existing pattern:
+
+- `backfill_service` (started via `_safe_start` in lifespan)
+- `watchlist_service` (streams Schwab; live → CH)
+- `live_lake_writer` (TA-5.7; every 5 min, CH → bronze)
+- `nightly_polygon_refresh` (lifespan asyncio.create_task; sleeps
+  until configured hour)
+- `nightly_schwab_refresh` (same pattern)
+- `journal_sync_service` (Schwab account sync, every 5 min)
+- `_initial_gap_sweep_after_warmup` (one-shot after startup)
+
+No external cron, no systemd timer, no OS-level scheduler. The
+FastAPI process IS the scheduler. Restarting the server restarts
+every job from a clean state.
+
+**What we'll add** to this same pattern:
+
+| Job | Cadence | Started by | What it does |
+|---|---|---|---|
+| `silver_corp_actions_build` | nightly 01:30 ET | lifespan asyncio task | bronze.{provider}_corp_actions → silver.corp_actions |
+| `silver_ohlcv_build` | nightly 02:30 ET | lifespan asyncio task | bronze → silver.ohlcv_1m + silver.bar_quality |
+| `bronze_compaction` | daily 03:00 ET | lifespan asyncio task | Athena OPTIMIZE on bronze.{tables} |
+| `silver_compaction` | weekly Sat 03:00 ET | lifespan asyncio task | Athena OPTIMIZE on silver.{tables} |
+
+All gated by `SETTINGS.*_ENABLED` flags so operators can disable
+individual jobs without code changes.
+
 ## Sequenced timeline (recommended)
 
 This week (this and next session):
@@ -274,3 +304,29 @@ TA-5.1.5..5.1.7 + G1 + G3.
 
 After this whole sequence lands, **every gap in your data flow is
 closed.** The system is production-grade.
+
+## Final step — wipe CH + verify (after all phases land)
+
+Once G1-G5 are in, the final verification:
+
+1. **Run** `scripts/rebuild_ch_from_silver.py --wipe`:
+   - Stops the live stream momentarily
+   - Truncates CH `ohlcv_1m` + `ohlcv_5m` + `ohlcv_daily`
+   - Reloads every active watchlist symbol from silver via
+     `silver_to_ch_backfill`
+   - Restarts live stream
+
+2. **Verify each use case end-to-end:**
+
+   | Use case | What to check |
+   |---|---|
+   | Live ticks land in CH | New bar in seconds of market activity |
+   | Live ticks land in bronze within 5 min | `audit_bronze.py --check live_freshness` is 🟢 |
+   | Chart loads history fast | `/symbol/AAPL` loads 2y in <2s |
+   | Add new streamed symbol | `add_members("XYZ")` → CH has ≥48d within ~10s |
+   | Silver freshness | `silver.ohlcv_1m` includes yesterday's bars after 02:30 ET |
+   | Adjusted vs raw | NVDA 2024-06-07: close_raw≈$1208.88, close_adj≈$120.88 |
+   | Provider precedence | Polygon-covered bars show `source_provider="polygon"` |
+   | bar_quality | Full-coverage days show `actual_bars ≈ expected_bars` |
+
+3. Record verification in BUILD_JOURNAL as the **TA-5 LANDED** entry.
