@@ -13,6 +13,9 @@ behind the package boundary.
 """
 from __future__ import annotations
 
+from app.services.silver.corp_actions import (
+    PolygonCorpActionsBronzeIngest,
+)
 from app.services.silver.schemas import (
     CorpAction,
     CorpActionKind,
@@ -21,4 +24,5 @@ from app.services.silver.schemas import (
 __all__ = [
     "CorpAction",
     "CorpActionKind",
+    "PolygonCorpActionsBronzeIngest",
 ]
