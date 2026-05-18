@@ -60,10 +60,16 @@ def _parse_date(s: str) -> date:
 
 
 def _resolve_symbols(spec: Optional[str]) -> list[str]:
-    s = (spec or "").strip().lower()
-    if not s or s in ("seed", "seed-100", "seed_100"):
-        return list(SEED_SYMBOLS)
-    return [tok.strip().upper() for tok in spec.split(",") if tok.strip()]
+    """Translate --symbols spec → list[str].
+
+    Delegates to `app.services.universe.resolve_universe_spec` so the
+    CLI handles the same keywords as the nightly loops:
+      "seed" / "" / None    → SEED_SYMBOLS (curated 100, static)
+      "active"              → SEED ∪ active-watchlist symbols (G1 dynamic)
+      "AAPL,NVDA,..."       → explicit comma-separated list
+    """
+    from app.services.universe import resolve_universe_spec
+    return resolve_universe_spec(spec or "")
 
 
 def _build_parser() -> argparse.ArgumentParser:

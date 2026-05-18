@@ -42,6 +42,62 @@ def preflight():
 
 
 @pytest.fixture(scope="module")
+def build_cli():
+    """The scripts/run_silver_ohlcv_build.py operator CLI."""
+    return _load_script("run_silver_ohlcv_build")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Build CLI symbol resolution — regression for "active" not being a CSV
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestBuildCliResolveSymbols:
+    """Regression: an earlier version of the CLI's local _resolve_symbols
+    didn't know about 'active' and treated it as a single-symbol CSV,
+    starting an empty backfill. Fixed by delegating to the universe
+    service (same path the nightlies use)."""
+
+    def test_seed_returns_seed_symbols(self, build_cli) -> None:
+        from app.data.seed_universe import SEED_SYMBOLS
+
+        syms = build_cli._resolve_symbols("seed")
+        assert set(syms) == set(SEED_SYMBOLS)
+
+    def test_active_unions_seed_and_watchlists(self, build_cli) -> None:
+        """'active' = SEED ∪ active-watchlist symbols. Critically, NOT
+        a literal single symbol 'ACTIVE'."""
+        from app.data.seed_universe import SEED_SYMBOLS
+        from unittest.mock import patch
+
+        with patch(
+            "app.db.watchlist_repo.list_all_active_symbols",
+            return_value={"NEW_WATCHLIST_SYM"},
+        ):
+            syms = build_cli._resolve_symbols("active")
+        # Must contain SEED + the watchlist symbol; must NOT be ["ACTIVE"].
+        assert "NEW_WATCHLIST_SYM" in syms
+        assert set(SEED_SYMBOLS).issubset(set(syms))
+        assert syms != ["ACTIVE"]
+
+    def test_empty_string_returns_seed(self, build_cli) -> None:
+        from app.data.seed_universe import SEED_SYMBOLS
+
+        syms = build_cli._resolve_symbols("")
+        assert set(syms) == set(SEED_SYMBOLS)
+
+    def test_none_returns_seed(self, build_cli) -> None:
+        from app.data.seed_universe import SEED_SYMBOLS
+
+        syms = build_cli._resolve_symbols(None)
+        assert set(syms) == set(SEED_SYMBOLS)
+
+    def test_csv_uppercased(self, build_cli) -> None:
+        syms = build_cli._resolve_symbols("aapl,nvda,MSFT")
+        assert syms == ["AAPL", "NVDA", "MSFT"]
+
+
+@pytest.fixture(scope="module")
 def verify():
     return _load_script("verify_silver_build")
 
