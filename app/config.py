@@ -88,6 +88,19 @@ class Settings(BaseModel):
         "SILVER_PROVIDER_PRECEDENCE", "polygon,schwab"
     )
 
+    # TA-5.3.3 — silver-derived add_members flow.
+    # When True, watchlist_service.add_members uses the unified
+    # silver-derived flow per docs/streaming_universe_model.md:
+    #   1. silver_to_ch_backfill (silver.ohlcv_1m → CH ohlcv_1m, 730d)
+    #   2. schwab_rest_tip_fill (silver watermark → live, ≤48d)
+    # When False (default), uses the legacy _enqueue_backfill 3-call
+    # path (provider REST → CH direct = Path ②). The legacy path is
+    # scheduled for removal in TA-5.5. Flip this to True after
+    # TA-5.1.7 operator backfill is verified.
+    silver_derived_add_members_enabled: bool = (
+        os.getenv("SILVER_DERIVED_ADD_MEMBERS_ENABLED", "false").lower() == "true"
+    )
+
     # Silver OHLCV build (TA-5.1.6 — nightly bronze→silver pipeline).
     # Runs after both nightly_polygon_refresh (07:00 UTC) and
     # nightly_schwab_refresh (22:00 UTC) have completed. Default

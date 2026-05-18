@@ -174,7 +174,7 @@ is config + an ingest job stopping/starting, not code.
 | Schwab REST nightly seed refresh → bronze | ✅ live | nightly_schwab_refresh |
 | Polygon corp-actions → bronze → silver | ✅ TA-5.0 | corp_actions/{polygon_ingest, build}.py |
 | **silver.ohlcv_1m** (canonical OHLCV) | ✅ **TA-5.1.1–.6 LANDED 2026-05-17**; pending live verify (TA-5.1.7) | `app/services/silver/ohlcv/` + `scripts/run_silver_ohlcv_build.py` + `/api/silver/*` + MCP `get_silver_bars` |
-| **silver → CH backfill on add_members** | ❌ **next: TA-5.3** | silver_to_ch_backfill (to build) |
+| **silver → CH backfill on add_members** | ✅ TA-5.3.1+5.3.2+5.3.3 LANDED 2026-05-18 (feature-flagged via `SILVER_DERIVED_ADD_MEMBERS_ENABLED`) | `silver_to_ch_backfill.py` + `schwab_tip_fill.py` + `watchlist_service._enqueue_silver_derived_warmup` |
 | `scripts/promote_to_seed.py` | ❌ planned | promote_to_seed.py (to build) |
 
 **Path forward:** TA-5.1.7 (operator validate + initial backfill) → TA-5.3 → CH wipe-and-rebuild → universe-expansion CLI.

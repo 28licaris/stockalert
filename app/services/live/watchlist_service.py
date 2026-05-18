@@ -205,15 +205,22 @@ class WatchlistService:
             logger.warning("Watchlist: provider error: %s", status["provider_error"])
 
         # Auto-enqueue backfill for every symbol we just subscribed to.
-        # Three resolutions go out in parallel - server-side coverage checks
-        # turn each into a no-op if the data is already there.
-        #   - QUICK 1-min (30d):    fills streamer-downtime gaps.
-        #   - INTRADAY 5-min (270d): so 5m/15m/30m/1h/4h charts cover ~9 months.
-        #   - DAILY (2y):            so the 1d chart covers ~2 years.
+        # Branches on the same TA-5.3.3 flag as add_members so behavior
+        # is consistent across restart + symbol-add paths.
         subs = sorted(self._subscribed)
-        self._enqueue_backfill(subs, kind="quick", days=30)
-        self._enqueue_backfill(subs, kind="intraday", days=270)
-        self._enqueue_backfill(subs, kind="daily", days=365 * 2)
+        from app.config import settings as _s
+        if getattr(_s, "silver_derived_add_members_enabled", False):
+            # NEW (TA-5.3.3): silver-derived warmup per symbol.
+            self._enqueue_silver_derived_warmup(subs)
+        else:
+            # LEGACY (Path ②). Three resolutions; server-side coverage
+            # checks turn each into a no-op if data is already there.
+            #   - QUICK 1-min (30d):    fills streamer-downtime gaps.
+            #   - INTRADAY 5-min (270d): so 5m/15m/30m/1h/4h charts cover ~9 mo.
+            #   - DAILY (2y):            so the 1d chart covers ~2 years.
+            self._enqueue_backfill(subs, kind="quick", days=30)
+            self._enqueue_backfill(subs, kind="intraday", days=270)
+            self._enqueue_backfill(subs, kind="daily", days=365 * 2)
 
     async def stop(self) -> None:
         """Unsubscribe everything and tear down the stream."""
@@ -298,15 +305,31 @@ class WatchlistService:
                 self._increment(newly)
         self._reconcile()
         # Fill in whatever history we're missing for the newly-added symbols.
-        # Fire-and-forget. Three backfills go out (one per storage table):
-        #   - QUICK 1-min for the last 30d (intraday chart populates immediately).
-        #   - INTRADAY 5-min for the last 270d (5m/15m/30m/1h/4h charts).
-        #   - DAILY for the last 2y (1d chart).
-        # All three short-circuit on the server if coverage is already enough.
+        # Fire-and-forget. Two paths coexist during the TA-5.3 rollout:
+        #
+        # NEW (TA-5.3.3 — silver-derived). Enabled via
+        # SILVER_DERIVED_ADD_MEMBERS_ENABLED=true. Per
+        # docs/streaming_universe_model.md:
+        #   1. silver_to_ch_backfill (silver.ohlcv_1m → CH, 730d)
+        #   2. schwab_rest_tip_fill  (silver watermark → live, ≤48d)
+        # CH is canonical-derived (S3 silver is the source of truth).
+        #
+        # LEGACY (Path ② — provider REST → CH direct). Three backfills:
+        #   - QUICK 1-min for the last 30d
+        #   - INTRADAY 5-min for the last 270d
+        #   - DAILY for the last 2y
+        # Scheduled for removal in TA-5.5 once silver-derived is
+        # operator-verified.
         if newly:
-            self._enqueue_backfill(newly, kind="quick", days=30)
-            self._enqueue_backfill(newly, kind="intraday", days=270)
-            self._enqueue_backfill(newly, kind="daily", days=365 * 2)
+            # Local import keeps watchlist_service module-load free of
+            # `app.config.settings` cycles in tests that monkeypatch it.
+            from app.config import settings as _s
+            if getattr(_s, "silver_derived_add_members_enabled", False):
+                self._enqueue_silver_derived_warmup(newly)
+            else:
+                self._enqueue_backfill(newly, kind="quick", days=30)
+                self._enqueue_backfill(newly, kind="intraday", days=270)
+                self._enqueue_backfill(newly, kind="daily", days=365 * 2)
         return {
             "watchlist": name,
             "added": newly,
@@ -330,7 +353,11 @@ class WatchlistService:
         }
 
     def _enqueue_backfill(self, symbols: list[str], *, kind: str, days: int) -> None:
-        """Fire-and-forget backfill enqueue. Tolerates no-loop / no-backfill state."""
+        """Fire-and-forget backfill enqueue. Tolerates no-loop / no-backfill state.
+
+        **LEGACY (Path ②)** — provider REST → CH direct. Scheduled for
+        removal in TA-5.5 once the silver-derived path is operator-verified.
+        """
         if not symbols or self._backfill is None:
             return
         try:
@@ -350,6 +377,84 @@ class WatchlistService:
                     self._backfill.enqueue_quick(sym, days=days)
             except Exception as e:
                 logger.warning("Auto-backfill enqueue failed for %s: %s", sym, e)
+
+    def _enqueue_silver_derived_warmup(self, symbols: list[str]) -> None:
+        """Fire-and-forget: silver→CH backfill + Schwab REST tip-fill.
+
+        TA-5.3.3 unified add-symbol flow per
+        docs/streaming_universe_model.md. Per symbol (sequential within
+        the symbol, parallel across symbols):
+          1. SilverToChBackfill — silver.ohlcv_1m → CH ohlcv_1m (730d)
+          2. SchwabTipFill — silver watermark → live gap (≤48d), dual
+             write to bronze + CH
+
+        Both calls are best-effort: failures are logged but the symbol
+        stays subscribed. Brand-new symbols (no silver history) get
+        zero from step 1 and the full 48d from step 2, which is the
+        expected cockpit "warming up" UX.
+        """
+        if not symbols:
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop (sync test / pre-startup); skip.
+            return
+        for sym in symbols:
+            asyncio.create_task(
+                self._silver_derived_warmup_one(sym),
+                name=f"silver_warmup_{sym}",
+            )
+
+    async def _silver_derived_warmup_one(self, symbol: str) -> None:
+        """One symbol's silver-derived warmup chain. Errors logged but
+        not raised — the symbol is already subscribed; failed warmup
+        just means the chart shows live-only until next nightly silver
+        chain catches up."""
+        # Step 1: silver → CH (sync; offload to thread).
+        try:
+            from app.services.ingest.silver_to_ch_backfill import (
+                DEFAULT_BACKFILL_DAYS,
+                SilverToChBackfill,
+            )
+
+            silver_to_ch = SilverToChBackfill.from_settings()
+            s2c = await asyncio.to_thread(
+                silver_to_ch.backfill_symbol,
+                symbol, days=DEFAULT_BACKFILL_DAYS,
+            )
+            logger.info(
+                "silver→CH warmup: %s read=%d written=%d snapshot=%s",
+                symbol, s2c.bars_read, s2c.bars_written, s2c.snapshot_id,
+            )
+            if not s2c.succeeded:
+                logger.warning(
+                    "silver→CH warmup for %s failed: %s "
+                    "(continuing to tip-fill)", symbol, s2c.error,
+                )
+        except Exception as e:
+            logger.exception(
+                "silver→CH warmup for %s raised: %s (continuing to "
+                "tip-fill)", symbol, e,
+            )
+
+        # Step 2: Schwab REST tip-fill (async).
+        try:
+            from app.services.ingest.schwab_tip_fill import SchwabTipFill
+
+            tip = SchwabTipFill.from_settings()
+            tf = await tip.tip_fill(symbol)
+            logger.info(
+                "tip-fill: %s fetched=%d bronze=%d ch=%d",
+                symbol, tf.bars_fetched,
+                tf.bars_written_bronze, tf.bars_written_ch,
+            )
+            if not tf.succeeded:
+                logger.warning(
+                    "tip-fill for %s failed: %s", symbol, tf.error,
+                )
+        except Exception as e:
+            logger.exception("tip-fill for %s raised: %s", symbol, e)
 
     # ---------- observability ----------
 

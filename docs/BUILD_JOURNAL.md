@@ -2858,3 +2858,66 @@ bottom with a date.
 
   Next: TA-5.3.3 — wire silver_to_ch_backfill + tip_fill into
   watchlist_service.add_members (feature-flagged for safe rollback).
+
+- **2026-05-18** — **TA-5.3.3 LANDED**: wire silver_to_ch + tip-fill
+  into watchlist_service.add_members + start() (feature-flagged).
+
+  Completes the unified add-symbol flow per
+  docs/streaming_universe_model.md. When the new flag is on,
+  watchlist_service.add_members and start() use:
+    1. SilverToChBackfill.backfill_symbol(days=730) — silver → CH
+    2. SchwabTipFill.tip_fill(symbol) — silver-watermark → live, ≤48d
+  When the flag is off (default), they keep the legacy 3-call
+  _enqueue_backfill path (provider REST → CH direct = Path ②).
+
+  Why feature-flagged: the legacy path is the production default
+  until TA-5.1.7 operator validation completes. Flipping the flag
+  is the operator's "switch CH from legacy to silver-derived"
+  moment. TA-5.5 will remove the legacy path entirely once the
+  flag is verified stable.
+
+  NEW config (app/config.py):
+    SILVER_DERIVED_ADD_MEMBERS_ENABLED (default false)
+
+  NEW methods (app/services/live/watchlist_service.py):
+    _enqueue_silver_derived_warmup(symbols): sync fire-and-forget
+      dispatcher; mirrors _enqueue_backfill's shape (no-loop guard,
+      empty-symbols guard, one task per symbol).
+    _silver_derived_warmup_one(symbol): async per-symbol chain.
+      Step 1 (silver → CH) wraps the sync backfill_symbol in
+      asyncio.to_thread. Step 2 (tip-fill) is naturally async.
+      Both calls are best-effort: failures logged + don't propagate
+      so the subscribed symbol stays live regardless.
+
+  Both add_members AND start() branch on the same flag — keeps
+  behavior consistent across symbol-add and server-restart paths.
+
+  Tests (9, all green):
+    Flag dispatch:
+      Flag OFF → legacy 3-call path runs, new path NOT called
+      Flag ON  → new path called with all symbols, legacy NOT called
+    Warmup chain ordering:
+      Step 1 (silver_to_ch) runs THEN step 2 (tip_fill)
+      Step 1 fail (raise) → step 2 still runs
+      Step 1 fail (error result) → step 2 still runs
+      Step 2 fail (raise) → logged, not raised
+    Fire-and-forget semantics:
+      No event loop → silent skip (no raise)
+      Empty symbols → no tasks created
+      N symbols → exactly N tasks (one per symbol)
+
+  Existing test_watchlist_service.py 10 tests still pass (legacy
+  path unchanged for the default-off case).
+
+  203 tests green across silver + watchlist + ingest surfaces.
+
+  .env.example: documents the new flag with rollback semantics
+  streaming_universe_model.md: capability table updated to ✅ LANDED
+
+  Operator next steps:
+    1. Run TA-5.1.7 5-step go-live procedure (still pending)
+    2. After silver is verified, flip
+       SILVER_DERIVED_ADD_MEMBERS_ENABLED=true in .env + restart
+    3. Add a test symbol to a watchlist; observe the silver→CH +
+       tip-fill logs in stdout
+    4. If stable for a week, proceed to TA-5.5 (delete legacy path)
