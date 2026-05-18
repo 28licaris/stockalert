@@ -88,6 +88,14 @@ Then, in this order:
     + initial-backfill silver from bronze. Pre-flight script,
     multi-hour `--full` run, post-run verification, nightly-loop
     enablement, Yahoo-adj spot-check.
+17. [futures_data_plan.md](futures_data_plan.md) — plan-only
+    investigation for adding futures (ES, NQ, CL, GC, …) to the
+    pipeline. Three phases: TF-1 live-only via Schwab CHART_FUTURES
+    (~3 days), TF-2 Polygon Futures historical (~3-5 days), TF-3
+    continuous-contract rollover series (~5-7 days). Documents the
+    fundamental difference from equities (no historical tip-fill
+    via Schwab REST), open design questions, and decision gates
+    between phases. No code yet.
 
 ## Working agreement
 
