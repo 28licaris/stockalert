@@ -24,6 +24,27 @@ What it does NOT own:
 
 ## Tables
 
+### Two data types in bronze
+
+Bronze holds **two kinds of data**, both raw, both per-provider:
+
+1. **OHLCV bars** (continuous time-series): `bronze.polygon_minute`,
+   `bronze.schwab_minute`. One row per `(symbol, minute)`; minute prices
+   + volume. Updated nightly (Polygon flat-files) + live (Schwab stream).
+2. **Corp-actions** (discrete event archive): `bronze.polygon_corp_actions`.
+   One row per `(symbol, ex_date, action_type)`; split factors + dividend
+   amounts. Updated nightly via Polygon REST. **NOT included in the
+   minute-bar flat-files** — these are published separately by Polygon
+   and need their own ingest path. Consumed by the silver OHLCV build
+   to compute split/dividend-adjusted columns.
+
+Without bronze corp-actions, backtests on stocks with splits would
+show fake -75% candles on split day. They're a reference table, not
+a time-series — different cadence, different volume, different
+partition strategy.
+
+### Tables
+
 Current:
 - `stock_lake.polygon_minute` — Polygon flat-file + REST minute bars.
   Partition `month(timestamp)`, sort `(symbol, timestamp)`.
@@ -40,6 +61,47 @@ Planned (created when the first writer for each is added):
 - `stock_lake.schwab_day`
 - `stock_lake.alpaca_minute`
 - `stock_lake.{provider}_corp_actions` — additional providers if/when added.
+
+### Adding / removing providers — what changes here, what doesn't
+
+The architecture is **provider-pluggable** by design (silver_layer_plan
+§2.3). Adding a new provider is purely additive at this layer:
+
+1. New schema + `ensure_*` function in this package.
+2. New ingest module under `app/services/silver/{kind}/` for the
+   new provider.
+3. Add the provider name to `SILVER_PROVIDER_PRECEDENCE` env var.
+
+**Zero changes to silver build code.** Silver iterates the
+precedence list and silently skips providers whose bronze table
+doesn't exist. Removing a provider is the reverse: stop its ingest
+job, drop the name from the precedence env var, optionally drop the
+table.
+
+### When a provider subscription pauses (the universe-expansion reminder)
+
+If a provider subscription is going to be paused (e.g. Polygon
+ending), **expand the universe of any live-streaming providers
+BEFORE the pause** — those will be the only sources of fresh data
+during the pause window.
+
+Specifically for the canonical case (Polygon paused, Schwab still
+streaming our 100-symbol seed universe):
+- Polygon flat-files = whole market while active; static archive
+  during pause.
+- Schwab stream = only seed-universe symbols, ongoing forever.
+- During a Polygon pause, **only seed-universe symbols get new
+  bronze data.** Non-seed symbols are frozen at the Polygon-pause
+  date.
+
+To avoid leaving symbols you'll later want stuck at the pause-date
+boundary, run pre-pause:
+```bash
+poetry run python scripts/promote_to_seed.py --universe sp500
+# or --universe russell1000 / --universe russell3000
+```
+
+Full runbook in [silver_layer_plan §9.7](../../../docs/silver_layer_plan.md).
 
 Naming note: Glue databases are flat — no real `bronze.` namespace.
 We use a `bronze/` subfolder in the S3 warehouse path

@@ -2098,3 +2098,41 @@ bottom with a date.
   - `BacktestConfig.adjusted=False` reads `_raw` instead — for the
     rare replay-accuracy case where you want exactly what the trader
     saw live.
+- **2026-05-17** — **Bronze holds two data types; corp-actions are
+  separate from OHLCV.** Clarification triggered by operator question
+  ("we already update bronze nightly, what is bronze.polygon_corp_actions
+  for?"). The medallion model is per-data-type, not per-source:
+  - **Bronze OHLCV** (`bronze.polygon_minute`, `bronze.schwab_minute`):
+    continuous time-series. Minute-by-minute price + volume. Updated
+    nightly (Polygon flat-files) + live (Schwab stream).
+  - **Bronze corp-actions** (`bronze.polygon_corp_actions`): discrete
+    event archive. Splits + dividends. Polygon publishes these via
+    a separate REST API — they are NOT in the minute-bar flat-files.
+    Updated nightly via the new ingest. Consumed by the silver OHLCV
+    build to compute `_adj` (split/dividend-adjusted) price columns.
+  Without bronze corp-actions, backtests on stocks with splits would
+  show fake -75% candles on split day. Both kinds follow the same
+  bronze→silver pattern (per-provider raw → canonical merged).
+  Documented in [bronze/README.md "Two data types in bronze"](../app/services/bronze/README.md).
+- **2026-05-17** — **Provider-pluggable architecture confirmed for
+  corp-actions.** Adding a new provider (e.g. SEC XBRL, IEX, future
+  alt-data feed) requires no changes to silver build code:
+  1. New bronze schema + `ensure_*` function in `app/services/bronze/`.
+  2. New ingest module in `app/services/silver/{kind}/`.
+  3. Append the provider name to `SILVER_PROVIDER_PRECEDENCE` env var.
+  `SilverCorpActionsBuild` iterates the configured precedence list
+  and silently skips providers whose bronze table doesn't exist. Same
+  for removal: stop the ingest job, drop the precedence entry,
+  optionally drop the table. Implementation verified via the
+  `_merge_with_precedence` sanity test in TA-5.0 step 5c.
+- **2026-05-17** — **Universe-expansion reminder cross-referenced in
+  bronze README.** The pre-pause "expand the Schwab seed universe"
+  guidance from silver_layer_plan §9.7 also lives in
+  `app/services/bronze/README.md` so the action item is discoverable
+  from the layer where the actual table expansion happens (bronze
+  ingest scope). The strategic recommendation: before pausing Polygon,
+  run `scripts/promote_to_seed.py --universe sp500` (or russell1000 /
+  russell3000) so the live-streamed universe covers everything you
+  might want to trade later — Polygon flat-files are free at the
+  marginal symbol while subscribed, but once Polygon is paused only
+  Schwab-streamed symbols get fresh bronze data.
