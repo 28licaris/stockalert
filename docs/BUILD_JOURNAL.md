@@ -2791,3 +2791,70 @@ bottom with a date.
   Docs updated:
     silver_initial_build_speedup_options.md: Option A marked LANDED
     runbook_silver_ohlcv_build.md: step 2 includes --concurrency 8
+
+- **2026-05-18** — **TA-5.3.2 LANDED**: Schwab REST tip-fill —
+  silver-watermark → live gap (≤48d), dual-write to bronze + CH.
+
+  Completes step 4 of the "add streamed symbol" flow per
+  docs/streaming_universe_model.md. Closes the gap between silver's
+  latest minute and the live stream's first bar — without it, a
+  brand-new symbol's chart would be empty for ~24h until the next
+  nightly silver_build → silver_to_ch_backfill chain caught up.
+
+  NEW service: app/services/ingest/schwab_tip_fill.py
+    SchwabTipFill.compute_gap(symbol, *, now=None)
+      → (silver_watermark, gap_start, gap_end)
+      gap_start = max(watermark + 1min, now - 48d)
+      gap_end   = now - 1min  (snapped to minute boundary, avoids
+                  in-flight live minute)
+
+    SchwabTipFill.tip_fill(symbol, *, now=None) async
+      → TipFillResult with per-stage row counts
+
+  Dual-write contract (ordered):
+    1. Schwab REST historical_df (single call covers ≤48d window)
+    2. Bronze: per-day BronzeIcebergSink.write() — preserves the
+       canonical archive
+    3. CH: insert_bars_batch — immediate chart availability
+
+  Source tag: "schwab-tipfill" (distinct from "schwab" nightly REST
+  and "schwab-stream" live). app/services/silver/ohlcv/normalize.py
+  _SOURCE_TO_PROVIDER updated so silver build maps tip-fill rows
+  back to canonical provider="schwab" for the precedence merge.
+
+  Failure model:
+    - Schwab fetch fails → abort (no writes attempted)
+    - Bronze write fails → abort CH (preserve archive integrity;
+      caller retries the whole tip_fill)
+    - CH write fails → bronze succeeded → partial result; the next
+      nightly silver_build → silver_to_ch_backfill chain repairs CH
+
+  Why dual CH write is intentional (vs "no historical → CH" rule):
+    - Window is ≤48 days, near-live, not bulk archive
+    - Without it, cockpit "warming up" UX is ~24h (next nightly
+      silver chain) instead of seconds
+    - Bronze archive remains the source-of-truth; CH is the cache
+    - silver_ohlcv_build picks up the new bronze rows the next
+      nightly, then silver_to_ch_backfill re-syncs CH canonical
+
+  Tests (16, all green):
+    - compute_gap: empty silver → full 48d
+    - compute_gap: watermark within 48d → resume at watermark+1m
+    - compute_gap: watermark older than 48d → bounded at now-48d
+    - compute_gap: silver caught up → empty gap (skip Schwab)
+    - compute_gap: missing silver.ohlcv_1m table → no-history
+    - compute_gap: empty symbol raises
+    - tip_fill happy path: 5 bars → 5 bronze + 5 CH writes, both
+      tagged "schwab-tipfill"
+    - tip_fill: bars spanning 2 UTC days → 2 per-day bronze writes
+    - tip_fill: empty Schwab response → 0 writes, no error
+    - tip_fill: empty gap → no Schwab call, no writes
+    - Error paths: Schwab fail, bronze fail (aborts CH), CH fail
+      (bronze succeeded → partial result with error text)
+    - Source-tag propagation: schwab-tipfill maps to schwab in
+      silver normalize._provider_from_source
+
+  184 tests green across the silver + ingest surface area.
+
+  Next: TA-5.3.3 — wire silver_to_ch_backfill + tip_fill into
+  watchlist_service.add_members (feature-flagged for safe rollback).

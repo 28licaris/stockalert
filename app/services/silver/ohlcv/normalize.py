@@ -279,6 +279,7 @@ _SOURCE_TO_PROVIDER = {
     "polygon": "polygon",
     "schwab": "schwab",
     "schwab-stream": "schwab",
+    "schwab-tipfill": "schwab",  # TA-5.3.2 on-demand REST tip-fill
 }
 
 
