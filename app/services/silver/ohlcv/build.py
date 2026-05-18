@@ -194,25 +194,21 @@ class SilverOhlcvBuild:
         The arrows are None when there's no data to write (cold-start
         symbol, weekend day, etc.).
 
-        This split lets `build_window_concurrent` run the I/O-bound +
-        CPU-bound compute work in parallel (many slices at once via
-        asyncio.Semaphore + asyncio.to_thread) while batching the
-        PyIceberg upserts per-day in serial — avoiding optimistic-
-        concurrency commit conflicts.
+        Implementation: reads bronze for the slice, then delegates the
+        in-memory compute to `_compute_from_provider_rows` (shared with
+        the month-batched path, TA-5.1.11).
 
         Use `build_slice` for the simple sequential path (compute +
         write in one call).
         """
         run_id = run_id or uuid.uuid4().hex
-        result = SliceResult(symbol=symbol, date=day)
         try:
             day_start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
             day_end = day_start + timedelta(days=1)
 
-            per_provider_rows: list[tuple[str, list[dict]]] = []
-
-            # 1. Read each provider's bronze for the slice, in precedence
-            #    order so the merge sees the right priority.
+            # Read each provider's bronze for the slice, in precedence
+            # order so the merge sees the right priority.
+            provider_rows_map: dict[str, list[dict]] = {}
             for provider in self._get_precedence():
                 routing = _PROVIDER_ROUTING.get(provider)
                 if routing is None:
@@ -224,40 +220,62 @@ class SilverOhlcvBuild:
                 rows = self._read_bronze_slice(
                     routing.bronze_short, symbol, day_start, day_end,
                 )
-                if provider == "polygon":
-                    result.polygon_rows_read = len(rows)
-                elif provider == "schwab":
-                    result.schwab_rows_read = len(rows)
+                provider_rows_map[provider] = rows
 
-                if not rows:
-                    continue
-
-                # 2. Normalize this provider's rows into the canonical
-                #    split-adjusted frame.
-                normalized = normalize_provider_rows(
-                    rows,
-                    adjustment_status=routing.adjustment_status,
-                    split_index=self._get_split_index(),
-                )
-                per_provider_rows.append((provider, normalized))
-
-            if not per_provider_rows:
-                # No bronze data for this slice at all. Not an error —
-                # the symbol may not have traded this day.
-                return result, None, None
-
-            # 3. Merge with precedence + compute bar_quality.
-            ohlcv_arrow = merge_with_precedence(per_provider_rows, run_id=run_id)
-            quality_arrow = compute_bar_quality(per_provider_rows, run_id=run_id)
-            return result, ohlcv_arrow, quality_arrow
-
+            return self._compute_from_provider_rows(
+                symbol, day, run_id, provider_rows_map=provider_rows_map,
+            )
         except Exception as e:
             logger.exception(
                 "silver_ohlcv_build: slice (%s, %s) compute failed: %s",
                 symbol, day, e,
             )
+            result = SliceResult(symbol=symbol, date=day)
             result.error = f"{type(e).__name__}: {e}"
             return result, None, None
+
+    def _compute_from_provider_rows(
+        self,
+        symbol: str,
+        day: date,
+        run_id: str,
+        *,
+        provider_rows_map: dict[str, list[dict]],
+    ) -> tuple[SliceResult, Optional[pa.Table], Optional[pa.Table]]:
+        """In-memory compute: normalize + merge + bar_quality.
+
+        Takes per-provider bronze rows ALREADY FETCHED — no S3 reads.
+        Shared by `compute_slice` (per-slice fetch) and
+        `_build_window_month_batched` (month-batched fetch).
+        """
+        result = SliceResult(symbol=symbol, date=day)
+        per_provider_rows: list[tuple[str, list[dict]]] = []
+
+        for provider in self._get_precedence():
+            routing = _PROVIDER_ROUTING.get(provider)
+            if routing is None:
+                continue
+            rows = provider_rows_map.get(provider, [])
+            if provider == "polygon":
+                result.polygon_rows_read = len(rows)
+            elif provider == "schwab":
+                result.schwab_rows_read = len(rows)
+            if not rows:
+                continue
+            normalized = normalize_provider_rows(
+                rows,
+                adjustment_status=routing.adjustment_status,
+                split_index=self._get_split_index(),
+            )
+            per_provider_rows.append((provider, normalized))
+
+        if not per_provider_rows:
+            # No bronze data for this slice. Not an error.
+            return result, None, None
+
+        ohlcv_arrow = merge_with_precedence(per_provider_rows, run_id=run_id)
+        quality_arrow = compute_bar_quality(per_provider_rows, run_id=run_id)
+        return result, ohlcv_arrow, quality_arrow
 
     def build_slice(
         self,
@@ -301,25 +319,37 @@ class SilverOhlcvBuild:
         end_date: date,
         *,
         max_concurrency: int = 1,
+        mode: str = "month",
     ) -> BuildResult:
         """Build all (symbol, day) slices in the window.
 
-        When `max_concurrency > 1`, dispatches to the concurrent
-        implementation which:
-          - runs `compute_slice` for many slices in parallel via
-            `asyncio.Semaphore(max_concurrency)` + `asyncio.to_thread`
-            (the I/O-bound + CPU-bound work that's 95% of wall-clock)
-          - batches the PyIceberg upserts per-day (one upsert per
-            table per day) — keeps optimistic-concurrency commit
-            churn low
+        Three execution modes:
 
-        `max_concurrency=1` (default) preserves the original sequential
-        behavior: opt-in to parallelism for safety.
+          mode="month" (default, TA-5.1.11): ONE bronze scan per
+            provider per month. ~2000× fewer S3 round-trips than
+            per-slice; dominant choice for production --full backfills.
+            `max_concurrency` is ignored in this mode (it's already
+            fast enough that the parallelism savings are negligible).
 
-        Either way: idempotent (re-running same window upserts identical
-        rows modulo ingestion_ts), per-slice error-isolated (one bad
-        symbol doesn't abort the rest).
+          mode="per-slice" + max_concurrency=1: original sequential
+            path. One bronze scan per (symbol, day, provider).
+            Mostly useful for debugging or single-slice rebuilds.
+
+          mode="per-slice" + max_concurrency>1 (TA-5.1.10): per-slice
+            scans parallelized via asyncio.Semaphore. Less efficient
+            than month-batched but works fine for tests / small windows.
+
+        All modes are idempotent (re-running upserts byte-identical
+        rows modulo ingestion_ts/run_id) and per-slice error-isolated.
         """
+        if mode == "month":
+            return self._build_window_month_batched(symbols, start_date, end_date)
+        if mode != "per-slice":
+            raise ValueError(
+                f"build_window: unknown mode {mode!r}. "
+                "Expected 'month' or 'per-slice'."
+            )
+
         if max_concurrency > 1:
             return self._build_window_concurrent(
                 symbols, start_date, end_date, max_concurrency=max_concurrency,
@@ -446,6 +476,260 @@ class SilverOhlcvBuild:
         return self.build_window(
             symbols, start, end, max_concurrency=max_concurrency,
         )
+
+    # ─────────────────────────────────────────────────────────────────
+    # Month-batched build path (TA-5.1.11) — the fast path
+    # ─────────────────────────────────────────────────────────────────
+    #
+    # ONE bronze scan per provider per month gives us ALL (symbols × days)
+    # for the month in a single Iceberg metadata walk + scan. The compute
+    # work then runs from in-memory groupby instead of new S3 reads.
+    #
+    # Math (seed universe, 5y backfill):
+    #   per-slice (legacy):  1300 days × 100 sym × 2 providers × ~10 GETs
+    #                        = ~2.6M S3 GETs
+    #   month-batched:       60 months × 2 providers × ~10 GETs
+    #                        = ~1.2K S3 GETs (~2000× reduction)
+    #
+    # See docs/silver_initial_build_speedup_options.md for the full
+    # derivation. The per-slice path stays available for tests + the
+    # corp-action rebuild trigger (single-symbol windows, where the
+    # per-month scan and per-slice scan cost the same).
+
+    def _iter_months(
+        self, start_date: date, end_date: date,
+    ) -> Iterable[tuple[date, date]]:
+        """Yield (month_start, month_end) tuples covering [start_date, end_date].
+
+        month_start is the first day of the month (potentially before
+        start_date); month_end is the last day of the month
+        (potentially after end_date). The build loop clamps to the
+        actual window when iterating days within a month.
+        """
+        current = date(start_date.year, start_date.month, 1)
+        while current <= end_date:
+            # Last day of current's month:
+            if current.month == 12:
+                next_month_start = date(current.year + 1, 1, 1)
+            else:
+                next_month_start = date(current.year, current.month + 1, 1)
+            month_end = next_month_start - timedelta(days=1)
+            yield current, month_end
+            current = next_month_start
+
+    def _read_bronze_month(
+        self,
+        bronze_short: str,
+        symbols: list[str],
+        month_start: date,
+        month_end_inclusive: date,
+    ) -> list[dict]:
+        """Read bronze.{short} for `symbols` across [month_start, month_end_inclusive].
+
+        ONE Iceberg scan returns every (symbol × day) row for the month.
+        Returns [] if the bronze table is absent or the scan fails
+        (degrades gracefully like `_read_bronze_slice`).
+        """
+        from pyiceberg.expressions import In
+
+        try:
+            table = self._get_catalog().load_table(bronze_table_id(bronze_short))
+        except NoSuchTableError:
+            return []
+
+        # Iceberg LessThan is exclusive; bump end to next-day midnight UTC.
+        ts_lo = datetime(
+            month_start.year, month_start.month, month_start.day,
+            tzinfo=timezone.utc,
+        )
+        ts_hi = datetime(
+            month_end_inclusive.year,
+            month_end_inclusive.month,
+            month_end_inclusive.day,
+            tzinfo=timezone.utc,
+        ) + timedelta(days=1)
+
+        try:
+            arrow = table.scan(
+                row_filter=And(
+                    In("symbol", symbols),
+                    GreaterThanOrEqual("timestamp", ts_lo),
+                    LessThan("timestamp", ts_hi),
+                ),
+                selected_fields=(
+                    "symbol", "timestamp",
+                    "open", "high", "low", "close", "volume",
+                    "vwap", "trade_count", "source",
+                ),
+            ).to_arrow()
+        except Exception as e:
+            logger.warning(
+                "silver_ohlcv_build: month scan failed for %s %s..%s: %s",
+                bronze_short, month_start, month_end_inclusive, e,
+            )
+            return []
+        return arrow.to_pylist() if arrow.num_rows > 0 else []
+
+    @staticmethod
+    def _group_rows_by_symbol_day(
+        rows: list[dict],
+    ) -> dict[tuple[str, date], list[dict]]:
+        """Group bronze rows by (symbol, calendar_date(UTC))."""
+        from collections import defaultdict
+
+        out: dict[tuple[str, date], list[dict]] = defaultdict(list)
+        for r in rows:
+            ts = r.get("timestamp")
+            sym = r.get("symbol")
+            if ts is None or sym is None:
+                continue
+            d = ts.date() if hasattr(ts, "date") else None
+            if d is None:
+                continue
+            out[(sym, d)].append(r)
+        return dict(out)
+
+    def _build_window_month_batched(
+        self,
+        symbols: list[str],
+        start_date: date,
+        end_date: date,
+    ) -> BuildResult:
+        """Month-batched version of build_window. See class header
+        for the math + rationale. Output is byte-identical to the
+        per-slice path (modulo ingestion_ts / run_id).
+        """
+        run_id = uuid.uuid4().hex
+        started = datetime.now(timezone.utc)
+        result = BuildResult(
+            run_id=run_id,
+            started_at=started,
+            finished_at=started,
+            symbols=list(symbols),
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        logger.info(
+            "silver_ohlcv_build: starting run_id=%s symbols=%d window=%s..%s "
+            "mode=month-batched (TA-5.1.11)",
+            run_id, len(symbols), start_date, end_date,
+        )
+
+        # Prime corp-actions cache once before any month is scanned.
+        self._prime_corp_actions_cache()
+
+        precedence = self._get_precedence()
+
+        for month_start, month_end in self._iter_months(start_date, end_date):
+            # 1. ONE scan per provider per month.
+            #    Group rows by (symbol, date) for cheap per-slice lookup.
+            per_provider_by_slice: dict[
+                str, dict[tuple[str, date], list[dict]]
+            ] = {}
+            for provider in precedence:
+                routing = _PROVIDER_ROUTING.get(provider)
+                if routing is None:
+                    continue
+                month_rows = self._read_bronze_month(
+                    routing.bronze_short, symbols, month_start, month_end,
+                )
+                per_provider_by_slice[provider] = (
+                    self._group_rows_by_symbol_day(month_rows)
+                )
+
+            logger.info(
+                "silver_ohlcv_build: month=%s loaded %s",
+                month_start.strftime("%Y-%m"),
+                ", ".join(
+                    f"{p}={sum(len(v) for v in by.values())}rows"
+                    for p, by in per_provider_by_slice.items()
+                ),
+            )
+
+            # 2. Iterate every day in the month that falls within the window.
+            day = max(month_start, start_date)
+            last_day = min(month_end, end_date)
+            while day <= last_day:
+                day_slice_results: list[SliceResult] = []
+                day_ohlcv_arrows: list[pa.Table] = []
+                day_quality_arrows: list[pa.Table] = []
+                # Track which arrow belongs to which slice for re-attribution.
+                arrow_owners: list[tuple[SliceResult, Optional[pa.Table], Optional[pa.Table]]] = []
+
+                for sym in symbols:
+                    provider_rows_map = {
+                        provider: by_slice.get((sym, day), [])
+                        for provider, by_slice in per_provider_by_slice.items()
+                    }
+                    sr, ohlcv_arrow, quality_arrow = self._compute_from_provider_rows(
+                        sym, day, run_id, provider_rows_map=provider_rows_map,
+                    )
+                    day_slice_results.append(sr)
+                    arrow_owners.append((sr, ohlcv_arrow, quality_arrow))
+                    if ohlcv_arrow is not None and ohlcv_arrow.num_rows > 0:
+                        day_ohlcv_arrows.append(ohlcv_arrow)
+                    if quality_arrow is not None and quality_arrow.num_rows > 0:
+                        day_quality_arrows.append(quality_arrow)
+
+                # 3. ONE upsert per silver table per day.
+                if day_ohlcv_arrows:
+                    combined = pa.concat_tables(day_ohlcv_arrows)
+                    try:
+                        self._get_ohlcv_table().upsert(combined)
+                        for sr, ohlcv_arrow, _ in arrow_owners:
+                            if (
+                                sr.succeeded
+                                and ohlcv_arrow is not None
+                            ):
+                                sr.silver_rows_written = ohlcv_arrow.num_rows
+                    except Exception as e:
+                        logger.exception(
+                            "silver_ohlcv_build: day=%s ohlcv batch upsert "
+                            "failed: %s", day, e,
+                        )
+                        err = f"{type(e).__name__}: {e}"
+                        for sr in day_slice_results:
+                            if sr.succeeded:
+                                sr.error = err
+
+                if day_quality_arrows:
+                    combined_q = pa.concat_tables(day_quality_arrows)
+                    try:
+                        self._get_bar_quality_table().upsert(combined_q)
+                        for sr, _, quality_arrow in arrow_owners:
+                            if sr.succeeded and quality_arrow is not None:
+                                sr.quality_row_written = True
+                    except Exception as e:
+                        logger.exception(
+                            "silver_ohlcv_build: day=%s bar_quality batch "
+                            "upsert failed: %s", day, e,
+                        )
+                        # bar_quality failure is non-fatal (ohlcv is canonical).
+
+                result.slices.extend(day_slice_results)
+                day += timedelta(days=1)
+
+            # Release this month's data so the next month doesn't pile up.
+            per_provider_by_slice.clear()
+
+        result.finished_at = datetime.now(timezone.utc)
+        logger.info(
+            "silver_ohlcv_build: done run_id=%s slices=%d (ok=%d fail=%d) "
+            "silver_rows=%d duration=%.1fs mode=month-batched",
+            run_id, len(result.slices), result.slices_succeeded,
+            result.slices_failed, result.total_silver_rows,
+            result.duration_seconds,
+        )
+
+        # Record one run row in ingestion_runs (best-effort).
+        self._record_run(result)
+
+        # Clear caches so next run reloads fresh.
+        self._split_index = None
+        self._corp_actions_arrow = None
+
+        return result
 
     # ─────────────────────────────────────────────────────────────────
     # Concurrent build path (TA-5.1.10)

@@ -121,15 +121,26 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--mode",
+        type=str,
+        choices=["month", "per-slice"],
+        default="month",
+        help=(
+            "Bronze scan strategy (TA-5.1.11). Default 'month': ONE "
+            "scan per provider per month for ~2000× fewer S3 round-"
+            "trips. 'per-slice' falls back to the legacy per-(symbol, "
+            "day) scan path — mostly useful for debugging or single-"
+            "slice rebuilds. Output is byte-identical either way."
+        ),
+    )
+    p.add_argument(
         "--concurrency",
         type=int,
         default=1,
         help=(
-            "Number of (symbol, day) slices to compute in parallel "
-            "(TA-5.1.10). Default 1 (sequential — safe). Recommended 8 "
-            "for an overnight --full run on a fast network. Upserts are "
-            "always batched per-day regardless of N to avoid PyIceberg "
-            "commit conflicts."
+            "Per-slice mode only (TA-5.1.10): number of slices to "
+            "compute in parallel. Default 1 (sequential). Ignored "
+            "when --mode=month (already fast enough without)."
         ),
     )
     p.add_argument(
@@ -275,8 +286,11 @@ def main() -> int:
     try:
         build = SilverOhlcvBuild.from_settings()
         result = build.build_window(
-            symbols, since, until, max_concurrency=concurrency,
+            symbols, since, until,
+            mode=args.mode,
+            max_concurrency=concurrency,
         )
+        summary["mode"] = args.mode
         summary["result"] = _summarize(result)
         summary["status"] = "ok" if result.slices_failed == 0 else "partial_fail"
     except Exception as e:

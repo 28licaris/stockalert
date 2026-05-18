@@ -24,6 +24,38 @@ parallelization helps every future run too (nightly delta,
 
 ---
 
+## Option D — Month-batched scans [✅ LANDED 2026-05-18, TA-5.1.11]
+
+**THE FUNDAMENTAL FIX.** Replaces the per-slice scan loop with ONE
+bronze scan per provider per month. Each scan returns ALL (symbols
+× days) for the month; downstream compute runs from in-memory
+groupby instead of new S3 reads.
+
+**Math (seed × 5y backfill):**
+- Per-slice (legacy): 1,300 days × 100 symbols × 2 providers × ~10 GETs = ~2.6M S3 GETs
+- Month-batched:       60 months × 2 providers × ~10 GETs        = ~1.2K S3 GETs
+- **~2,000× reduction in S3 round-trips.**
+
+**Wall-clock impact:**
+
+| Setup | Per-slice (legacy) | Month-batched (default now) |
+|---|---|---|
+| Local laptop, N=1 sequential | ~24 hr | **~30-60 min** |
+| Local, N=8 concurrent | ~3-4 hr | (concurrency irrelevant — already fast) |
+| CodeBuild same-region | ~30-60 min | **~5-10 min** |
+
+**The new default.** `build_window(...)` and `scripts/run_silver_ohlcv_build.py`
+both default to `mode="month"`. The per-slice path stays available
+via `--mode per-slice` for debugging single slices.
+
+**Where else this helps:**
+- Corp-action rebuilds (TA-5.1.9): rebuilding one symbol's full
+  history is now 60 month-scans, not 1,300 day-scans. ~22× faster.
+- Schema migrations: re-deriving silver from bronze after a schema
+  change is ~30 min instead of ~24 hr.
+- Backfill of newly-promoted symbols: per-symbol full history takes
+  minutes instead of an hour.
+
 ## Option A — Parallelize the build [✅ LANDED 2026-05-18, TA-5.1.10]
 
 Each `build_slice(symbol, day)` is independent. The previous

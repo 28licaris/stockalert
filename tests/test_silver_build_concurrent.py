@@ -280,15 +280,18 @@ class TestConcurrentBuild:
     def test_sequential_path_preserved_at_concurrency_1(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """max_concurrency=1 routes through the original sequential
-        path. Each (symbol, day) does its own upsert."""
+        """mode='per-slice' + max_concurrency=1 routes through the
+        original sequential path. Each (symbol, day) does its own
+        upsert (NOT batched per-day)."""
         symbols = ["AAPL", "NVDA"]
         d0 = date(2024, 6, 10)
         rows_map = {(s, d0): 3 for s in symbols}
         build, ohlcv_t, bq_t = _make_build(rows_map)
         monkeypatch.setattr(build, "_record_run", lambda _r: None)
 
-        build.build_window(symbols, d0, d0, max_concurrency=1)
+        build.build_window(
+            symbols, d0, d0, mode="per-slice", max_concurrency=1,
+        )
 
         # 2 slices × 1 upsert each = 2 ohlcv upserts (NOT batched).
         assert len(ohlcv_t.upserts) == 2
@@ -379,7 +382,12 @@ class TestConcurrencyLimit:
                     in_flight["n"] -= 1
 
         monkeypatch.setattr(build, "compute_slice", _spy_compute)
-        build.build_window(symbols, d0, d0, max_concurrency=3)
+        # Explicitly use the per-slice path — month-batched doesn't
+        # call compute_slice at all (it uses _compute_from_provider_rows
+        # in-line from pre-fetched data).
+        build.build_window(
+            symbols, d0, d0, mode="per-slice", max_concurrency=3,
+        )
 
         # With 8 slices and concurrency=3, max in-flight should be ≤ 3.
         # (And > 1 to prove we ARE running concurrently — otherwise

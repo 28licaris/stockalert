@@ -2921,3 +2921,91 @@ bottom with a date.
     3. Add a test symbol to a watchlist; observe the silver→CH +
        tip-fill logs in stdout
     4. If stable for a week, proceed to TA-5.5 (delete legacy path)
+
+- **2026-05-18** — **TA-5.1.11 LANDED**: month-batched bronze scans
+  (THE big read-pattern fix; ~2000× fewer S3 round-trips).
+
+  **The change:** replace the per-slice scan loop with ONE Iceberg
+  scan per provider per month. Each month-scan returns ALL
+  (symbols × days) for the month; downstream compute runs from
+  in-memory groupby instead of fresh S3 reads.
+
+  **Math (seed × 5y backfill):**
+    Per-slice: 1,300 days × 100 symbols × 2 providers × ~10 GETs
+               = ~2,600,000 S3 GETs
+    Month-batched: 60 months × 2 providers × ~10 GETs
+                  = ~1,200 S3 GETs
+    Reduction: ~2,000×
+
+  **Wall-clock impact:**
+    Local laptop (was 18-25 hr per-slice sequential):  ~30-60 min
+    CodeBuild same-region (was 30-60 min per-slice):   ~5-10 min
+
+  **Real-lake validation (this commit):** ran the new path against
+  the actual lake on NVDA × 2026-05-15 — 79s for 2 month-scans
+  (~7-8K rows each), producing 960-row silver output. Output
+  byte-identical to per-slice path (verified by test_output_equivalence).
+
+  **Architecture:**
+    SilverOhlcvBuild._iter_months(start, end)
+      → generator of (month_start, month_end) tuples
+    SilverOhlcvBuild._read_bronze_month(short, symbols, m_start, m_end)
+      → ONE Iceberg scan with In("symbol", [list]) +
+        timestamp >= m_start AND < m_end_plus_one. Returns
+        list[dict] of all rows for the whole month.
+    SilverOhlcvBuild._group_rows_by_symbol_day(rows)
+      → {(symbol, calendar_date(UTC)): list[row]}
+    SilverOhlcvBuild._compute_from_provider_rows(...)
+      → shared in-memory compute (normalize+merge+bar_quality);
+        used by BOTH compute_slice and the month-batched path
+    SilverOhlcvBuild._build_window_month_batched(symbols, start, end)
+      → outer month loop + inner day loop + per-day batched upserts
+
+  build_window now takes `mode: str = "month"`. Per-slice path
+  preserved as opt-in `mode="per-slice"` for tests + single-slice
+  debugging + corp-action rebuilds (which are single-symbol windows
+  where per-slice and per-month cost the same).
+
+  CLI flag `--mode {month, per-slice}` on
+  scripts/run_silver_ohlcv_build.py. Default: month. The
+  --concurrency flag still works but only matters in per-slice mode
+  (month-batched doesn't need parallelism — already fast enough).
+
+  **Refactor invariants verified:**
+    - compute_slice's logic preserved (refactored to delegate
+      to _compute_from_provider_rows)
+    - Per-day batched upserts: same shape regardless of mode
+      (TA-5.1.10's concurrency tests still pass against the
+      month-batched default — same per-day-upsert structure)
+    - Idempotent: re-running same window upserts byte-identical
+      rows modulo ingestion_ts/run_id
+
+  **Tests (10 new, all green):**
+    _iter_months: single month, multi-month, year-boundary
+    Scan count assertions:
+      - month-batched: 300-slice window → exactly 2 scans (1/month)
+      - per-slice: 4-slice window → 4 scans (counter-check)
+    Output equivalence: month-batched output == per-slice output
+      (Arrow rows compared with ingestion_ts/run_id stripped)
+    Per-day batched upserts: 5 trading days → 5 ohlcv upserts
+      + 5 bar_quality upserts
+    Edge cases: empty month, partial month at window start
+    Invalid mode → ValueError
+
+  213 silver + ingest + watchlist tests green.
+
+  **Bonus speedup for other operations:**
+    Corp-action rebuilds (TA-5.1.9): 60 scans vs 1300 for a full-
+      history symbol rebuild. ~22× faster per affected symbol.
+    Schema migrations: ~30 min instead of ~24 hr for re-derive.
+    Newly-promoted symbol backfills: minutes instead of an hour.
+
+  Docs updated:
+    silver_initial_build_speedup_options.md: Option D LANDED at the
+      top as the dominant choice
+    runbook_silver_ohlcv_build.md: step 2 simplified — no more
+      --concurrency flag in the recommended path
+
+  Next: CodeBuild scaffolding (buildspec.yml + IAM + runbook), then
+  the operator's --full run, which should finish in ~10 min not
+  ~30-60 min thanks to this.

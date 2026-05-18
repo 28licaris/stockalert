@@ -43,24 +43,21 @@ Optional flags:
 Once preflight is green, kick off the multi-hour `--full` run:
 
 ```bash
-# Default: seed universe × from 2021-01-04 → yesterday, sequential.
-poetry run python scripts/run_silver_ohlcv_build.py --full \
-    --out-json full_backfill.json
-
-# Recommended: dynamic universe + parallelism (TA-5.1.10).
+# Recommended: month-batched scans (default since TA-5.1.11), dynamic universe.
 poetry run python scripts/run_silver_ohlcv_build.py --full \
     --symbols active \
-    --concurrency 8 \
     --out-json full_backfill.json
 ```
 
-Wall-clock estimate:
-- Single-threaded (default `--concurrency 1`): ~18-25 hours for the
-  seed universe. I/O-bound on Iceberg scans.
-- Concurrent (`--concurrency 8`): ~3-4 hours locally, ~30-60 min in
-  cloud (EC2 / CodeBuild in the same AWS region as your S3 bucket).
-  See `silver_initial_build_speedup_options.md` for the full cost/
-  effort matrix.
+Wall-clock estimate (month-batched, the new default):
+- Local laptop: ~30-60 min for the seed universe (~2000× fewer S3
+  round-trips than the legacy per-slice path).
+- CodeBuild / EC2 same-region: ~5-10 min.
+
+If you ever need the legacy per-slice mode (debugging a single
+slice, or A/B comparing outputs), pass `--mode per-slice`. Output is
+byte-identical either way — the difference is purely the read
+strategy.
 
 Recommended runtime setting:
 - Run from a screen / tmux session so a terminal hiccup doesn't
