@@ -72,6 +72,11 @@ Then, in this order:
     pause-point notes: what TA-5.0 + TA-5.7 delivered, empirical
     state of the live system, operator-validation steps required
     before TA-5.1, where to pick up next.
+14. [streaming_universe_model.md](streaming_universe_model.md) —
+    concise operational model: Schwab = only streaming provider;
+    two-tier universe (seed vs ad-hoc archive); the "add streamed
+    symbol" flow; promote-to-seed CLI; Polygon-pause/resume
+    behavior. Quick-reference companion to silver_layer_plan.
 
 ## Working agreement
 
