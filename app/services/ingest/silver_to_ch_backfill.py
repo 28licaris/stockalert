@@ -10,9 +10,10 @@ Per the consumer contract:
   S3 silver = canonical (immutable, snapshot-pinned, corp-action-adj'd)
   ClickHouse = derived hot cache (re-buildable from silver any time)
 
-The reader picks `_adj` columns by default (split-adjusted, what
-chart + screener + indicator + backtest consume); `_raw` is available
-as an opt-in for replay-accuracy use cases.
+Silver stores split-adjusted prices; that's what CH ohlcv_1m needs
+(the chart, indicators, screener, backtest all consume the
+adjusted view). Consumers needing raw prices recompute via the
+cumulative split factor — see SilverOhlcvReader's docstring.
 
 Wall-clock notes:
   - Cold-start NVDA × 730 days ≈ 200K bars → ~10 seconds end-to-end
@@ -78,10 +79,10 @@ class SilverToChBackfill:
     explicitly for tests.
 
     Public API:
-      - `backfill_symbol(symbol, *, days=730, adjusted=True)` — pull
-        the last N days from silver and bulk-insert into CH.
-      - `backfill_symbol_window(symbol, start, end, *, adjusted=True)`
-        — explicit window variant for fine-grained control.
+      - `backfill_symbol(symbol, *, days=730)` — pull the last N days
+        from silver and bulk-insert into CH.
+      - `backfill_symbol_window(symbol, start, end)` — explicit window
+        variant for fine-grained control.
 
     Both are sync (CH insert is blocking) — wrap in
     `asyncio.to_thread` from async callers.
@@ -108,7 +109,6 @@ class SilverToChBackfill:
         symbol: str,
         *,
         days: int = DEFAULT_BACKFILL_DAYS,
-        adjusted: bool = True,
     ) -> SilverToChBackfillResult:
         """Backfill the last `days` calendar days of silver bars into CH.
 
@@ -116,24 +116,16 @@ class SilverToChBackfill:
             symbol: Ticker (case-insensitive).
             days: Calendar-day lookback. 730 (2y) is the default and
                 matches the legacy daily-backfill window.
-            adjusted: When True (default), use `_adj` OHLCV columns —
-                continuous-across-splits for chart + screener +
-                indicator + backtest. When False, use `_raw` —
-                replay-accuracy for trade-tape reconstruction.
         """
         end = datetime.now(timezone.utc)
         start = end - timedelta(days=max(1, int(days)))
-        return self.backfill_symbol_window(
-            symbol, start, end, adjusted=adjusted,
-        )
+        return self.backfill_symbol_window(symbol, start, end)
 
     def backfill_symbol_window(
         self,
         symbol: str,
         start: datetime,
         end: datetime,
-        *,
-        adjusted: bool = True,
     ) -> SilverToChBackfillResult:
         """Backfill `[start, end)` of silver bars into CH for `symbol`."""
         sym = (symbol or "").strip().upper()
@@ -160,13 +152,12 @@ class SilverToChBackfill:
                 )
                 return result
 
-            ch_rows = self._silver_to_ch_rows(resp, adjusted=adjusted)
+            ch_rows = self._silver_to_ch_rows(resp)
             insert_bars_batch(ch_rows)
             result.bars_written = len(ch_rows)
             logger.info(
-                "SilverToChBackfill: %s — wrote %d bars to CH "
-                "(snapshot=%s, adjusted=%s)",
-                sym, result.bars_written, result.snapshot_id, adjusted,
+                "SilverToChBackfill: %s — wrote %d bars to CH (snapshot=%s)",
+                sym, result.bars_written, result.snapshot_id,
             )
         except Exception as e:
             logger.exception(
@@ -183,32 +174,24 @@ class SilverToChBackfill:
     # ─────────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _silver_to_ch_rows(
-        resp: SilverBarsResponse, *, adjusted: bool,
-    ) -> list[dict]:
+    def _silver_to_ch_rows(resp: SilverBarsResponse) -> list[dict]:
         """Translate `SilverBarsResponse` → CH ohlcv_1m row dicts.
 
-        CH ohlcv_1m has one OHLCV set per row; silver has both _raw and
-        _adj. Pick which one to write based on `adjusted`. Source tag
-        is set to "silver" so the row is distinguishable from
-        provider-direct inserts (legacy path ②) in any future audit.
+        Silver's split-adjusted OHLCV maps directly to CH ohlcv_1m's
+        single OHLCV set. Source tag is set to `silver-{provider}` so
+        the row is distinguishable from provider-direct inserts
+        (legacy path ②) in any future audit.
         """
         out: list[dict] = []
         for bar in resp.bars:
-            if adjusted:
-                o, h, l, c = bar.open_adj, bar.high_adj, bar.low_adj, bar.close_adj
-                v = bar.volume_adj
-            else:
-                o, h, l, c = bar.open_raw, bar.high_raw, bar.low_raw, bar.close_raw
-                v = bar.volume_raw
             out.append({
                 "symbol": bar.symbol,
                 "timestamp": bar.timestamp,
-                "open": o,
-                "high": h,
-                "low": l,
-                "close": c,
-                "volume": v,
+                "open": bar.open,
+                "high": bar.high,
+                "low": bar.low,
+                "close": bar.close,
+                "volume": bar.volume,
                 "vwap": bar.vwap or 0.0,
                 "trade_count": bar.trade_count or 0,
                 # Provenance: this row came from the silver-derived path,

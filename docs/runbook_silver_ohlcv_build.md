@@ -93,7 +93,7 @@ The script aggregates findings across four phases:
 4. **Audit**: `ingestion_runs` CH row count + status distribution
 5. **Cross-check sample**: N random (symbol, date) cells passed
    through `SilverOhlcvReader.get_bars` — bars sorted, unique
-   timestamps, valid provider tags, `_adj` populated
+   timestamps, valid provider tags, OHLC populated
 
 **Pass criterion:** `✅ No issues found`. Exit 0.
 
@@ -133,16 +133,16 @@ nightly_silver_ohlcv_build: sleeping XXXXs until next run
 
 ### Step 5 — Spot-check Yahoo adjusted-close (10 random symbols)
 
-For final QA, compare 10 random silver `_adj` close prices against
-Yahoo Finance's adjusted-close on known split dates:
+Silver stores split-adjusted OHLCV directly — silver's `close` IS
+Yahoo's `adjclose`. So this becomes a trivial 1-to-1 comparison.
 
 ```bash
 # Example: NVDA 2024-06-10 10-for-1 split.
-# Get silver _adj close at 14:30 ET on 2024-06-07 (Friday before split):
-curl -sS "http://localhost:8000/api/silver/bars/NVDA?start=2024-06-07T18:30:00Z&end=2024-06-07T18:31:00Z" | jq
+# Silver close at 14:30 ET on 2024-06-07 (Friday before split):
+curl -sS "http://localhost:8000/api/silver/bars/NVDA?start=2024-06-07T18:30:00Z&end=2024-06-07T18:31:00Z" | jq '.bars[0].close'
 
-# Yahoo split-adjusted close for 2024-06-07: ~120.88
-# Silver _adj close should be within $0.01.
+# Expected: ~120.88 (matches Yahoo Finance's adjclose for that day).
+# Silver `close` should be within $0.01 of Yahoo.
 ```
 
 If divergences exceed $0.01, file a ticket — the per-provider

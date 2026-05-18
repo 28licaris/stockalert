@@ -35,16 +35,12 @@ logger = logging.getLogger(__name__)
 _SILVER_OHLCV_1M_ARROW = pa.schema([
     pa.field("symbol", pa.string(), nullable=False),
     pa.field("timestamp", pa.timestamp("us", tz="UTC"), nullable=False),
-    pa.field("open_raw", pa.float64(), nullable=True),
-    pa.field("high_raw", pa.float64(), nullable=True),
-    pa.field("low_raw", pa.float64(), nullable=True),
-    pa.field("close_raw", pa.float64(), nullable=True),
-    pa.field("volume_raw", pa.int64(), nullable=True),
-    pa.field("open_adj", pa.float64(), nullable=True),
-    pa.field("high_adj", pa.float64(), nullable=True),
-    pa.field("low_adj", pa.float64(), nullable=True),
-    pa.field("close_adj", pa.float64(), nullable=True),
-    pa.field("volume_adj", pa.int64(), nullable=True),
+    # OHLCV — split-adjusted canonical view.
+    pa.field("open", pa.float64(), nullable=True),
+    pa.field("high", pa.float64(), nullable=True),
+    pa.field("low", pa.float64(), nullable=True),
+    pa.field("close", pa.float64(), nullable=True),
+    pa.field("volume", pa.int64(), nullable=True),
     pa.field("vwap", pa.float64(), nullable=True),
     pa.field("trade_count", pa.int64(), nullable=True),
     pa.field("source_provider", pa.string(), nullable=False),
@@ -188,7 +184,7 @@ def compute_bar_quality(
             key = (row["symbol"], d)
             g = grouped[key]
             g["providers"].add(provider_name)
-            g["per_provider_closes"][provider_name][ts] = _safe_float(row.get("close_raw"))
+            g["per_provider_closes"][provider_name][ts] = _safe_float(row.get("close"))
             g["all_timestamps"].add(ts)
 
     ingestion_ts = datetime.now(timezone.utc)

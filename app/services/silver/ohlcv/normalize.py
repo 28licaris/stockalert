@@ -1,14 +1,13 @@
 """
-Per-provider raw↔split-adjusted normalization.
+Per-provider normalization to the split-adjusted canonical frame.
 
 Bronze tables carry the prices each provider sent, in their native
 adjustment state (verified by the 2026-05-17 probe):
   - bronze.polygon_minute:  RAW (unadjusted)
   - bronze.schwab_minute:   SPLIT_ADJUSTED
 
-Silver carries BOTH `_raw` and `_adj` for every row. This module
-performs the per-provider transformation that fills in the missing
-column.
+Silver carries ONE set of OHLCV columns — split-adjusted. This module
+maps each provider's bronze rows INTO that canonical frame.
 
 **Math** (see silver_layer_plan §2.9 + §3.3 for the design):
 
@@ -17,53 +16,51 @@ Given a bar at timestamp `T` for symbol `S`, define:
     F(S, T) = product of split.factor for every silver.corp_actions row
               where symbol = S, action_type = 'split', ex_date > date(T)
 
-That is, F is the cumulative forward-split factor for splits AFTER the
-bar's calendar date. A 4-for-1 split on Aug 31 2020 contributes
-`factor=4` to F for any bar with `date(T) < 2020-08-31`.
+F is the cumulative forward-split factor for splits AFTER the bar's
+calendar date. A 4-for-1 split on Aug 31 2020 contributes `factor=4`
+to F for any bar with `date(T) < 2020-08-31`.
 
 Then:
 
-    Polygon (raw → both):
-        _raw = passthrough (provider's value)
-        _adj = _raw / F(S, T)
-            (divide by post-bar splits to scale into the post-all-splits frame)
+    Polygon (RAW → split-adjusted):
+        out = input / F(S, T)
+        (divide by post-bar splits to scale into the
+         post-all-splits frame)
 
-    Schwab (split_adjusted → both):
-        _adj = passthrough (provider's already-adjusted value)
-        _raw = _adj × F(S, T)
-            (multiply back to undo the adjustment Schwab already applied)
+    Schwab (SPLIT_ADJUSTED → passthrough):
+        out = input
+        (already in the post-all-splits frame)
 
 **Worked example.** NVDA had a 10-for-1 split on 2024-06-10.
 
-  Bar at 2024-06-07 14:30 ET, close = 1208.88 raw (= 120.88 split-adj).
+  Bar at 2024-06-07 14:30 ET, the trader saw 1208.88 on screen.
   F = 10 (one 10-for-1 split AFTER this bar).
 
-  Polygon bronze (raw):       Schwab bronze (split-adjusted):
-    raw = 1208.88                adj = 120.88
-    adj = 1208.88 / 10            raw = 120.88 × 10
-        = 120.88                       = 1208.88
-
-  Both providers produce identical silver rows. ✓
+  Polygon bronze (raw=1208.88) → silver close = 1208.88 / 10 = 120.88
+  Schwab bronze (adj=120.88)   → silver close = 120.88 (passthrough)
+  Both reconcile to identical silver rows. ✓
 
   Bar at 2024-06-10 14:30 ET (split day), close = 121.79.
   F = 1 (no splits after this bar).
 
-  Polygon bronze (raw=121.79):  Schwab bronze (adj=121.79):
-    raw = 121.79                  adj = 121.79
-    adj = 121.79 / 1              raw = 121.79 × 1
-        = 121.79                       = 121.79
-
+  Polygon bronze (raw=121.79)  → silver close = 121.79 / 1 = 121.79
+  Schwab bronze (adj=121.79)   → silver close = 121.79
   Both identical. ✓
+
+**If a consumer needs raw prices** (trade-tape replay): they multiply
+silver's split-adjusted value by F(symbol, bar_date). The math + the
+silver.corp_actions table are public. Silver intentionally does NOT
+store both views — that was bloat (TA-5.1.8 cleanup, 2026-05-18).
 
 **Cash dividend adjustment is not handled here.** Schwab's
 pricehistory appears to only split-adjust (not dividend-adjust) per
-the probe. If we ever add a `close_div_adj` column for true
-Yahoo-style total-return adjustment, the math expands. For now,
-`_adj` means "split-adjusted only".
+the probe. If we ever add a `close_total_return` column for true
+Yahoo-style total-return adjustment, the math expands.
 
 **Volume handling:** split-adjustment multiplies volume too —
-forward-split halves the share size, so volume in "post-split shares"
-is `volume_raw × F`. We mirror the same scaling.
+forward-split halves the share size, so post-split volume is
+`bronze_volume × F` for Polygon (raw → post-split equivalent shares)
+and passthrough for Schwab (already in post-split shares).
 """
 from __future__ import annotations
 
@@ -155,17 +152,16 @@ def normalize_provider_rows(
     adjustment_status: str,
     split_index: SplitFactors,
 ) -> list[dict]:
-    """Take bronze rows + per-symbol split index → list of normalized
-    dicts ready for the precedence merge.
+    """Map bronze rows into the silver canonical (split-adjusted) frame.
 
-    Each output dict has both `_raw` (open/high/low/close/volume) and
-    `_adj` populated, plus `source_provider` (passed through from the
-    bronze row's `source` field), plus the timestamp + symbol
+    Output dicts have ONE set of OHLCV columns (open/high/low/close/volume),
+    always in the split-adjusted frame, plus `source_provider` passed
+    through from the bronze `source` tag, plus the symbol + timestamp
     identifiers.
 
     `adjustment_status` decides the math direction:
-      - ADJUSTMENT_STATUS_RAW: raw is passthrough; adj = raw / F
-      - ADJUSTMENT_STATUS_SPLIT_ADJUSTED: adj is passthrough; raw = adj * F
+      - ADJUSTMENT_STATUS_RAW: out = bronze / F (volume × F)
+      - ADJUSTMENT_STATUS_SPLIT_ADJUSTED: out = bronze (passthrough)
     """
     if adjustment_status not in (
         ADJUSTMENT_STATUS_RAW, ADJUSTMENT_STATUS_SPLIT_ADJUSTED,
@@ -189,35 +185,27 @@ def normalize_provider_rows(
         volume_v = _safe_int(r.get("volume"))
 
         if adjustment_status == ADJUSTMENT_STATUS_RAW:
-            open_raw, high_raw, low_raw, close_raw = open_v, high_v, low_v, close_v
-            volume_raw = volume_v
-            open_adj = _div_or_none(open_v, F)
-            high_adj = _div_or_none(high_v, F)
-            low_adj = _div_or_none(low_v, F)
-            close_adj = _div_or_none(close_v, F)
-            volume_adj = _mul_int_or_none(volume_v, F)   # split-adj volume = raw × F
-        else:  # split_adjusted
-            open_adj, high_adj, low_adj, close_adj = open_v, high_v, low_v, close_v
-            volume_adj = volume_v
-            open_raw = _mul_or_none(open_v, F)
-            high_raw = _mul_or_none(high_v, F)
-            low_raw = _mul_or_none(low_v, F)
-            close_raw = _mul_or_none(close_v, F)
-            volume_raw = _div_int_or_none(volume_v, F)   # raw volume = adj / F
+            # Polygon (raw) → divide prices by F, multiply volume by F.
+            open_norm = _div_or_none(open_v, F)
+            high_norm = _div_or_none(high_v, F)
+            low_norm = _div_or_none(low_v, F)
+            close_norm = _div_or_none(close_v, F)
+            volume_norm = _mul_int_or_none(volume_v, F)
+        else:
+            # Schwab (already split-adjusted) → passthrough.
+            open_norm, high_norm, low_norm, close_norm = (
+                open_v, high_v, low_v, close_v,
+            )
+            volume_norm = volume_v
 
         out.append({
             "symbol": symbol,
             "timestamp": ts,
-            "open_raw": open_raw,
-            "high_raw": high_raw,
-            "low_raw": low_raw,
-            "close_raw": close_raw,
-            "volume_raw": volume_raw,
-            "open_adj": open_adj,
-            "high_adj": high_adj,
-            "low_adj": low_adj,
-            "close_adj": close_adj,
-            "volume_adj": volume_adj,
+            "open": open_norm,
+            "high": high_norm,
+            "low": low_norm,
+            "close": close_norm,
+            "volume": volume_norm,
             "vwap": _safe_float(r.get("vwap")),
             "trade_count": _safe_int(r.get("trade_count")),
             # Source provider is the row's bronze `source` tag mapped
@@ -266,27 +254,15 @@ def _safe_int(v):
 
 
 def _div_or_none(v, F: float):
+    """Polygon raw price → split-adjusted: divide by F."""
     if v is None or F == 0:
         return None
     return v / F
 
 
-def _mul_or_none(v, F: float):
-    if v is None:
-        return None
-    return v * F
-
-
-def _div_int_or_none(v, F: float):
-    """Integer-result division. Rounds to nearest int (volume can't
-    be fractional)."""
-    if v is None or F == 0:
-        return None
-    return int(round(v / F))
-
-
 def _mul_int_or_none(v, F: float):
-    """Integer-result multiplication (volume scaling)."""
+    """Polygon raw volume → split-adjusted volume: multiply by F.
+    Integer-result (volume can't be fractional)."""
     if v is None:
         return None
     return int(round(v * F))

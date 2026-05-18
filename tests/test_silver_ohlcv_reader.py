@@ -77,31 +77,21 @@ def _silver_row(
     symbol: str,
     ts: datetime,
     *,
-    close_raw: float = 100.0,
-    close_adj: Optional[float] = None,
+    close: float = 100.0,
     source_provider: str = "polygon",
     sources_seen: str = "polygon",
-    volume_raw: int = 1000,
-    volume_adj: Optional[int] = None,
+    volume: int = 1000,
 ) -> dict:
-    if close_adj is None:
-        close_adj = close_raw
-    if volume_adj is None:
-        volume_adj = volume_raw
+    """Silver row in the Arrow-shaped layout (split-adjusted OHLCV)."""
     return {
         "symbol": symbol,
         "timestamp": ts,
-        "open_raw": close_raw,
-        "high_raw": close_raw,
-        "low_raw": close_raw,
-        "close_raw": close_raw,
-        "volume_raw": volume_raw,
-        "open_adj": close_adj,
-        "high_adj": close_adj,
-        "low_adj": close_adj,
-        "close_adj": close_adj,
-        "volume_adj": volume_adj,
-        "vwap": close_raw,
+        "open": close,
+        "high": close,
+        "low": close,
+        "close": close,
+        "volume": volume,
+        "vwap": close,
         "trade_count": 5,
         "source_provider": source_provider,
         "sources_seen": sources_seen,
@@ -148,8 +138,8 @@ class TestGetBarsHappyPath:
         t1 = datetime(2024, 6, 10, 13, 31, tzinfo=timezone.utc)
         # Insert out-of-order to verify reader sorts ASC by timestamp.
         rows = [
-            _silver_row("AAPL", t1, close_raw=190.5),
-            _silver_row("AAPL", t0, close_raw=190.0),
+            _silver_row("AAPL", t1, close=190.5),
+            _silver_row("AAPL", t0, close=190.0),
         ]
         ohlcv_table = _FakeIcebergTable(pa.Table.from_pylist(rows))
         bq_table = _FakeIcebergTable(pa.Table.from_pylist([]))
@@ -169,9 +159,8 @@ class TestGetBarsHappyPath:
         assert resp.count == 2
         # Sorted by timestamp ascending.
         assert [b.timestamp for b in resp.bars] == [t0, t1]
-        # _raw == _adj (no splits in this fixture).
-        assert resp.bars[0].close_raw == 190.0
-        assert resp.bars[0].close_adj == 190.0
+        # Silver stores split-adjusted OHLCV directly.
+        assert resp.bars[0].close == 190.0
         # sources_seen promoted from CSV to list.
         assert resp.bars[0].sources_seen == ["polygon"]
         # source_provider preserved.
@@ -271,11 +260,11 @@ class TestGetBarsEdgeCases:
     def test_skip_rows_with_null_ohlc(self) -> None:
         """Rows missing OHLC are skipped (defensive — would be upstream bug)."""
         ts = datetime(2024, 6, 10, 13, 30, tzinfo=timezone.utc)
-        good = _silver_row("AAPL", ts, close_raw=190.0)
+        good = _silver_row("AAPL", ts, close=190.0)
         bad = _silver_row(
-            "AAPL", ts.replace(minute=31), close_raw=190.5,
+            "AAPL", ts.replace(minute=31), close=190.5,
         )
-        bad["close_raw"] = None
+        bad["close"] = None
         rows = [good, bad]
         reader = SilverOhlcvReader(
             ohlcv_table=_FakeIcebergTable(pa.Table.from_pylist(rows)),

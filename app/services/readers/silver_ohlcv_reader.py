@@ -104,12 +104,17 @@ class SilverOhlcvReader:
         `start`/`end` are tz-aware UTC datetimes (caller responsibility;
         naive datetimes are upgraded to UTC defensively).
 
-        The response carries BOTH `_raw` and `_adj` columns on every
-        bar — consumers decide which to read. The default consumer
-        path (chart, screener, indicators, backtest, ML) uses `_adj`
-        because `silver_ohlcv_build` makes `_adj` continuous across
-        splits. `_raw` is for replay-accuracy use cases (trade-tape
-        reconstruction).
+        Each bar carries one set of OHLCV columns — split-adjusted
+        canonical view. That's what chart, indicators, backtests,
+        screener, and ML all consume.
+
+        **Need raw prices** (trade-tape replay, fill reconciliation)?
+        Multiply silver values by F(symbol, bar_date), where F is the
+        cumulative split factor for ex_date > bar_date. Read
+        silver.corp_actions via CorpActionsReader and apply the math
+        client-side; see `app/services/silver/ohlcv/normalize.py` for
+        reference. Silver intentionally doesn't carry redundant raw
+        columns.
 
         Edge cases:
           - Unknown / empty symbol → empty `bars`, count=0.
@@ -270,10 +275,7 @@ class SilverOhlcvReader:
             # (would be an upstream bug worth surfacing rather than
             # silently 0-filling).
             if any(
-                r.get(c) is None for c in (
-                    "open_raw", "high_raw", "low_raw", "close_raw",
-                    "open_adj", "high_adj", "low_adj", "close_adj",
-                )
+                r.get(c) is None for c in ("open", "high", "low", "close")
             ):
                 logger.debug(
                     "SilverOhlcvReader: skipping row with NULL OHLC for "
@@ -285,16 +287,11 @@ class SilverOhlcvReader:
                 SilverBar(
                     symbol=r["symbol"],
                     timestamp=ts,
-                    open_raw=r["open_raw"],
-                    high_raw=r["high_raw"],
-                    low_raw=r["low_raw"],
-                    close_raw=r["close_raw"],
-                    volume_raw=r.get("volume_raw") or 0,
-                    open_adj=r["open_adj"],
-                    high_adj=r["high_adj"],
-                    low_adj=r["low_adj"],
-                    close_adj=r["close_adj"],
-                    volume_adj=r.get("volume_adj") or 0,
+                    open=r["open"],
+                    high=r["high"],
+                    low=r["low"],
+                    close=r["close"],
+                    volume=r.get("volume") or 0,
                     vwap=r.get("vwap"),
                     trade_count=r.get("trade_count"),
                     source_provider=r.get("source_provider") or "unknown",

@@ -335,7 +335,7 @@ Once G1-G5 are in, the final verification:
    | Chart loads history fast | `/symbol/AAPL` loads 2y in <2s |
    | Add new streamed symbol | `add_members("XYZ")` → CH has ≥48d within ~10s |
    | Silver freshness | `silver.ohlcv_1m` includes yesterday's bars after 02:30 ET |
-   | Adjusted vs raw | NVDA 2024-06-07: close_raw≈$1208.88, close_adj≈$120.88 |
+   | Split-adjusted close | NVDA 2024-06-07: silver close ≈ $120.88 (matches Yahoo adjclose) |
    | Provider precedence | Polygon-covered bars show `source_provider="polygon"` |
    | bar_quality | Full-coverage days show `actual_bars ≈ expected_bars` |
 

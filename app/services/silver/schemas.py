@@ -198,38 +198,34 @@ SILVER_CORP_ACTIONS_SORT = SortOrder(
 class SilverBar(BaseModel):
     """One canonical 1-minute OHLCV bar in silver.
 
-    Both `_raw` (what the provider sent) and `_adj` (split/dividend-
-    adjusted) columns are populated for every row, regardless of which
-    provider the bar came from. silver_ohlcv_build's per-provider
-    normalization makes this true:
+    Silver stores **split-adjusted** OHLCV. That's the canonical
+    consumer view — what chart, indicators, backtests, screener, and
+    ML all need (continuous lines across split events, no fake gaps).
 
-    - Polygon (raw) cell:
-        _raw = passthrough (Polygon's prices)
-        _adj = _raw × factor_to_today(symbol, ex_date <= bar_date)
-    - Schwab (split-adjusted) cell:
-        _adj = passthrough (Schwab's prices, already adjusted)
-        _raw = _adj × cumulative_split_factor(bar_date → today)
+    The build pipeline takes per-provider bronze (Polygon = raw,
+    Schwab = already split-adjusted) and normalizes everyone to the
+    split-adjusted frame via the cumulative-factor math in
+    `app/services/silver/ohlcv/normalize.py`.
 
-    Consumers read `_adj` by default (chart, screener, indicators,
-    backtest, ML). Replay-accuracy mode reads `_raw`.
+    **If a consumer needs raw prices** (trade-tape replay, "what was
+    the actual fill?"), recompute via:
+        raw_value = silver_value × F(symbol, bar_date)
+        F = product of split.factor for silver.corp_actions rows
+            where action_type='split' AND ex_date > date(bar_ts)
+    See `cumulative_factor_after` in normalize.py for reference.
+    Silver intentionally does NOT carry redundant `_raw` columns —
+    they're derived from the canonical `_adj` plus `silver.corp_actions`.
     """
 
     symbol: str
     timestamp: datetime
 
-    # Raw (unadjusted) — what the trader actually saw live.
-    open_raw: float
-    high_raw: float
-    low_raw: float
-    close_raw: float
-    volume_raw: int
-
-    # Adjusted (split + cash dividend back-adjusted).
-    open_adj: float
-    high_adj: float
-    low_adj: float
-    close_adj: float
-    volume_adj: int
+    # OHLCV — split-adjusted. Canonical consumer view.
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
 
     # Optional provider-supplied fields (NULL in some providers).
     vwap: Optional[float] = None
@@ -273,30 +269,26 @@ class SilverBar(BaseModel):
 SILVER_OHLCV_1M_SCHEMA = Schema(
     NestedField(1, "symbol", StringType(), required=True),
     NestedField(2, "timestamp", TimestamptzType(), required=True),
-    # Raw OHLCV — what the provider sent (un-normalized).
-    NestedField(3, "open_raw", DoubleType(), required=False),
-    NestedField(4, "high_raw", DoubleType(), required=False),
-    NestedField(5, "low_raw", DoubleType(), required=False),
-    NestedField(6, "close_raw", DoubleType(), required=False),
-    NestedField(7, "volume_raw", LongType(), required=False),
-    # Adjusted OHLCV — split + cash-dividend back-adjusted.
-    NestedField(8, "open_adj", DoubleType(), required=False),
-    NestedField(9, "high_adj", DoubleType(), required=False),
-    NestedField(10, "low_adj", DoubleType(), required=False),
-    NestedField(11, "close_adj", DoubleType(), required=False),
-    NestedField(12, "volume_adj", LongType(), required=False),
+    # OHLCV — split-adjusted. Canonical consumer view.
+    # If a consumer needs raw prices, recompute via the cumulative
+    # split factor from silver.corp_actions (see SilverBar docstring).
+    NestedField(3, "open", DoubleType(), required=False),
+    NestedField(4, "high", DoubleType(), required=False),
+    NestedField(5, "low", DoubleType(), required=False),
+    NestedField(6, "close", DoubleType(), required=False),
+    NestedField(7, "volume", LongType(), required=False),
     # Optional provider-supplied fields.
-    NestedField(13, "vwap", DoubleType(), required=False),
-    NestedField(14, "trade_count", LongType(), required=False),
+    NestedField(8, "vwap", DoubleType(), required=False),
+    NestedField(9, "trade_count", LongType(), required=False),
     # Provenance.
-    NestedField(15, "source_provider", StringType(), required=True),
+    NestedField(10, "source_provider", StringType(), required=True),
     # `sources_seen` deliberately a string column (CSV) rather than
     # array to keep PyIceberg upsert mechanics simple. Cheap to parse on
     # read; cheap to serialize on write. If we ever need fast array
     # filters we can promote to list<string> with a schema migration.
-    NestedField(16, "sources_seen", StringType(), required=False),
-    NestedField(17, "ingestion_ts", TimestamptzType(), required=False),
-    NestedField(18, "ingestion_run_id", StringType(), required=False),
+    NestedField(11, "sources_seen", StringType(), required=False),
+    NestedField(12, "ingestion_ts", TimestamptzType(), required=False),
+    NestedField(13, "ingestion_run_id", StringType(), required=False),
     identifier_field_ids=[1, 2],
 )
 

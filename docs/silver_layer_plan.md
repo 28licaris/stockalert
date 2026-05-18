@@ -370,49 +370,53 @@ Six concrete races to defend against:
 6. **CH gets wiped/rebuilt.** The user-visible "no historical data" gap.
    - **Defense:** A `scripts/rebuild_ch_from_silver.py` operator script. Reads silver for all watchlist symbols, bulk-inserts into CH. ~hour wall-clock for a full S&P 500 rebuild. CH is **always** rebuildable from silver because of the ground-truth rule.
 
-### 2.9 Adjusted vs. raw prices — and the per-provider adjustment status
+### 2.9 Silver stores split-adjusted OHLCV — one column set, lean by design
 
-Silver carries both `_raw` and `_adj` columns (split-adjusted; cash
-dividends optional). CH receives only one set — configured globally:
+Silver carries ONE set of OHLCV columns: `open / high / low / close
+/ volume`. Always split-adjusted. That's the canonical consumer
+contract. No suffix, no dual storage, no "which view do I read?"
+question. One source of truth.
 
-- **Chart, indicator overlays, screener, backtest training:** see `_adj`.
-- **Backtest replay-accuracy mode:** opt-in via `BacktestConfig.adjusted=False` → reads `_raw` from silver.
-- **Default everywhere:** `_adj`.
+**Default consumer view (chart, indicators, screener, backtest
+training, ML):** silver's columns directly. Continuous across
+splits — exactly what every downstream surface needs.
+
+**If a consumer needs raw prices** (trade-tape replay, fill
+reconciliation): recompute on demand via
+
+```
+raw_value = silver_value × F(symbol, bar_date)
+F = product of split.factor for silver.corp_actions rows where
+    action_type='split' AND ex_date > date(bar_ts)
+```
+
+See `app/services/silver/ohlcv/normalize.py` (`cumulative_factor_after`)
+for the reference function. Silver doesn't bake this into its
+schema because it's trivially derivable and rarely needed.
 
 **Critical: each bronze provider's adjustment status differs.** This
 was empirically determined by `scripts/probe_provider_adjustment.py`
 on 2026-05-17 against AAPL 2020-08-31 (4-for-1) and NVDA 2024-06-10
 (10-for-1); both probes agreed:
 
-| Bronze source | Adjustment status | Silver build path |
+| Bronze source | Adjustment status | Silver build math |
 |---|---|---|
-| `bronze.polygon_minute` (Polygon flat-files) | **RAW** | Apply corp_actions to compute `_adj`; pass through as `_raw` |
-| `bronze.schwab_minute` (Schwab REST + stream) | **SPLIT_ADJUSTED** | Pass through as `_adj`; un-adjust via corp_actions cumulative factor to compute `_raw` |
+| `bronze.polygon_minute` (Polygon flat-files) | **RAW** | Divide prices by F; multiply volume by F → silver split-adjusted |
+| `bronze.schwab_minute` (Schwab REST + stream) | **SPLIT_ADJUSTED** | Passthrough → silver split-adjusted |
 | (future) bronze.{provider}_minute | TBD — run probe at onboarding | per the probe result |
 
 This is encoded in `app/services/bronze/schemas.py` as
 `ADJUSTMENT_STATUS_RAW` / `ADJUSTMENT_STATUS_SPLIT_ADJUSTED` constants
 + a per-table `BRONZE_*_MINUTE_ADJUSTMENT_STATUS` variable. The silver
-OHLCV build (TA-5.1) reads these constants to decide how to populate
-silver's `_raw` and `_adj` columns per provider.
+OHLCV build (TA-5.1) reads these to pick the normalization path for
+each provider's bronze rows.
 
-**Why this matters:** before the probe, the design assumed all
+**Why the probe matters:** before it, the design assumed all
 providers send raw. If we'd kept that assumption, Schwab-sourced
-cells would have populated silver's `_raw` columns with split-adjusted
-data — every backtest using `_raw` (e.g. replay-accuracy mode) would
-have silently used wrong prices. The probe catches this class of
+cells would have silver values 10× off after a 10-for-1 split (or
+4× after AAPL's 4-for-1). Every chart, every indicator, every
+backtest would be silently wrong. The probe catches this class of
 bug at silver-build time.
-
-**Un-adjustment math** (for split-adjusted → raw):
-
-```
-raw_price = adjusted_price * cumulative_split_factor(symbol, from_date=bar_date, to_date=today)
-```
-
-Where `cumulative_split_factor` walks `silver.corp_actions` rows
-between `bar_date` and `today`, multiplying split factors and
-ignoring cash dividends (since the Schwab API does not appear to
-dividend-adjust per the probe results — only split-adjust).
 
 **Run the probe regularly:**
 - At CI gate before any silver_build CI run.
@@ -455,16 +459,15 @@ def build_silver_slice(symbol: str, day: date) -> None:
     polygon_bars = read_bronze("polygon_minute", symbol, day)
     schwab_bars  = read_bronze("schwab_minute",  symbol, day)
 
-    # 2. Normalize each provider's bars to BOTH (_raw, _adj). Use the
-    #    per-provider ADJUSTMENT_STATUS constant to decide which way
-    #    the corp_actions factors apply.
+    # 2. Normalize each provider's bars into silver's canonical
+    #    split-adjusted frame. The per-provider ADJUSTMENT_STATUS
+    #    constant decides the math direction:
     #
     #    Polygon is RAW (per the 2026-05-17 probe):
-    #      _raw = polygon's prices (pass-through)
-    #      _adj = polygon's prices * factor_to_today(symbol, ex_date <= day)
+    #      silver = polygon_value / F(symbol, bar_date)
+    #               (divide by future-split factors → post-split frame)
     #    Schwab is SPLIT_ADJUSTED:
-    #      _adj = schwab's prices (pass-through)
-    #      _raw = schwab's prices * cumulative_split_factor(symbol, day → today)
+    #      silver = schwab_value (passthrough; already adjusted)
     factors_to_today = compute_adjustment_factors_to_today(
         symbol, as_of=date.today(),
         corp_actions=read_corp_actions(symbol),
@@ -481,9 +484,9 @@ def build_silver_slice(symbol: str, day: date) -> None:
     )
 
     # 3. Merge with provider precedence on the normalized rows.
-    #    First-with-row wins per (symbol, ts). Both _raw and _adj are
-    #    now correctly populated regardless of which provider's cell
-    #    wins.
+    #    First-with-row wins per (symbol, ts). The silver row carries
+    #    one canonical OHLCV set (split-adjusted) regardless of which
+    #    provider's cell wins.
     merged = merge_with_precedence(
         sources=[("polygon", polygon_normalized), ("schwab", schwab_normalized)],
         precedence=settings.silver_provider_precedence,
@@ -514,19 +517,23 @@ on 2026-05-17.
 
 **Key invariant:** when a corp-action lands (e.g. NVDA announces a
 4-for-1 split, ex-date in 30 days), ALL historical silver rows for
-NVDA need their `_adj` columns recomputed. Implementation:
+NVDA need their OHLCV columns recomputed (the F factor changes for
+every bar with date < new-split's ex_date). Implementation:
 
 - On ex-date crossing, `silver_build.py` re-emits the affected
-  `(symbol, ts)` slice with new factors.
-- This is the reason adjustment lives in silver, not bronze. Bronze
-  is append-only; silver is `MERGE INTO`.
-- An alternative would be view-based adjustment (compute `_adj` on
-  the fly from raw + corp-actions). We rejected this because:
+  `(symbol, ts)` slice with the new factor — re-reads bronze,
+  re-runs `normalize_provider_rows`, upserts the corrected
+  split-adjusted values.
+- This is why adjustment lives in silver, not bronze. Bronze is
+  append-only; silver is `MERGE INTO`.
+- An alternative would be view-based adjustment (silver stores raw,
+  consumers compute adjusted on the fly). We rejected this because:
   - PyIceberg's read path doesn't support computed columns
     efficiently;
   - Backtests need byte-identical reproducibility (a corp-action
     update mid-run shouldn't change historical bars within the run).
-  Materializing `_adj` once is simpler and reproducibility-friendly.
+  Materializing the adjusted view once is simpler and
+  reproducibility-friendly.
 
 ### 3.5 Scheduling
 
@@ -603,8 +610,8 @@ def build_silver_corp_actions(since: date | None = None) -> None:
 `silver.corp_actions` ingestion run timestamp. When a new
 corp-action lands for symbol `S`, all `silver.ohlcv_1m` slices for
 `S` are marked **dirty** in the watermark and rebuilt on the next
-nightly silver_build pass (adjusted columns recomputed from the
-corrected factor).
+nightly silver_build pass (OHLCV values recomputed from the
+corrected F factor).
 
 ### 4.5 Why this matters
 
@@ -647,13 +654,13 @@ class SilverReader:
         start: datetime,
         end: datetime,
         *,
-        adjusted: bool = True,
         snapshot_id: Optional[str] = None,
         limit: int = 50_000,
     ) -> list[SilverBar]:
         """Half-open window [start, end). Returns SilverBar rows
-        from the chosen snapshot (default: latest). `adjusted=True`
-        returns the `_adj` columns; `adjusted=False` returns `_raw`."""
+        from the chosen snapshot (default: latest). Silver stores
+        split-adjusted OHLCV; consumers needing raw recompute via
+        the corp_actions cumulative factor (see normalize.py)."""
 
     def list_symbols(
         self, *, since: Optional[datetime] = None,
@@ -872,11 +879,12 @@ flat `silver_build.py` originally sketched).
 
 - **TA-5.1.1 ✅** — `silver.ohlcv_1m` + `silver.bar_quality` Iceberg
   schemas + `SilverBar` Pydantic in `app/services/silver/schemas.py`.
-  Both `_raw` and `_adj` OHLCV columns on every row.
-- **TA-5.1.2 ✅** — `app/services/silver/ohlcv/normalize.py`. Per-provider
-  raw↔split-adjusted normalization (Polygon raw → divide-by-F to
-  compute _adj; Schwab split-adjusted → multiply-by-F to compute
-  _raw). NVDA 2024-06-10 split math verified.
+  One set of OHLCV columns (split-adjusted; lean by design — see
+  TA-5.1.8 in journal for the dual-column → single-column history).
+- **TA-5.1.2 ✅** — `app/services/silver/ohlcv/normalize.py`.
+  Per-provider mapping into silver's canonical split-adjusted frame
+  (Polygon raw → divide by F; Schwab split-adjusted → passthrough).
+  NVDA 2024-06-10 split math verified.
 - **TA-5.1.3 ✅** — `app/services/silver/ohlcv/merge.py`. Provider
   precedence merge (`polygon > schwab` default, configurable) +
   one-pass bar_quality computation (gap_count, max_gap_minutes,
@@ -1231,7 +1239,7 @@ only the nightly job is dormant. Resumption is symmetric to pause:
       gap in `bronze.polygon_minute`.
 - [ ] Nightly Polygon job resumes from there.
 - [ ] Silver build naturally picks up the new bronze rows and rebuilds
-      adjusted columns where needed.
+      OHLCV values where needed (split factors may have changed).
 - [ ] Cockpit Status page reflects: Polygon = active (resumed
       YYYY-MM-DD), pause window from previous-pause-date to
       this-resume-date now filled in.
@@ -1326,13 +1334,6 @@ prices will be slightly off for affected symbols.
 - Operator escape-hatch script to manually correct
   `silver.corp_actions` rows (§9.4).
 
-### Storage cost of dual columns
-
-Silver carries 8 price columns (4 raw + 4 adjusted) per row vs.
-4 in bronze. ~2× the storage. At ~30GB bronze today, silver
-projects to ~60GB. Trivial cost (~$1.50/month S3 Standard); flagged
-only because it doubles eventually.
-
 ### Coverage gap during initial backfill
 
 The ~6-12 hour initial silver backfill blocks the flip-the-default
@@ -1345,8 +1346,9 @@ all current watchlist symbols and flip.
 ### Latency on adjustment recompute after a corp action
 
 When NVDA does a 4-for-1 split, every historical NVDA silver row
-needs `_adj` recomputed. That's 2-3 years × 390 bars × NVDA history
-≈ 300k rows. PyIceberg `MERGE INTO` on that is ~30 seconds.
+needs its OHLCV values recomputed (the F factor changes for every
+bar before the new ex_date). That's 2-3 years × 390 bars × NVDA
+history ≈ 300k rows. PyIceberg `MERGE INTO` on that is ~30 seconds.
 Acceptable. Not "live" — but corp actions land overnight via
 Polygon, so silver rebuild during the 02:00 ET window covers them
 naturally.
@@ -1432,26 +1434,26 @@ for a specific symbol — but the default holds for everything.
 
 ### 14.2 Adjustment default — RESOLVED 2026-05-17
 
-**Decision: adjusted everywhere.** Already designed in
-[data_platform_plan.md §6](data_platform_plan.md):
+**Decision: split-adjusted everywhere.**
 
-- **Bronze** stores **what the provider sent** — raw, unadjusted
-  bars. No transformation at the bronze boundary. This preserves
-  what the trader actually saw live and gives silver freedom to
-  recompute adjustments when corp-actions land.
-- **Silver** stores **both raw + adjusted columns** in `silver.ohlcv_1m`:
-  - `open_raw / high_raw / low_raw / close_raw / volume_raw`
-  - `open_adj / high_adj / low_adj / close_adj / volume_adj`
+- **Bronze** stores **what the provider sent** in its native
+  adjustment frame (Polygon = raw, Schwab = split-adjusted —
+  verified by the probe framework). No transformation at the bronze
+  boundary; this preserves the provider's contract and gives silver
+  the freedom to re-derive when corp-actions change.
+- **Silver** stores **one canonical OHLCV set**, always
+  split-adjusted: `open / high / low / close / volume`. That's the
+  contract — one source of truth, lean schema.
 - **All downstream consumers** (chart, screener, indicator overlays,
-  backtest harness, MCP tools, ML training via gold) read the
-  **`_adj` columns by default** — the right choice for AI/ML trading
-  because split discontinuities would otherwise poison everything.
-- **Replay-accuracy opt-in** (rare cases — backtests that need to
-  reproduce the exact trader experience including unadjusted prices):
-  `BacktestConfig.adjusted=False` reads `_raw` instead. Same code
-  path; just a different column set.
+  backtest harness, MCP tools, ML training via gold) read silver's
+  canonical view directly. Split discontinuities would otherwise
+  poison every chart line, indicator value, and backtest equity curve.
+- **Replay-accuracy use cases** (rare — backtests that need to
+  reproduce the unadjusted trader experience): consumer reads
+  `silver.corp_actions` and recomputes:
+  `raw = silver_value × F(symbol, bar_date)` where F is the
+  cumulative product of future split factors. ~5 lines client-side.
 
-The bronze-records-raw design (no transformation at boundary) means
-when a new corp action lands, silver re-derives `_adj` columns from
-the unchanged `_raw` columns + updated `silver.corp_actions`. No
-bronze rewrite needed.
+When a new corp action lands, silver re-runs the per-(symbol, day)
+build for the affected slices, recomputing the OHLCV values with
+the new F factor. Bronze stays untouched.

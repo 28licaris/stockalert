@@ -293,8 +293,8 @@ class TestBuildSliceSingleProvider:
 
         row = ohlcv.upserts[0].to_pylist()[0]
         assert row["symbol"] == "AAPL"
-        assert row["close_raw"] == 180.0
-        assert row["close_adj"] == 180.0  # F=1 so adj == raw
+        # F=1 (no future splits) → polygon raw passes through unchanged.
+        assert row["close"] == 180.0
         assert row["source_provider"] == "polygon"
         assert row["sources_seen"] == "polygon"
 
@@ -322,7 +322,7 @@ class TestBuildSlicePrecedenceMerge:
 
         row = ohlcv.upserts[0].to_pylist()[0]
         # Polygon precedes Schwab → polygon's 180.00 wins.
-        assert row["close_raw"] == 180.0
+        assert row["close"] == 180.0
         assert row["source_provider"] == "polygon"
         # Both providers contributed to this minute → both in sources_seen.
         seen = row["sources_seen"].split(",")

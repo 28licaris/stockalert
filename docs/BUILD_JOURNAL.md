@@ -2608,3 +2608,63 @@ bottom with a date.
   tip-fill) becomes the next code block.
 
   150 silver + universe + operator-tool tests green.
+
+- **2026-05-18** — **TA-5.1.8 LANDED**: drop `_raw` columns from silver
+  (lean-schema refactor). Reverses an unforced earlier complexity decision.
+
+  **What happened.** TA-5.1.1 landed silver.ohlcv_1m with dual
+  OHLCV columns: `open_raw, high_raw, low_raw, close_raw, volume_raw`
+  + `open_adj, high_adj, low_adj, close_adj, volume_adj`. The
+  reasoning in `silver_layer_plan.md §2.9` was "consumers read _adj
+  by default; replay-accuracy mode reads _raw."
+
+  The user pushed back: `_raw` is **fully derived** from `_adj` +
+  `silver.corp_actions` (multiply by F to undo the split adjustment).
+  Storing both is bloat:
+    - ~30% larger rows (~240 GB at full scale)
+    - Two sources of truth → drift bug surface area
+    - Every consumer + every test + every Pydantic forced to ask
+      "which one do I read?"
+    - The "replay accuracy" use case is rare and easy to do
+      client-side: `raw = adj × F(symbol, ts)` is 5 lines.
+
+  More importantly, this was a **design decision I made unilaterally**
+  based on a sentence in the plan doc, not from an explicit
+  conversation with the user. That's an anti-pattern.
+
+  **What changed.**
+
+  Silver schema reduced from 18 → 13 columns. OHLCV columns are now
+  just `open/high/low/close/volume` (always split-adjusted; that's
+  silver's canonical contract). Files touched:
+    - `app/services/silver/schemas.py` — SilverBar Pydantic +
+      SILVER_OHLCV_1M_SCHEMA: 5 fields removed, suffix dropped
+    - `app/services/silver/ohlcv/normalize.py` — produces one set
+      of normalized columns. Polygon math: divide-by-F. Schwab
+      math: passthrough. (No more dual-direction adj↔raw math.)
+    - `app/services/silver/ohlcv/merge.py` — Arrow schema reduction;
+      disagreement-detector reads `close` instead of `close_raw`
+    - `app/services/readers/silver_ohlcv_reader.py` — reads
+      single-column layout; docstring updated to point consumers
+      at the corp_actions reader for raw-price recomputation
+    - `app/services/ingest/silver_to_ch_backfill.py` — drops the
+      `adjusted=True/False` parameter; always writes adjusted
+      (which is what it did in practice anyway). Source tag
+      `silver-{provider}` preserved.
+
+  **Yahoo spot-check becomes trivial.** Silver `close` IS Yahoo
+  `adjclose` (both split-adjusted). The runbook's step-5 QA is
+  now a 1-to-1 numeric comparison, not a "which view should I
+  compare?" decision.
+
+  149 tests green (was 150 — one redundant `test_unadjusted_writes_raw`
+  test got consolidated into `test_silver_adj_close_propagates_to_ch`).
+
+  **Working agreement locked.** New entry in user memory
+  (`feedback_lean_silver_explicit_signoff.md`):
+    1. Silver must be LEAN — no derived columns that can be
+       recomputed from canonical inputs
+    2. Don't make design decisions that add complexity / dual
+       storage / extra Pydantic fields without surfacing the
+       tradeoff and getting explicit signoff. Plan docs are
+       guidance, NOT pre-authorization.

@@ -190,19 +190,24 @@ One bar per `(symbol, ts)`, source of truth for backtests and training.
 |---|---|---|
 | symbol | string | sort key |
 | ts | timestamptz | sort key, UTC |
-| open_raw / high_raw / low_raw / close_raw | double | unadjusted, as a trader saw it live |
-| open_adj / high_adj / low_adj / close_adj | double | split + dividend adjusted |
-| volume_raw | long | unadjusted shares |
-| volume_adj | long | split-adjusted shares |
+| open / high / low / close | double | split-adjusted (canonical) |
+| volume | long | split-adjusted shares |
 | vwap | double | nullable |
 | trade_count | long | nullable |
 | source_provider | string | which provider's bar won precedence |
-| sources_seen | array&lt;string&gt; | every provider that had this bar |
+| sources_seen | string | CSV of every provider that had this bar |
 | ingestion_ts | timestamptz | when this silver row was built |
+| ingestion_run_id | string | links to ingestion_runs audit row |
 
-Dual columns let backtests reconstruct what a trader actually saw (raw)
-while ML trains on adjusted prices. Without this, split events look like
-75% crashes in training data.
+Silver stores the canonical split-adjusted view — what every consumer
+(chart, indicators, screener, backtest, ML) needs. Continuous across
+splits; no fake 75% "crashes" in training data on split days.
+
+Consumers needing the unadjusted price a trader saw live (rare —
+trade-tape replay, fill reconciliation) recompute from
+`silver.corp_actions`: `raw = silver_value × F(symbol, bar_date)`
+where F is the cumulative product of post-bar split factors. See
+`app/services/silver/ohlcv/normalize.py`.
 
 ### Provider precedence (config-driven)
 

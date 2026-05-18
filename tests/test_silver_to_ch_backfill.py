@@ -33,30 +33,22 @@ def _silver_bar(
     symbol: str,
     ts: datetime,
     *,
-    close_raw: float,
-    close_adj: float,
+    close: float,
     source_provider: str = "polygon",
     sources_seen: Optional[list[str]] = None,
-    volume_raw: int = 1000,
-    volume_adj: Optional[int] = None,
+    volume: int = 1000,
     vwap: Optional[float] = None,
     trade_count: Optional[int] = None,
 ) -> SilverBar:
-    if volume_adj is None:
-        volume_adj = volume_raw
+    """SilverBar fixture (split-adjusted OHLCV — the canonical view)."""
     return SilverBar(
         symbol=symbol,
         timestamp=ts,
-        open_raw=close_raw,
-        high_raw=close_raw,
-        low_raw=close_raw,
-        close_raw=close_raw,
-        volume_raw=volume_raw,
-        open_adj=close_adj,
-        high_adj=close_adj,
-        low_adj=close_adj,
-        close_adj=close_adj,
-        volume_adj=volume_adj,
+        open=close,
+        high=close,
+        low=close,
+        close=close,
+        volume=volume,
         vwap=vwap,
         trade_count=trade_count,
         source_provider=source_provider,
@@ -122,12 +114,15 @@ class TestBackfillResult:
 
 
 class TestBackfillHappyPath:
-    def test_adjusted_writes_adj_columns_to_ch(
+    def test_silver_adj_close_propagates_to_ch(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Default mode (adjusted=True) writes _adj columns to CH."""
+        """Silver split-adjusted close maps directly to CH ohlcv_1m.close.
+        Worked example: NVDA pre-2024-06-10-split bar has silver
+        close=120.88 (the split-adjusted view), and that's exactly
+        what CH gets — no provider-direct fetching, no extra math."""
         ts = datetime(2024, 6, 7, 14, 30, tzinfo=timezone.utc)
-        bar = _silver_bar("AAPL", ts, close_raw=1208.88, close_adj=120.88)
+        bar = _silver_bar("AAPL", ts, close=120.88)
         resp = SilverBarsResponse(
             symbol="AAPL",
             start=datetime(2024, 6, 7, tzinfo=timezone.utc),
@@ -145,12 +140,7 @@ class TestBackfillHappyPath:
         )
 
         bf = SilverToChBackfill(reader=reader)
-        result = bf.backfill_symbol_window(
-            "aapl",
-            resp.start,
-            resp.end,
-            adjusted=True,
-        )
+        result = bf.backfill_symbol_window("aapl", resp.start, resp.end)
 
         assert result.succeeded
         assert result.symbol == "AAPL"
@@ -161,40 +151,11 @@ class TestBackfillHappyPath:
         # symbols are canonical uppercase).
         assert reader.last_call["symbol"] == "AAPL"
 
-        # Adjusted mode: CH row carries _adj prices.
         assert len(captured) == 1
         row = captured[0]
         assert row["symbol"] == "AAPL"
-        assert row["close"] == 120.88   # _adj wins
+        assert row["close"] == 120.88
         assert row["source"] == "silver-polygon"
-
-    def test_unadjusted_writes_raw_columns_to_ch(
-        self, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        ts = datetime(2024, 6, 7, 14, 30, tzinfo=timezone.utc)
-        bar = _silver_bar("AAPL", ts, close_raw=1208.88, close_adj=120.88)
-        resp = SilverBarsResponse(
-            symbol="AAPL",
-            start=datetime(2024, 6, 7, tzinfo=timezone.utc),
-            end=datetime(2024, 6, 8, tzinfo=timezone.utc),
-            snapshot_id=None,
-            bars=[bar],
-            count=1,
-        )
-
-        captured: list = []
-        monkeypatch.setattr(
-            "app.services.ingest.silver_to_ch_backfill.insert_bars_batch",
-            lambda rows: captured.extend(rows),
-        )
-
-        bf = SilverToChBackfill(reader=_StubReader(response=resp))
-        result = bf.backfill_symbol_window(
-            "AAPL", resp.start, resp.end, adjusted=False,
-        )
-
-        assert result.bars_written == 1
-        assert captured[0]["close"] == 1208.88   # _raw wins
 
     def test_source_provider_propagates_into_ch_source_tag(
         self, monkeypatch: pytest.MonkeyPatch,
@@ -204,8 +165,7 @@ class TestBackfillHappyPath:
         even though it ultimately came from silver."""
         ts = datetime(2024, 6, 7, 14, 30, tzinfo=timezone.utc)
         bar = _silver_bar(
-            "AAPL", ts, close_raw=100.0, close_adj=100.0,
-            source_provider="schwab",
+            "AAPL", ts, close=100.0, source_provider="schwab",
         )
         resp = SilverBarsResponse(
             symbol="AAPL",
@@ -286,7 +246,7 @@ class TestBackfillEdgeCases:
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         ts = datetime(2024, 1, 1, 14, 30, tzinfo=timezone.utc)
-        bar = _silver_bar("AAPL", ts, close_raw=100.0, close_adj=100.0)
+        bar = _silver_bar("AAPL", ts, close=100.0)
         resp = SilverBarsResponse(
             symbol="AAPL",
             start=datetime(2024, 1, 1, tzinfo=timezone.utc),
