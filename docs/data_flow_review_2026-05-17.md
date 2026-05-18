@@ -51,8 +51,8 @@ EDGE CASES
 |---|---|---|---|
 | 1 | Polygon nightly → bronze, **whole market** | Polygon nightly runs against `POLYGON_NIGHTLY_SYMBOLS` (default `"seed"` = ~100). Whole-market was the **one-shot** historical bulk pull. Today's nightly is seed-only. | **GAP** — flip nightly to whole market (or expanded universe). |
 | 2 | Schwab nightly → bronze, **universe seed (100)** | ✅ Built. `nightly_schwab_refresh` pulls yesterday's 1-min for SCHWAB_NIGHTLY_SYMBOLS (default seed). | None for seed; needs expansion if universe grows. |
-| 3 | Silver merge polygon > schwab | ✅ For corp-actions (TA-5.0 done). 🔲 For OHLCV (TA-5.1.2 normalization landed today; merge + build orchestrator next). | **GAP** — silver.ohlcv_1m doesn't exist yet. |
-| 4 | Silver syncs periodically | 🔲 No silver_ohlcv_build cron yet. silver_corp_actions_build is operator-triggered. | **GAP** — wire silver builds into nightly schedule. |
+| 3 | Silver merge polygon > schwab | ✅ For corp-actions (TA-5.0). ✅ For OHLCV (TA-5.1.1–.6 LANDED 2026-05-17 — silver.ohlcv_1m + silver.bar_quality + orchestrator + reader + HTTP + MCP). Pending operator validate + initial backfill (TA-5.1.7). | None (pending live verify). |
+| 4 | Silver syncs periodically | ✅ TA-5.1.6 in-process nightly loop (default 23:00 UTC, 1h after Schwab nightly). Gated on `SILVER_OHLCV_BUILD_ENABLED=true`. silver_corp_actions_build still operator-triggered (separate). | None. |
 | 5 | CH seeded/hot-loaded from silver | 🔲 Not built. Legacy path ② still pulls Schwab REST → CH directly on `add_members`. | **GAP** — TA-5.3 (silver_to_ch_backfill). |
 | 6 | Schwab stream → CH (only live source) | ✅ Built (path ①). Live-stream rows tagged `schwab-stream`. | None. |
 | 7 | Live writer: stream → bronze every 5 min | ✅ TA-5.7 done. | None. |
@@ -150,31 +150,27 @@ Ordered by dependency:
 Outcome: any symbol added to any watchlist gets nightly bronze
 backfill from both providers automatically (within 24h).
 
-### Phase G2 — Complete TA-5.1 (silver OHLCV build) (~3 days)
+### Phase G2 — Complete TA-5.1 (silver OHLCV build) [✅ .1–.6 LANDED 2026-05-17]
 
-In progress today. Remaining sub-phases:
-
-| Item | Effort |
+| Item | Status |
 |---|---|
-| TA-5.1.3: provider precedence merge + bar_quality computation | 2 hr |
-| TA-5.1.4: orchestrator (`silver_ohlcv_build.build_slice(symbol, day)`) + watermark + tests | 4 hr |
-| TA-5.1.5: SilverOhlcvReader + HTTP + MCP | 1 hr |
-| TA-5.1.6: operator CLI for initial backfill + nightly schedule | 1 hr |
-| TA-5.1.7: live verification + initial overnight backfill | 30 min + overnight |
+| TA-5.1.3: provider precedence merge + bar_quality computation | ✅ LANDED |
+| TA-5.1.4: orchestrator (`SilverOhlcvBuild.build_slice/window/nightly/full`) + tests | ✅ LANDED |
+| TA-5.1.5: SilverOhlcvReader + HTTP `/api/silver/*` + MCP `get_silver_bars` + `get_silver_bar_quality` | ✅ LANDED |
+| TA-5.1.6: operator CLI `scripts/run_silver_ohlcv_build.py` + in-process nightly loop | ✅ LANDED |
+| TA-5.1.7: flip `SILVER_OHLCV_BUILD_ENABLED=true` + run `--full` once + verify | ⏳ pending (operator step) |
 
-Outcome: `silver.ohlcv_1m` exists, gets refreshed nightly from
-bronze, available to all consumers.
+Outcome (after .1.7): `silver.ohlcv_1m` exists, gets refreshed
+nightly from bronze, available to all consumers via the same
+Pydantic contract over HTTP + MCP.
 
-### Phase G3 — Wire silver build into nightly schedule (0.5 day)
+### Phase G3 — Wire silver build into nightly schedule [✅ LANDED as TA-5.1.6]
 
-| Item | Effort |
-|---|---|
-| Add `silver_build` to FastAPI lifespan (background task; runs at 02:00 ET after both nightly bronze ingests) | 1 hr |
-| `ingestion_runs` audit row per silver_build cycle | 30 min |
-| `silver_freshness` bronze-audit check (extension of TA-5.7 freshness check) | 1 hr |
-| Tests + lifespan-shutdown handling | 1 hr |
-
-Outcome: silver auto-syncs every night after bronze updates.
+Merged into TA-5.1.6 above. In-process asyncio loop at default
+23:00 UTC (1h after Schwab nightly), gated on
+`SILVER_OHLCV_BUILD_ENABLED`. Records best-effort run row to
+`ingestion_runs`. Lifespan-shutdown symmetric. 12 tests cover
+scheduling + gating + summary shape.
 
 ### Phase G4 — TA-5.3 silver→CH backfill + tip-fill (1 day)
 

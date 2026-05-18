@@ -135,9 +135,42 @@ is a 5-minute operator check:
 
 ---
 
-## Where to pick up — TA-5.1 (silver OHLCV build)
+## TA-5.1 status (silver OHLCV build) — .1–.6 LANDED 2026-05-17
 
-The big one. ~5-7 days of focused work to build
+✅ All code sub-phases done. Only operator-validate (TA-5.1.7)
+remains. See [BUILD_JOURNAL.md](BUILD_JOURNAL.md) decision log for
+per-commit details.
+
+Implemented in `app/services/silver/ohlcv/` (sub-package, not the
+flat `silver_build.py` originally sketched):
+
+- ✅ `schemas.py` — `silver.ohlcv_1m` (18 fields, both _raw + _adj,
+  month partition, `(symbol, ts)` identifier) + `silver.bar_quality`
+  (11 fields, `(symbol, date)` identifier) + Pydantic SilverBar.
+- ✅ `normalize.py` — raw↔split-adjusted math. Polygon raw → _adj
+  via divide-by-F; Schwab adj → _raw via multiply-by-F. NVDA
+  2024-06-10 10-for-1 split verified.
+- ✅ `merge.py` — provider precedence (polygon > schwab default) +
+  one-pass bar_quality (expected/actual/gaps/disagreements).
+- ✅ `build.py` — orchestrator with build_slice/window/nightly/full.
+  Provider-pluggable via `_PROVIDER_ROUTING`. Error-isolated per
+  slice. Corp-actions cache primed once per run.
+- ✅ Reader + HTTP + MCP (TA-5.1.5):
+  `SilverOhlcvReader.get_bars` + `get_bar_quality`,
+  `GET /api/silver/bars/{symbol}` + `/api/silver/bar-quality/{symbol}`,
+  MCP `get_silver_bars` + `get_silver_bar_quality`.
+- ✅ Nightly loop + CLI (TA-5.1.6): in-process asyncio at default
+  23:00 UTC (1h after Schwab nightly), gated on
+  `SILVER_OHLCV_BUILD_ENABLED`. Operator CLI
+  `scripts/run_silver_ohlcv_build.py --full / --nightly / --since
+  / --until / --symbols / --out-json`.
+
+102 silver tests green. Toggle `SILVER_OHLCV_BUILD_ENABLED=true`
+to arm the nightly; run `scripts/run_silver_ohlcv_build.py --full`
+once to seed silver from bronze.
+
+### Original design recap (for reference)
+
 `silver.ohlcv_1m` + `silver.bar_quality` per the design in
 [silver_layer_plan §3](silver_layer_plan.md).
 

@@ -31,7 +31,7 @@ quick-reference; full architecture in
                               │
                        ┌──────┴──────────────────────────────────────┐
                        ▼                                              ▼
-              silver_corp_actions_build              silver_ohlcv_build (TA-5.1, planned)
+              silver_corp_actions_build              silver_ohlcv_build (TA-5.1, LANDED)
                       │                                              │
                       ▼                                              ▼
               silver.corp_actions ◄────── reads ──────  silver.ohlcv_1m + silver.bar_quality
@@ -167,11 +167,11 @@ is config + an ingest job stopping/starting, not code.
 | Polygon flat-files → bronze | ✅ live | nightly_polygon_refresh |
 | Schwab REST nightly seed refresh → bronze | ✅ live | nightly_schwab_refresh |
 | Polygon corp-actions → bronze → silver | ✅ TA-5.0 | corp_actions/{polygon_ingest, build}.py |
-| **silver.ohlcv_1m** (canonical OHLCV) | ❌ **next: TA-5.1** | silver_ohlcv_build (to build) |
+| **silver.ohlcv_1m** (canonical OHLCV) | ✅ **TA-5.1.1–.6 LANDED 2026-05-17**; pending live verify (TA-5.1.7) | `app/services/silver/ohlcv/` + `scripts/run_silver_ohlcv_build.py` + `/api/silver/*` + MCP `get_silver_bars` |
 | **silver → CH backfill on add_members** | ❌ **next: TA-5.3** | silver_to_ch_backfill (to build) |
 | `scripts/promote_to_seed.py` | ❌ planned | promote_to_seed.py (to build) |
 
-**Path forward:** TA-5.1 → TA-5.3 → CH wipe-and-rebuild → universe-expansion CLI.
+**Path forward:** TA-5.1.7 (operator validate + initial backfill) → TA-5.3 → CH wipe-and-rebuild → universe-expansion CLI.
 
 After all four land, the "add streamed symbol" flow becomes the
 clean, fast, lake-canonical version above. The legacy

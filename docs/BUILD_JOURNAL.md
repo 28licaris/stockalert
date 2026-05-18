@@ -2380,3 +2380,137 @@ bottom with a date.
   freshness verification, and an audit framework that catches
   regressions. silver_build (TA-5.1) can now be wired against this
   foundation.
+
+- **2026-05-17** — **TA-5.1.1/.2/.3 LANDED**: silver schemas +
+  normalization + merge.
+
+  TA-5.1.1: `silver.ohlcv_1m` + `silver.bar_quality` Iceberg schemas
+  with corresponding `SilverBar` Pydantic. Both `_raw` (passthrough)
+  and `_adj` (split-adjusted) OHLCV on every row, plus
+  source_provider + sources_seen CSV provenance. Identifier
+  `(symbol, ts)` for ohlcv_1m, `(symbol, date)` for bar_quality.
+  Month partition + symbol-sorted, mirroring bronze.
+
+  TA-5.1.2: per-provider raw↔adjusted normalization math. Polygon
+  (raw) → _adj = _raw / F. Schwab (split-adjusted) → _raw = _adj × F.
+  F = product of split factors for ex_date > bar_date. Cumulative
+  index built once per run from silver.corp_actions. Worked example
+  NVDA 2024-06-10 10-for-1 split: both providers produce identical
+  silver rows (math verified inline).
+
+  TA-5.1.3: provider precedence merge (polygon > schwab default)
+  + bar_quality computation (expected_bars=390 RTH, actual_bars,
+  gap_count, max_gap_minutes, providers_seen CSV,
+  disagreement_count tolerance 50¢ OR 0.5%). Single iteration
+  produces both outputs — one pass, two tables.
+
+- **2026-05-17** — **TA-5.1.4 LANDED**: silver OHLCV build
+  orchestrator.
+
+  `app/services/silver/ohlcv/build.py` wires the four pieces from
+  .1/.2/.3 into `SilverOhlcvBuild` with four public modes:
+    - `build_slice(symbol, day)` — one (symbol, day) slice
+    - `build_window(symbols, start, end)` — day-by-day iteration
+    - `run_nightly(symbols=None)` — yesterday × active universe
+    - `run_full(symbols, start_date, end_date)` — initial backfill
+
+  Provider-pluggability: `_PROVIDER_ROUTING` dict (provider →
+  bronze short + adjustment_status). Adding a new provider = one
+  entry + bronze schema additions. ZERO orchestrator changes. Same
+  pattern as corp-actions build + bronze audit + silver probes.
+
+  Error isolation per slice (SliceResult.error) so build_window
+  loop survives one symbol failing. Critical for nightly runs.
+
+  Idempotent: re-running yields byte-identical silver rows modulo
+  ingestion_ts/run_id. PyIceberg upsert on the identifier handles
+  re-write.
+
+  Corp-actions caching: `_prime_corp_actions_cache()` loads
+  silver.corp_actions once per run, builds the split-factor index
+  in memory; saves N×slices catalog reads.
+
+  16 tests cover: routing dict, result dataclass semantics, empty
+  bronze, single-provider slice, precedence merge with sources_seen,
+  upsert-failure isolation, build_window iteration, cache clearing,
+  cold-start (no silver.corp_actions) graceful empty index.
+
+- **2026-05-17** — **TA-5.1.5 LANDED**: SilverOhlcvReader + HTTP +
+  MCP. Canonical consumer surface for silver bars + bar-quality.
+
+  `app/services/readers/silver_ohlcv_reader.py`:
+    - `get_bars(symbol, start, end)` → SilverBarsResponse
+    - `get_bar_quality(symbol, since, until)` → BarQualityResponse
+  Reads `silver.ohlcv_1m` + `silver.bar_quality`. Cold-start safe
+  (empty result if tables absent). Snapshot-pinning. Filters push
+  down to Iceberg (month partition + symbol sort).
+
+  HTTP routes (app/api/routes_silver.py, mounted at /api/silver):
+    - GET /api/silver/bars/{symbol}?start=...&end=...
+    - GET /api/silver/bar-quality/{symbol}?since=...&until=...
+
+  MCP tools (app/mcp/tools/silver_ohlcv.py):
+    - get_silver_bars(symbol, start, end)
+    - get_silver_bar_quality(symbol, since, until)
+
+  Pydantic shapes added to `readers/schemas.py`: SilverBarsResponse,
+  BarQualityRow, BarQualityResponse. Re-exports existing SilverBar.
+
+  Consumer-contract compliance: per silver_layer_plan §"The consumer
+  contract" — every consumer (chart, screener, indicator, backtest,
+  MCP) reads silver, never bronze directly.
+
+  15 tests cover: happy-path with sorted output + snapshot_id, CSV
+  → list[str] for sources_seen, empty/whitespace symbol, missing
+  table (cold start), scan failure isolation, naive datetime →
+  UTC, NULL-OHLC row skipping. HTTP route + start/end validation
+  + since/until validation. MCP tool import sanity.
+
+- **2026-05-17** — **TA-5.1.6 LANDED**: nightly silver build loop
+  + operator CLI. Closes TA-5.1's automation surface.
+
+  `app/services/silver/ohlcv/nightly.py`:
+    - `run_silver_ohlcv_build_loop()`: forever loop, sleep-until-hour
+      then run yesterday × universe. 300s back-off on unexpected
+      exceptions (no hot-loop). Idempotent + failure-isolated.
+    - `run_silver_ohlcv_build_nightly()`: one-shot wrapper used by
+      both the loop and the CLI. Runs the synchronous build in
+      `asyncio.to_thread` so the event loop stays responsive.
+
+  `scripts/run_silver_ohlcv_build.py`:
+    - `--nightly` (yesterday × seed)
+    - `--full` (2021-01-04 → yesterday)
+    - `--since` / `--until` (custom window)
+    - `--symbols` ('seed' | CSV list)
+    - `--out-json` (pipeline-friendly summary)
+
+  Schedule order:
+    07:00 UTC — nightly_polygon_refresh
+    22:00 UTC — nightly_schwab_refresh
+    23:00 UTC — silver_ohlcv_build   ← new, 1h after Schwab nightly
+
+  Lifespan wiring in main_api.py: gated on
+  `SILVER_OHLCV_BUILD_ENABLED=true` + `STOCK_LAKE_BUCKET` set.
+  Symmetric shutdown. Same `_safe_start` isolation pattern as
+  upstream nightlies.
+
+  New settings: `SILVER_OHLCV_BUILD_ENABLED` (default false),
+  `SILVER_OHLCV_BUILD_RUN_HOUR_UTC` (23), `SILVER_OHLCV_BUILD_SYMBOLS`
+  ('seed'). Disabled by default until TA-5.1.7 operator-validates
+  with a live run.
+
+  12 tests cover: scheduling math (target-later/already-passed/clamp),
+  symbol resolution (seed/CSV/whitespace), gating (disabled/missing
+  bucket/enabled), one-shot returns summary, loop returns
+  immediately when gated.
+
+  **Cumulative TA-5.1 status (.1 through .6):** 102 silver tests
+  green. silver_ohlcv_build is feature-complete; remaining is
+  TA-5.1.7 — flip the env toggle, run an initial full backfill in
+  prod (operator step, est. several hours wall-clock for the seed
+  universe × 5 years of bronze).
+
+  **Next:** TA-5.1.7 (live verification + initial backfill), then
+  G1 (dynamic universe), then TA-5.3 (silver→CH + tip-fill add
+  flow), then TA-5.5 (delete Path ② + wipe-and-rebuild CH +
+  end-to-end verification).

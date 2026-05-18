@@ -865,36 +865,60 @@ Foundation: silver needs corp-actions to be useful.
 for any symbol in `bronze.polygon_minute`'s distinct-symbols list.
 Manual spot-check against Polygon UI for 10 random symbols.
 
-### Phase TA-5.1 — Silver build job (5–7 days)
+### Phase TA-5.1 — Silver build job (5–7 days) [✅ .1–.6 LANDED 2026-05-17]
 
-- `app/services/silver/silver_build.py`.
-- `silver.ohlcv_1m` Iceberg table.
-- Per-symbol provider precedence merge.
-- Adjustment factor computation + application.
-- `silver.bar_quality` writer.
-- Watermarked + idempotent.
-- Initial backfill for full bronze history (S3-bound, ~6-12 hrs
-  one-shot, scheduled overnight).
-- Nightly job at 02:00 ET.
-- Tests: synthetic 2-provider input → expected merged output;
-  synthetic corp-action → expected adjustment.
+Implemented in `app/services/silver/ohlcv/` (sub-package, not the
+flat `silver_build.py` originally sketched).
+
+- **TA-5.1.1 ✅** — `silver.ohlcv_1m` + `silver.bar_quality` Iceberg
+  schemas + `SilverBar` Pydantic in `app/services/silver/schemas.py`.
+  Both `_raw` and `_adj` OHLCV columns on every row.
+- **TA-5.1.2 ✅** — `app/services/silver/ohlcv/normalize.py`. Per-provider
+  raw↔split-adjusted normalization (Polygon raw → divide-by-F to
+  compute _adj; Schwab split-adjusted → multiply-by-F to compute
+  _raw). NVDA 2024-06-10 split math verified.
+- **TA-5.1.3 ✅** — `app/services/silver/ohlcv/merge.py`. Provider
+  precedence merge (`polygon > schwab` default, configurable) +
+  one-pass bar_quality computation (gap_count, max_gap_minutes,
+  disagreement_count).
+- **TA-5.1.4 ✅** — `app/services/silver/ohlcv/build.py`.
+  `SilverOhlcvBuild` orchestrator wires .1–.3 into four execution
+  modes: `build_slice` / `build_window` / `run_nightly` / `run_full`.
+  Provider-pluggable via `_PROVIDER_ROUTING`. Error-isolated per
+  slice. Corp-actions cache primed once per run.
+- **TA-5.1.5 ✅** — `app/services/readers/silver_ohlcv_reader.py`,
+  HTTP routes `GET /api/silver/bars/{symbol}` +
+  `GET /api/silver/bar-quality/{symbol}`, MCP tools `get_silver_bars`
+  + `get_silver_bar_quality`. Single Pydantic contract over both
+  surfaces.
+- **TA-5.1.6 ✅** — `app/services/silver/ohlcv/nightly.py` (in-process
+  asyncio loop at default 23:00 UTC; runs 1h after Schwab nightly) +
+  `scripts/run_silver_ohlcv_build.py` operator CLI (--nightly /
+  --full / --since/--until / --symbols / --out-json). Wired into
+  FastAPI lifespan gated on `SILVER_OHLCV_BUILD_ENABLED`.
+- **TA-5.1.7** — operator validation + initial full backfill
+  (next). Flip env toggle to true; run `scripts/run_silver_ohlcv_build.py
+  --full` once; spot-check silver counts + Yahoo-adjusted-close on
+  10 random symbols.
+
+**Tests:** 102 silver tests green across schemas, normalize math,
+merge precedence, orchestrator pipeline, reader+routes, MCP, nightly
+loop scheduling.
 
 **Gate:** for 50 hand-picked symbols across high-volume liquid +
 illiquid + multi-split histories, silver row counts match
 expected (= calendar 1m bars during market hours + extended where
 applicable). Adjusted closes match Yahoo Finance's adjusted-close
-on dividend / split dates (within $0.01).
+on dividend / split dates (within $0.01). [Pending operator step
+TA-5.1.7.]
 
-### Phase TA-5.2 — SilverReader + reads-flip (3 days)
+### Phase TA-5.2 — Reads-flip [SUBSUMED INTO TA-5.1.5]
 
-- `app/services/readers/silver_reader.py` per §5.
-- HTTP route: `GET /api/silver/bars` (mirrors `/api/lake/bars`).
-- MCP tool: `get_silver_bars`.
-- Flip backtester `BronzeReader` → `SilverReader(adjusted=True)`
-  default (configurable to `_raw` per-run).
-- Add silver reads to indicator reader / dashboard symbol page
-  for the "full history" pull (not the recent N days, which
-  stays on CH).
+Reader + HTTP + MCP shipped as part of TA-5.1.5. The remaining
+backtester flip (BronzeReader → SilverReader default) and
+indicator-reader switch lands when TA-5.3 + TA-5.5 retire the
+provider-REST → CH path. Keeping this section as a reference; the
+work has been merged into the TA-5.1 phase scope.
 
 **Gate:** existing backtest configs (canary SMA, EMA-crossover,
 RSI, Bollinger, MTF-EMA) produce **near-identical** metrics on
