@@ -55,13 +55,13 @@ phases:
   pre_build:
     commands:
       - echo "=== pre_build ==="
-      - echo "Region:          $AWS_REGION"
-      - echo "Bucket:          $STOCK_LAKE_BUCKET"
-      - echo "Glue DB:         $ICEBERG_GLUE_DATABASE"
-      - echo "Symbols:         $SILVER_BUILD_SYMBOLS"
-      - echo "Mode:            $SILVER_BUILD_MODE"
-      - echo "Window:          ${SILVER_BUILD_SINCE:-(default)} .. ${SILVER_BUILD_UNTIL:-(default)}"
-      - echo "Build ID:        $CODEBUILD_BUILD_ID"
+      - 'echo "Region          $AWS_REGION"'
+      - 'echo "Bucket          $STOCK_LAKE_BUCKET"'
+      - 'echo "Glue DB         $ICEBERG_GLUE_DATABASE"'
+      - 'echo "Symbols         $SILVER_BUILD_SYMBOLS"'
+      - 'echo "Mode            $SILVER_BUILD_MODE"'
+      - 'echo "Window          ${SILVER_BUILD_SINCE:-(default)} .. ${SILVER_BUILD_UNTIL:-(default)}"'
+      - 'echo "Build ID        $CODEBUILD_BUILD_ID"'
       # Sanity: confirm we can reach S3 + Glue.
       - aws s3 ls "s3://$STOCK_LAKE_BUCKET/iceberg/" | head -5
       - aws glue get-database --name "$ICEBERG_GLUE_DATABASE" --query 'Database.Name'
@@ -70,42 +70,14 @@ phases:
   build:
     commands:
       - echo "=== build ==="
-      - |
-        ARGS=()
-        if [ "$SILVER_BUILD_MODE" = "full" ]; then
-          ARGS+=("--full")
-        elif [ "$SILVER_BUILD_MODE" = "nightly" ]; then
-          ARGS+=("--nightly")
-        fi
-        if [ -n "$SILVER_BUILD_SINCE" ]; then
-          ARGS+=("--since" "$SILVER_BUILD_SINCE")
-        fi
-        if [ -n "$SILVER_BUILD_UNTIL" ]; then
-          ARGS+=("--until" "$SILVER_BUILD_UNTIL")
-        fi
-        ARGS+=("--symbols" "$SILVER_BUILD_SYMBOLS")
-        ARGS+=("--out-json" "/tmp/silver_run/result.json")
-        echo "Running: poetry run python scripts/run_silver_ohlcv_build.py ${ARGS[@]}"
-        poetry run python scripts/run_silver_ohlcv_build.py "${ARGS[@]}"
+      - chmod +x scripts/codebuild/run_silver_build.sh
+      - bash scripts/codebuild/run_silver_build.sh
 
   post_build:
     commands:
       - echo "=== post_build ==="
-      - |
-        if [ -f /tmp/silver_run/result.json ]; then
-          REPORT_KEY="silver_build_reports/codebuild-${CODEBUILD_BUILD_ID}.json"
-          aws s3 cp /tmp/silver_run/result.json "s3://${STOCK_LAKE_BUCKET}/${REPORT_KEY}"
-          echo "Report:          s3://${STOCK_LAKE_BUCKET}/${REPORT_KEY}"
-          echo "--- summary ---"
-          # If jq is available print a compact summary; otherwise dump the file.
-          if command -v jq >/dev/null 2>&1; then
-            jq '{status, mode, since, until, symbols_count, result: {slices, slices_succeeded, slices_failed, silver_rows, duration_seconds}}' /tmp/silver_run/result.json
-          else
-            cat /tmp/silver_run/result.json
-          fi
-        else
-          echo "WARNING: /tmp/silver_run/result.json not produced. See logs above."
-        fi
+      - chmod +x scripts/codebuild/post_build.sh
+      - bash scripts/codebuild/post_build.sh
 
 artifacts:
   files:
