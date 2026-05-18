@@ -99,9 +99,20 @@ rebuildable from silver byte-identically**.
 |---|---|---|---|
 | Polygon flatfiles bulk historical | **YES** | derived by silver_build (nightly) | **NO** |
 | Schwab REST historical backfill | **YES** | derived by silver_build (nightly) | **NO** |
-| Live stream (Schwab, 1-min) | **YES** (real-time append) | derived by silver_build (nightly, claims overnight) | **YES** (live overlay zone) |
+| Live stream (Schwab, 1-min) | **DESIGNED — not yet implemented**[^liveBronze] | derived by silver_build (nightly via the REST-backfilled rows) | **YES** (live overlay zone) |
 | `silver_to_ch_backfill` (on user add_members) | — (read source) | — (read source) | **YES** (silver→CH path) |
 | User-driven historical chart expansion | — | — (read source) | **YES** (silver→CH path) |
+
+[^liveBronze]: The original design called for the bar batcher to
+**dual-write** live ticks to both CH (live overlay) and
+`bronze.schwab_minute` (immutable archive). The bronze audit
+(2026-05-17) confirmed empirically that today the batcher writes
+to CH only — `bronze.schwab_minute` has zero `schwab-stream`-tagged
+rows. The nightly Schwab REST backfill catches up the previous
+day's bars into bronze, so silver build eventually sees the data.
+But there's a freshness gap (live tick → CH in seconds, → bronze
+in 8-24 hours). Adding the dual-write is a future TA-5.x sub-phase.
+See [BUILD_JOURNAL.md](BUILD_JOURNAL.md) 2026-05-17 audit entry.
 
 **Only two paths write to CH:**
 1. **Live stream**: Schwab 1-min WebSocket → CH `ohlcv_1m` (real-time, marked `is_live=true`).

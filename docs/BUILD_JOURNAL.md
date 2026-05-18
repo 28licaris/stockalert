@@ -2178,3 +2178,58 @@ bottom with a date.
     `app/services/silver/probes/README.md` "How to add a new
     provider's probe" + "Decide if the provider needs corp-actions
     ingest" sections.
+- **2026-05-17** — **Bronze layer audit framework + first audit run.**
+  Operator emphasized bronze is the foundation; everything downstream
+  flows from here. Built `app/services/bronze/audit/` package
+  (universal pattern, same as silver/probes/) with 5 checks:
+  schema_match, row_counts, source_tags, null_symbols,
+  adjustment_status. Runner: `scripts/audit_bronze.py`.
+
+  **First audit findings (production bronze):**
+  - ✅ **Schema match**: both tables (polygon_minute, schwab_minute)
+    have 12 fields matching the declared `BRONZE_*_MINUTE_SCHEMA`.
+    No drift.
+  - ✅ **Null symbols**: 0 bad rows out of **2,116,486,243 polygon**
+    + **1,774,051 schwab**. The Phase-1 80k null-symbol filter is
+    holding.
+  - ✅ **Polygon adjustment status**: bronze.polygon_minute
+    empirically matches documented status `'raw'` via NVDA 2024
+    split probe (pre/post ratio = 9.932, expected 10.0). The
+    `BRONZE_POLYGON_MINUTE_ADJUSTMENT_STATUS = "raw"` constant
+    accurately describes what's on disk.
+  - ⚠️ **Schwab live-stream NOT writing to bronze**: source_tags
+    shows zero `schwab-stream`-tagged rows. The bar batcher
+    (`app/db/batcher.py`) writes only to CH; it does NOT dual-write
+    to bronze.schwab_minute as silver_layer_plan §2.4 originally
+    designed. The nightly Schwab REST backfill catches up the
+    previous day's bars. **This 8-24h freshness gap is the
+    primary motivator for the new TA-5.7 phase (live_lake_writer)
+    landing before TA-5.1.**
+  - ⚠️ **Snapshot summary key gap**: PyIceberg's older snapshots
+    don't expose `total-records` in `snapshot.summary` (only
+    `operation`). Date ranges captured via column scan instead:
+    polygon = 2021-01-04 → 2026-05-15 (5 years); schwab =
+    2026-03-30 → 2026-05-15 (~48 days). Cosmetic only; not a bug.
+- **2026-05-17** — **TA-5.7 inserted into roadmap: live_lake_writer.**
+  The audit's "schwab-stream not writing to bronze" finding drove
+  a new sub-phase. Original silver_layer_plan §2.4 specified
+  per-tick dual-write at the batcher; that approach is wrong (tiny
+  files, Iceberg metadata churn). The data_platform_plan §8 Path A
+  design already specified the right approach: 5-min micro-batch
+  writes via a `live_lake_writer` background task. Building that
+  per the existing design (no redesign).
+
+  TA-5.7 sub-phases:
+  - 5.7.1 `app/services/ingest/live_lake_writer.py` core
+  - 5.7.2 lifespan wiring + config flag
+  - 5.7.3 ingestion_runs audit integration
+  - 5.7.4 daily compaction for bronze.schwab_minute
+  - 5.7.5 new bronze audit check: `live_freshness`
+    (max(timestamp) > 10min stale during market hours = WARN)
+  - 5.7.6 tests + 24h live verification
+
+  Roadmap order (operator-confirmed): TA-5.0 corp-actions →
+  TA-5.7 live_lake_writer → TA-5.1 silver build. Sequential because
+  both corp-actions correctness and live-data freshness are
+  prerequisites for the silver build to produce production-grade
+  silver.ohlcv_1m.
