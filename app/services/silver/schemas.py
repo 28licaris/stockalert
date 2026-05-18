@@ -29,10 +29,12 @@ from pyiceberg.table.sorting import (
     SortField,
     SortOrder,
 )
-from pyiceberg.transforms import IdentityTransform, YearTransform
+from pyiceberg.transforms import IdentityTransform, MonthTransform, YearTransform
 from pyiceberg.types import (
     DateType,
     DoubleType,
+    IntegerType,
+    LongType,
     NestedField,
     StringType,
     TimestamptzType,
@@ -184,5 +186,190 @@ SILVER_CORP_ACTIONS_SORT = SortOrder(
         transform=IdentityTransform(),
         direction=SortDirection.ASC,
         null_order=NullOrder.NULLS_LAST,
+    ),
+)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Pydantic — SilverBar (the OHLCV-with-_raw-and-_adj row)
+# ─────────────────────────────────────────────────────────────────────
+
+
+class SilverBar(BaseModel):
+    """One canonical 1-minute OHLCV bar in silver.
+
+    Both `_raw` (what the provider sent) and `_adj` (split/dividend-
+    adjusted) columns are populated for every row, regardless of which
+    provider the bar came from. silver_ohlcv_build's per-provider
+    normalization makes this true:
+
+    - Polygon (raw) cell:
+        _raw = passthrough (Polygon's prices)
+        _adj = _raw × factor_to_today(symbol, ex_date <= bar_date)
+    - Schwab (split-adjusted) cell:
+        _adj = passthrough (Schwab's prices, already adjusted)
+        _raw = _adj × cumulative_split_factor(bar_date → today)
+
+    Consumers read `_adj` by default (chart, screener, indicators,
+    backtest, ML). Replay-accuracy mode reads `_raw`.
+    """
+
+    symbol: str
+    timestamp: datetime
+
+    # Raw (unadjusted) — what the trader actually saw live.
+    open_raw: float
+    high_raw: float
+    low_raw: float
+    close_raw: float
+    volume_raw: int
+
+    # Adjusted (split + cash dividend back-adjusted).
+    open_adj: float
+    high_adj: float
+    low_adj: float
+    close_adj: float
+    volume_adj: int
+
+    # Optional provider-supplied fields (NULL in some providers).
+    vwap: Optional[float] = None
+    trade_count: Optional[int] = None
+
+    # Provenance — which provider won the precedence merge for this cell.
+    source_provider: str = Field(
+        ...,
+        description=(
+            "Provider whose bronze row was selected after provider-precedence "
+            "merge. The other providers that ALSO had a row for this "
+            "(symbol, ts) are in `sources_seen` for QA."
+        ),
+    )
+    sources_seen: list[str] = Field(
+        default_factory=list,
+        description="Every provider that had a row for this (symbol, ts).",
+    )
+
+    ingestion_ts: Optional[datetime] = Field(
+        None, description="When silver_build wrote this row (UTC).",
+    )
+    ingestion_run_id: Optional[str] = Field(
+        None, description="silver_build run that produced this row.",
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Iceberg — silver.ohlcv_1m
+# ─────────────────────────────────────────────────────────────────────
+#
+# Per-cell shape: identifier `(symbol, timestamp)`. silver_ohlcv_build
+# upserts on this identifier when re-running (idempotent).
+#
+# Partition `month(timestamp)` matches bronze's strategy — keeps the
+# scan plan symmetrical across tiers and makes per-month maintenance
+# (compaction, snapshot expiration) consistent.
+#
+# Sort `(symbol, timestamp)` is the dominant access pattern (one symbol
+# over a time window) — same as bronze.
+SILVER_OHLCV_1M_SCHEMA = Schema(
+    NestedField(1, "symbol", StringType(), required=True),
+    NestedField(2, "timestamp", TimestamptzType(), required=True),
+    # Raw OHLCV — what the provider sent (un-normalized).
+    NestedField(3, "open_raw", DoubleType(), required=False),
+    NestedField(4, "high_raw", DoubleType(), required=False),
+    NestedField(5, "low_raw", DoubleType(), required=False),
+    NestedField(6, "close_raw", DoubleType(), required=False),
+    NestedField(7, "volume_raw", LongType(), required=False),
+    # Adjusted OHLCV — split + cash-dividend back-adjusted.
+    NestedField(8, "open_adj", DoubleType(), required=False),
+    NestedField(9, "high_adj", DoubleType(), required=False),
+    NestedField(10, "low_adj", DoubleType(), required=False),
+    NestedField(11, "close_adj", DoubleType(), required=False),
+    NestedField(12, "volume_adj", LongType(), required=False),
+    # Optional provider-supplied fields.
+    NestedField(13, "vwap", DoubleType(), required=False),
+    NestedField(14, "trade_count", LongType(), required=False),
+    # Provenance.
+    NestedField(15, "source_provider", StringType(), required=True),
+    # `sources_seen` deliberately a string column (CSV) rather than
+    # array to keep PyIceberg upsert mechanics simple. Cheap to parse on
+    # read; cheap to serialize on write. If we ever need fast array
+    # filters we can promote to list<string> with a schema migration.
+    NestedField(16, "sources_seen", StringType(), required=False),
+    NestedField(17, "ingestion_ts", TimestamptzType(), required=False),
+    NestedField(18, "ingestion_run_id", StringType(), required=False),
+    identifier_field_ids=[1, 2],
+)
+
+SILVER_OHLCV_1M_PARTITION = PartitionSpec(
+    PartitionField(
+        source_id=2,                # timestamp
+        field_id=1000,
+        transform=MonthTransform(),
+        name="ts_month",
+    ),
+)
+
+SILVER_OHLCV_1M_SORT = SortOrder(
+    SortField(
+        source_id=1,                # symbol
+        transform=IdentityTransform(),
+        direction=SortDirection.ASC,
+        null_order=NullOrder.NULLS_LAST,
+    ),
+    SortField(
+        source_id=2,                # timestamp
+        transform=IdentityTransform(),
+        direction=SortDirection.ASC,
+        null_order=NullOrder.NULLS_LAST,
+    ),
+)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Iceberg — silver.bar_quality
+# ─────────────────────────────────────────────────────────────────────
+#
+# One row per (symbol, date) — the audit ledger for silver_ohlcv_build.
+# Catches silent provider drops, schema drifts, and cross-provider
+# disagreements. Pinned by silver_layer_plan §3.1 (and §6 of
+# data_platform_plan).
+#
+# Identifier `(symbol, date)` is the merge key; re-running silver_build
+# for a date upserts this row.
+SILVER_BAR_QUALITY_SCHEMA = Schema(
+    NestedField(1, "symbol", StringType(), required=True),
+    NestedField(2, "date", DateType(), required=True),
+    NestedField(3, "expected_bars", IntegerType(), required=False),
+    NestedField(4, "actual_bars", IntegerType(), required=False),
+    NestedField(5, "gap_count", IntegerType(), required=False),
+    NestedField(6, "max_gap_minutes", IntegerType(), required=False),
+    # CSV of providers that had at least one bar this day (e.g.
+    # "polygon,schwab"). String for upsert simplicity; same rationale
+    # as sources_seen above.
+    NestedField(7, "providers_seen", StringType(), required=False),
+    NestedField(8, "disagreement_count", IntegerType(), required=False),
+    NestedField(9, "backfill_attempts", IntegerType(), required=False),
+    NestedField(10, "ingestion_ts", TimestamptzType(), required=False),
+    NestedField(11, "ingestion_run_id", StringType(), required=False),
+    identifier_field_ids=[1, 2],
+)
+
+SILVER_BAR_QUALITY_PARTITION = PartitionSpec(
+    PartitionField(
+        source_id=2,                # date
+        field_id=1000,
+        transform=MonthTransform(),
+        name="date_month",
+    ),
+)
+
+SILVER_BAR_QUALITY_SORT = SortOrder(
+    SortField(
+        source_id=1, transform=IdentityTransform(),
+        direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST,
+    ),
+    SortField(
+        source_id=2, transform=IdentityTransform(),
+        direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST,
     ),
 )
