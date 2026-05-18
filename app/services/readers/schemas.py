@@ -18,6 +18,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from app.services.silver.schemas import CorpAction
+
 
 class BronzeBar(BaseModel):
     """
@@ -104,6 +106,42 @@ class LakeLatestDayResponse(BaseModel):
             "misclassifies them and would advance the counter early."
         ),
     )
+
+
+class CorpActionsResponse(BaseModel):
+    """Response wrapper for a windowed corp-actions query.
+
+    Reads from `silver.corp_actions` — the canonical consumer surface
+    per the medallion contract. Callers never read bronze corp-actions
+    directly; silver build merges providers with precedence and
+    publishes here.
+    """
+
+    symbol: str
+    since: Optional[date] = Field(
+        None,
+        description="Lower bound on ex_date (inclusive). None = full history.",
+    )
+    until: Optional[date] = Field(
+        None,
+        description="Upper bound on ex_date (inclusive). None = through today.",
+    )
+    action_types: Optional[list[str]] = Field(
+        None,
+        description=(
+            "Filter to specific action kinds (split, cash_dividend, "
+            "stock_dividend, spinoff). None = all kinds."
+        ),
+    )
+    snapshot_id: Optional[str] = Field(
+        None,
+        description=(
+            "Iceberg snapshot pinned by the read. Recording this lets "
+            "callers replay the same query against the same lake state."
+        ),
+    )
+    actions: list[CorpAction]
+    count: int = Field(..., description="Number of actions returned.")
 
 
 # ─────────────────────────────────────────────────────────────────────

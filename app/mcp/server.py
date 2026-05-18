@@ -48,6 +48,7 @@ def register_all_tools() -> None:
     module under `app/mcp/tools/` is registered.
     """
     # noqa: F401 — imports are for side effect (tool registration)
+    from app.mcp.tools import corp_actions  # noqa: F401
     from app.mcp.tools import coverage  # noqa: F401
     from app.mcp.tools import indicators  # noqa: F401
     from app.mcp.tools import instruments  # noqa: F401
@@ -65,7 +66,7 @@ def register_all_tools() -> None:
     logger.info(
         "MCP tools registered (lake + live + quotes + signals + "
         "watchlist + movers + instruments + market + coverage + "
-        "system + sim + indicators + screener)"
+        "system + sim + indicators + screener + corp_actions)"
     )
 
 

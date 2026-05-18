@@ -407,3 +407,72 @@ class TestSilverBuildSettingsParsing:
         monkeypatch.setattr(settings, "silver_provider_precedence", "")
         with pytest.raises(ValueError, match="silver_provider_precedence is empty"):
             SilverCorpActionsBuild.from_settings()
+
+
+# ─────────────────────────────────────────────────────────────────────
+# CorpActionsReader — read service for silver.corp_actions
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestCorpActionsReader:
+    def test_empty_symbol_returns_empty_response(self) -> None:
+        from app.services.readers.corp_actions_reader import CorpActionsReader
+
+        r = CorpActionsReader()
+        resp = r.get_corp_actions("")
+        assert resp.count == 0
+        assert resp.actions == []
+        assert resp.snapshot_id is None
+
+    def test_whitespace_symbol_returns_empty(self) -> None:
+        from app.services.readers.corp_actions_reader import CorpActionsReader
+
+        r = CorpActionsReader()
+        resp = r.get_corp_actions("   ")
+        assert resp.count == 0
+
+    def test_missing_table_returns_empty_gracefully(self) -> None:
+        """Reader handles 'silver.corp_actions doesn't exist yet' without
+        raising — important because silver may be unbuilt in fresh setups."""
+        from unittest.mock import patch
+        from app.services.readers.corp_actions_reader import CorpActionsReader
+
+        r = CorpActionsReader()
+        # Patch _get_table to simulate a load failure.
+        with patch.object(r, "_get_table", side_effect=RuntimeError("no table")):
+            resp = r.get_corp_actions("AAPL")
+        assert resp.count == 0
+        assert resp.actions == []
+        assert resp.symbol == "AAPL"
+
+    def test_arrow_to_actions_sorts_by_ex_date_then_kind(self) -> None:
+        """Output is sorted (ex_date, action_type) for deterministic
+        downstream behavior."""
+        from app.services.readers.corp_actions_reader import CorpActionsReader
+        from datetime import date as _date
+
+        # Build an Arrow Table by hand to test the helper directly.
+        rows = [
+            {"symbol": "AAPL", "ex_date": _date(2020, 8, 31), "action_type": "split",
+             "factor": 4.0, "cash_amount": None, "announced_at": None,
+             "source_provider": "polygon", "ingestion_ts": None, "ingestion_run_id": None},
+            {"symbol": "AAPL", "ex_date": _date(2020, 8, 7), "action_type": "cash_dividend",
+             "factor": None, "cash_amount": 0.82, "announced_at": None,
+             "source_provider": "polygon", "ingestion_ts": None, "ingestion_run_id": None},
+        ]
+        arrow = _make_silver_arrow(rows)
+        actions = CorpActionsReader._arrow_to_actions(arrow)
+        assert len(actions) == 2
+        # Sorted: 2020-08-07 first, then 2020-08-31
+        assert actions[0].ex_date == _date(2020, 8, 7)
+        assert actions[1].ex_date == _date(2020, 8, 31)
+
+    def test_symbol_uppercased(self) -> None:
+        """Input symbol is normalized to uppercase before query."""
+        from unittest.mock import patch
+        from app.services.readers.corp_actions_reader import CorpActionsReader
+
+        r = CorpActionsReader()
+        with patch.object(r, "_get_table", side_effect=RuntimeError("no table")):
+            resp = r.get_corp_actions("aapl")
+        assert resp.symbol == "AAPL"
