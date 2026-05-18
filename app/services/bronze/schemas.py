@@ -15,8 +15,9 @@ from __future__ import annotations
 from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
 from pyiceberg.table.sorting import NullOrder, SortDirection, SortField, SortOrder
-from pyiceberg.transforms import IdentityTransform, MonthTransform
+from pyiceberg.transforms import IdentityTransform, MonthTransform, YearTransform
 from pyiceberg.types import (
+    DateType,
     DoubleType,
     LongType,
     NestedField,
@@ -117,4 +118,65 @@ BRONZE_SCHWAB_MINUTE_PARTITION = PartitionSpec(
 BRONZE_SCHWAB_MINUTE_SORT = SortOrder(
     SortField(source_id=1, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
     SortField(source_id=2, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# bronze.polygon_corp_actions
+# ─────────────────────────────────────────────────────────────────────
+#
+# Raw per-provider archive of Polygon's `/v3/reference/splits` and
+# `/v3/reference/dividends` endpoints. Append-only / upsert-on-revision
+# via the identifier columns. Consumed by
+# `app/services/silver/corp_actions/build.py` (TA-5.0 step 5c), which
+# merges this with other future bronze corp-action tables and writes
+# canonical rows to `silver.corp_actions`.
+#
+# Structure matches `silver.corp_actions` (same column shape) — the
+# value-add of silver is provider precedence resolution + canonical
+# single-row-per-(symbol, ex_date, action_type), not a different shape.
+#
+# Identifier `(symbol, ex_date, action_type)` matches silver's
+# identifier so the silver merge uses the same join key.
+#
+# Per the silver_layer_plan §4 pluggable-provider principle: when a
+# second corp-actions provider lands later (e.g. SEC XBRL or IEX),
+# it gets a parallel `bronze.{provider}_corp_actions` table with the
+# SAME schema; the silver build picks them up automatically via
+# precedence config.
+BRONZE_POLYGON_CORP_ACTIONS_SCHEMA = Schema(
+    NestedField(1, "symbol", StringType(), required=True),
+    NestedField(2, "ex_date", DateType(), required=True),
+    NestedField(3, "action_type", StringType(), required=True),
+    NestedField(4, "factor", DoubleType(), required=False),
+    NestedField(5, "cash_amount", DoubleType(), required=False),
+    NestedField(6, "announced_at", TimestamptzType(), required=False),
+    NestedField(7, "source_provider", StringType(), required=True),
+    NestedField(8, "ingestion_ts", TimestamptzType(), required=False),
+    NestedField(9, "ingestion_run_id", StringType(), required=False),
+    identifier_field_ids=[1, 2, 3],
+)
+
+BRONZE_POLYGON_CORP_ACTIONS_PARTITION = PartitionSpec(
+    PartitionField(
+        source_id=2,                # ex_date
+        field_id=1000,
+        transform=YearTransform(),
+        name="ex_year",
+    ),
+)
+
+BRONZE_POLYGON_CORP_ACTIONS_SORT = SortOrder(
+    SortField(
+        source_id=1,                # symbol
+        transform=IdentityTransform(),
+        direction=SortDirection.ASC,
+        null_order=NullOrder.NULLS_LAST,
+    ),
+    SortField(
+        source_id=2,                # ex_date
+        transform=IdentityTransform(),
+        direction=SortDirection.ASC,
+        null_order=NullOrder.NULLS_LAST,
+    ),
 )

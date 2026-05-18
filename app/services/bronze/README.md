@@ -30,11 +30,16 @@ Current:
 - `stock_lake.schwab_minute` — Schwab REST pricehistory minute bars.
   Same schema and partitioning. Differs at runtime: `vwap` and
   `trade_count` are always null (Schwab doesn't return them).
+- `stock_lake.polygon_corp_actions` — Polygon REST splits + dividends
+  archive. Partition `year(ex_date)`, sort `(symbol, ex_date)`.
+  Identifier `(symbol, ex_date, action_type)` enables idempotent
+  re-ingestion via Iceberg upsert. Consumed by `silver_corp_actions_build`.
 
 Planned (created when the first writer for each is added):
 - `stock_lake.polygon_day`
 - `stock_lake.schwab_day`
 - `stock_lake.alpaca_minute`
+- `stock_lake.{provider}_corp_actions` — additional providers if/when added.
 
 Naming note: Glue databases are flat — no real `bronze.` namespace.
 We use a `bronze/` subfolder in the S3 warehouse path

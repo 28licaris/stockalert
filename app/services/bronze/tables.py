@@ -15,6 +15,9 @@ from pyiceberg.exceptions import NamespaceAlreadyExistsError, NoSuchNamespaceErr
 from pyiceberg.table import Table
 
 from app.services.bronze.schemas import (
+    BRONZE_POLYGON_CORP_ACTIONS_PARTITION,
+    BRONZE_POLYGON_CORP_ACTIONS_SCHEMA,
+    BRONZE_POLYGON_CORP_ACTIONS_SORT,
     BRONZE_POLYGON_MINUTE_PARTITION,
     BRONZE_POLYGON_MINUTE_SCHEMA,
     BRONZE_POLYGON_MINUTE_SORT,
@@ -111,6 +114,49 @@ def ensure_bronze_schwab_minute(catalog: Catalog | None = None) -> Table:
         sort_order=BRONZE_SCHWAB_MINUTE_SORT,
         properties={
             "write.target-file-size-bytes": str(256 * 1024 * 1024),
+            "write.parquet.compression-codec": "snappy",
+        },
+    )
+
+
+def ensure_bronze_polygon_corp_actions(catalog: Catalog | None = None) -> Table:
+    """
+    Create `bronze.polygon_corp_actions` if absent; return the table.
+
+    Holds raw Polygon corp-action announcements (splits + dividends +
+    stock dividends + spinoffs). Identifier `(symbol, ex_date,
+    action_type)` enables idempotent re-ingestion via Iceberg upsert
+    when Polygon revises a prior announcement.
+
+    Per the silver_layer_plan §4 pluggable-provider principle, this
+    table is one of (potentially) N parallel `bronze.{provider}_corp_actions`
+    tables; the silver build merges them with precedence config.
+
+    Storage tuning: 64 MB target file size (smaller than the 256 MB
+    used for minute-bar tables) because corp-actions are sparse —
+    per-year partitions are only a few MB.
+    """
+    catalog = catalog or get_catalog()
+    _ensure_namespace(catalog)
+
+    table_id = bronze_table_id("polygon_corp_actions")
+    try:
+        return catalog.load_table(table_id)
+    except NoSuchTableError:
+        pass
+
+    warehouse = f"s3://{settings.stock_lake_bucket}/{settings.iceberg_warehouse_prefix}"
+    location = f"{warehouse}/bronze/polygon_corp_actions"
+
+    log.info("Creating bronze table %s at %s", table_id, location)
+    return catalog.create_table(
+        identifier=table_id,
+        schema=BRONZE_POLYGON_CORP_ACTIONS_SCHEMA,
+        location=location,
+        partition_spec=BRONZE_POLYGON_CORP_ACTIONS_PARTITION,
+        sort_order=BRONZE_POLYGON_CORP_ACTIONS_SORT,
+        properties={
+            "write.target-file-size-bytes": str(64 * 1024 * 1024),
             "write.parquet.compression-codec": "snappy",
         },
     )
