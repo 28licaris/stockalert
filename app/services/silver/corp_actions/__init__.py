@@ -18,8 +18,12 @@ Detailed contract: [docs/silver_layer_plan.md §4](../../../../docs/silver_layer
 """
 from __future__ import annotations
 
+from app.services.silver.corp_actions.build import SilverCorpActionsBuild
 from app.services.silver.corp_actions.polygon_ingest import (
     PolygonCorpActionsBronzeIngest,
 )
 
-__all__ = ["PolygonCorpActionsBronzeIngest"]
+__all__ = [
+    "PolygonCorpActionsBronzeIngest",
+    "SilverCorpActionsBuild",
+]

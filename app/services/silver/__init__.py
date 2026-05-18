@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from app.services.silver.corp_actions import (
     PolygonCorpActionsBronzeIngest,
+    SilverCorpActionsBuild,
 )
 from app.services.silver.schemas import (
     CorpAction,
@@ -25,4 +26,5 @@ __all__ = [
     "CorpAction",
     "CorpActionKind",
     "PolygonCorpActionsBronzeIngest",
+    "SilverCorpActionsBuild",
 ]

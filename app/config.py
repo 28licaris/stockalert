@@ -79,6 +79,15 @@ class Settings(BaseModel):
     iceberg_glue_database: str = os.getenv("ICEBERG_GLUE_DATABASE", "stock_lake")
     iceberg_warehouse_prefix: str = os.getenv("ICEBERG_WAREHOUSE_PREFIX", "iceberg").strip("/")
 
+    # Silver provider precedence for the merge step. Comma-separated
+    # list, highest priority first. Used by silver_corp_actions_build
+    # (and the planned silver OHLCV build) to resolve conflicts when
+    # multiple bronze.{provider}_* tables have a row for the same
+    # identifier. Default: polygon > schwab (per silver_layer_plan.md §14.1).
+    silver_provider_precedence: str = os.getenv(
+        "SILVER_PROVIDER_PRECEDENCE", "polygon,schwab"
+    )
+
     # Schwab (Think or Swim) – store credentials in .env only; never commit
     schwab_client_id: str = os.getenv("SCHWAB_CLIENT_ID", "")
     schwab_client_secret: str = os.getenv("SCHWAB_CLIENT_SECRET", "")
