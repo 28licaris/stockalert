@@ -37,12 +37,30 @@ def _seconds_until_next_run(hour_utc: int, *, now: datetime | None = None) -> fl
 
 
 def resolve_nightly_lake_symbols(spec: str) -> list[str]:
-    """Same semantics as ``polygon_flatfiles_bulk_backfill._resolve_symbols``."""
+    """Translate ``POLYGON_NIGHTLY_SYMBOLS`` → list[str].
+
+    Spec strings:
+      - "seed" / "seed-100" → SEED_SYMBOLS
+      - "all" / "*" / ""    → empty list (= whole-market via flat-files;
+                              Polygon flat-files contain every symbol
+                              regardless of input, so the empty list is
+                              the "import everything" signal)
+      - "active"            → SEED_SYMBOLS ∪ active-watchlist symbols
+                              (per G1 dynamic-universe; same semantics
+                              as Schwab nightly + silver build)
+      - "AAPL,NVDA,…"       → explicit list (uppercased)
+    """
     s = (spec or "").strip().lower()
-    if s in ("seed", "seed-100", "seed_100"):
-        return list(SEED_SYMBOLS)
     if s in ("all", "*", ""):
         return []
+    if s in ("active", "universe", "dynamic"):
+        # Local import: avoid pulling watchlist_repo (CH dependency)
+        # at module-load time. Module-load needs to work even when
+        # CH is unavailable.
+        from app.services.universe import resolve_universe_spec
+        return resolve_universe_spec("active")
+    if s in ("seed", "seed-100", "seed_100"):
+        return list(SEED_SYMBOLS)
     return [tok.strip().upper() for tok in spec.split(",") if tok.strip()]
 
 

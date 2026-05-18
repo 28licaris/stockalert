@@ -49,14 +49,14 @@ EDGE CASES
 
 | # | Intent | Current state | Gap |
 |---|---|---|---|
-| 1 | Polygon nightly → bronze, **whole market** | Polygon nightly runs against `POLYGON_NIGHTLY_SYMBOLS` (default `"seed"` = ~100). Whole-market was the **one-shot** historical bulk pull. Today's nightly is seed-only. | **GAP** — flip nightly to whole market (or expanded universe). |
-| 2 | Schwab nightly → bronze, **universe seed (100)** | ✅ Built. `nightly_schwab_refresh` pulls yesterday's 1-min for SCHWAB_NIGHTLY_SYMBOLS (default seed). | None for seed; needs expansion if universe grows. |
+| 1 | Polygon nightly → bronze, **whole market** | Polygon nightly accepts `POLYGON_NIGHTLY_SYMBOLS={seed,active,all,...}`. `all` = whole-market (free via flat-files). G1 added `active` keyword (= SEED ∪ active watchlists). Default still `seed`; flip to `all` for whole-market or `active` for dynamic. | None (op decision is which spec to use). |
+| 2 | Schwab nightly → bronze, **universe seed (100)** | ✅ Built; G1 added `active` keyword. Default still `seed`; flip to `active` for dynamic universe. | None. |
 | 3 | Silver merge polygon > schwab | ✅ For corp-actions (TA-5.0). ✅ For OHLCV (TA-5.1.1–.6 LANDED 2026-05-17 — silver.ohlcv_1m + silver.bar_quality + orchestrator + reader + HTTP + MCP). Pending operator validate + initial backfill (TA-5.1.7). | None (pending live verify). |
 | 4 | Silver syncs periodically | ✅ TA-5.1.6 in-process nightly loop (default 23:00 UTC, 1h after Schwab nightly). Gated on `SILVER_OHLCV_BUILD_ENABLED=true`. silver_corp_actions_build still operator-triggered (separate). | None. |
 | 5 | CH seeded/hot-loaded from silver | 🔲 Not built. Legacy path ② still pulls Schwab REST → CH directly on `add_members`. | **GAP** — TA-5.3 (silver_to_ch_backfill). |
 | 6 | Schwab stream → CH (only live source) | ✅ Built (path ①). Live-stream rows tagged `schwab-stream`. | None. |
 | 7 | Live writer: stream → bronze every 5 min | ✅ TA-5.7 done. | None. |
-| 8 | Edge: new streamed symbol → add to universe + backfill S3 | 🔲 `add_members` adds to watchlist but NOT to `SEED_SYMBOLS` (which is a static Python tuple). New streamed symbols do NOT get nightly Polygon/Schwab backfills. | **GAP** — dynamic universe. |
+| 8 | Edge: new streamed symbol → add to universe + backfill S3 | ✅ G1 LANDED 2026-05-17. `get_active_universe()` = SEED ∪ active-watchlist symbols. Set `*_NIGHTLY_SYMBOLS=active` to flip each nightly to the dynamic universe. Adding any symbol to any watchlist now grows the nightly bronze refresh + silver build automatically. | None (op decision: flip env to `active`). |
 | 9 | Edge: add streamed symbol → history from silver to CH | 🔲 Not built. | **GAP** — TA-5.3 + on-add wiring. |
 | 10 | Edge: gap between silver watermark + live → seamless UX | 🔲 Tip-fill designed, not built. Cockpit "warming up" UX designed, not built. | **GAP** — TA-5.3 tip-fill + cockpit (FE-2). |
 
@@ -137,18 +137,32 @@ market" literally + auto-handles new symbols + cheap.
 
 Ordered by dependency:
 
-### Phase G1 — Dynamic universe & nightly scope (1 day)
+### Phase G1 — Dynamic universe & nightly scope [✅ LANDED 2026-05-17]
 
-| Item | Effort |
+| Item | Status |
 |---|---|
-| `get_active_universe()` helper in `app/data/seed_universe.py`: union of static seed + live watchlists | 1 hr |
-| Flip `POLYGON_NIGHTLY_SYMBOLS=all` default (whole-market Polygon nightly) | 30 min |
-| Flip `SCHWAB_NIGHTLY_SYMBOLS=universe` (dynamic — reads `get_active_universe()`) | 1 hr |
-| Tests: helper round-trip, nightly job picks up newly-added watchlist symbols | 1 hr |
-| Doc update: `streaming_universe_model.md` to reflect dynamic universe | 30 min |
+| `get_active_universe()` helper — placed in `app/services/universe/active_universe.py` (not `app/data/seed_universe.py`; keeps the static-tuple module pure, free of CH dependencies) | ✅ |
+| `resolve_universe_spec("seed" \| "active" \| CSV)` — single resolver used by all three nightlies | ✅ |
+| Polygon nightly: `POLYGON_NIGHTLY_SYMBOLS=active` now valid (alongside `seed`/`all`/CSV) | ✅ |
+| Schwab nightly: `SCHWAB_NIGHTLY_SYMBOLS=active` now valid | ✅ |
+| Silver build: `SILVER_OHLCV_BUILD_SYMBOLS=active` now valid + `SilverOhlcvBuild.run_nightly()` default flipped to `get_active_universe()` | ✅ |
+| Tests: 18 cover seed/active/CSV routing, CH-outage fallback, kinds filter, each nightly's delegation through the shared resolver, dynamic-build default | ✅ |
+| Doc update: `streaming_universe_model.md` + `data_flow_review` updated | ✅ |
+
+**Defaults preserved.** Each `*_NIGHTLY_SYMBOLS` env var still
+defaults to `seed` (curated 100). Operators opt into the dynamic
+universe explicitly by setting it to `active`.
 
 Outcome: any symbol added to any watchlist gets nightly bronze
-backfill from both providers automatically (within 24h).
+backfill from both providers + silver build automatically (within
+24h) once the operator flips `*_NIGHTLY_SYMBOLS=active`.
+
+Recommended production setting (per "Option B" above):
+```
+POLYGON_NIGHTLY_SYMBOLS=all      # whole-market via flat-files (free)
+SCHWAB_NIGHTLY_SYMBOLS=active    # only what's watchlisted
+SILVER_OHLCV_BUILD_SYMBOLS=active
+```
 
 ### Phase G2 — Complete TA-5.1 (silver OHLCV build) [✅ .1–.6 LANDED 2026-05-17]
 

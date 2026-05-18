@@ -53,11 +53,16 @@ def _seconds_until_next_run(hour_utc: int, *, now: Optional[datetime] = None) ->
 
 
 def _resolve_symbols(spec: str) -> list[str]:
-    """Translate config string → list[str]. "seed" → SEED_SYMBOLS."""
-    s = (spec or "").strip().lower()
-    if s in ("seed", "seed-100", "seed_100", ""):
-        return list(SEED_SYMBOLS)
-    return [tok.strip().upper() for tok in spec.split(",") if tok.strip()]
+    """Translate ``SILVER_OHLCV_BUILD_SYMBOLS`` → list[str].
+
+    Spec strings: "seed" (default), "active" (= SEED ∪ active
+    watchlists per G1 dynamic universe), or explicit CSV. Delegates
+    to `app.services.universe.resolve_universe_spec` so all three
+    nightlies (polygon, schwab, silver) share one resolver.
+    """
+    # Local import: keep watchlist_repo (CH) out of module-load path.
+    from app.services.universe import resolve_universe_spec
+    return resolve_universe_spec(spec)
 
 
 def _silver_build_gated() -> tuple[bool, str]:

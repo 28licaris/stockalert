@@ -2514,3 +2514,48 @@ bottom with a date.
   G1 (dynamic universe), then TA-5.3 (silver→CH + tip-fill add
   flow), then TA-5.5 (delete Path ② + wipe-and-rebuild CH +
   end-to-end verification).
+
+- **2026-05-17** — **G1 LANDED**: dynamic universe.
+
+  `app/services/universe/active_universe.py`:
+    - `get_active_universe()` = SEED_SYMBOLS ∪ active-watchlist
+      symbols. Best-effort: degrades to seed-only if CH is down
+      (nightlies must survive CH outages).
+    - `resolve_universe_spec("seed" | "active" | CSV)` — single
+      resolver used by every nightly + the silver build, so
+      adding `"active"` to env config works system-wide.
+
+  Three nightlies now delegate to `resolve_universe_spec`:
+    - `nightly_polygon_refresh.resolve_nightly_lake_symbols` (also
+      preserves `"all"`/`"*"`/`""` = whole-market for flat-files)
+    - `nightly_schwab_refresh._resolve_symbols`
+    - `silver/ohlcv/nightly._resolve_symbols`
+
+  `SilverOhlcvBuild.run_nightly()` + `.run_full()` defaults flipped
+  from `SEED_SYMBOLS` → `get_active_universe()`. So `run_nightly()`
+  with no args now covers SEED ∪ watchlists.
+
+  **Defaults preserved.** Each `*_NIGHTLY_SYMBOLS` env var still
+  defaults to `seed`. Operators opt into the dynamic universe
+  explicitly by setting it to `active`. Recommended production
+  config (per data_flow_review §G1):
+    POLYGON_NIGHTLY_SYMBOLS=all      # whole-market via flat-files
+    SCHWAB_NIGHTLY_SYMBOLS=active    # dynamic (SEED ∪ watchlists)
+    SILVER_OHLCV_BUILD_SYMBOLS=active
+
+  Placement rationale: chose `app/services/universe/` over adding
+  to `app/data/seed_universe.py` because `seed_universe.py` is a
+  pure-Python static-tuple module with no runtime dependencies.
+  `get_active_universe()` reads from ClickHouse — that's a runtime
+  service, not data. Keeping them separate preserves the rule
+  that `app/data/*` can be imported by anything (no CH needed at
+  module load).
+
+  18 tests cover: seed-keyword + CSV-list + active-keyword routing,
+  CH-outage fallback, kinds filter, sorted+deduped output. Plus
+  delegation tests for each of the three nightlies (active works
+  through all of them) + a spy test confirming
+  `SilverOhlcvBuild.run_nightly()` pulls from `get_active_universe`
+  by default.
+
+  120 tests green across the silver + universe surface area.

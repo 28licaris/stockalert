@@ -43,10 +43,15 @@ def _seconds_until_next_run(hour_utc: int, *, now: datetime | None = None) -> fl
 
 
 def _resolve_symbols(spec: str) -> list[str]:
-    s = (spec or "").strip().lower()
-    if s in ("seed", "seed-100", "seed_100", ""):
-        return list(SEED_SYMBOLS)
-    return [tok.strip().upper() for tok in spec.split(",") if tok.strip()]
+    """Translate ``SCHWAB_NIGHTLY_SYMBOLS`` → list[str].
+
+    Spec strings: "seed" (default), "active" (= SEED ∪ watchlists,
+    per G1 dynamic universe), or explicit CSV. See
+    `app.services.universe.resolve_universe_spec` for details.
+    """
+    # Local import: keep watchlist_repo (CH) out of module-load path.
+    from app.services.universe import resolve_universe_spec
+    return resolve_universe_spec(spec)
 
 
 def _schwab_nightly_gated() -> tuple[bool, str]:

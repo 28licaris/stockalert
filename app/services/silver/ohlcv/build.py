@@ -307,12 +307,13 @@ class SilverOhlcvBuild:
     def run_nightly(self, symbols: Optional[Iterable[str]] = None) -> BuildResult:
         """Yesterday's slice for the active universe.
 
-        Default symbols = SEED_SYMBOLS for now. After G1 lands (dynamic
-        universe), this will use `get_active_universe()`.
+        Default symbols = `get_active_universe()` (SEED_SYMBOLS ∪
+        active-watchlist symbols) per G1 dynamic universe. Pass an
+        explicit list to override (operator override / one-shot rebuilds).
         """
         if symbols is None:
-            from app.data.seed_universe import SEED_SYMBOLS
-            symbols = list(SEED_SYMBOLS)
+            from app.services.universe import get_active_universe
+            symbols = get_active_universe()
         else:
             symbols = list(symbols)
         yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
@@ -327,13 +328,14 @@ class SilverOhlcvBuild:
     ) -> BuildResult:
         """Build the full silver history from bronze.
 
-        Defaults: symbols = SEED_SYMBOLS; start = 2021-01-04 (bronze
-        polygon coverage start); end = yesterday. Wall-clock measured
-        in hours for a full rebuild — operator script intended.
+        Defaults: symbols = `get_active_universe()` per G1; start =
+        2021-01-04 (bronze polygon coverage start); end = yesterday.
+        Wall-clock measured in hours for a full rebuild — operator
+        script intended.
         """
         if symbols is None:
-            from app.data.seed_universe import SEED_SYMBOLS
-            symbols = list(SEED_SYMBOLS)
+            from app.services.universe import get_active_universe
+            symbols = get_active_universe()
         else:
             symbols = list(symbols)
         start = start_date or date(2021, 1, 4)

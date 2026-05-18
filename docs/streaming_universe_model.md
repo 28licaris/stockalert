@@ -53,8 +53,14 @@ active watchlist get streamed; everything else does not.
 
 | Tier | What's in it | Bronze coverage | Going forward |
 |---|---|---|---|
-| **Seed universe** | Symbols actively streamed by Schwab. Configured in `settings.seed_symbols`. ~100 today, grows. | Polygon archive (5-20y) + Schwab nightly fill (last 48d) + Schwab stream (forever) | New bars every minute via Schwab stream |
-| **Archive only** | Everything else Polygon covered (rest of US market) | Polygon archive only | No new bars unless Polygon resumes |
+| **Active universe** (G1, dynamic) | `SEED_SYMBOLS ∪ <every symbol in any active watchlist>`. Resolved at nightly-job time via `get_active_universe()`. ~100 today + growing as users + agents add watchlist members. | Polygon archive (5-20y) + Schwab nightly REST (last 48d) + Schwab stream (forever) when watchlisted | New bars every minute via Schwab stream + nightly bronze refresh for both providers |
+| **Archive only** | Everything else Polygon covered (rest of US market, never watchlisted) | Polygon archive only | No new bars unless added to a watchlist or Polygon resumes whole-market |
+
+**G1 LANDED 2026-05-17.** The `active` keyword is now a valid spec
+for `POLYGON_NIGHTLY_SYMBOLS`, `SCHWAB_NIGHTLY_SYMBOLS`, and
+`SILVER_OHLCV_BUILD_SYMBOLS`. Set those to `active` and adding any
+symbol to any watchlist automatically grows nightly bronze + silver
+coverage within 24h. **No separate "promote-to-seed" step needed.**
 
 ## The "add a streamed symbol" flow (unified — no two-tier branching)
 
