@@ -2668,3 +2668,68 @@ bottom with a date.
        storage / extra Pydantic fields without surfacing the
        tradeoff and getting explicit signoff. Plan docs are
        guidance, NOT pre-authorization.
+
+- **2026-05-18** — **TA-5.1.9 LANDED**: corp-action rebuild trigger
+  (auto-recompute affected silver slices when a new split lands).
+
+  **The bug-in-waiting this closes.** Without it, scenario:
+    Day 1: NVDA's silver history exists with F=1 (no future splits).
+    Day 2: NVDA announces 4-for-1 split, ex_date in 30 days.
+           corp_actions_backfill picks it up → silver.corp_actions
+           has the new row.
+    Day 3+: Nightly silver_build only processes yesterday — never
+           touches NVDA's deep history. Historical rows still have
+           F=1 baked in.
+    Result: 4× price discontinuity at the new ex_date.
+
+  **Implementation.** SilverOhlcvBuild.run_nightly() now runs in
+  two phases:
+
+    Phase 1: Dirty-rebuild scan
+      1. Read CH ingestion_runs for the prior successful
+         silver_ohlcv_build's started_at (= watermark)
+      2. Query silver.corp_actions for splits with
+         ingestion_ts > watermark AND action_type='split'
+      3. Per affected symbol, find max(ex_date) of new splits
+      4. Rebuild window (BRONZE_HISTORY_START, max_ex_date - 1)
+         — bars on/after the new ex_date already have correct F
+         from their original build
+
+    Phase 2: Normal yesterday × universe
+      Same as before. Combined BuildResult recorded once in
+      ingestion_runs, serving as the next night's watermark.
+
+  Uses existing ingestion_runs CH table as the watermark — no new
+  schema. Cold start (no prior run): defaults to 7-day lookback.
+
+  New SilverOhlcvBuild methods (app/services/silver/ohlcv/build.py):
+    - find_corp_action_dirty_symbols(since) → dict[symbol, max_ex_date]
+    - _get_last_run_started_at() → datetime | None  (CH read)
+    - _run_corp_action_dirty_rebuilds() → BuildResult | None
+
+  run_nightly(scan_corp_action_dirty=True) toggle for tests +
+  one-off operator overrides.
+
+  Operator CLI: --rebuild-corp-action-dirty manually triggers the
+  same scan + rebuild logic. Useful immediately after running
+  scripts/run_corp_actions_backfill.py when you don't want to wait
+  for tonight's nightly.
+
+  Tests (11, all green):
+    - No corp_actions table → graceful empty
+    - Empty corp_actions → empty dirty
+    - Single new split → flags symbol with that ex_date
+    - Multiple splits same symbol → keeps MAX(ex_date)
+    - Multiple symbols → each gets own max
+    - Filter pushes action_type='split' + since predicates to Iceberg
+    - Scan failure → graceful empty (no raise; nightly continues)
+    - run_nightly with scan_corp_action_dirty=False skips the scan
+    - Dirty + yesterday results merge correctly
+    - No dirty → falls through to yesterday-only
+    - Rebuild window math: starts at BRONZE_HISTORY_START, ends at
+      max_ex_date - 1, never includes ex_date itself
+
+  Docs updated:
+    silver_layer_plan.md §3.4 rewritten with actual implementation
+    runbook_silver_ohlcv_build.md: new "When a new split lands" section
+    + manual --rebuild-corp-action-dirty usage

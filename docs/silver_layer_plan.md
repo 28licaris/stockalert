@@ -513,27 +513,47 @@ Step 2 is new vs. the original design (which assumed all bronze
 sources were raw). Discovered + fixed via the empirical probe
 on 2026-05-17.
 
-### 3.4 Adjustment recomputation
+### 3.4 Adjustment recomputation (TA-5.1.9)
 
-**Key invariant:** when a corp-action lands (e.g. NVDA announces a
-4-for-1 split, ex-date in 30 days), ALL historical silver rows for
-NVDA need their OHLCV columns recomputed (the F factor changes for
-every bar with date < new-split's ex_date). Implementation:
+**Key invariant:** when a new split lands in `silver.corp_actions`
+for symbol S with ex_date X, every silver.ohlcv_1m row for S with
+bar_date < X has a stale F (cumulative split factor) baked in.
+Those rows need recompute or the chart shows a discontinuity at X.
 
-- On ex-date crossing, `silver_build.py` re-emits the affected
-  `(symbol, ts)` slice with the new factor — re-reads bronze,
-  re-runs `normalize_provider_rows`, upserts the corrected
-  split-adjusted values.
-- This is why adjustment lives in silver, not bronze. Bronze is
-  append-only; silver is `MERGE INTO`.
-- An alternative would be view-based adjustment (silver stores raw,
-  consumers compute adjusted on the fly). We rejected this because:
-  - PyIceberg's read path doesn't support computed columns
-    efficiently;
-  - Backtests need byte-identical reproducibility (a corp-action
-    update mid-run shouldn't change historical bars within the run).
-  Materializing the adjusted view once is simpler and
-  reproducibility-friendly.
+**Implementation (LANDED 2026-05-18):**
+
+`SilverOhlcvBuild.run_nightly()` runs in two phases:
+
+1. **Dirty rebuild phase**: query CH `ingestion_runs` for the prior
+   successful silver_ohlcv_build's `started_at`, then query
+   silver.corp_actions for splits with `ingestion_ts > that_ts`.
+   For each affected symbol, rebuild the window
+   `(BRONZE_HISTORY_START, max_new_ex_date - 1)`. Bars on/after
+   the new ex_date already have correct F (their original build
+   saw the split).
+2. **Normal yesterday phase**: yesterday × active universe as before.
+
+The combined BuildResult is recorded once in `ingestion_runs`,
+serving as the new watermark for the next night's scan. Uses the
+existing `ingestion_runs` CH table — no new schema. Cold start
+(no prior run): falls back to a 7-day lookback.
+
+**Manual operator trigger** (e.g. after a one-off corp-actions
+backfill):
+
+```bash
+poetry run python scripts/run_silver_ohlcv_build.py --rebuild-corp-action-dirty
+```
+
+**Why this design over the alternatives:**
+- View-based adjustment (silver stores raw, consumers compute on
+  the fly): PyIceberg's read path doesn't support computed columns
+  efficiently; backtests need byte-identical reproducibility (a
+  corp-action update mid-run shouldn't change historical bars
+  within the run).
+- Per-row dirty-marker table: requires a new CH table + dual writes
+  on every corp-actions update. The `ingestion_runs` watermark is
+  leaner and uses existing infrastructure.
 
 ### 3.5 Scheduling
 

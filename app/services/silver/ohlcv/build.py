@@ -29,7 +29,13 @@ from typing import Iterable, Optional
 
 import pyarrow as pa
 from pyiceberg.exceptions import NoSuchTableError
-from pyiceberg.expressions import And, EqualTo, GreaterThanOrEqual, LessThan
+from pyiceberg.expressions import (
+    And,
+    EqualTo,
+    GreaterThan,
+    GreaterThanOrEqual,
+    LessThan,
+)
 
 from app.config import settings
 from app.services.bronze.schemas import (
@@ -304,12 +310,28 @@ class SilverOhlcvBuild:
 
         return result
 
-    def run_nightly(self, symbols: Optional[Iterable[str]] = None) -> BuildResult:
-        """Yesterday's slice for the active universe.
+    def run_nightly(
+        self,
+        symbols: Optional[Iterable[str]] = None,
+        *,
+        scan_corp_action_dirty: bool = True,
+    ) -> BuildResult:
+        """Yesterday's slice for the active universe, plus any dirty
+        slices that need rebuilding because corp-actions changed.
 
         Default symbols = `get_active_universe()` (SEED_SYMBOLS ∪
         active-watchlist symbols) per G1 dynamic universe. Pass an
         explicit list to override (operator override / one-shot rebuilds).
+
+        **Corp-action dirty rebuild (TA-5.1.9):** when set
+        (`scan_corp_action_dirty=True`, default), the run first queries
+        silver.corp_actions for splits ingested since the last
+        successful silver_ohlcv_build run. For each affected symbol it
+        rebuilds the full history window (bars before the new ex_date)
+        because the cumulative split factor F changed. Without this,
+        new splits would create silent price discontinuities at the
+        ex_date in historical silver data. See
+        `find_corp_action_dirty_symbols` for the scan logic.
         """
         if symbols is None:
             from app.services.universe import get_active_universe
@@ -317,6 +339,22 @@ class SilverOhlcvBuild:
         else:
             symbols = list(symbols)
         yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
+
+        # Phase 1: corp-action dirty rebuilds (if enabled).
+        # Run BEFORE the normal yesterday-window so that any rebuild
+        # picks up the same corp_actions state the yesterday build will use.
+        if scan_corp_action_dirty:
+            dirty_result = self._run_corp_action_dirty_rebuilds()
+            # If we got any dirty rebuilds, return the combined result.
+            # If not, fall through to a pure yesterday-only build.
+            if dirty_result is not None and dirty_result.slices:
+                # Run yesterday's slice and merge into the dirty result.
+                yesterday_result = self.build_window(symbols, yesterday, yesterday)
+                dirty_result.slices.extend(yesterday_result.slices)
+                dirty_result.finished_at = yesterday_result.finished_at
+                return dirty_result
+
+        # Phase 2: normal yesterday × universe.
         return self.build_window(symbols, yesterday, yesterday)
 
     def run_full(
@@ -341,6 +379,199 @@ class SilverOhlcvBuild:
         start = start_date or date(2021, 1, 4)
         end = end_date or (datetime.now(timezone.utc).date() - timedelta(days=1))
         return self.build_window(symbols, start, end)
+
+    # ─────────────────────────────────────────────────────────────────
+    # Corp-action rebuild trigger (TA-5.1.9)
+    # ─────────────────────────────────────────────────────────────────
+    #
+    # When a new split lands in silver.corp_actions for symbol S with
+    # ex_date X, every silver.ohlcv_1m row for S with bar_date < X has
+    # a stale F (cumulative split factor) baked in. Those rows need
+    # recompute or the chart shows a discontinuity at X.
+    #
+    # The scan compares silver.corp_actions's `ingestion_ts` against
+    # the previous successful silver_ohlcv_build run's `started_at`
+    # (read from CH `ingestion_runs`). Anything newer = dirty.
+    #
+    # Rebuild window per affected symbol:
+    #   start = BRONZE_HISTORY_START (2021-01-04)
+    #   end   = max(new ex_dates for that symbol) - 1 day
+    # We rebuild the FULL history before the latest new ex_date because
+    # multiple back-dated splits could chain (rare but possible).
+
+    BRONZE_HISTORY_START = date(2021, 1, 4)
+
+    def find_corp_action_dirty_symbols(
+        self, since: datetime,
+    ) -> dict[str, date]:
+        """Find symbols whose silver history is stale due to new splits.
+
+        Returns `{symbol: max_new_ex_date}` — the rebuild window for
+        each symbol is `(BRONZE_HISTORY_START, max_new_ex_date - 1)`.
+        Empty dict if no new splits since `since`.
+
+        `since` is the prior successful silver_ohlcv_build run's
+        `started_at` timestamp (UTC). Anything in silver.corp_actions
+        with `ingestion_ts > since AND action_type = 'split'` is new.
+        """
+        try:
+            ca_table = self._get_catalog().load_table(
+                silver_table_id("corp_actions"),
+            )
+        except NoSuchTableError:
+            logger.info(
+                "find_corp_action_dirty_symbols: silver.corp_actions "
+                "absent; no dirty symbols",
+            )
+            return {}
+
+        try:
+            arrow = ca_table.scan(
+                row_filter=And(
+                    EqualTo("action_type", "split"),
+                    GreaterThan("ingestion_ts", since),
+                ),
+                selected_fields=("symbol", "ex_date", "ingestion_ts"),
+            ).to_arrow()
+        except Exception as e:
+            logger.warning(
+                "find_corp_action_dirty_symbols: corp_actions scan "
+                "failed: %s; returning empty (no rebuild this pass)", e,
+            )
+            return {}
+
+        if arrow.num_rows == 0:
+            return {}
+
+        per_symbol: dict[str, date] = {}
+        for row in arrow.to_pylist():
+            sym = row.get("symbol")
+            ex = row.get("ex_date")
+            if not sym or not ex:
+                continue
+            prev = per_symbol.get(sym)
+            if prev is None or ex > prev:
+                per_symbol[sym] = ex
+        return per_symbol
+
+    def _get_last_run_started_at(self) -> Optional[datetime]:
+        """Read the latest successful silver_ohlcv_build run's
+        `started_at` from CH ingestion_runs. Returns None if none
+        recorded (cold start)."""
+        try:
+            from app.db import get_client
+
+            client = get_client()
+            result = client.query(
+                """
+                SELECT max(started_at)
+                FROM ingestion_runs
+                WHERE job_name = 'silver_ohlcv_build'
+                  AND status IN ('ok', 'partial_fail')
+                """,
+            )
+            if not result.result_rows:
+                return None
+            ts = result.result_rows[0][0]
+            if ts is None:
+                return None
+            # CH returns naive datetime in UTC; upgrade to tz-aware.
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            return ts
+        except Exception as e:
+            logger.warning(
+                "_get_last_run_started_at: CH read failed (%s); "
+                "returning None — corp-action dirty scan will use a "
+                "default lookback instead", e,
+            )
+            return None
+
+    def _run_corp_action_dirty_rebuilds(self) -> Optional[BuildResult]:
+        """Scan for dirty symbols + rebuild affected windows.
+
+        Returns the BuildResult of the rebuild pass, or None if
+        nothing was dirty (so the caller can skip merging).
+        """
+        # Watermark for the scan: prior successful run's started_at.
+        # If none recorded (cold start), default to "7 days ago" so the
+        # first auto-run after silver-build go-live picks up any splits
+        # that landed during the initial backfill window.
+        since = self._get_last_run_started_at()
+        if since is None:
+            since = datetime.now(timezone.utc) - timedelta(days=7)
+            logger.info(
+                "_run_corp_action_dirty_rebuilds: no prior run watermark; "
+                "scanning corp_actions ingested since %s (default 7d lookback)",
+                since,
+            )
+
+        dirty = self.find_corp_action_dirty_symbols(since)
+        if not dirty:
+            logger.info(
+                "_run_corp_action_dirty_rebuilds: no dirty symbols "
+                "(no new splits since %s)", since,
+            )
+            return None
+
+        logger.info(
+            "_run_corp_action_dirty_rebuilds: %d symbols dirty: %s",
+            len(dirty), sorted(dirty.keys()),
+        )
+
+        # Build a separate run per affected symbol because each has its
+        # own end date. Could be batched into one run_id for audit
+        # cleanliness — do that here, building one window per symbol
+        # but accumulating slice results into a single BuildResult.
+        run_id = uuid.uuid4().hex
+        started = datetime.now(timezone.utc)
+        combined = BuildResult(
+            run_id=run_id,
+            started_at=started,
+            finished_at=started,
+            symbols=sorted(dirty.keys()),
+            start_date=self.BRONZE_HISTORY_START,
+            end_date=max(dirty.values()),
+        )
+
+        # Prime corp-actions cache once for the whole rebuild pass.
+        self._prime_corp_actions_cache()
+
+        for symbol, max_ex_date in dirty.items():
+            # Rebuild window: everything strictly before the new ex_date.
+            # The new ex_date's own bars + going forward already have
+            # the correct F (their ingestion already saw the new split).
+            window_end = max_ex_date - timedelta(days=1)
+            window_start = self.BRONZE_HISTORY_START
+            if window_end < window_start:
+                continue
+            logger.info(
+                "corp-action-dirty rebuild: %s %s..%s",
+                symbol, window_start, window_end,
+            )
+            current = window_start
+            while current <= window_end:
+                slice_result = self.build_slice(symbol, current, run_id=run_id)
+                combined.slices.append(slice_result)
+                current += timedelta(days=1)
+
+        combined.finished_at = datetime.now(timezone.utc)
+        logger.info(
+            "_run_corp_action_dirty_rebuilds: done run_id=%s symbols=%d "
+            "slices=%d (ok=%d fail=%d) silver_rows=%d duration=%.1fs",
+            run_id, len(dirty), len(combined.slices),
+            combined.slices_succeeded, combined.slices_failed,
+            combined.total_silver_rows, combined.duration_seconds,
+        )
+
+        # Clear caches (run_nightly's normal phase will re-prime).
+        self._split_index = None
+        self._corp_actions_arrow = None
+
+        # Record the run for audit.
+        self._record_run(combined)
+
+        return combined
 
     # ─────────────────────────────────────────────────────────────────
     # Per-pipeline-step helpers

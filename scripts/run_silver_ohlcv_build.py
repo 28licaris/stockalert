@@ -88,6 +88,17 @@ def _build_parser() -> argparse.ArgumentParser:
             "loop runs. Idempotent."
         ),
     )
+    mode.add_argument(
+        "--rebuild-corp-action-dirty",
+        action="store_true",
+        help=(
+            "Scan silver.corp_actions for splits ingested since the last "
+            "successful silver_ohlcv_build run and rebuild every affected "
+            "symbol's full history before each new ex_date. Manual operator "
+            "trigger for the same corp-action-rebuild logic the nightly "
+            "loop runs automatically (TA-5.1.9)."
+        ),
+    )
     p.add_argument(
         "--since",
         type=_parse_date,
@@ -160,12 +171,76 @@ def _summarize(result: BuildResult) -> dict:
     }
 
 
+def _run_corp_action_dirty(args) -> int:
+    """Manual operator trigger for the corp-action rebuild logic (TA-5.1.9).
+
+    Same scan + rebuild the nightly loop runs automatically. Use this
+    when you've just landed a corp_actions ingest manually and want
+    historical silver slices recomputed immediately rather than waiting
+    for the next nightly.
+    """
+    summary: dict = {
+        "mode": "rebuild_corp_action_dirty",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "status": "in_progress",
+    }
+
+    try:
+        build = SilverOhlcvBuild.from_settings()
+        result = build._run_corp_action_dirty_rebuilds()
+        if result is None:
+            summary["status"] = "no_dirty_symbols"
+            summary["result"] = {"slices": 0, "symbols": 0}
+        else:
+            summary["result"] = _summarize(result)
+            summary["status"] = (
+                "ok" if result.slices_failed == 0 else "partial_fail"
+            )
+    except Exception as e:
+        summary["status"] = "fail"
+        summary["error"] = f"{type(e).__name__}: {e}"
+        logger.exception("rebuild_corp_action_dirty failed")
+
+    summary["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+    print()
+    print("─── silver_ohlcv_build (corp-action dirty rebuild) ───")
+    print(f"  status:       {summary['status']}")
+    if summary["status"] == "no_dirty_symbols":
+        print(
+            "  no symbols flagged dirty — no new corp_actions since the "
+            "last successful silver_ohlcv_build run"
+        )
+    elif "result" in summary:
+        r = summary["result"]
+        print(
+            f"  symbols:      {r['symbols']}  "
+            f"slices:       {r['slices']}  "
+            f"(ok={r['slices_succeeded']} fail={r['slices_failed']})"
+        )
+        print(f"  silver_rows:  {r['silver_rows']}")
+        print(f"  duration:     {r['duration_seconds']:.1f}s")
+    if "error" in summary:
+        print(f"  error:        {summary['error']}")
+    print()
+
+    if args.out_json:
+        args.out_json.write_text(json.dumps(summary, indent=2, default=str))
+        print(f"JSON report → {args.out_json}")
+
+    return 0 if summary["status"] in ("ok", "no_dirty_symbols") else 2
+
+
 def main() -> int:
     args = _build_parser().parse_args()
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
+
+    # Dirty-rebuild mode is a different path — bypass window resolution.
+    if args.rebuild_corp_action_dirty:
+        return _run_corp_action_dirty(args)
 
     since, until = _resolve_window(args)
     symbols = _resolve_symbols(args.symbols)

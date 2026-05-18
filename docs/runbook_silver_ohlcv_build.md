@@ -148,6 +148,30 @@ curl -sS "http://localhost:8000/api/silver/bars/NVDA?start=2024-06-07T18:30:00Z&
 If divergences exceed $0.01, file a ticket — the per-provider
 normalization math may have a corner case the canary tests missed.
 
+## When a new split lands (corp-action rebuild)
+
+The nightly loop **automatically** handles this (TA-5.1.9): at the
+start of every run, it scans `silver.corp_actions` for splits
+ingested since the last successful silver_ohlcv_build, identifies
+affected symbols, and rebuilds the historical window before each
+new ex_date. Then it runs the normal yesterday × universe build.
+
+Without this, a new split would create a silent price
+discontinuity at the ex_date in historical silver data — every bar
+before the new split would still have the old F (cumulative split
+factor) baked in.
+
+If you need to trigger the rebuild manually (e.g. you just ran
+`scripts/run_corp_actions_backfill.py --full` and don't want to
+wait for tonight's nightly):
+
+```bash
+poetry run python scripts/run_silver_ohlcv_build.py --rebuild-corp-action-dirty
+```
+
+That runs the same scan + rebuild logic the nightly loop runs
+automatically, then exits.
+
 ## Re-running individual phases
 
 The build is idempotent, so any of these is safe to re-run:
