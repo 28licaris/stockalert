@@ -43,22 +43,24 @@ Optional flags:
 Once preflight is green, kick off the multi-hour `--full` run:
 
 ```bash
-# Default: seed universe × from 2021-01-04 → yesterday.
+# Default: seed universe × from 2021-01-04 → yesterday, sequential.
 poetry run python scripts/run_silver_ohlcv_build.py --full \
     --out-json full_backfill.json
 
-# Recommended after G1: dynamic universe (SEED ∪ active watchlists).
+# Recommended: dynamic universe + parallelism (TA-5.1.10).
 poetry run python scripts/run_silver_ohlcv_build.py --full \
     --symbols active \
+    --concurrency 8 \
     --out-json full_backfill.json
 ```
 
 Wall-clock estimate:
-- ~100 symbols × ~1300 trading days × per-slice ~0.5s ≈ **18-25
-  hours single-threaded**. Plan for an overnight + next-day window.
-- I/O bound on Iceberg scans, not on CH inserts. Future enhancement
-  could parallelize per-symbol via a semaphore (see
-  `silver_layer_plan.md §3` — single-process today).
+- Single-threaded (default `--concurrency 1`): ~18-25 hours for the
+  seed universe. I/O-bound on Iceberg scans.
+- Concurrent (`--concurrency 8`): ~3-4 hours locally, ~30-60 min in
+  cloud (EC2 / CodeBuild in the same AWS region as your S3 bucket).
+  See `silver_initial_build_speedup_options.md` for the full cost/
+  effort matrix.
 
 Recommended runtime setting:
 - Run from a screen / tmux session so a terminal hiccup doesn't

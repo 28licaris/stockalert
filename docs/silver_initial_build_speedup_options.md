@@ -24,16 +24,30 @@ parallelization helps every future run too (nightly delta,
 
 ---
 
-## Option A — Parallelize the build
+## Option A — Parallelize the build [✅ LANDED 2026-05-18, TA-5.1.10]
 
-Each `build_slice(symbol, day)` is independent. The current
-orchestrator's `for symbol in symbols` loop wastes 80–95% of
+Each `build_slice(symbol, day)` is independent. The previous
+orchestrator's `for symbol in symbols` loop wasted 80–95% of
 available capacity on S3 round-trips.
 
-**What changes:** add `asyncio.Semaphore(N)` fan-out around
-`build_slice`, batched per-day upserts to keep PyIceberg commit
-churn low, `--concurrency N` flag on the CLI (default 1 = current
-behavior; opt-in for safety).
+**What landed:**
+- New `SilverOhlcvBuild.compute_slice(symbol, day)` — the
+  read+normalize+merge half of build_slice with no writes.
+- New `_build_window_concurrent()` — fans out compute_slice via
+  `asyncio.Semaphore(N)` + `asyncio.to_thread`, then does ONE upsert
+  per silver table per day (batched to keep PyIceberg commit churn
+  low — concurrent upserts to the same table cause retry storms).
+- `build_window` and `run_full` accept `max_concurrency=N` (default
+  1 = sequential, opt-in to parallelism).
+- CLI flag `--concurrency N` on `scripts/run_silver_ohlcv_build.py`.
+
+**Run it:**
+```bash
+poetry run python scripts/run_silver_ohlcv_build.py --full \
+    --symbols active \
+    --concurrency 8 \
+    --out-json full_backfill.json
+```
 
 **Expected speedup:**
 

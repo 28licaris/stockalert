@@ -233,7 +233,10 @@ class TestSilverBuildDefaultUniverse:
             "app.db.watchlist_repo.list_all_active_symbols",
             return_value={"NEW_DYNAMIC_SYM"},
         ):
-            build.run_nightly()  # symbols=None → should pull active universe
+            # scan_corp_action_dirty=False so the test stays focused on
+            # the universe-default path and doesn't touch the TA-5.1.9
+            # corp_actions scan (which needs a real catalog).
+            build.run_nightly(scan_corp_action_dirty=False)
 
         assert "NEW_DYNAMIC_SYM" in captured["symbols"]
         assert set(SEED_SYMBOLS).issubset(set(captured["symbols"]))

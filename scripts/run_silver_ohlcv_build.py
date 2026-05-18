@@ -121,6 +121,18 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help=(
+            "Number of (symbol, day) slices to compute in parallel "
+            "(TA-5.1.10). Default 1 (sequential — safe). Recommended 8 "
+            "for an overnight --full run on a fast network. Upserts are "
+            "always batched per-day regardless of N to avoid PyIceberg "
+            "commit conflicts."
+        ),
+    )
+    p.add_argument(
         "--out-json",
         type=Path,
         default=None,
@@ -244,22 +256,27 @@ def main() -> int:
 
     since, until = _resolve_window(args)
     symbols = _resolve_symbols(args.symbols)
+    concurrency = max(1, int(args.concurrency))
     logger.info(
-        "silver_ohlcv_build: window=%s..%s symbols=%d (full=%s nightly=%s)",
-        since, until, len(symbols), args.full, args.nightly,
+        "silver_ohlcv_build: window=%s..%s symbols=%d (full=%s nightly=%s) "
+        "concurrency=%d",
+        since, until, len(symbols), args.full, args.nightly, concurrency,
     )
 
     summary: dict = {
         "since": since.isoformat(),
         "until": until.isoformat(),
         "symbols_count": len(symbols),
+        "concurrency": concurrency,
         "started_at": datetime.now(timezone.utc).isoformat(),
         "status": "in_progress",
     }
 
     try:
         build = SilverOhlcvBuild.from_settings()
-        result = build.build_window(symbols, since, until)
+        result = build.build_window(
+            symbols, since, until, max_concurrency=concurrency,
+        )
         summary["result"] = _summarize(result)
         summary["status"] = "ok" if result.slices_failed == 0 else "partial_fail"
     except Exception as e:

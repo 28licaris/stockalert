@@ -2733,3 +2733,61 @@ bottom with a date.
     silver_layer_plan.md §3.4 rewritten with actual implementation
     runbook_silver_ohlcv_build.md: new "When a new split lands" section
     + manual --rebuild-corp-action-dirty usage
+
+- **2026-05-18** — **TA-5.1.10 LANDED**: parallelize silver build
+  (asyncio.Semaphore + per-day batched upserts).
+
+  **The problem.** The original sequential build_window iterates
+  (symbol × day) one slice at a time. With ~5 sec per slice
+  dominated by S3 latency, the initial --full backfill takes
+  18-25 hours for the seed universe — operator-painful.
+
+  **Implementation.** Split build_slice's compute and write halves:
+    - compute_slice(): READ + normalize + merge → (SliceResult,
+      ohlcv_arrow, quality_arrow). No writes. Pure function modulo
+      the corp-actions cache + bronze reads.
+    - build_slice(): convenience wrapper = compute_slice + the two
+      upserts. Same API as before for sequential callers.
+    - _build_window_concurrent(): for each day, fan out compute_slice
+      via asyncio.Semaphore(N) + asyncio.to_thread, then do ONE
+      batched upsert per silver table per day.
+
+  **Per-day batching is the upsert-conflict mitigation.** PyIceberg's
+  optimistic concurrency means N concurrent upserts to the same
+  Iceberg table cause retry storms. Batching to one upsert per
+  table per day amortizes commits and avoids the issue.
+
+  **New plumbing:**
+    - build_window(symbols, start, end, *, max_concurrency=1)
+    - run_full(*, max_concurrency=1)
+    - CLI flag: --concurrency N on scripts/run_silver_ohlcv_build.py
+
+  **Defaults preserved.** max_concurrency=1 → original sequential
+  path (safe). Operator opts in to parallelism explicitly. Sweet
+  spot is N=8 per the speedup options doc; higher hits diminishing
+  returns from S3 rate limits + PyArrow CPU contention.
+
+  Wall-clock impact (estimated):
+    --concurrency 1 (today)      18-25 hr   local laptop
+    --concurrency 8              3-4 hr     local laptop
+    --concurrency 8 in cloud     30-60 min  EC2/CodeBuild same region
+
+  Tests (8, all green):
+    - compute_slice returns Arrows without writing
+    - Empty bronze → (result, None, None)
+    - All slices processed at concurrency=N
+    - Per-day batching: 3 symbols × 2 days = 2 ohlcv upserts, NOT 6
+    - max_concurrency=1 preserves sequential path (1 upsert per slice)
+    - Empty day → no upserts
+    - Cache primed exactly once per run (not once per slice)
+    - Semaphore actually bounds concurrent compute_slice in flight
+
+  Existing test_active_universe.py test updated to pass
+  scan_corp_action_dirty=False (avoids the TA-5.1.9 catalog access
+  which the universe-default test doesn't need).
+
+  168 silver tests green. FastAPI + MCP server still import cleanly.
+
+  Docs updated:
+    silver_initial_build_speedup_options.md: Option A marked LANDED
+    runbook_silver_ohlcv_build.md: step 2 includes --concurrency 8

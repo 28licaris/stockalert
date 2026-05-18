@@ -181,14 +181,28 @@ class SilverOhlcvBuild:
     # Public modes
     # ─────────────────────────────────────────────────────────────────
 
-    def build_slice(
+    def compute_slice(
         self,
         symbol: str,
         day: date,
         *,
         run_id: Optional[str] = None,
-    ) -> SliceResult:
-        """Build one (symbol, day) slice end-to-end."""
+    ) -> tuple[SliceResult, Optional[pa.Table], Optional[pa.Table]]:
+        """The READ + NORMALIZE + MERGE half of build_slice — no writes.
+
+        Returns (SliceResult, ohlcv_arrow_or_None, bar_quality_arrow_or_None).
+        The arrows are None when there's no data to write (cold-start
+        symbol, weekend day, etc.).
+
+        This split lets `build_window_concurrent` run the I/O-bound +
+        CPU-bound compute work in parallel (many slices at once via
+        asyncio.Semaphore + asyncio.to_thread) while batching the
+        PyIceberg upserts per-day in serial — avoiding optimistic-
+        concurrency commit conflicts.
+
+        Use `build_slice` for the simple sequential path (compute +
+        write in one call).
+        """
         run_id = run_id or uuid.uuid4().hex
         result = SliceResult(symbol=symbol, date=day)
         try:
@@ -218,7 +232,8 @@ class SilverOhlcvBuild:
                 if not rows:
                     continue
 
-                # 2. Normalize this provider's rows to BOTH _raw and _adj.
+                # 2. Normalize this provider's rows into the canonical
+                #    split-adjusted frame.
                 normalized = normalize_provider_rows(
                     rows,
                     adjustment_status=routing.adjustment_status,
@@ -229,23 +244,51 @@ class SilverOhlcvBuild:
             if not per_provider_rows:
                 # No bronze data for this slice at all. Not an error —
                 # the symbol may not have traded this day.
-                return result
+                return result, None, None
 
             # 3. Merge with precedence + compute bar_quality.
             ohlcv_arrow = merge_with_precedence(per_provider_rows, run_id=run_id)
             quality_arrow = compute_bar_quality(per_provider_rows, run_id=run_id)
-
-            # 4. Upsert into silver tables.
-            if ohlcv_arrow.num_rows > 0:
-                self._get_ohlcv_table().upsert(ohlcv_arrow)
-                result.silver_rows_written = ohlcv_arrow.num_rows
-            if quality_arrow.num_rows > 0:
-                self._get_bar_quality_table().upsert(quality_arrow)
-                result.quality_row_written = True
+            return result, ohlcv_arrow, quality_arrow
 
         except Exception as e:
             logger.exception(
-                "silver_ohlcv_build: slice (%s, %s) failed: %s", symbol, day, e,
+                "silver_ohlcv_build: slice (%s, %s) compute failed: %s",
+                symbol, day, e,
+            )
+            result.error = f"{type(e).__name__}: {e}"
+            return result, None, None
+
+    def build_slice(
+        self,
+        symbol: str,
+        day: date,
+        *,
+        run_id: Optional[str] = None,
+    ) -> SliceResult:
+        """Build one (symbol, day) slice end-to-end (compute + write).
+
+        Sequential convenience wrapper around compute_slice + the two
+        upserts. For high-volume backfills, prefer
+        `build_window_concurrent` which batches upserts per-day.
+        """
+        result, ohlcv_arrow, quality_arrow = self.compute_slice(
+            symbol, day, run_id=run_id,
+        )
+        if not result.succeeded:
+            return result
+
+        try:
+            if ohlcv_arrow is not None and ohlcv_arrow.num_rows > 0:
+                self._get_ohlcv_table().upsert(ohlcv_arrow)
+                result.silver_rows_written = ohlcv_arrow.num_rows
+            if quality_arrow is not None and quality_arrow.num_rows > 0:
+                self._get_bar_quality_table().upsert(quality_arrow)
+                result.quality_row_written = True
+        except Exception as e:
+            logger.exception(
+                "silver_ohlcv_build: slice (%s, %s) upsert failed: %s",
+                symbol, day, e,
             )
             result.error = f"{type(e).__name__}: {e}"
 
@@ -256,13 +299,32 @@ class SilverOhlcvBuild:
         symbols: list[str],
         start_date: date,
         end_date: date,
+        *,
+        max_concurrency: int = 1,
     ) -> BuildResult:
         """Build all (symbol, day) slices in the window.
 
-        Iterates day-by-day across each symbol. Single-process today;
-        future enhancement could parallelize per-symbol with a
-        semaphore.
+        When `max_concurrency > 1`, dispatches to the concurrent
+        implementation which:
+          - runs `compute_slice` for many slices in parallel via
+            `asyncio.Semaphore(max_concurrency)` + `asyncio.to_thread`
+            (the I/O-bound + CPU-bound work that's 95% of wall-clock)
+          - batches the PyIceberg upserts per-day (one upsert per
+            table per day) — keeps optimistic-concurrency commit
+            churn low
+
+        `max_concurrency=1` (default) preserves the original sequential
+        behavior: opt-in to parallelism for safety.
+
+        Either way: idempotent (re-running same window upserts identical
+        rows modulo ingestion_ts), per-slice error-isolated (one bad
+        symbol doesn't abort the rest).
         """
+        if max_concurrency > 1:
+            return self._build_window_concurrent(
+                symbols, start_date, end_date, max_concurrency=max_concurrency,
+            )
+
         run_id = uuid.uuid4().hex
         started = datetime.now(timezone.utc)
         result = BuildResult(
@@ -275,7 +337,8 @@ class SilverOhlcvBuild:
         )
 
         logger.info(
-            "silver_ohlcv_build: starting run_id=%s symbols=%d window=%s..%s",
+            "silver_ohlcv_build: starting run_id=%s symbols=%d window=%s..%s "
+            "concurrency=1 (sequential)",
             run_id, len(symbols), start_date, end_date,
         )
 
@@ -363,13 +426,15 @@ class SilverOhlcvBuild:
         symbols: Optional[Iterable[str]] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
+        max_concurrency: int = 1,
     ) -> BuildResult:
         """Build the full silver history from bronze.
 
         Defaults: symbols = `get_active_universe()` per G1; start =
         2021-01-04 (bronze polygon coverage start); end = yesterday.
-        Wall-clock measured in hours for a full rebuild — operator
-        script intended.
+        Wall-clock measured in hours for a full rebuild at concurrency=1
+        — operator script intended. Set `max_concurrency=8` (or higher)
+        to parallelize; ~5-8x speedup typical.
         """
         if symbols is None:
             from app.services.universe import get_active_universe
@@ -378,7 +443,179 @@ class SilverOhlcvBuild:
             symbols = list(symbols)
         start = start_date or date(2021, 1, 4)
         end = end_date or (datetime.now(timezone.utc).date() - timedelta(days=1))
-        return self.build_window(symbols, start, end)
+        return self.build_window(
+            symbols, start, end, max_concurrency=max_concurrency,
+        )
+
+    # ─────────────────────────────────────────────────────────────────
+    # Concurrent build path (TA-5.1.10)
+    # ─────────────────────────────────────────────────────────────────
+    #
+    # Each compute_slice is independent and I/O-bound (S3 latency
+    # dominates). N-way concurrency across (symbol, day) pairs gives
+    # ~Nx speedup up to PyIceberg upsert commit-churn limits.
+    #
+    # Per-day batched upserts: we collect all per-day Arrow tables in
+    # memory and do ONE upsert per silver table per day. PyIceberg's
+    # optimistic concurrency means concurrent upserts to the same
+    # table retry on conflict — batching to per-day amortizes commits
+    # and avoids retry storms.
+    #
+    # Sweet spot is ~8 concurrent slices (per the speedup options doc).
+    # Higher concurrency hits diminishing returns from S3 rate limits
+    # and CPU contention on PyArrow merges.
+
+    def _build_window_concurrent(
+        self,
+        symbols: list[str],
+        start_date: date,
+        end_date: date,
+        *,
+        max_concurrency: int,
+    ) -> BuildResult:
+        """Concurrent version of build_window. See build_window's
+        docstring for the high-level contract."""
+        import asyncio
+
+        run_id = uuid.uuid4().hex
+        started = datetime.now(timezone.utc)
+        result = BuildResult(
+            run_id=run_id,
+            started_at=started,
+            finished_at=started,
+            symbols=list(symbols),
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        logger.info(
+            "silver_ohlcv_build: starting run_id=%s symbols=%d window=%s..%s "
+            "concurrency=%d",
+            run_id, len(symbols), start_date, end_date, max_concurrency,
+        )
+
+        # Prime corp-actions cache once before fan-out.
+        self._prime_corp_actions_cache()
+
+        # Iterate day-by-day. For each day, fan out the compute work for
+        # all symbols, then do ONE batched upsert per silver table.
+        # Day-by-day keeps partial-failure recovery clean (a crash mid-
+        # window loses at most one day of work).
+        current = start_date
+        sem = asyncio.Semaphore(max_concurrency)
+
+        async def _compute_one(symbol: str, day: date):
+            async with sem:
+                return await asyncio.to_thread(
+                    self.compute_slice, symbol, day, run_id=run_id,
+                )
+
+        async def _run_day(day: date) -> list[SliceResult]:
+            tasks = [_compute_one(sym, day) for sym in symbols]
+            outputs = await asyncio.gather(*tasks)
+
+            # Batch all this day's Arrow tables into per-table upserts.
+            ohlcv_batch: list[pa.Table] = []
+            quality_batch: list[pa.Table] = []
+            slice_results: list[SliceResult] = []
+            for sr, ohlcv_arrow, quality_arrow in outputs:
+                slice_results.append(sr)
+                if (
+                    sr.succeeded
+                    and ohlcv_arrow is not None
+                    and ohlcv_arrow.num_rows > 0
+                ):
+                    ohlcv_batch.append(ohlcv_arrow)
+                if (
+                    sr.succeeded
+                    and quality_arrow is not None
+                    and quality_arrow.num_rows > 0
+                ):
+                    quality_batch.append(quality_arrow)
+
+            # One upsert per table per day.
+            if ohlcv_batch:
+                combined = pa.concat_tables(ohlcv_batch)
+                try:
+                    self._get_ohlcv_table().upsert(combined)
+                    # Re-attribute row counts to each contributing slice
+                    # so SliceResult reflects what got written.
+                    for sr, ohlcv_arrow, _ in outputs:
+                        if (
+                            sr.succeeded
+                            and ohlcv_arrow is not None
+                        ):
+                            sr.silver_rows_written = ohlcv_arrow.num_rows
+                except Exception as e:
+                    logger.exception(
+                        "silver_ohlcv_build: day=%s ohlcv batch upsert "
+                        "failed: %s", day, e,
+                    )
+                    err = f"{type(e).__name__}: {e}"
+                    for sr in slice_results:
+                        if sr.succeeded:
+                            sr.error = err
+
+            if quality_batch:
+                combined_q = pa.concat_tables(quality_batch)
+                try:
+                    self._get_bar_quality_table().upsert(combined_q)
+                    for sr, _, quality_arrow in outputs:
+                        if (
+                            sr.succeeded
+                            and quality_arrow is not None
+                        ):
+                            sr.quality_row_written = True
+                except Exception as e:
+                    logger.exception(
+                        "silver_ohlcv_build: day=%s bar_quality batch "
+                        "upsert failed: %s", day, e,
+                    )
+                    # bar_quality failure is a soft error — log but
+                    # don't mark the whole slice failed (ohlcv is the
+                    # canonical data).
+
+            return slice_results
+
+        async def _run_all() -> None:
+            nonlocal current
+            while current <= end_date:
+                day_results = await _run_day(current)
+                result.slices.extend(day_results)
+                current += timedelta(days=1)
+
+        try:
+            asyncio.run(_run_all())
+        except RuntimeError as e:
+            # If called from inside an existing event loop (unusual —
+            # this method is typically called from a sync CLI), the
+            # asyncio.run() call raises. Fall back to a loop.
+            if "running event loop" in str(e):
+                loop = asyncio.new_event_loop()
+                try:
+                    loop.run_until_complete(_run_all())
+                finally:
+                    loop.close()
+            else:
+                raise
+
+        result.finished_at = datetime.now(timezone.utc)
+        logger.info(
+            "silver_ohlcv_build: done run_id=%s slices=%d (ok=%d fail=%d) "
+            "silver_rows=%d duration=%.1fs concurrency=%d",
+            run_id, len(result.slices), result.slices_succeeded,
+            result.slices_failed, result.total_silver_rows,
+            result.duration_seconds, max_concurrency,
+        )
+
+        # Record one run row in ingestion_runs (best-effort).
+        self._record_run(result)
+
+        # Clear caches so next run reloads fresh.
+        self._split_index = None
+        self._corp_actions_arrow = None
+
+        return result
 
     # ─────────────────────────────────────────────────────────────────
     # Corp-action rebuild trigger (TA-5.1.9)
