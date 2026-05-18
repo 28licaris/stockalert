@@ -77,6 +77,12 @@ Then, in this order:
     two-tier universe (seed vs ad-hoc archive); the "add streamed
     symbol" flow; promote-to-seed CLI; Polygon-pause/resume
     behavior. Quick-reference companion to silver_layer_plan.
+15. [data_flow_review_2026-05-17.md](data_flow_review_2026-05-17.md) —
+    end-to-end review of the data flow against operator intent.
+    Identifies 6 gaps + 5-phase plan to close them (G1 dynamic
+    universe; G2 silver OHLCV build; G3 nightly schedule; G4
+    silver→CH backfill; G5 delete legacy + wipe-rebuild; G6
+    gap-handling UX). Includes 4 operator decisions to confirm.
 
 ## Working agreement
 
