@@ -226,6 +226,34 @@ async def lifespan(app: FastAPI):
                 exc,
             )
 
+    # Nightly silver OHLCV build (TA-5.1.6). Runs after both upstream
+    # nightlies (polygon 07:00 UTC, schwab 22:00 UTC) — default 23:00
+    # UTC gives Schwab nightly headroom. Idempotent + isolated-failure.
+    nightly_silver_ohlcv_task: asyncio.Task | None = None
+    if (
+        getattr(_settings, "silver_ohlcv_build_enabled", False)
+        and (_settings.stock_lake_bucket or "").strip()
+    ):
+        try:
+            from app.services.silver.ohlcv.nightly import run_silver_ohlcv_build_loop
+
+            nightly_silver_ohlcv_task = asyncio.create_task(
+                run_silver_ohlcv_build_loop(),
+                name="nightly_silver_ohlcv_build",
+            )
+            app.state.nightly_silver_ohlcv_task = nightly_silver_ohlcv_task
+            logger.info(
+                "nightly_silver_ohlcv_build: background loop started "
+                "(SILVER_OHLCV_BUILD_RUN_HOUR_UTC=%s, symbols=%s)",
+                _settings.silver_ohlcv_build_run_hour_utc,
+                _settings.silver_ohlcv_build_symbols,
+            )
+        except Exception as exc:
+            logger.exception(
+                "✗ nightly_silver_ohlcv_build failed to start: %s — continuing without it",
+                exc,
+            )
+
     async def broadcast_signal(signal_data: dict):
         logger.info(f"📡 Broadcasting signal: {signal_data}")
         disconnected = []
@@ -264,6 +292,16 @@ async def lifespan(app: FastAPI):
             pass
         except Exception as e:
             logger.warning("nightly_schwab_refresh task shutdown: %s", e)
+
+    sov = getattr(app.state, "nightly_silver_ohlcv_task", None)
+    if sov is not None and not sov.done():
+        sov.cancel()
+        try:
+            await sov
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning("nightly_silver_ohlcv_build task shutdown: %s", e)
 
     # Live lake writer: stop BEFORE watchlist (so it can capture any
     # last-minute streamed bars; the stop call gives the in-flight cycle

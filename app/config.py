@@ -88,6 +88,23 @@ class Settings(BaseModel):
         "SILVER_PROVIDER_PRECEDENCE", "polygon,schwab"
     )
 
+    # Silver OHLCV build (TA-5.1.6 — nightly bronze→silver pipeline).
+    # Runs after both nightly_polygon_refresh (07:00 UTC) and
+    # nightly_schwab_refresh (22:00 UTC) have completed. Default
+    # 23:00 UTC gives Schwab nightly ~60 min headroom.
+    silver_ohlcv_build_enabled: bool = (
+        os.getenv("SILVER_OHLCV_BUILD_ENABLED", "false").lower() == "true"
+    )
+    silver_ohlcv_build_run_hour_utc: int = int(
+        os.getenv("SILVER_OHLCV_BUILD_RUN_HOUR_UTC", "23")
+    )
+    # Symbols spec: "seed" (= SEED_SYMBOLS, default) or comma-separated
+    # explicit list. Future G1 will flip the default to "active" =
+    # dynamic universe (get_active_universe()).
+    silver_ohlcv_build_symbols: str = os.getenv(
+        "SILVER_OHLCV_BUILD_SYMBOLS", "seed"
+    )
+
     # Live-lake-writer config (TA-5.7 — closes the 8-24h Schwab live →
     # bronze freshness gap). The writer reads CH ohlcv_1m every
     # cycle_minutes and upserts into bronze.{provider}_minute. See
