@@ -461,21 +461,87 @@ NVDA need their `_adj` columns recomputed. Implementation:
 
 ---
 
-## 4. Corp-actions ingestion (`silver.corp_actions`)
+## 4. Corp-actions: bronze → silver, same medallion pattern
 
-Smaller cousin of the silver build. Polygon's
-`/v3/reference/dividends` and `/v3/reference/splits` are the canonical
-source for US equities; their `pay_date`, `ex_dividend_date`, and
-`split_from`/`split_to` populate `silver.corp_actions`.
+Corp-actions follow the **same bronze → silver pattern** as OHLCV
+(updated 2026-05-17 per operator clarification: "silver should be
+built from our bronze providers and auto sync because bronze is
+updated nightly and this should be able to extend into new
+providers in the future"). The previous design that wrote
+Polygon corp-actions directly to silver was inconsistent with the
+medallion and the pluggable-provider principle (§2.3).
 
-- **Initial backfill:** one-shot script reading Polygon's full history
-  for every symbol in `bronze.polygon_minute`'s distinct-symbols
-  list. ~50K splits + ~3M dividends since 2003. Iceberg `INSERT INTO`.
-- **Ongoing:** nightly job at 01:30 ET pulls the previous day's
-  announcements; appends to `silver.corp_actions`.
-- **Trigger:** any new corp-action row for a symbol marks every
-  silver slice for that symbol as "needs rebuild." `silver_build.py`
-  picks them up on its next run.
+### 4.1 Two tables, two stages
+
+| Tier | Table | Source | Purpose |
+|---|---|---|---|
+| **Bronze** | `bronze.polygon_corp_actions` | Polygon REST `/v3/reference/splits` + `/v3/reference/dividends` | Raw per-provider archive. Append-only, immutable, identifier `(symbol, ex_date, action_type)` |
+| (future) | `bronze.{provider}_corp_actions` | Future provider REST (e.g. SEC XBRL, Yahoo, IEX) | Same shape; plugs in via the silver-build precedence config |
+| **Silver** | `silver.corp_actions` | `silver_corp_actions_build` merges all bronze sources | Canonical, deduped, provider-precedence-resolved. Consumer surface. |
+
+### 4.2 Ingest (Polygon → bronze)
+
+`app/services/silver/corp_actions/polygon_ingest.py`:
+
+- **Initial backfill** (one-shot, when seeding the lake): pulls
+  Polygon's full history (~50K splits + ~3M dividends since 2003)
+  in one pass via `PolygonCorpActionsClient.collect_*`. Writes to
+  `bronze.polygon_corp_actions` via Iceberg `upsert` (identifier
+  `(symbol, ex_date, action_type)`). Idempotent re-runs.
+- **Nightly** (incremental): pulls yesterday's announcements;
+  same upsert path. Re-running on the same day is a no-op.
+
+Pattern matches `app/services/ingest/nightly_polygon_refresh.py` for
+OHLCV — same author has both jobs; same idempotency contract.
+
+### 4.3 Build (bronze → silver)
+
+`app/services/silver/corp_actions/build.py`:
+
+```python
+# Pseudocode — actual implementation in TA-5.0 step 5c.
+def build_silver_corp_actions(since: date | None = None) -> None:
+    # 1. Read all configured bronze sources for the time window.
+    polygon = read_bronze("polygon_corp_actions", since=since)
+    # (future) other = read_bronze("other_corp_actions", since=since)
+    sources = [("polygon", polygon)]   # add more as providers land
+
+    # 2. Merge with provider precedence (default: polygon > others).
+    #    Identifier is (symbol, ex_date, action_type); first-with-row wins.
+    merged = merge_with_precedence(
+        sources=sources,
+        precedence=settings.silver_provider_precedence,
+    )
+
+    # 3. Upsert into silver. Idempotent; subsequent corrections from
+    #    any provider naturally overwrite via the identifier-field join.
+    silver_corp_actions.upsert(merged)
+```
+
+### 4.4 Triggering OHLCV silver rebuilds when corp-actions change
+
+`silver_build` (the OHLCV-silver build, §3) watches the
+`silver.corp_actions` ingestion run timestamp. When a new
+corp-action lands for symbol `S`, all `silver.ohlcv_1m` slices for
+`S` are marked **dirty** in the watermark and rebuilt on the next
+nightly silver_build pass (adjusted columns recomputed from the
+corrected factor).
+
+### 4.5 Why this matters
+
+Three benefits over the original direct-to-silver design:
+
+1. **Consistent with the medallion.** Bronze is immutable raw
+   data; silver is derived. Every consumer reads silver. Per the
+   consumer contract §"The consumer contract."
+2. **Pluggable.** Adding a second corp-actions provider later
+   (e.g. when validating Polygon's pre-2010 dividend coverage
+   against SEC XBRL) is one bronze table + one precedence-config
+   entry. Zero silver code changes.
+3. **Reproducible.** Each bronze table is snapshot-pinnable.
+   "What corp-actions did silver see on date X?" is a
+   bronze-snapshot query — no need to back-derive from silver's
+   ingestion log.
 
 ---
 

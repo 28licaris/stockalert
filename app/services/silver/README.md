@@ -23,15 +23,31 @@ Read it before changing anything here.
 | File | Owns |
 |---|---|
 | [schemas.py](schemas.py) | Pydantic `CorpAction` + Iceberg schemas for `silver.corp_actions`, `silver.ohlcv_1m`, `silver.bar_quality` |
-| [tables.py](tables.py) | Idempotent Iceberg table creation against the Glue catalog |
-| [corp_actions_ingest.py](corp_actions_ingest.py) | (TA-5.0) Pulls splits + dividends from Polygon REST → writes to `silver.corp_actions` |
-| (planned TA-5.1) `silver_build.py` | The nightly build job: merges bronze with provider precedence, applies adjustment factors, writes silver.ohlcv_1m + silver.bar_quality |
+| [tables.py](tables.py) | Idempotent Iceberg table creation against the Glue catalog (silver-side tables) |
+| [corp_actions/polygon_ingest.py](corp_actions/) (TA-5.0 step 5b) | Polygon REST → `bronze.polygon_corp_actions`. Pulls splits + dividends; idempotent upsert by `(symbol, ex_date, action_type)` |
+| [corp_actions/build.py](corp_actions/) (TA-5.0 step 5c) | The bronze → silver merge job: reads every `bronze.{provider}_corp_actions` table, applies provider precedence, writes `silver.corp_actions` |
+| (planned TA-5.1) `ohlcv/build.py` | The nightly OHLCV build: merges `bronze.{provider}_minute` tables, applies adjustment factors from `silver.corp_actions`, writes `silver.ohlcv_1m` + `silver.bar_quality` |
+
+## Architectural rule (per [silver_layer_plan §4](../../../docs/silver_layer_plan.md))
+
+**Every silver table is derived from bronze, never written directly
+from a provider.** Reasoning: the medallion contract (bronze raw,
+silver canonical, gold ML) plus the pluggable-provider principle
+(`docs/silver_layer_plan.md §2.3`). When we add a second
+corp-actions provider later, it gets a new
+`bronze.{provider}_corp_actions` table and an entry in the
+precedence config — `silver.corp_actions` keeps the same shape,
+zero downstream changes.
 
 ## What it does NOT own
 
-- Reads back into silver — that's
+- Reads back from silver — that's
   [`app/services/readers/silver_reader.py`](../readers/) (TA-5.2).
-- Bronze writes — see [`app/services/bronze/`](../bronze/).
+- Bronze writes for OHLCV — see [`app/services/bronze/`](../bronze/).
+- Bronze writes for corp-actions also go through this package
+  (`silver/corp_actions/polygon_ingest.py`) because they're the
+  same logical work unit; only OHLCV ingest lives in
+  `app/services/ingest/` (existing convention).
 - Backfilling silver into ClickHouse — see (planned TA-5.3)
   `app/services/ingest/silver_to_ch_backfill.py`.
 
