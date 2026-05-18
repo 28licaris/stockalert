@@ -56,36 +56,72 @@ active watchlist get streamed; everything else does not.
 | **Seed universe** | Symbols actively streamed by Schwab. Configured in `settings.seed_symbols`. ~100 today, grows. | Polygon archive (5-20y) + Schwab nightly fill (last 48d) + Schwab stream (forever) | New bars every minute via Schwab stream |
 | **Archive only** | Everything else Polygon covered (rest of US market) | Polygon archive only | No new bars unless Polygon resumes |
 
-## The "add a streamed symbol" flow
+## The "add a streamed symbol" flow (unified — no two-tier branching)
+
+**Single path for every symbol added for streaming.** No branching
+on "is it in seed" — the same flow handles deep-history symbols
+(seed-or-promoted) and brand-new ad-hoc symbols.
 
 ```
 User: "Add NVDA to my live stream"
   │
   ▼
-add_members("NVDA"):
+add_streamed_symbol("NVDA"):
   │
-  ├── ALWAYS: subscribe NVDA on Schwab WebSocket
-  │           → live ticks flow into CH (overlay)
-  │           → live_lake_writer (TA-5.7 done) flushes to bronze every 5 min
+  │ 1. Subscribe Schwab CHART_EQUITY for NVDA.
+  │    Live ticks now flow → CH live overlay AND (via
+  │    live_lake_writer, every 5 min) → bronze.schwab_minute.
   │
-  └── HISTORY: branches by tier
-      │
-      ├── If NVDA ∈ seed_symbols:
-      │     silver_to_ch_backfill(NVDA, days=730)
-      │       → reads silver.ohlcv_1m (clean canonical history)
-      │       → bulk-inserts into CH
-      │       → ~10s wall-clock for 2y of 1-min data
-      │     schwab_tip_backfill(NVDA)
-      │       → bridges silver-watermark gap (≤48h Schwab REST)
-      │       → writes bronze + CH
-      │
-      └── If NVDA ∉ seed_symbols (ad-hoc exploration):
-            schwab_rest_one_shot(NVDA, days=48)
-              → writes BRONZE only (not CH directly)
-              → silver picks it up on next nightly silver_build
-              → CH reads silver thereafter
-            (chart shows live + Schwab REST 48d until silver builds)
+  │ 2. silver_to_ch_backfill(NVDA, days=730)
+  │    Reads silver.ohlcv_1m for NVDA, bulk-inserts into CH.
+  │    - If silver HAS NVDA's history → fast (~10s for 2y), accurate.
+  │    - If silver has NOTHING for NVDA (brand-new ad-hoc symbol) →
+  │      no-op (writes 0 rows). Next step covers it.
+  │
+  │ 3. compute_gap_from_silver(NVDA):
+  │      silver_watermark = max(ts) in silver.ohlcv_1m for NVDA
+  │                       = None if symbol not in silver yet
+  │      gap_start = max(silver_watermark, now - 48d)
+  │                  (Schwab REST's 1-min reach is ~48 days)
+  │      gap_end = now - 1 min  (avoid the in-flight minute)
+  │
+  │ 4. schwab_rest_tip_fill(NVDA, gap_start, gap_end):
+  │    Pull Schwab REST /pricehistory for the gap window.
+  │    Write to BOTH:
+  │      - bronze.schwab_minute (idempotent upsert; immutable archive)
+  │      - CH ohlcv_1m          (idempotent; chart available immediately)
+  │
+  │    This is the ONE bounded exception to "no historical → CH directly"
+  │    — the window is ≤48 days, near-live, not bulk archive.
+  │
+  │ 5. Live stream takes over from gap_end onward.
+  │    Chart now has: silver-derived history (if any) + Schwab REST
+  │    tip-fill + live stream. Continuous from add-time → now.
+  │
+  │ 6. (automatic, no code needed)
+  │    Next nightly silver_build sees the new bronze rows from step 4
+  │    + live_lake_writer's contributions, merges them into silver.
+  │    Subsequent silver_to_ch_backfill calls (e.g. when the user
+  │    expands the chart window) re-sync CH from silver canonical.
 ```
+
+**Why this is better than the two-tier design:**
+
+1. **One code path.** No `if symbol in seed_symbols: ...` branching.
+2. **Idempotent at every step.** Re-running the add flow is safe.
+3. **Brand-new symbols get usable history immediately** (Schwab
+   REST 48 days), not "wait 24h for nightly silver build".
+4. **Self-healing.** Bronze gets the new rows on add; silver
+   picks them up on next nightly; CH stays consistent.
+
+**The ≤48 day Schwab REST limit is the one constraint.** A brand-new
+symbol gets 48 days of 1-min history initially. To get deeper:
+- Promote to the universe (so the next nightly Polygon refresh
+  ingests its full history)
+- Or run an operator-triggered one-shot Polygon pull for that symbol
+
+After promotion + next nightly cycle, the symbol's silver history
+extends back to Polygon's coverage (5-20 years).
 
 ## Promoting ad-hoc → seed
 
