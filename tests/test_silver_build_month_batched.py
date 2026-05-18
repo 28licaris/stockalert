@@ -349,18 +349,19 @@ class TestOutputEquivalence:
 # ─────────────────────────────────────────────────────────────────────
 
 
-class TestPerDayUpserts:
-    def test_one_upsert_per_table_per_day(
+class TestPerMonthCommits:
+    def test_one_commit_per_table_per_month(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Within a month, each day still produces ONE upsert per
-        silver table — same commit-conflict mitigation as the
-        concurrent path."""
+        """TA-5.1.12: per-MONTH commits, not per-day. 5 trading days
+        in June 2024 → exactly 1 ohlcv commit + 1 bar_quality commit
+        for the whole month. This is the ~22× commit-count reduction
+        that gets us from 29 hr to ~10 min wall-clock."""
         from datetime import timedelta
 
         symbols = ["AAPL", "NVDA"]
         d0 = date(2024, 6, 10)
-        d_end = date(2024, 6, 14)  # 5 trading days
+        d_end = date(2024, 6, 14)  # 5 trading days, all in June
         rows_map = {
             (s, d0 + timedelta(days=i)): 5
             for s in symbols
@@ -371,12 +372,38 @@ class TestPerDayUpserts:
 
         build.build_window(symbols, d0, d_end)
 
-        # 5 days → 5 ohlcv upserts + 5 bar_quality upserts.
-        assert len(ohlcv_t.upserts) == 5
-        assert len(bq_t.upserts) == 5
-        # Each upsert has BOTH symbols' data for that day.
-        for u in ohlcv_t.upserts:
-            assert u.num_rows == 2 * 5   # 2 symbols × 5 bars
+        # 1 month → 1 commit per silver table for the whole month.
+        assert len(ohlcv_t.upserts) == 1
+        assert len(bq_t.upserts) == 1
+        # Single ohlcv commit has all rows: 2 symbols × 5 days × 5 = 50.
+        assert ohlcv_t.upserts[0].num_rows == 2 * 5 * 5
+        # Single bar_quality commit: 1 row per (symbol, day) = 10.
+        assert bq_t.upserts[0].num_rows == 2 * 5
+
+    def test_one_commit_per_month_across_multiple_months(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Window spanning 2 months → exactly 2 commits per silver table."""
+        from datetime import timedelta
+
+        symbols = ["AAPL"]
+        # Trading days in late June + early July 2024.
+        days = [
+            date(2024, 6, 28),
+            date(2024, 7, 1),
+            date(2024, 7, 2),
+        ]
+        rows_map = {(s, d): 5 for s in symbols for d in days}
+        build, ohlcv_t, bq_t, _ = _make_build(rows_map)
+        monkeypatch.setattr(build, "_record_run", lambda _r: None)
+
+        build.build_window(
+            symbols, date(2024, 6, 28), date(2024, 7, 2),
+        )
+
+        # 2 months → 2 commits per silver table.
+        assert len(ohlcv_t.upserts) == 2
+        assert len(bq_t.upserts) == 2
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -443,3 +470,123 @@ class TestInvalidMode:
                 ["AAPL"], date(2024, 6, 10), date(2024, 6, 10),
                 mode="bogus",
             )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# TA-5.1.12: auto-detect-empty → append; non-empty → upsert
+# ─────────────────────────────────────────────────────────────────────
+
+
+class _SilverTableWithMode:
+    """Silver-table fake that:
+      - reports a current_snapshot (with optional total-records count)
+      - records calls to .upsert() vs .append() separately
+    """
+
+    def __init__(self, total_records: int = 0) -> None:
+        self._total = total_records
+        self.upserts: list[pa.Table] = []
+        self.appends: list[pa.Table] = []
+
+    def current_snapshot(self):
+        if self._total == 0:
+            # An empty fresh table: no snapshot yet.
+            return None
+
+        class _Snap:
+            def __init__(self, total):
+                self.summary = type(
+                    "S", (),
+                    {"additional_properties": {"total-records": str(total)}},
+                )()
+            snapshot_id = 1234
+
+        return _Snap(self._total)
+
+    def upsert(self, arrow: pa.Table) -> None:
+        self.upserts.append(arrow)
+
+    def append(self, arrow: pa.Table) -> None:
+        self.appends.append(arrow)
+
+
+class TestAppendVsUpsert:
+    """The TA-5.1.12 fix: empty silver → use append (cheap); non-empty
+    silver → use upsert (idempotent re-write)."""
+
+    def test_empty_table_uses_append(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        symbols = ["AAPL"]
+        d0 = date(2024, 6, 10)
+        rows_map = {("AAPL", d0): 5}
+        build, _, _, _ = _make_build(rows_map)
+
+        # Swap in mode-aware fakes (empty = no rows yet).
+        ohlcv_fake = _SilverTableWithMode(total_records=0)
+        bq_fake = _SilverTableWithMode(total_records=0)
+        build._ohlcv_table = ohlcv_fake
+        build._bar_quality_table = bq_fake
+        monkeypatch.setattr(build, "_record_run", lambda _r: None)
+
+        build.build_window(symbols, d0, d0)
+
+        assert len(ohlcv_fake.appends) == 1
+        assert len(ohlcv_fake.upserts) == 0
+        assert len(bq_fake.appends) == 1
+        assert len(bq_fake.upserts) == 0
+
+    def test_non_empty_table_uses_upsert(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        symbols = ["AAPL"]
+        d0 = date(2024, 6, 10)
+        rows_map = {("AAPL", d0): 5}
+        build, _, _, _ = _make_build(rows_map)
+
+        # Pre-populated table (1M rows already there).
+        ohlcv_fake = _SilverTableWithMode(total_records=1_000_000)
+        bq_fake = _SilverTableWithMode(total_records=1_000_000)
+        build._ohlcv_table = ohlcv_fake
+        build._bar_quality_table = bq_fake
+        monkeypatch.setattr(build, "_record_run", lambda _r: None)
+
+        build.build_window(symbols, d0, d0)
+
+        assert len(ohlcv_fake.upserts) == 1
+        assert len(ohlcv_fake.appends) == 0
+        assert len(bq_fake.upserts) == 1
+        assert len(bq_fake.appends) == 0
+
+    def test_mode_locked_at_run_start(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The empty/non-empty check happens ONCE at run start. We
+        don't switch strategies mid-run if the table grew during this
+        run (we wrote the first month and now have rows)."""
+        from datetime import timedelta
+
+        symbols = ["AAPL"]
+        d0 = date(2024, 6, 10)
+        d_end = date(2024, 8, 10)  # 3 months
+        rows_map = {
+            (s, d0 + timedelta(days=i)): 5
+            for s in symbols
+            for i in range(60)
+        }
+        build, _, _, _ = _make_build(rows_map)
+
+        # Empty at start.
+        ohlcv_fake = _SilverTableWithMode(total_records=0)
+        bq_fake = _SilverTableWithMode(total_records=0)
+        build._ohlcv_table = ohlcv_fake
+        build._bar_quality_table = bq_fake
+        monkeypatch.setattr(build, "_record_run", lambda _r: None)
+
+        build.build_window(symbols, d0, d_end)
+
+        # All 3 monthly commits used append (mode locked at run start).
+        # If we re-checked emptiness per-month, month 2 + 3 would have
+        # used upsert (since the table is no longer empty).
+        assert len(ohlcv_fake.appends) == 3
+        assert len(ohlcv_fake.upserts) == 0

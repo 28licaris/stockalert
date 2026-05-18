@@ -254,10 +254,11 @@ class TestConcurrentBuild:
         assert slice_keys == {(s, d) for s in symbols for d in (d0, d1)}
         assert result.slices_succeeded == 6
 
-    def test_per_day_batched_upserts(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """At max_concurrency=4 with 3 symbols × 2 days, we expect
-        exactly 2 ohlcv upserts and 2 bar_quality upserts (one per day
-        per table), not 6 of each. That's the commit-conflict mitigation."""
+    def test_per_month_batched_upserts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """TA-5.1.12: per-MONTH commits, not per-day. 3 symbols × 2 days
+        (both in June 2024) → exactly 1 ohlcv upsert + 1 bar_quality
+        upsert for the whole month (not 6, not 2). That's the commit-
+        cost mitigation."""
         symbols = ["AAPL", "NVDA", "MSFT"]
         d0 = date(2024, 6, 10)
         d1 = date(2024, 6, 11)
@@ -267,15 +268,13 @@ class TestConcurrentBuild:
 
         build.build_window(symbols, d0, d1, max_concurrency=4)
 
-        # 2 days → 2 upserts per table.
-        assert len(ohlcv_t.upserts) == 2
-        assert len(bq_t.upserts) == 2
-        # Each ohlcv upsert has rows for all 3 symbols (3 × 5 = 15 rows).
-        for upsert in ohlcv_t.upserts:
-            assert upsert.num_rows == 15
-        # Each bar_quality upsert has one row per symbol per day = 3 rows.
-        for upsert in bq_t.upserts:
-            assert upsert.num_rows == 3
+        # 1 month → 1 upsert per silver table for the whole month.
+        assert len(ohlcv_t.upserts) == 1
+        assert len(bq_t.upserts) == 1
+        # The single ohlcv upsert has all rows (3 symbols × 2 days × 5 = 30 rows).
+        assert ohlcv_t.upserts[0].num_rows == 30
+        # bar_quality has one row per (symbol, day): 3 × 2 = 6.
+        assert bq_t.upserts[0].num_rows == 6
 
     def test_sequential_path_preserved_at_concurrency_1(
         self, monkeypatch: pytest.MonkeyPatch,

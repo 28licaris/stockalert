@@ -570,6 +570,52 @@ class SilverOhlcvBuild:
             return []
         return arrow.to_pylist() if arrow.num_rows > 0 else []
 
+    def _silver_tables_empty(self) -> bool:
+        """True iff BOTH silver.ohlcv_1m and silver.bar_quality are
+        empty (no current snapshot OR snapshot summary has 0 records).
+
+        Used by `_build_window_month_batched` to choose write
+        strategy: empty → append (cheap); non-empty → upsert
+        (idempotent).
+
+        Fail-safe: any error treats the table as non-empty (upsert is
+        always correct; append is only safe on empty tables).
+        """
+        for getter in (self._get_ohlcv_table, self._get_bar_quality_table):
+            try:
+                tbl = getter()
+                snap = tbl.current_snapshot()
+            except Exception:
+                # Can't determine state → use safe path (upsert).
+                return False
+            if snap is None:
+                continue
+            try:
+                summ = snap.summary
+                summ_map = (
+                    summ.additional_properties
+                    if hasattr(summ, "additional_properties") else dict(summ)
+                )
+                n = int(summ_map.get("total-records", "0"))
+                if n > 0:
+                    return False
+            except Exception:
+                return False
+        return True
+
+    @staticmethod
+    def _write_silver_table(
+        table, arrow: pa.Table, *, append: bool,
+    ) -> None:
+        """Write to a silver table. `append=True` uses `.append()`
+        (fast, no merge logic — safe when table is empty);
+        `append=False` uses `.upsert()` (idempotent merge by identifier
+        — required for re-runs over existing data)."""
+        if append:
+            table.append(arrow)
+        else:
+            table.upsert(arrow)
+
     @staticmethod
     def _group_rows_by_symbol_day(
         rows: list[dict],
@@ -596,8 +642,18 @@ class SilverOhlcvBuild:
         end_date: date,
     ) -> BuildResult:
         """Month-batched version of build_window. See class header
-        for the math + rationale. Output is byte-identical to the
-        per-slice path (modulo ingestion_ts / run_id).
+        for the math + rationale.
+
+        Write strategy (TA-5.1.12, after the 29-hour wakeup call):
+          - PER-MONTH commits, not per-day. One combined arrow per
+            silver table per month → ~22× fewer Iceberg commits.
+          - AUTO-DETECT empty silver table at start of run. If empty
+            → use .append() (no merge work, ~8× faster per commit).
+            If non-empty → .upsert() (idempotent re-write path).
+
+        Output is byte-identical to the per-slice path (modulo
+        ingestion_ts / run_id). See docs/iceberg_performance_findings.md
+        for the diagnosis.
         """
         run_id = uuid.uuid4().hex
         started = datetime.now(timezone.utc)
@@ -610,10 +666,17 @@ class SilverOhlcvBuild:
             end_date=end_date,
         )
 
+        # Auto-detect empty silver tables → use append() for this run.
+        # Empty means: no current snapshot, or snapshot has 0 records.
+        # When empty, there cannot be identifier collisions, so append is
+        # functionally equivalent to upsert AND much cheaper.
+        use_append = self._silver_tables_empty()
+        write_mode = "append" if use_append else "upsert"
+
         logger.info(
             "silver_ohlcv_build: starting run_id=%s symbols=%d window=%s..%s "
-            "mode=month-batched (TA-5.1.11)",
-            run_id, len(symbols), start_date, end_date,
+            "mode=month-batched (TA-5.1.12) write_strategy=%s",
+            run_id, len(symbols), start_date, end_date, write_mode,
         )
 
         # Prime corp-actions cache once before any month is scanned.
@@ -647,16 +710,19 @@ class SilverOhlcvBuild:
                 ),
             )
 
-            # 2. Iterate every day in the month that falls within the window.
+            # 2. Iterate every day in the month that falls within the
+            #    window; compute slices in memory and ACCUMULATE per-table.
+            month_slice_results: list[SliceResult] = []
+            month_ohlcv_arrows: list[pa.Table] = []
+            month_quality_arrows: list[pa.Table] = []
+            # Track which arrow belongs to which slice (for row-count attribution).
+            arrow_owners: list[
+                tuple[SliceResult, Optional[pa.Table], Optional[pa.Table]]
+            ] = []
+
             day = max(month_start, start_date)
             last_day = min(month_end, end_date)
             while day <= last_day:
-                day_slice_results: list[SliceResult] = []
-                day_ohlcv_arrows: list[pa.Table] = []
-                day_quality_arrows: list[pa.Table] = []
-                # Track which arrow belongs to which slice for re-attribution.
-                arrow_owners: list[tuple[SliceResult, Optional[pa.Table], Optional[pa.Table]]] = []
-
                 for sym in symbols:
                     provider_rows_map = {
                         provider: by_slice.get((sym, day), [])
@@ -665,50 +731,67 @@ class SilverOhlcvBuild:
                     sr, ohlcv_arrow, quality_arrow = self._compute_from_provider_rows(
                         sym, day, run_id, provider_rows_map=provider_rows_map,
                     )
-                    day_slice_results.append(sr)
+                    month_slice_results.append(sr)
                     arrow_owners.append((sr, ohlcv_arrow, quality_arrow))
                     if ohlcv_arrow is not None and ohlcv_arrow.num_rows > 0:
-                        day_ohlcv_arrows.append(ohlcv_arrow)
+                        month_ohlcv_arrows.append(ohlcv_arrow)
                     if quality_arrow is not None and quality_arrow.num_rows > 0:
-                        day_quality_arrows.append(quality_arrow)
-
-                # 3. ONE upsert per silver table per day.
-                if day_ohlcv_arrows:
-                    combined = pa.concat_tables(day_ohlcv_arrows)
-                    try:
-                        self._get_ohlcv_table().upsert(combined)
-                        for sr, ohlcv_arrow, _ in arrow_owners:
-                            if (
-                                sr.succeeded
-                                and ohlcv_arrow is not None
-                            ):
-                                sr.silver_rows_written = ohlcv_arrow.num_rows
-                    except Exception as e:
-                        logger.exception(
-                            "silver_ohlcv_build: day=%s ohlcv batch upsert "
-                            "failed: %s", day, e,
-                        )
-                        err = f"{type(e).__name__}: {e}"
-                        for sr in day_slice_results:
-                            if sr.succeeded:
-                                sr.error = err
-
-                if day_quality_arrows:
-                    combined_q = pa.concat_tables(day_quality_arrows)
-                    try:
-                        self._get_bar_quality_table().upsert(combined_q)
-                        for sr, _, quality_arrow in arrow_owners:
-                            if sr.succeeded and quality_arrow is not None:
-                                sr.quality_row_written = True
-                    except Exception as e:
-                        logger.exception(
-                            "silver_ohlcv_build: day=%s bar_quality batch "
-                            "upsert failed: %s", day, e,
-                        )
-                        # bar_quality failure is non-fatal (ohlcv is canonical).
-
-                result.slices.extend(day_slice_results)
+                        month_quality_arrows.append(quality_arrow)
                 day += timedelta(days=1)
+
+            # 3. ONE write per silver table for the WHOLE MONTH.
+            #    Per-month, not per-day — eliminates 22× the Iceberg
+            #    commit overhead. The per-month combined arrow is at
+            #    most ~860K rows for the seed universe (~150 MB), well
+            #    within memory.
+            if month_ohlcv_arrows:
+                combined = pa.concat_tables(month_ohlcv_arrows)
+                try:
+                    self._write_silver_table(
+                        self._get_ohlcv_table(), combined, append=use_append,
+                    )
+                    for sr, ohlcv_arrow, _ in arrow_owners:
+                        if sr.succeeded and ohlcv_arrow is not None:
+                            sr.silver_rows_written = ohlcv_arrow.num_rows
+                    logger.info(
+                        "silver_ohlcv_build: month=%s wrote %d ohlcv rows (%s)",
+                        month_start.strftime("%Y-%m"),
+                        combined.num_rows, write_mode,
+                    )
+                except Exception as e:
+                    logger.exception(
+                        "silver_ohlcv_build: month=%s ohlcv %s failed: %s",
+                        month_start.strftime("%Y-%m"), write_mode, e,
+                    )
+                    err = f"{type(e).__name__}: {e}"
+                    for sr in month_slice_results:
+                        if sr.succeeded:
+                            sr.error = err
+
+            if month_quality_arrows:
+                combined_q = pa.concat_tables(month_quality_arrows)
+                try:
+                    self._write_silver_table(
+                        self._get_bar_quality_table(),
+                        combined_q,
+                        append=use_append,
+                    )
+                    for sr, _, quality_arrow in arrow_owners:
+                        if sr.succeeded and quality_arrow is not None:
+                            sr.quality_row_written = True
+                    logger.info(
+                        "silver_ohlcv_build: month=%s wrote %d bar_quality rows (%s)",
+                        month_start.strftime("%Y-%m"),
+                        combined_q.num_rows, write_mode,
+                    )
+                except Exception as e:
+                    logger.exception(
+                        "silver_ohlcv_build: month=%s bar_quality %s failed: %s",
+                        month_start.strftime("%Y-%m"), write_mode, e,
+                    )
+                    # bar_quality failure is non-fatal (ohlcv is canonical).
+
+            result.slices.extend(month_slice_results)
 
             # Release this month's data so the next month doesn't pile up.
             per_provider_by_slice.clear()
