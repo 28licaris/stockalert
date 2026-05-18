@@ -20,7 +20,8 @@
   │  (3 days+5min)       │   │  (~48d/REST)         │   │  (5-20 years)            │
   └──────────┬──────────┘   └─────────┬───────────┘   └──────────┬───────────────┘
              │                        │                          │
-             │ ①                      │ ②                       │ ③ ⑤
+             │ ①                      │ ② ⚠️ LEGACY              │ ③ ⑤
+             │                        │   (retires TA-5.5)       │
              ▼                        ▼                          ▼
 
 ╔════════════════════════════════════════════════════════════════════════════════════╗
@@ -32,9 +33,12 @@
   │   ._on_bar          │   │   + historical_     │   │   + polygon_flatfiles_   │
   │                     │   │   loader            │   │     bulk_backfill        │
   │ bar_batcher         │   │                     │   │                          │
-  │  (5-sec batch)      │   │ source="schwab" or  │   │ source="polygon-         │
-  │ tag = "schwab-      │   │          "polygon"  │   │           flatfiles"     │
-  │       stream"       │   │                     │   │                          │
+  │  (5-sec batch)      │   │ ⚠️ LEGACY: pulls    │   │ source="polygon-         │
+  │ tag = "schwab-      │   │  REST → CH directly │   │           flatfiles"     │
+  │       stream"       │   │  (skips bronze!)    │   │                          │
+  │                     │   │ source="schwab" or  │   │                          │
+  │                     │   │          "polygon"  │   │                          │
+  │                     │   │ retires at TA-5.5   │   │                          │
   └────────┬────────────┘   └─────────┬───────────┘   └──────────┬───────────────┘
            │                          │                          │
            │                          │                          │

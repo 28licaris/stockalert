@@ -42,7 +42,8 @@ Plus the planned tier:
 │             │                       │                       │                 │
 └─────────────┼───────────────────────┼───────────────────────┼─────────────────┘
               │                       │                       │
-              │ ① live stream        │ ② REST pull           │ ③ flat-file / REST
+              │ ① live stream        │ ② REST→CH (LEGACY     │ ③ flat-file / REST
+              │                       │    retiring TA-5.5)    │
               │                       │                       │
 ┌─────────────┼───────────────────────┼───────────────────────┼─────────────────┐
 │             ▼                       ▼                       ▼                 │
@@ -155,12 +156,26 @@ arrival + 5-second batch flush ceiling).
 
 ### ② Schwab REST `/pricehistory` → CH `ohlcv_1m`/`ohlcv_5m`/`ohlcv_daily`
 
-**Trigger:** Multiple — invoked by:
+> ⚠️ **LEGACY PATH — VIOLATES THE GROUND-TRUTH RULE.**
+> Scheduled for retirement at **TA-5.5** once TA-5.3 (silver_to_ch_backfill)
+> ships. This path exists today only because the bronze→silver→CH-derived
+> architecture is not yet fully wired; the legacy `add_members` flow still
+> uses provider REST → CH directly. See silver_layer_plan §6.3 + §8.
+
+**Why this is a violation:** historical data (>48h) should land in
+bronze first, get derived into silver, and reach CH only via
+silver→CH backfill. Path ② pulls historical data from Schwab REST
+and writes it **directly to CH**, bypassing bronze entirely. For
+ad-hoc symbols (not in the seed universe), this means **the lake
+never gets a record of them** — they live only in CH.
+
+**Trigger today (pending TA-5.5 retirement):**
 - `backfill_service` on demand (gap-fill, quick, deep)
 - `add_members` path for ad-hoc symbols (~48d 1-min + multi-year daily)
 - Cockpit "manual backfill" buttons
-- Schwab nightly seed-universe refresh (via `nightly_schwab_refresh`
-  → `scripts/schwab_bronze_backfill.py`)
+
+(Note: `nightly_schwab_refresh` is NOT a trigger for this path — it
+writes to `bronze.schwab_minute` per Path ③'s family.)
 
 **Code path:**
 ```
@@ -168,17 +183,27 @@ backfill_service._enqueue_quick(symbol, days)
   → backfill_service._run_quick / _run_deep
   → historical_loader.fetch_and_save(symbol, start, end, timeframe)
     → provider.historical_df(symbol, start, end, "1Min")   # Schwab REST
-    → queries.insert_bars_batch_async(rows)                # CH writer
+    → queries.insert_bars_batch_async(rows)                # CH writer (the violation)
 ```
 
 **Row identity:**
-- `source = "schwab"` (REST default tag).
+- `source = "schwab"` (REST tag).
 - `timestamp` = bar's UTC minute.
 
 **Schwab REST window limits:**
 - 1-min bars: **~48 days** lookback max (Schwab's hard limit).
 - 5-min bars: ~270 days.
 - Daily: multi-year.
+
+**Future state (after TA-5.3):** `add_members(symbol)` will instead:
+
+| Symbol | New path |
+|---|---|
+| In seed universe | `silver_to_ch_backfill` (silver → CH; fast, snapshot-pinned) + tip-fill (Schwab REST → bronze + CH for ≤48h window) |
+| Ad-hoc (non-seed) | `schwab_rest_one_shot` writes to **bronze** (not CH); silver picks it up on next nightly build; CH reads silver thereafter |
+
+The bounded `tip-fill` (≤48h, near-live) is the ONE legitimate
+exception to the ground-truth rule — see silver_layer_plan §6.4.
 
 **Where the code lives:**
 - [app/services/ingest/backfill_service.py](../app/services/ingest/backfill_service.py)
