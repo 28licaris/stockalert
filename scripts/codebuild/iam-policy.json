@@ -79,10 +79,21 @@
       "Effect": "Allow",
       "Action": [
         "codeconnections:UseConnection",
-        "codestar-connections:UseConnection"
+        "codeconnections:GetConnection",
+        "codeconnections:GetConnectionToken",
+        "codeconnections:GetIndividualAccessToken",
+        "codeconnections:GetInstallationToken",
+        "codestar-connections:UseConnection",
+        "codestar-connections:GetConnection",
+        "codestar-connections:GetConnectionToken",
+        "codestar-connections:GetIndividualAccessToken",
+        "codestar-connections:GetInstallationToken"
       ],
-      "Resource": "arn:aws:codeconnections:us-east-1:562741918372:connection/fd5cad49-2c66-4827-b49c-88c6aba3ff00",
-      "_comment": "CodeBuild reads the GitHub source via the CodeConnections (formerly CodeStar Connections) OAuth. Without this, DOWNLOAD_SOURCE fails with 'Access denied to connection arn:...'. Both action namespaces because AWS renamed the service — old policies still work."
+      "Resource": [
+        "arn:aws:codeconnections:us-east-1:562741918372:connection/fd5cad49-2c66-4827-b49c-88c6aba3ff00",
+        "arn:aws:codestar-connections:us-east-1:562741918372:connection/fd5cad49-2c66-4827-b49c-88c6aba3ff00"
+      ],
+      "_comment": "CodeBuild's source download path calls GetConnectionToken on the connection to get an OAuth token, then UseConnection to actually pull. Just UseConnection is not enough — the error is 'Failed to get access token'. Both action namespaces because AWS renamed the service mid-2024 (codestar-connections → codeconnections); both Resource ARN formats because CodeBuild's runtime accepts either."
     }
   ],
   "_metadata": {
