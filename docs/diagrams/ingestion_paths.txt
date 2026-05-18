@@ -1,0 +1,165 @@
+═══════════════════════════════════════════════════════════════════════════════════════
+              STOCKALERT DATA INGESTION ARCHITECTURE — 2026-05-17
+═══════════════════════════════════════════════════════════════════════════════════════
+                                       LEGEND
+        ━━━━━ live (real-time)        ▒▒▒▒▒ planned (not yet built)
+        ───── batch (scheduled)        ⓲  numbered ingestion path (see §3)
+
+
+╔════════════════════════════════════════════════════════════════════════════════════╗
+║                              EXTERNAL PROVIDERS                                    ║
+╚════════════════════════════════════════════════════════════════════════════════════╝
+
+  ┌─────────────────────┐   ┌─────────────────────┐   ┌──────────────────────────┐
+  │ Schwab              │   │ Schwab              │   │ Polygon                  │
+  │   CHART_EQUITY      │   │   /pricehistory     │   │   • Flat-files (S3)      │
+  │   WebSocket          │   │   /accounts         │   │   • REST /v2/aggs        │
+  │  ━━ LIVE ━━         │   │   ── BATCH ──       │   │   • REST corp-actions    │
+  │  seed universe       │   │  seed universe       │   │  ── BATCH ──             │
+  │  100 stocks          │   │  100 stocks          │   │  whole market            │
+  │  (3 days+5min)       │   │  (~48d/REST)         │   │  (5-20 years)            │
+  └──────────┬──────────┘   └─────────┬───────────┘   └──────────┬───────────────┘
+             │                        │                          │
+             │ ①                      │ ②                       │ ③ ⑤
+             ▼                        ▼                          ▼
+
+╔════════════════════════════════════════════════════════════════════════════════════╗
+║                              INGEST CODE PATHS                                     ║
+╚════════════════════════════════════════════════════════════════════════════════════╝
+
+  ┌─────────────────────┐   ┌─────────────────────┐   ┌──────────────────────────┐
+  │ watchlist_service   │   │ backfill_service    │   │ nightly_polygon_refresh  │
+  │   ._on_bar          │   │   + historical_     │   │   + polygon_flatfiles_   │
+  │                     │   │   loader            │   │     bulk_backfill        │
+  │ bar_batcher         │   │                     │   │                          │
+  │  (5-sec batch)      │   │ source="schwab" or  │   │ source="polygon-         │
+  │ tag = "schwab-      │   │          "polygon"  │   │           flatfiles"     │
+  │       stream"       │   │                     │   │                          │
+  └────────┬────────────┘   └─────────┬───────────┘   └──────────┬───────────────┘
+           │                          │                          │
+           │                          │                          │
+           ▼                          ▼                          ▼
+
+╔════════════════════════════════════════════════════════════════════════════════════╗
+║                         CLICKHOUSE (HOT CACHE)                                     ║
+╚════════════════════════════════════════════════════════════════════════════════════╝
+                                                                  WRITES NEVER GO
+                                                                  HERE (per ground-
+                                                                  truth rule)
+  ┌───────────────────────────────────────────────────────────┐         │
+  │                    ohlcv_1m                                │         │
+  │                                                            │         │
+  │  ┌─────────────────────┐    ┌──────────────────────────┐  │         │
+  │  │ LIVE OVERLAY ZONE   │    │ HISTORICAL ZONE          │  │         │
+  │  │ (Schwab stream)     │    │ (silver-derived only —   │  │         │
+  │  │ ━━━━━━━━━━━━        │    │  PLANNED, see ⑧)        │  │         │
+  │  │ source=schwab-stream│    │ source=silver-derived▒▒▒▒│  │         │
+  │  │                     │    │                          │  │         │
+  │  │ Also: REST backfills│    │                          │  │         │
+  │  │ source=schwab/      │    │                          │  │         │
+  │  │       polygon (rare)│    │                          │  │         │
+  │  └─────────────────────┘    └──────────────────────────┘  │
+  │                                                            │
+  │  ohlcv_5m, ohlcv_daily ← Materialized views from ohlcv_1m  │
+  └───────────────────┬────────────────────────────────────────┘
+                      │
+                      │ ④ every 5 min
+                      │   live_lake_writer (NEW TA-5.7)
+                      │   filter: source LIKE '*-stream'
+                      ▼
+
+╔════════════════════════════════════════════════════════════════════════════════════╗
+║                      S3 / ICEBERG — BRONZE TIER                                    ║
+║                          (RAW, IMMUTABLE)                                          ║
+╚════════════════════════════════════════════════════════════════════════════════════╝
+
+  ┌─────────────────────────┐   ┌─────────────────────────┐
+  │ bronze.polygon_minute   │   │ bronze.schwab_minute    │
+  │                         │   │                         │
+  │ 2.1 BILLION rows        │   │ 1.77M rows              │
+  │ 2021-01-04 → 2026-05-15 │   │ 2026-03-30 → 2026-05-15 │
+  │                         │   │                         │
+  │ source tags:            │   │ source tags:            │
+  │  polygon-flatfiles ✓    │   │  schwab           ✓     │
+  │  (one source today)     │   │  schwab-stream    NEW ④ │
+  │                         │   │                         │
+  │ ADJUSTMENT = RAW        │   │ ADJUSTMENT =            │
+  │   ✓ verified            │   │   SPLIT_ADJUSTED        │
+  │                         │   │   ✓ verified            │
+  └─────────────────────────┘   └─────────────────────────┘
+
+  ┌─────────────────────────────┐
+  │ bronze.polygon_corp_actions │  ◄── ⑤ corp_actions/polygon_ingest.py
+  │  NEW (TA-5.0)               │      idempotent upsert by
+  │                             │      (symbol, ex_date, action_type)
+  │ Identifier:                 │
+  │  (symbol, ex_date,          │      source_provider = "polygon"
+  │   action_type)              │
+  └──────────────┬──────────────┘
+                 │
+                 │ ⑥ silver_corp_actions_build (TA-5.0)
+                 │   provider-precedence merge
+                 ▼
+
+╔════════════════════════════════════════════════════════════════════════════════════╗
+║                      S3 / ICEBERG — SILVER TIER                                    ║
+║                       (CANONICAL, DERIVED)                                         ║
+╚════════════════════════════════════════════════════════════════════════════════════╝
+
+  ┌─────────────────────────────┐    ┌──────────────────────────────────┐
+  │ silver.corp_actions         │    │ silver.ohlcv_1m       ▒▒▒▒▒▒▒▒▒▒│
+  │  NEW (TA-5.0)               │    │ + silver.bar_quality  ▒▒▒▒▒▒▒▒▒▒│
+  │                             │    │   PLANNED (TA-5.1)               │
+  │ Provider precedence resolved│    │                                   │
+  │ (polygon > schwab default)  │    │ Per-cell normalized to BOTH       │
+  │                             │    │   _raw + _adj columns             │
+  │ Verified: 5,108 rows from   │    │ Provider precedence merge         │
+  │  NVDA-split canary week     │    │ Reads silver.corp_actions ──┐    │
+  │                             │    │   for adjustment factors    │    │
+  └─────────────────────────┬───┘    └──────────────┬──────────────│────┘
+                            │                       │              │
+                            └───────────────────────┘              │
+                              ⑦ (PLANNED) ▒▒▒▒▒▒▒▒                 │
+                                                                   │
+                                                                   ▼
+                                                            ⑧ (PLANNED)
+                                                            silver_to_ch_backfill
+                                                            on add_members →
+                                                            CH historical zone
+
+╔════════════════════════════════════════════════════════════════════════════════════╗
+║                          CONSUMERS (READ-ONLY)                                     ║
+╚════════════════════════════════════════════════════════════════════════════════════╝
+
+   Chart ──── reads CH ohlcv_1m (live + historical)
+   Screener ── reads silver.ohlcv_1m (when TA-5.1 lands)
+   Backtest ── reads silver.ohlcv_1m direct
+   MCP tools ─ reads silver.{ohlcv_1m,corp_actions}
+   /api/corp-actions ── reads silver.corp_actions   ✓ LIVE
+   /api/screener/scan ── reads CH ohlcv_1m today; silver later
+   IndicatorReader ── reads CH ohlcv_1m today; silver later
+
+═══════════════════════════════════════════════════════════════════════════════════════
+                  AUDIT + MONITORING (catches regressions automatically)
+═══════════════════════════════════════════════════════════════════════════════════════
+
+  scripts/audit_bronze.py             6 checks against every bronze table
+    ├ schema_match                    on-disk vs declared
+    ├ row_counts                      records + date range
+    ├ source_tags                     distinct sources match expected
+    ├ null_symbols                    zero across 2.1B rows ✓
+    ├ adjustment_status               bronze matches docs ✓
+    └ live_freshness  NEW             *-stream max(ts) < 30min stale RTH
+
+  scripts/probe_provider_adjustment.py  5 known-split probes per provider
+    ├ aapl_2020_4for1                 default
+    ├ nvda_2024_10for1                used by audit check
+    ├ amzn_2022_20for1
+    ├ googl_2022_20for1
+    └ tsla_2022_3for1
+
+  CH ingestion_runs                   audit log per job cycle
+                                      (run_id, job_name, window, status)
+
+  silver.bar_quality                  PLANNED TA-5.1
+                                      expected vs actual + disagreements

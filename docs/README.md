@@ -62,6 +62,16 @@ Then, in this order:
     evidence, regime context, harness tests, execution layer, live
     observability). Drives the additions in `trading_subsystem_design.md`
     §10 phasing.
+12. [data_ingestion_paths.md](data_ingestion_paths.md) — the
+    definitive map of every path data takes into the system (8 paths
+    across S3/Iceberg bronze, silver, and ClickHouse). Per-path
+    walkthrough, master ASCII diagram, per-provider adjustment-status
+    table, audit + monitoring touchpoints, the ground-truth rule.
+    Updated 2026-05-17 with TA-5.0 + TA-5.7 ingest paths.
+13. [CHECKPOINT_2026-05-17.md](CHECKPOINT_2026-05-17.md) — session
+    pause-point notes: what TA-5.0 + TA-5.7 delivered, empirical
+    state of the live system, operator-validation steps required
+    before TA-5.1, where to pick up next.
 
 ## Working agreement
 
