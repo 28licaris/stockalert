@@ -18,7 +18,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from app.services.silver.schemas import CorpAction
+from app.services.silver.schemas import CorpAction, SilverBar
 
 
 class BronzeBar(BaseModel):
@@ -488,3 +488,121 @@ class IndicatorChartData(BaseModel):
             "(other intervals) — CH has no snapshot semantics."
         ),
     )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Silver OHLCV (TA-5.1.5) — canonical consumer surface for 1m bars
+# ─────────────────────────────────────────────────────────────────────
+#
+# These response wrappers are what the HTTP route (`/api/silver/bars/...`)
+# and the MCP tool (`get_silver_bars`) both surface. Same Pydantic
+# contract on both surfaces. Reads `silver.ohlcv_1m` — the
+# provider-merged, corp-action-adjusted, dedup'd canonical OHLCV.
+
+
+class SilverBarsResponse(BaseModel):
+    """Response wrapper for a windowed silver-OHLCV query.
+
+    Reads `silver.ohlcv_1m`. Every row carries BOTH `_raw` (what the
+    provider sent) and `_adj` (split + cash-dividend back-adjusted)
+    columns — consumers pick which they want per the
+    [silver_layer_plan consumer contract](../../../docs/silver_layer_plan.md).
+    Default consumption is `_adj` (chart, screener, indicators,
+    backtest, ML); `_raw` is for replay-accuracy / trade-tape reconstruction.
+
+    `snapshot_id` is the Iceberg snapshot pinned by the read.
+    Recording this lets callers replay against the exact lake state.
+    """
+
+    symbol: str
+    start: datetime
+    end: datetime
+    snapshot_id: Optional[str] = Field(
+        None,
+        description=(
+            "Iceberg snapshot pinned by the read. None if the silver "
+            "table doesn't exist yet (cold-start before first build)."
+        ),
+    )
+    bars: list[SilverBar]
+    count: int = Field(..., description="len(bars). Echoed for cheap client-side checks.")
+
+
+class BarQualityRow(BaseModel):
+    """One row from `silver.bar_quality` — the per-(symbol, date) audit
+    ledger produced alongside silver.ohlcv_1m.
+
+    Used by:
+      - Operators inspecting nightly silver-build health.
+      - Agents asking "did my training set have any silent gaps on day X?"
+      - The dashboard's data-quality panel.
+    """
+
+    symbol: str
+    date: date
+    expected_bars: Optional[int] = Field(
+        None,
+        description=(
+            "RTH minutes for the trading day (390 by default). Per-symbol "
+            "override possible for ETFs / ADRs with non-standard hours."
+        ),
+    )
+    actual_bars: Optional[int] = Field(
+        None, description="Distinct minute timestamps observed in silver.",
+    )
+    gap_count: Optional[int] = Field(
+        None,
+        description=(
+            "Number of contiguous missing-minute runs within the day. "
+            "Each absent block counts as one gap regardless of length."
+        ),
+    )
+    max_gap_minutes: Optional[int] = Field(
+        None, description="Length of the longest single gap (in minutes).",
+    )
+    providers_seen: list[str] = Field(
+        default_factory=list,
+        description="Providers that contributed at least one bar this day.",
+    )
+    disagreement_count: Optional[int] = Field(
+        None,
+        description=(
+            "Number of minutes where two or more providers' close prices "
+            "disagreed beyond the tolerance (50¢ OR 0.5%)."
+        ),
+    )
+    backfill_attempts: Optional[int] = Field(
+        None,
+        description=(
+            "Re-tries the orchestrator performed for this slice. 0 for a "
+            "clean first-shot build; rises when nightly retries kick in."
+        ),
+    )
+    ingestion_ts: Optional[datetime] = Field(
+        None, description="When silver_ohlcv_build wrote this row (UTC).",
+    )
+    ingestion_run_id: Optional[str] = Field(
+        None,
+        description="Run ID linking this row to the silver-build invocation.",
+    )
+
+
+class BarQualityResponse(BaseModel):
+    """Response wrapper for a windowed bar-quality query."""
+
+    symbol: str
+    since: Optional[date] = Field(
+        None, description="Lower bound on `date` (inclusive). None = all history.",
+    )
+    until: Optional[date] = Field(
+        None, description="Upper bound on `date` (inclusive). None = through today.",
+    )
+    snapshot_id: Optional[str] = Field(
+        None,
+        description=(
+            "Iceberg snapshot pinned by the read. None if silver.bar_quality "
+            "doesn't exist yet."
+        ),
+    )
+    rows: list[BarQualityRow]
+    count: int

@@ -34,6 +34,7 @@ from app.api import (
     routes_monitors,
     routes_movers,
     routes_screener,
+    routes_silver,
     routes_watchlist,
 )
 from app.services.journal.journal_sync import journal_sync_service
@@ -325,6 +326,7 @@ app.include_router(routes_lake.router, prefix="/api", tags=["Lake"])
 app.include_router(routes_indicators.router, prefix="/api", tags=["Indicators"])
 app.include_router(routes_screener.router, prefix="/api", tags=["Screener"])
 app.include_router(routes_corp_actions.router, prefix="/api", tags=["CorpActions"])
+app.include_router(routes_silver.router, prefix="/api", tags=["Silver"])
 
 try:
     from app.api import routes_signals
