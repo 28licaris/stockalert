@@ -1,0 +1,114 @@
+# CodeBuild buildspec for `scripts/run_silver_ohlcv_build.py --full`.
+#
+# Runs the silver backfill in AWS same-region as our S3 + Glue, where
+# S3 GETs cost ~2-10ms (vs ~30-100ms from a residential connection).
+# Estimated wall-clock: ~15-20 min for seed × 5y backfill.
+#
+# Setup is one-time per AWS account (see
+# docs/runbook_codebuild_silver_full_backfill.md):
+#   1. Create CodeStar Connections OAuth to GitHub
+#   2. Create IAM role with the policy in
+#      scripts/codebuild/iam-policy.json
+#   3. Create CodeBuild project pointing at this buildspec
+#
+# After setup: "Start build" in the AWS Console (or `aws codebuild
+# start-build --project-name <name>`) kicks it off.
+#
+# The result JSON gets uploaded to S3 at:
+#   s3://${STOCK_LAKE_BUCKET}/silver_build_reports/codebuild-<build-id>.json
+
+version: 0.2
+
+env:
+  # Defaults — override per-build via the CodeBuild project's Environment
+  # variables panel (or by passing --environment-variables-override on
+  # the AWS CLI when starting the build).
+  variables:
+    AWS_REGION: us-east-1
+    STOCK_LAKE_BUCKET: stock-lake-562741918372-us-east-1-an
+    ICEBERG_GLUE_DATABASE: stock_lake
+    ICEBERG_WAREHOUSE_PREFIX: iceberg
+    ICEBERG_CATALOG_NAME: stock_lake
+    SILVER_PROVIDER_PRECEDENCE: polygon,schwab
+    # Build-window controls. Defaults: full backfill from bronze coverage
+    # start to yesterday for the active universe (SEED ∪ watchlists).
+    SILVER_BUILD_SYMBOLS: active
+    SILVER_BUILD_MODE: full
+    # Optional: explicit window. Leave empty for --full defaults.
+    SILVER_BUILD_SINCE: ""
+    SILVER_BUILD_UNTIL: ""
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - echo "=== install ==="
+      - python --version
+      - pip install --upgrade pip
+      - pip install poetry==1.8.3
+      - poetry --version
+      # Skip dev deps; we don't need pytest/etc. in the build env.
+      - poetry config virtualenvs.create false
+      - poetry install --without dev --no-interaction --no-ansi
+
+  pre_build:
+    commands:
+      - echo "=== pre_build ==="
+      - echo "Region:          $AWS_REGION"
+      - echo "Bucket:          $STOCK_LAKE_BUCKET"
+      - echo "Glue DB:         $ICEBERG_GLUE_DATABASE"
+      - echo "Symbols:         $SILVER_BUILD_SYMBOLS"
+      - echo "Mode:            $SILVER_BUILD_MODE"
+      - echo "Window:          ${SILVER_BUILD_SINCE:-(default)} .. ${SILVER_BUILD_UNTIL:-(default)}"
+      - echo "Build ID:        $CODEBUILD_BUILD_ID"
+      # Sanity: confirm we can reach S3 + Glue.
+      - aws s3 ls "s3://$STOCK_LAKE_BUCKET/iceberg/" | head -5
+      - aws glue get-database --name "$ICEBERG_GLUE_DATABASE" --query 'Database.Name'
+      - mkdir -p /tmp/silver_run
+
+  build:
+    commands:
+      - echo "=== build ==="
+      - |
+        ARGS=()
+        if [ "$SILVER_BUILD_MODE" = "full" ]; then
+          ARGS+=("--full")
+        elif [ "$SILVER_BUILD_MODE" = "nightly" ]; then
+          ARGS+=("--nightly")
+        fi
+        if [ -n "$SILVER_BUILD_SINCE" ]; then
+          ARGS+=("--since" "$SILVER_BUILD_SINCE")
+        fi
+        if [ -n "$SILVER_BUILD_UNTIL" ]; then
+          ARGS+=("--until" "$SILVER_BUILD_UNTIL")
+        fi
+        ARGS+=("--symbols" "$SILVER_BUILD_SYMBOLS")
+        ARGS+=("--out-json" "/tmp/silver_run/result.json")
+        echo "Running: poetry run python scripts/run_silver_ohlcv_build.py ${ARGS[@]}"
+        poetry run python scripts/run_silver_ohlcv_build.py "${ARGS[@]}"
+
+  post_build:
+    commands:
+      - echo "=== post_build ==="
+      - |
+        if [ -f /tmp/silver_run/result.json ]; then
+          REPORT_KEY="silver_build_reports/codebuild-${CODEBUILD_BUILD_ID}.json"
+          aws s3 cp /tmp/silver_run/result.json "s3://${STOCK_LAKE_BUCKET}/${REPORT_KEY}"
+          echo "Report:          s3://${STOCK_LAKE_BUCKET}/${REPORT_KEY}"
+          echo "--- summary ---"
+          # If jq is available print a compact summary; otherwise dump the file.
+          if command -v jq >/dev/null 2>&1; then
+            jq '{status, mode, since, until, symbols_count, result: {slices, slices_succeeded, slices_failed, silver_rows, duration_seconds}}' /tmp/silver_run/result.json
+          else
+            cat /tmp/silver_run/result.json
+          fi
+        else
+          echo "WARNING: /tmp/silver_run/result.json not produced. See logs above."
+        fi
+
+artifacts:
+  files:
+    - /tmp/silver_run/result.json
+  name: silver-build-${CODEBUILD_BUILD_ID}
+  discard-paths: yes

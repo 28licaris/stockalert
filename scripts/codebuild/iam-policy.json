@@ -1,0 +1,84 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadBronzeWriteSilverIceberg",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:ListBucket",
+        "s3:GetBucketLocation"
+      ],
+      "Resource": [
+        "arn:aws:s3:::stock-lake-562741918372-us-east-1-an",
+        "arn:aws:s3:::stock-lake-562741918372-us-east-1-an/*"
+      ],
+      "_comment": "Iceberg silver writes (and reads existing manifests) require full RW on the lake bucket. Restrict the prefix if you prefer narrower scope: replace '/*' with '/iceberg/*' AND '/silver_build_reports/*' to allow only those subtrees."
+    },
+    {
+      "Sid": "GlueIcebergCatalog",
+      "Effect": "Allow",
+      "Action": [
+        "glue:GetDatabase",
+        "glue:GetDatabases",
+        "glue:GetTable",
+        "glue:GetTables",
+        "glue:GetTableVersion",
+        "glue:GetTableVersions",
+        "glue:CreateTable",
+        "glue:UpdateTable",
+        "glue:DeleteTable",
+        "glue:BatchCreatePartition",
+        "glue:BatchUpdatePartition",
+        "glue:BatchDeletePartition",
+        "glue:CreatePartition",
+        "glue:UpdatePartition",
+        "glue:GetPartition",
+        "glue:GetPartitions",
+        "glue:BatchGetPartition"
+      ],
+      "Resource": [
+        "arn:aws:glue:us-east-1:562741918372:catalog",
+        "arn:aws:glue:us-east-1:562741918372:database/stock_lake",
+        "arn:aws:glue:us-east-1:562741918372:table/stock_lake/*"
+      ],
+      "_comment": "PyIceberg uses Glue as the catalog for table metadata. Full table-level R/W is needed because each commit calls glue:UpdateTable. PartitionAware actions cover Iceberg's hidden partition spec changes."
+    },
+    {
+      "Sid": "CloudWatchLogsForBuildOutput",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": [
+        "arn:aws:logs:us-east-1:562741918372:log-group:/aws/codebuild/*"
+      ],
+      "_comment": "Standard CodeBuild logging. AWS auto-creates the log group on first run."
+    },
+    {
+      "Sid": "CodeBuildReports",
+      "Effect": "Allow",
+      "Action": [
+        "codebuild:CreateReportGroup",
+        "codebuild:CreateReport",
+        "codebuild:UpdateReport",
+        "codebuild:BatchPutTestCases",
+        "codebuild:BatchPutCodeCoverages"
+      ],
+      "Resource": [
+        "arn:aws:codebuild:us-east-1:562741918372:report-group/silver-build-*"
+      ],
+      "_comment": "Optional — CodeBuild reports for the JSON artifact. Remove if you don't use the artifacts feature."
+    }
+  ],
+  "_metadata": {
+    "purpose": "Minimum IAM policy for the CodeBuild service role that runs silver --full backfill.",
+    "attach_to": "The IAM role attached to your CodeBuild project. AWS Console: IAM → Roles → <your-codebuild-role> → Permissions → Add permissions → Create inline policy → JSON.",
+    "scope_note": "The S3 statement is broad-ish. Tighten to /iceberg/* + /silver_build_reports/* if you want strict least-privilege.",
+    "see_also": "docs/runbook_codebuild_silver_full_backfill.md"
+  }
+}

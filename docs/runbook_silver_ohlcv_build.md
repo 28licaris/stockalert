@@ -50,9 +50,11 @@ poetry run python scripts/run_silver_ohlcv_build.py --full \
 ```
 
 Wall-clock estimate (month-batched, the new default):
-- Local laptop: ~30-60 min for the seed universe (~2000× fewer S3
-  round-trips than the legacy per-slice path).
-- CodeBuild / EC2 same-region: ~5-10 min.
+- Local laptop (residential): ~2-3 hr — bottlenecked by S3 GET
+  latency, not Iceberg or the build math.
+- CodeBuild / EC2 same-region: **~15-20 min.** See
+  [runbook_codebuild_silver_full_backfill.md](runbook_codebuild_silver_full_backfill.md)
+  for the CodeBuild setup. Recommended for the initial `--full` run.
 
 If you ever need the legacy per-slice mode (debugging a single
 slice, or A/B comparing outputs), pass `--mode per-slice`. Output is

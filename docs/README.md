@@ -88,7 +88,19 @@ Then, in this order:
     + initial-backfill silver from bronze. Pre-flight script,
     multi-hour `--full` run, post-run verification, nightly-loop
     enablement, Yahoo-adj spot-check.
-17. [futures_data_plan.md](futures_data_plan.md) — plan-only
+17. [runbook_codebuild_silver_full_backfill.md](runbook_codebuild_silver_full_backfill.md) —
+    operator runbook for running silver `--full` via AWS CodeBuild
+    (same-region as S3, ~15-20 min wall-clock vs ~2.5 hr local).
+    First-time setup walkthrough (CodeStar connection, IAM role,
+    CodeBuild project) + run + re-run commands. Cost: ~$1-3/run.
+18. [iceberg_performance_findings.md](iceberg_performance_findings.md) —
+    honest write-up of the silver-build performance investigation
+    (2026-05-18). Documents why PyIceberg upsert was slow for
+    initial-fill (wrong primitive + wrong batching), what fixed it
+    (TA-5.1.12: per-month commits + auto-append-on-empty), and the
+    escape hatches (`add_files` API, plain Parquet, CH-as-source) if
+    Iceberg ever proves unfit again.
+19. [futures_data_plan.md](futures_data_plan.md) — plan-only
     investigation for adding futures (ES, NQ, CL, GC, …) to the
     pipeline. Three phases: TF-1 live-only via Schwab CHART_FUTURES
     (~3 days), TF-2 Polygon Futures historical (~3-5 days), TF-3
