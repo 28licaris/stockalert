@@ -2302,3 +2302,81 @@ bottom with a date.
 
   Next: TA-5.7 (live_lake_writer to close the 8-24h Schwab live →
   bronze gap), then TA-5.1 (silver OHLCV build).
+- **2026-05-17** — **TA-5.7 LANDED**: live_lake_writer + ingestion_runs
+  + live_freshness audit + bronze compaction CLI. Closes the
+  8-24h Schwab live → bronze freshness gap that the bronze audit
+  flagged on 2026-05-17.
+
+  **What's in this phase:**
+
+  - `app/services/ingest/live_lake_writer.py`: the core class.
+    Reads CH ohlcv_1m for the last 15 min, filters by per-provider
+    live source tag (`schwab-stream`), upserts into
+    bronze.{provider}_minute via PyIceberg upsert (identifier:
+    symbol, timestamp). Idempotent, provider-pluggable (config
+    map; adding a new live provider = one entry).
+  - 1-min safety margin so the in-flight bar (still being written
+    by the batcher) isn't read.
+  - Lifespan integration: `start_live_lake_writer()` +
+    `stop_live_lake_writer()` wired into `app/main_api.py`.
+    Started after the watchlist service; stopped BEFORE it on
+    shutdown (so last-minute streamed bars get captured).
+  - Config: `LIVE_LAKE_WRITER_ENABLED` (default true),
+    `LIVE_LAKE_WRITER_CYCLE_MINUTES` (default 5),
+    `LIVE_LAKE_WRITER_LOOKBACK_MINUTES` (default 15).
+  - `watchlist_service._on_bar` updated to tag streamed bars with
+    `{provider}-stream` (e.g. `schwab-stream`) so they're
+    distinguishable from REST-backfilled rows (which use the
+    bare `{provider}` tag).
+
+  **Auxiliaries:**
+
+  - CH `ingestion_runs` table: generic job-run audit log. One row
+    per cycle (run_id, job_name, started_at, finished_at, window,
+    rows_written, per_provider counts/errors, status). Shape is
+    generic across job_name so future ingest jobs (silver_build,
+    corp_actions_backfill) can use the same audit channel.
+  - New bronze audit check: `live_freshness` — verifies
+    max(timestamp) of `*-stream`-tagged rows is recent (<30 min
+    stale) during RTH (Mon-Fri 9:30am-4pm ET). Outside RTH:
+    INFO-only (expected staleness). RTH detection respects
+    timezone.
+  - `scripts/compact_bronze.py`: operator CLI that runs Athena
+    `OPTIMIZE … REWRITE DATA USING BIN_PACK` on bronze tables.
+    Recommended cadence: daily at 03:00 ET. Mitigates the
+    small-file problem (5-min writes × ~500 rows/cycle = tiny
+    Iceberg files).
+
+  **Tests:**
+
+  - `tests/test_live_lake_writer.py` (27 tests):
+    Construction guards (cycle > 0; lookback >= cycle).
+    Provider-config pluggability (custom config swap).
+    Row → Arrow conversion (schema match, audit metadata stamp,
+    vwap/trade_count 0→NULL normalization, naive ts → UTC coerce,
+    empty list → empty Arrow with correct schema).
+    CycleResult shape (total_rows sum, succeeded flag, duration).
+    run_cycle (empty window → 0 rows, per-provider error isolation,
+    window cutoff = as_of - 1min).
+    RTH detection (weekday during, after-close, before-open;
+    Saturday + Sunday → False).
+    Lifespan singleton.
+
+  Total tests across TA-5.0 + TA-5.7: 104 passing.
+
+  **What the operator does next** (to validate live-writer in
+  production):
+  1. Restart `uvicorn` — startup logs should show "✅ Live lake
+     writer started (cycle=5min lookback=15min)".
+  2. During market hours, after 5-10 min, run:
+       poetry run python scripts/audit_bronze.py --check live_freshness
+     Expected: 🟢 OK for schwab_minute (stale_minutes < 30).
+  3. After ~30 days of operation, run:
+       poetry run python scripts/compact_bronze.py
+     To compact accumulated small files.
+
+  **TA-5.0 + TA-5.7 = bronze layer is production-ready.** Bronze
+  has clean provenance (per-row source tag), idempotent writes,
+  freshness verification, and an audit framework that catches
+  regressions. silver_build (TA-5.1) can now be wired against this
+  foundation.

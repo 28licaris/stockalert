@@ -50,14 +50,22 @@ class WatchlistService:
         self._provider: Optional[DataProvider] = None
         self._provider_error: Optional[str] = None
         self._started = False
-        # Stamp every streamed bar with the *stream* provider's identity so the
-        # lake-archive layer can route deltas back to the correct
-        # `s3://stock-lake/raw/provider=<source>/` partition. Explicit
-        # DATA_SOURCE_TAG still wins so users can override (e.g. polygon-iex).
-        self._source = (
+        # Stamp every streamed bar with the *stream* provider's identity
+        # so the live_lake_writer (TA-5.7) can distinguish stream-sourced
+        # rows from REST-backfilled ones (which use the bare provider
+        # name, e.g. "schwab"). Suffix `-stream` is the contract:
+        # live_lake_writer reads CH ohlcv_1m WHERE source = "{provider}-stream".
+        # Explicit DATA_SOURCE_TAG still wins for operators who need to
+        # override (e.g. polygon-iex); they're responsible for matching
+        # the live_lake_writer config if they do.
+        base_tag = (
             (settings.data_source_tag or "").strip()
             or settings.effective_stream_provider
         )
+        if settings.data_source_tag:
+            self._source = base_tag
+        else:
+            self._source = f"{base_tag}-stream" if base_tag else ""
 
         # Symbol -> # of active watchlists containing it (excludes baseline membership;
         # baseline is tracked separately so refcount==0 cannot evict a baseline symbol).

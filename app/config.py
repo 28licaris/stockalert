@@ -88,6 +88,20 @@ class Settings(BaseModel):
         "SILVER_PROVIDER_PRECEDENCE", "polygon,schwab"
     )
 
+    # Live-lake-writer config (TA-5.7 — closes the 8-24h Schwab live →
+    # bronze freshness gap). The writer reads CH ohlcv_1m every
+    # cycle_minutes and upserts into bronze.{provider}_minute. See
+    # app/services/ingest/live_lake_writer.py.
+    live_lake_writer_enabled: bool = (
+        os.getenv("LIVE_LAKE_WRITER_ENABLED", "true").lower() == "true"
+    )
+    live_lake_writer_cycle_minutes: int = int(
+        os.getenv("LIVE_LAKE_WRITER_CYCLE_MINUTES", "5")
+    )
+    live_lake_writer_lookback_minutes: int = int(
+        os.getenv("LIVE_LAKE_WRITER_LOOKBACK_MINUTES", "15")
+    )
+
     # Schwab (Think or Swim) – store credentials in .env only; never commit
     schwab_client_id: str = os.getenv("SCHWAB_CLIENT_ID", "")
     schwab_client_secret: str = os.getenv("SCHWAB_CLIENT_SECRET", "")

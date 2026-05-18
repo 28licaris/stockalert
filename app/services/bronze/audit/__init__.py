@@ -71,6 +71,7 @@ from app.services.bronze.audit import row_counts as _row_counts   # noqa: F401,E
 from app.services.bronze.audit import source_tags as _source_tags  # noqa: F401,E402
 from app.services.bronze.audit import null_symbols as _null_symbols  # noqa: F401,E402
 from app.services.bronze.audit import adjustment_status as _adj_status  # noqa: F401,E402
+from app.services.bronze.audit import live_freshness as _live_freshness  # noqa: F401,E402
 
 
 __all__ = [

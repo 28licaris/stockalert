@@ -246,6 +246,42 @@ def init_schema() -> None:
     # ReplacingMergeTree on `archived_at` so re-running an archive job
     # (after a crash mid-write, say) cleanly overwrites the prior watermark
     # without leaving zombie entries.
+    # Ingestion-run audit log (TA-5.7 + future ingest jobs).
+    # One row per cycle / run of any ingest job (live_lake_writer,
+    # nightly_polygon_refresh, corp_actions_backfill, ...). The data
+    # platform plan §9 calls this out as the "operational layer" — Iceberg
+    # MERGE INTO is the correctness layer, this is "did the job actually
+    # run, when, with what scope, did it succeed."
+    #
+    # Schema is intentionally generic across job_name so a single table
+    # serves every ingest job. JSON columns hold per-job-specific detail
+    # (per_provider_rows_written etc.).
+    #
+    # ReplacingMergeTree on `finished_at` so a retry/re-run on the same
+    # run_id (extremely unlikely with UUIDs but defensive) cleanly
+    # overwrites the prior row.
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS ingestion_runs (
+            run_id                          String,
+            job_name                        LowCardinality(String),
+            started_at                      DateTime64(3, 'UTC'),
+            finished_at                     DateTime64(3, 'UTC'),
+            window_start                    DateTime64(3, 'UTC') DEFAULT toDateTime64(0, 3, 'UTC'),
+            window_end                      DateTime64(3, 'UTC') DEFAULT toDateTime64(0, 3, 'UTC'),
+            rows_written                    UInt64 DEFAULT 0,
+            per_provider_rows_written_json  String DEFAULT '{}',
+            per_provider_errors_json        String DEFAULT '',
+            status                          LowCardinality(String) DEFAULT 'ok',
+            version                         UInt64 DEFAULT 0
+        )
+        ENGINE = ReplacingMergeTree(version)
+        PARTITION BY toYYYYMM(started_at)
+        ORDER BY (job_name, started_at, run_id)
+        SETTINGS index_granularity = 8192
+        """
+    )
+
     client.command(
         """
         CREATE TABLE IF NOT EXISTS lake_archive_watermarks (

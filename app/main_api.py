@@ -111,6 +111,23 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("watchlist_service.status() failed: %s", e)
 
+    # Live lake writer (TA-5.7): every cycle_minutes, flushes live-stream
+    # ohlcv_1m rows from CH into bronze.{provider}_minute. Closes the
+    # 8-24h freshness gap that the bronze audit (2026-05-17) identified.
+    # Gated by LIVE_LAKE_WRITER_ENABLED so operators can disable for
+    # CH-only setups.
+    from app.config import settings as _llw_settings
+    if _llw_settings.live_lake_writer_enabled:
+        from app.services.ingest.live_lake_writer import start_live_lake_writer
+        await _safe_start("Live lake writer", start_live_lake_writer)
+        logger.info(
+            "✅ Live lake writer started (cycle=%dmin lookback=%dmin)",
+            _llw_settings.live_lake_writer_cycle_minutes,
+            _llw_settings.live_lake_writer_lookback_minutes,
+        )
+    else:
+        logger.info("ℹ️  Live lake writer disabled (LIVE_LAKE_WRITER_ENABLED=false)")
+
     # Wire the periodic gap sweeper: every 15 min the backfill service will
     # ask `watchlist_service` for the current streaming set and auto-enqueue
     # gap-fill jobs for any symbol with within-session holes.
@@ -246,6 +263,16 @@ async def lifespan(app: FastAPI):
             pass
         except Exception as e:
             logger.warning("nightly_schwab_refresh task shutdown: %s", e)
+
+    # Live lake writer: stop BEFORE watchlist (so it can capture any
+    # last-minute streamed bars; the stop call gives the in-flight cycle
+    # up to 5s to drain).
+    try:
+        from app.services.ingest.live_lake_writer import stop_live_lake_writer
+        await stop_live_lake_writer()
+        logger.info("✅ Live lake writer stopped")
+    except Exception as e:
+        logger.warning("live_lake_writer stop failed: %s", e)
 
     await monitor_manager.stop_all()
     logger.info("✅ Monitors stopped")
