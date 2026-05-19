@@ -149,14 +149,14 @@ class RenameWatchlistRequest(BaseModel):
     new_name: str = Field(..., min_length=1, max_length=64)
 
 
-@router.get("/api/watchlists")
+@router.get("/watchlists")
 async def list_watchlists_endpoint(include_inactive: bool = False, with_members: bool = True):
     """List all watchlists. By default returns active ones with their member lists."""
     wls = watchlist_service.list_watchlists(include_inactive=include_inactive)
     return [_serialize_wl(wl, with_members=with_members) for wl in wls]
 
 
-@router.post("/api/watchlists", status_code=201)
+@router.post("/watchlists", status_code=201)
 async def create_watchlist_endpoint(req: CreateWatchlistRequest):
     """Create (or reactivate) a watchlist. Idempotent."""
     if req.kind not in watchlist_repo.VALID_KINDS:
@@ -168,7 +168,7 @@ async def create_watchlist_endpoint(req: CreateWatchlistRequest):
         raise HTTPException(400, str(e))
 
 
-@router.get("/api/watchlists/{name}")
+@router.get("/watchlists/{name}")
 async def get_watchlist_endpoint(name: str):
     """Single watchlist with its members."""
     wl = watchlist_service.get_watchlist(name)
@@ -177,7 +177,7 @@ async def get_watchlist_endpoint(name: str):
     return _serialize_wl(wl, with_members=True)
 
 
-@router.patch("/api/watchlists/{name}")
+@router.patch("/watchlists/{name}")
 async def rename_watchlist_endpoint(name: str, req: RenameWatchlistRequest):
     """Rename a watchlist (members move with it)."""
     if name == "default":
@@ -192,7 +192,7 @@ async def rename_watchlist_endpoint(name: str, req: RenameWatchlistRequest):
         raise HTTPException(400, str(e))
 
 
-@router.delete("/api/watchlists/{name}")
+@router.delete("/watchlists/{name}")
 async def delete_watchlist_endpoint(name: str):
     """Soft-delete a watchlist. Members move with it (refcount on subscriptions decrements)."""
     if name == "default":
@@ -202,7 +202,7 @@ async def delete_watchlist_endpoint(name: str):
     return {"deleted": name}
 
 
-@router.get("/api/watchlists/{name}/members")
+@router.get("/watchlists/{name}/members")
 async def list_members_endpoint(name: str):
     """List active members of a watchlist."""
     wl = watchlist_service.get_watchlist(name)
@@ -211,7 +211,7 @@ async def list_members_endpoint(name: str):
     return watchlist_service.list_members(name)
 
 
-@router.post("/api/watchlists/{name}/members")
+@router.post("/watchlists/{name}/members")
 async def add_members_endpoint(name: str, req: SymbolsRequest):
     """Add symbols to a watchlist (auto-creates it). Idempotent. Triggers backfill for newly-added symbols."""
     try:
@@ -221,7 +221,7 @@ async def add_members_endpoint(name: str, req: SymbolsRequest):
         raise HTTPException(500, str(e))
 
 
-@router.delete("/api/watchlists/{name}/members")
+@router.delete("/watchlists/{name}/members")
 async def remove_members_endpoint(name: str, req: SymbolsRequest):
     """Remove symbols from a watchlist. Idempotent."""
     wl = watchlist_service.get_watchlist(name)
@@ -234,7 +234,7 @@ async def remove_members_endpoint(name: str, req: SymbolsRequest):
         raise HTTPException(500, str(e))
 
 
-@router.get("/api/watchlists/{name}/snapshot")
+@router.get("/watchlists/{name}/snapshot")
 async def watchlist_snapshot_endpoint(name: str):
     """Latest bar for each symbol in the named watchlist."""
     wl = watchlist_service.get_watchlist(name)

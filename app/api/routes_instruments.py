@@ -21,6 +21,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.api.schemas.instruments import InstrumentMatch, InstrumentSearchResponse
 from app.services.live.watchlist_service import watchlist_service
 
 logger = logging.getLogger(__name__)
@@ -56,11 +57,11 @@ def _cache_put(key: tuple[str, int], val: list[dict]) -> None:
     _cache[key] = (time.monotonic(), val)
 
 
-@router.get("/instruments/search")
+@router.get("/instruments/search", response_model=InstrumentSearchResponse)
 async def search_instruments(
     q: str = Query(..., min_length=1, max_length=32, description="Ticker prefix or company name fragment"),
     limit: int = Query(10, ge=1, le=25, description="Max suggestions to return"),
-):
+) -> InstrumentSearchResponse:
     """
     Autocomplete endpoint. Returns up to `limit` matching instruments.
 
@@ -82,7 +83,11 @@ async def search_instruments(
     key = (query.lower(), limit)
     cached = _cache_get(key)
     if cached is not None:
-        return {"query": query, "results": cached, "cached": True}
+        return InstrumentSearchResponse(
+            query=query,
+            results=[InstrumentMatch(**r) for r in cached],
+            cached=True,
+        )
 
     # Get the live provider from the watchlist service so we don't reconstruct
     # OAuth state per call. Falls back to an empty list if the provider isn't
@@ -90,7 +95,7 @@ async def search_instruments(
     provider = getattr(watchlist_service, "_provider", None)
     if provider is None:
         logger.debug("search_instruments: provider not ready, returning empty list")
-        return {"query": query, "results": [], "cached": False}
+        return InstrumentSearchResponse(query=query, results=[], cached=False)
 
     try:
         results = await provider.search_instruments(query, limit=limit)
@@ -101,4 +106,8 @@ async def search_instruments(
         results = []
 
     _cache_put(key, results)
-    return {"query": query, "results": results, "cached": False}
+    return InstrumentSearchResponse(
+        query=query,
+        results=[InstrumentMatch(**r) for r in results],
+        cached=False,
+    )

@@ -5,7 +5,11 @@ typed, component-driven single-page application that exposes
 **every** capability of the platform — data, indicators, screener,
 backtests, agents, MCP tools, monitoring — in one cohesive UI.
 
-**Status:** plan only. No code written yet.
+**Status:** FE-1, FE-1.5, FE-2 **landed** 2026-05-18. Stack decisions
+locked — see §3.0 below. FE-2 ships the chart primitive scaffold;
+FE-2.1 (indicator overlays, coverage strip, journal panel) is the
+next follow-on. See [BUILD_JOURNAL.md](BUILD_JOURNAL.md) for the
+gate evidence.
 
 **Goal:** a developer-first cockpit built to **production-grade
 modular standards** so it can graduate into a subscription product
@@ -26,6 +30,11 @@ piece of persisted state goes through abstractions (`useCurrentUser`,
 in SaaS mode. See §7 (SaaS-Readiness Contract) for the seams.
 
 **Companion docs:**
+- [frontend_api_contracts.md](frontend_api_contracts.md) — **READ THIS
+  FIRST** for any new endpoint work. Inventories every cockpit-facing
+  route, names the gaps, defines the contract rules, and parks the
+  open architectural questions (watchlists-vs-streaming, `/api/v1`
+  rename, etc.) that need signoff before FE-CONTRACTS-* phases start.
 - [trading_subsystem_design.md](trading_subsystem_design.md) — strategy
   framework backing the Backtest + Runs pages.
 - [data_platform_plan.md](data_platform_plan.md) — bronze/silver/gold
@@ -129,9 +138,43 @@ requires hand-vendoring scripts via CDN URLs.
 
 ---
 
-## 3. Stack decisions (recommendation + rationale)
+## 3. Stack decisions
 
-After surveying the field, my recommendation:
+### 3.0 LOCKED — 2026-05-18
+
+The table below in §3.1 reflects the *original recommendation*. Before
+FE-1 started, two swaps were made after reviewing the trade-offs with
+the operator (who is not a frontend dev, will lean on AI/Stack Overflow
+for help). Ubiquity > bleeding-edge where it doesn't matter.
+
+| Concern | Plan recommendation | LOCKED choice | Why the swap |
+|---|---|---|---|
+| Routing | TanStack Router | **React Router v7** | React Router v7 has type-safe routes too (added in v7); 10× more Stack Overflow answers; what most React tutorials assume. TanStack Router is newer/smaller; we don't need its marginal type benefits enough to pay the ecosystem-size tax. |
+| Lint/format | Biome | **ESLint + Prettier** | Biome is faster but React-rule coverage is still catching up. ESLint+Prettier are universal — every editor, every CI template, every AI assistant knows them cold. |
+
+Everything else in §3.1 is unchanged.
+
+The other locked-in decisions (recorded for posterity so future-us
+doesn't relitigate them):
+
+- **SaaS-readiness seams: INCLUDE in FE-1** (§7). Adds ~1 day now to
+  avoid a 6–8 week refactor later if the subscription product happens.
+- **Order: PARALLEL with TA-5 silver work.** The Status page makes
+  silver build progress observable as it lands.
+- **Folder: `frontend/`** at repo root (sibling of `app/`). Self-
+  contained, zero imports from `app/`, lift-out to its own repo is a
+  `git mv` + CORS config change.
+- **Mobile posture: responsive-by-default web app today; PWA install
+  when SaaS launches; separate React Native companion app later if and
+  only if mobile monitoring becomes a real product.** A single codebase
+  trying to be both desktop cockpit and mobile app is a trap — Bloomberg
+  ambitions don't survive 375px viewports. Tailwind + container queries
+  give us "looks fine on phone" for free; native mobile is a different
+  product surface, not a stretch goal of this one.
+
+### 3.1 Original recommendation (reference)
+
+After surveying the field, the original recommendation:
 
 | Concern | Recommendation | Why this and not the alternatives |
 |---|---|---|

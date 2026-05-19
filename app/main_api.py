@@ -8,9 +8,14 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.api.schemas import ErrorResponse
 
 from app.db import (
     close_client,
@@ -26,6 +31,7 @@ from app.services.live.watchlist_service import watchlist_service
 from app.api import (
     routes_backfill,
     routes_corp_actions,
+    routes_health,
     routes_indicators,
     routes_instruments,
     routes_journal,
@@ -353,29 +359,114 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(routes_monitors.router, prefix="", tags=["Monitors"])
-app.include_router(routes_watchlist.router, prefix="", tags=["Watchlist"])
-app.include_router(routes_movers.router, prefix="/api", tags=["Movers"])
-app.include_router(routes_backfill.router, prefix="/api", tags=["Backfill"])
-app.include_router(routes_instruments.router, prefix="/api", tags=["Instruments"])
-app.include_router(routes_market.router, prefix="/api", tags=["Market"])
-app.include_router(routes_journal.router, prefix="/api", tags=["Journal"])
-app.include_router(routes_lake.router, prefix="/api", tags=["Lake"])
-app.include_router(routes_indicators.router, prefix="/api", tags=["Indicators"])
-app.include_router(routes_screener.router, prefix="/api", tags=["Screener"])
-app.include_router(routes_corp_actions.router, prefix="/api", tags=["CorpActions"])
-app.include_router(routes_silver.router, prefix="/api", tags=["Silver"])
+
+# ─────────────────────────────────────────────────────────────────────
+# Error envelope handlers (FE-CONTRACTS-1)
+# Convert FastAPI's default `{"detail": "..."}` shape into the typed
+# ErrorResponse defined in app/api/schemas/common.py. Components in
+# the cockpit consume `code` + `message` + `details` directly.
+#
+# Status-code → error-code mapping is best-effort; route handlers may
+# pass a custom code via `HTTPException(..., headers={"X-Error-Code": "..."})`.
+# ─────────────────────────────────────────────────────────────────────
+
+
+_STATUS_CODE_DEFAULT: dict[int, str] = {
+    400: "bad_request",
+    401: "unauthorized",
+    403: "forbidden",
+    404: "not_found",
+    405: "method_not_allowed",
+    409: "conflict",
+    410: "gone",
+    422: "unprocessable",
+    429: "rate_limited",
+    500: "internal_error",
+    502: "bad_gateway",
+    503: "service_unavailable",
+    504: "gateway_timeout",
+}
+
+
+def _error_code_for(status_code: int, override: str | None = None) -> str:
+    if override:
+        return override
+    return _STATUS_CODE_DEFAULT.get(status_code, "error")
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    """Wrap raised HTTPExceptions in the typed ErrorResponse envelope."""
+    del request  # request_id middleware lands in a later phase
+    # `detail` may already be a dict (route called HTTPException(detail={...}));
+    # in that case treat it as structured details with a generic message.
+    if isinstance(exc.detail, dict):
+        message = str(exc.detail.get("message") or exc.detail.get("error") or "Error")
+        details = exc.detail
+    else:
+        message = str(exc.detail) if exc.detail is not None else "Error"
+        details = None
+
+    code_override = exc.headers.get("X-Error-Code") if exc.headers else None
+    envelope = ErrorResponse(
+        code=_error_code_for(exc.status_code, code_override),
+        message=message,
+        details=details,
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=envelope.model_dump(exclude_none=False),
+        headers=exc.headers,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """422 from request-body / query-param validation → ErrorResponse."""
+    del request
+    envelope = ErrorResponse(
+        code="validation_error",
+        message="Request validation failed.",
+        details={"errors": exc.errors()},
+    )
+    return JSONResponse(
+        status_code=422,
+        content=envelope.model_dump(exclude_none=False),
+    )
+
+# ─────────────────────────────────────────────────────────────────────
+# Router mounts (FE-CONTRACTS-1: one-shot rename to /api/v1/*)
+# Legacy paths get 307 redirects further down — see "legacy redirects".
+# ─────────────────────────────────────────────────────────────────────
+
+_V1 = "/api/v1"
+
+app.include_router(routes_health.router, prefix=_V1, tags=["Health"])
+app.include_router(routes_movers.router, prefix=_V1, tags=["Movers"])
+app.include_router(routes_backfill.router, prefix=_V1, tags=["Backfill"])
+app.include_router(routes_instruments.router, prefix=_V1, tags=["Instruments"])
+app.include_router(routes_market.router, prefix=_V1, tags=["Market"])
+app.include_router(routes_journal.router, prefix=_V1, tags=["Journal"])
+app.include_router(routes_lake.router, prefix=_V1, tags=["Lake"])
+app.include_router(routes_indicators.router, prefix=_V1, tags=["Indicators"])
+app.include_router(routes_screener.router, prefix=_V1, tags=["Screener"])
+app.include_router(routes_corp_actions.router, prefix=_V1, tags=["CorpActions"])
+app.include_router(routes_silver.router, prefix=_V1, tags=["Silver"])
+app.include_router(routes_monitors.router, prefix=_V1, tags=["Monitors"])
+app.include_router(routes_watchlist.router, prefix=_V1, tags=["Watchlist"])
 
 try:
     from app.api import routes_signals
-    app.include_router(routes_signals.router, prefix="/api", tags=["Signals"])
+    app.include_router(routes_signals.router, prefix=_V1, tags=["Signals"])
     logger.info("✅ Signals API routes loaded")
 except ImportError:
     logger.info("ℹ️  Signals routes not available")
 
 try:
     from app.api import routes_backtest
-    app.include_router(routes_backtest.router, prefix="/api", tags=["Backtest"])
+    app.include_router(routes_backtest.router, prefix=_V1, tags=["Backtest"])
     logger.info("✅ Backtest routes loaded")
 except ImportError:
     logger.info("ℹ️  Backtest routes not available")
@@ -393,6 +484,62 @@ except Exception as _asst_exc:  # noqa: BLE001
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Legacy redirects (FE-CONTRACTS-1)
+# Every legacy path returns 307 → /api/v1/<same path tail>. 307
+# preserves both method and body, so legacy HTML POSTs to /watchlist/add
+# arrive at /api/v1/watchlist/add intact.
+#
+# Registered AFTER all /api/v1 routes so the v1 routes match first
+# (Starlette routing is first-match-wins).
+#
+# Deletion plan: tracked in [docs/frontend_api_contracts.md §10.2] —
+# legacy redirects removed when the last static HTML page is gone or
+# at FE-CONTRACTS-7, whichever comes first.
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _v1_redirect(target_path: str, request: Request) -> RedirectResponse:
+    """Preserve the query string when redirecting; 307 preserves method+body."""
+    qs = request.url.query
+    url = f"{target_path}?{qs}" if qs else target_path
+    return RedirectResponse(url=url, status_code=307)
+
+
+@app.api_route(
+    "/api/{rest:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    include_in_schema=False,
+)
+async def legacy_api_redirect(rest: str, request: Request):
+    # Defensive: if `/api/v1/<x>` falls through here it means a v1 route
+    # is missing; let it 404 cleanly rather than redirect into a loop.
+    if rest.startswith("v1/") or rest == "v1":
+        raise HTTPException(status_code=404, detail="Not Found")
+    return _v1_redirect(f"/api/v1/{rest}", request)
+
+
+# The single-watchlist legacy routes lived at root (/watchlist, /watchlist/add,
+# /watchlist/remove, /watchlist/snapshot). They're still called by symbol.html
+# and dashboard.html. Map each to its new /api/v1 home.
+@app.api_route(
+    "/watchlist",
+    methods=["GET", "POST"],
+    include_in_schema=False,
+)
+async def legacy_watchlist_root_redirect(request: Request):
+    return _v1_redirect("/api/v1/watchlist", request)
+
+
+@app.api_route(
+    "/watchlist/{rest:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    include_in_schema=False,
+)
+async def legacy_watchlist_redirect(rest: str, request: Request):
+    return _v1_redirect(f"/api/v1/watchlist/{rest}", request)
+
+
+# ─────────────────────────────────────────────────────────────────────
 # MCP server (Pre-Phase 3 Step 3). Mounted at /mcp — same readers that
 # back HTTP routes back the MCP tools, so agents and humans see the
 # same Pydantic shapes.
@@ -407,6 +554,37 @@ except Exception as _mcp_exc:  # noqa: BLE001 — boundary; isolate startup fail
 _DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "static", "dashboard.html")
 _SYMBOL_PATH = os.path.join(os.path.dirname(__file__), "static", "symbol.html")
 _JOURNAL_PATH = os.path.join(os.path.dirname(__file__), "static", "journal.html")
+
+# React cockpit (FE-1+). Vite builds to app/static/dist/. Purely
+# additive: legacy /dashboard, /symbol/{ticker}, /journal stay
+# unchanged. The cockpit is reachable at /app/ only after a build.
+_COCKPIT_DIST = os.path.join(os.path.dirname(__file__), "static", "dist")
+_COCKPIT_INDEX = os.path.join(_COCKPIT_DIST, "index.html")
+_COCKPIT_AVAILABLE = os.path.isfile(_COCKPIT_INDEX)
+
+if _COCKPIT_AVAILABLE:
+    # Hashed JS/CSS/etc. under /app/assets — direct StaticFiles.
+    app.mount(
+        "/app/assets",
+        StaticFiles(directory=os.path.join(_COCKPIT_DIST, "assets")),
+        name="cockpit-assets",
+    )
+
+    @app.get("/app", include_in_schema=False)
+    @app.get("/app/", include_in_schema=False)
+    @app.get("/app/{full_path:path}", include_in_schema=False)
+    async def cockpit_spa(full_path: str = ""):
+        # SPA fallback: every route under /app/ renders index.html so
+        # React Router can resolve it client-side. Static asset
+        # requests are caught by the /app/assets mount above.
+        del full_path
+        return FileResponse(_COCKPIT_INDEX, media_type="text/html")
+else:
+    logger.info(
+        "ℹ️  Cockpit build not found at %s — run `cd frontend && npm run build` "
+        "to enable /app/. Legacy /dashboard, /symbol, /journal continue to work.",
+        _COCKPIT_DIST,
+    )
 
 
 @app.get("/", include_in_schema=False)

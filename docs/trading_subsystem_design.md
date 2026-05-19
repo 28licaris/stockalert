@@ -244,6 +244,21 @@ Defaults: `ZeroFees`, `NextBarOpenFill` (simple, conservative).
 Realistic defaults: `PerShareFees(0.005, min_commission=1.00)`,
 `PercentSlippage(0.0005)`. Configurable per run.
 
+**Live sim-trade surface (FE-CONTRACTS-5, locked 2026-05-18).**
+The cockpit's live paper-trading endpoints (`POST /api/v1/sim/trades`,
+etc. — full schema in
+[frontend_api_contracts.md §4.6](frontend_api_contracts.md)) reuse
+these **same** Protocols. The operator picks one active `FeeModel`
+and one active `SlippageModel` globally (`GET/PUT /api/v1/sim/cost-config`);
+every live sim trade fills through them and persists the audit
+trail (`requested_price`, `fill_price`, `slippage_amount`,
+`slippage_bps`, `fees`, `fees_model_name`, `slippage_model_name`) in
+the `sim_trades` ClickHouse table. This makes backtest results and
+live sim performance directly comparable — same cost model, same
+math. Future realism work (spread-aware, volume-aware, partial-fill
+models) is purely additive: new class implementing the Protocol +
+registry entry, zero schema change.
+
 ### 3.8 Backtester
 
 ```python

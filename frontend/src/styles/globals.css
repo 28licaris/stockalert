@@ -1,0 +1,88 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Color tokens as HSL triples so Tailwind's <alpha-value> syntax works:
+ *   bg-bg-base/50  →  hsl(var(--bg-base) / 50%)
+ *
+ * Defaults: dark theme (Bloomberg-terminal aesthetic, slate-with-indigo).
+ * Light theme overrides under `.light`. Component code never references
+ * raw color values; everything goes through Tailwind's semantic tokens.
+ */
+@layer base {
+  :root,
+  .dark {
+    --bg-base: 222 18% 7%;
+    --bg-subtle: 222 16% 10%;
+    --bg-muted: 222 14% 14%;
+    --bg-elevated: 222 14% 17%;
+
+    --fg-base: 220 14% 95%;
+    --fg-muted: 220 10% 70%;
+    --fg-subtle: 220 8% 50%;
+    --fg-inverted: 222 18% 7%;
+
+    --border: 222 14% 22%;
+    --border-subtle: 222 14% 16%;
+
+    --accent: 239 84% 67%;
+    --accent-fg: 220 14% 98%;
+
+    --success: 142 71% 45%;
+    --warning: 38 92% 50%;
+    --danger: 0 84% 60%;
+
+    --up: 142 71% 45%;
+    --down: 0 84% 60%;
+  }
+
+  .light {
+    --bg-base: 0 0% 100%;
+    --bg-subtle: 220 14% 96%;
+    --bg-muted: 220 14% 92%;
+    --bg-elevated: 0 0% 100%;
+
+    --fg-base: 222 18% 11%;
+    --fg-muted: 220 10% 35%;
+    --fg-subtle: 220 8% 50%;
+    --fg-inverted: 0 0% 100%;
+
+    --border: 220 14% 85%;
+    --border-subtle: 220 14% 92%;
+
+    --accent: 239 84% 60%;
+    --accent-fg: 0 0% 100%;
+
+    --success: 142 71% 38%;
+    --warning: 38 92% 45%;
+    --danger: 0 72% 51%;
+
+    --up: 142 71% 38%;
+    --down: 0 72% 51%;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    font-feature-settings:
+      "rlig" 1,
+      "calt" 1;
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 6px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}

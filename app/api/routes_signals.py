@@ -17,6 +17,8 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.api.schemas.bars import Bar
+from app.api.schemas.signals import Signal
 from app.db import queries  # only for SUPPORTED_INTERVALS (validation)
 from app.services.readers.bar_reader import BarReader
 from app.services.readers.signal_reader import SignalReader
@@ -63,12 +65,12 @@ def _ts(v: Any) -> Optional[str]:
 # ─────────────────────────────────────────────────────────────────────
 
 
-@router.get("/signals")
+@router.get("/signals", response_model=list[Signal])
 async def list_signals(
     symbol: Optional[str] = None,
     limit: int = 50,
     reader: SignalReader = Depends(get_signal_reader),
-) -> list[dict]:
+) -> list[Signal]:
     """
     Return recent signals (optionally filtered to `symbol`),
     newest-first. Response shape preserved verbatim for the dashboard.
@@ -77,19 +79,19 @@ async def list_signals(
         reader.get_signals_by_symbol, symbol, limit
     )
     return [
-        {
-            "symbol": s.symbol,
-            "type": s.signal_type,
-            "indicator": s.indicator,
-            "ts": _ts(s.ts_signal),
-            "price": s.price_at_signal,
-            "indicator_value": s.indicator_value,
-        }
+        Signal(
+            symbol=s.symbol,
+            type=s.signal_type,
+            indicator=s.indicator,
+            ts=_ts(s.ts_signal) or "",
+            price=s.price_at_signal,
+            indicator_value=s.indicator_value,
+        )
         for s in signals
     ]
 
 
-@router.get("/bars")
+@router.get("/bars", response_model=list[Bar])
 async def list_bars(
     symbol: str,
     limit: Optional[int] = Query(
@@ -112,7 +114,7 @@ async def list_bars(
         description="Restrict to bars in the last N days (server-side window).",
     ),
     reader: BarReader = Depends(get_bar_reader),
-) -> list[dict]:
+) -> list[Bar]:
     """
     Return OHLCV bars for `symbol` at `interval`. All source-table
     selection, fallback, and auto-limit logic lives in
@@ -134,13 +136,16 @@ async def list_bars(
         limit=limit,
     )
     return [
-        {
-            "ts": _ts(b.timestamp),
-            "open": b.open,
-            "high": b.high,
-            "low": b.low,
-            "close": b.close,
-            "volume": b.volume,
-        }
+        Bar(
+            ts=_ts(b.timestamp) or "",
+            open=b.open,
+            high=b.high,
+            low=b.low,
+            close=b.close,
+            volume=b.volume,
+            vwap=b.vwap,
+            trade_count=b.trade_count,
+            source=b.source,
+        )
         for b in bars
     ]

@@ -27,3 +27,8 @@ __pycache__/
 # Local clone of the massive (formerly Polygon) Python SDK, pulled via
 # `pip install client-python/` as a path dep. Not vendored intentionally.
 /client-python/
+
+# Frontend cockpit (frontend/ has its own .gitignore for node_modules
+# etc.) — the build artifact ships from CI, not from devs' machines.
+/frontend/node_modules/
+/app/static/dist/

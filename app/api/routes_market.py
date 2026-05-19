@@ -20,6 +20,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Query
 
+from app.api.schemas.market import MarketBannerResponse
 from app.config import settings
 from app.db import watchlist_repo
 from app.services.readers.quote_service import QuoteService
@@ -99,7 +100,7 @@ def _extract_row(symbol: str, payload: dict[str, Any]) -> Optional[dict[str, Any
     }
 
 
-@router.get("/market/banner")
+@router.get("/market/banner", response_model=MarketBannerResponse)
 async def market_banner(
     symbols: Optional[str] = Query(
         None,

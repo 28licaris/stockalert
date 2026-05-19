@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.api.schemas.market import MoversResponse
 from app.services.live.watchlist_service import watchlist_service
 
 logger = logging.getLogger(__name__)
@@ -112,7 +113,7 @@ def _normalize_mover(row: dict) -> dict:
     }
 
 
-@router.get("/movers")
+@router.get("/movers", response_model=MoversResponse)
 async def get_movers(
     index: str = Query(
         "$SPX",

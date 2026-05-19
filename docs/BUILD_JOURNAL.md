@@ -3278,3 +3278,409 @@ bottom with a date.
   Next: CodeBuild scaffolding (buildspec.yml + IAM + runbook), then
   the operator's --full run, which should finish in ~10 min not
   ~30-60 min thanks to this.
+
+---
+
+## Phase FE-1 — Frontend foundation + SaaS-readiness seams
+
+**Goal:** Scaffold the React cockpit at `frontend/` with the locked
+stack from [docs/frontend_plan.md §3.0](frontend_plan.md). App shell
+renders, dev server proxies to FastAPI, OpenAPI codegen wired,
+production build outputs to `app/static/dist/`. Every SaaS seam
+exists as a no-op. No backend changes in this PR — the `/api/v1/*`
+rename and `Principal` dep land in a separate TA-SaaS-1 PR so a
+frontend bootstrap can't break ingest.
+
+**Status:** ✅ COMPLETE
+**Started:** 2026-05-18
+**Completed:** 2026-05-18
+**Gate (all green):**
+  - ✅ `cd frontend && npm install && npm run build` succeeds
+    (281 packages, 96 KB gzipped JS, 3.5 KB gzipped CSS — well under
+    the 250 KB initial-bundle target in [frontend_plan §10](frontend_plan.md))
+  - ✅ `cd frontend && npm run dev` serves the shell at :5173 with HMR,
+    proxies `/api`, `/mcp`, `/ws/*`, `/openapi.json` to FastAPI at :8000
+    (live-verified: HTTP 200 with `@vite/client` injected)
+  - ✅ `cd frontend && npm run typecheck` green
+  - ✅ `cd frontend && npm run lint` green (0 errors, 0 warnings)
+  - ✅ Placeholder Status route renders inside the AppShell;
+    sidebar collapses on desktop, slides over content on mobile
+  - ✅ `useCurrentUser()` returns `DEV_PRINCIPAL`; sidebar visibility
+    driven entirely by `flags.ts`; `apiClient` runs the `withAuth`
+    no-op middleware
+  - ✅ `branding.ts` is the sole source of "StockAlert" string
+  - ✅ `frontend/README.md` documents run/build/codegen + lift-out
+    contract (zero `app/` imports)
+  - ✅ End-to-end smoke: FastAPI serves SPA at `/app/`, `/app/symbol/AAPL`
+    falls back to index.html (React Router takes over), legacy
+    `/dashboard` continues to return 200
+  - ✅ `npm run codegen` against a live FastAPI produces a 3276-line
+    typed API surface; typecheck still passes against the real types
+
+### Tasks
+
+#### Frontend scaffold (this PR)
+- [x] `frontend/` directory with `package.json`, `vite.config.ts`,
+      `tsconfig.json`, `tsconfig.app.json`, `tsconfig.node.json`,
+      `index.html`, `vite-env.d.ts`
+- [x] Tailwind 3 installed properly (no CDN); `tailwind.config.ts`,
+      `postcss.config.js`, `src/styles/globals.css` with HSL token vars
+- [x] React Router v7 with placeholder Status route (`/`) + 404
+- [x] TanStack Query provider + ReactQueryDevtools (dev-only)
+- [x] Responsive AppShell: collapsing sidebar + topbar + content
+      area + bottom status strip; mobile drawer overlay
+- [x] shadcn/ui scaffolding (`components.json`, `cn()` helper,
+      `Button` primitive with cva variants)
+- [x] SaaS seams: `auth/principal.ts`, `auth/useCurrentUser.ts`,
+      `branding.ts`, `flags.ts`, `lib/storage.ts` (`useUserSetting`),
+      `hooks/useQuotaMutation.ts`, `api/client.ts` with `withAuth`
+      + `withTelemetry` middleware
+- [x] OpenAPI codegen: `npm run codegen` script + offline placeholder
+      `src/api/types.gen.ts`
+- [x] ESLint flat config + Prettier (locked over Biome — see §3.0)
+- [x] Vite dev proxy: `/api`, `/mcp`, `/openapi.json`, `/ws/*` →
+      `http://localhost:8000` (override via `STOCKALERT_BACKEND_URL`)
+- [x] Production build target: `../app/static/dist/`
+- [x] Path alias `@/` → `src/` (tsconfig + Vite)
+- [x] `frontend/README.md` with run/build/codegen + lift-out contract
+- [x] Root `.gitignore` updated to exclude `frontend/node_modules/`
+      and `app/static/dist/`
+
+#### Backend (this PR — minimal)
+- [x] `app/main_api.py` mounts `app/static/dist/` if present, at
+      `/app` (legacy `/dashboard`, `/symbol/{ticker}`, `/journal`
+      stay unchanged; cockpit is purely additive today)
+- [ ] CI: frontend-build job (deferred — separate small PR once the
+      skeleton has settled and we've verified `npm install` works on
+      the operator's machine)
+
+#### Companion PR — TA-SaaS-1 (deferred, NOT in this PR)
+- [ ] `app/auth/principal.py` with `Principal` Pydantic model
+- [ ] `get_principal` FastAPI dependency
+- [ ] CH `audit_events` table + middleware
+- [ ] `/api/*` → `/api/v1/*` one-shot rename (legacy redirects)
+- [ ] WS handshake `Principal` gating
+
+**Rationale for split:** the frontend scaffold doesn't *need* the
+backend seams to exist — `useCurrentUser` is a no-op constant either
+way. Bundling them risks a backend regression riding along with a
+frontend bootstrap that nobody on the operator side can review yet.
+Land FE-1 frontend first, get the shell rendering, then ship
+TA-SaaS-1 backend seams as a focused review.
+
+---
+
+## Phase FE-1.5 — Status page wiring
+
+**Goal:** Replace the FE-1 Status placeholder with live data. Add a
+composite backend endpoint (`GET /api/health/services`) that fans out
+to ClickHouse, Iceberg, Schwab, Polygon, backfill queue, and monitor
+manager probes; render through a shared TanStack Query hook that
+also feeds the StatusBar so both the page and footer share one HTTP
+round-trip every 10s.
+
+**Status:** ✅ COMPLETE
+**Started:** 2026-05-18
+**Completed:** 2026-05-18
+**Gate (all green):**
+  - ✅ Backend: `GET /api/health/services` returns the documented
+    shape; `tests/test_routes_health.py` green (3/3) including the
+    failure-isolation test (a probe raising → `state: "error"` row,
+    not a 5xx)
+  - ✅ Frontend: `useHealthServices()` polls every 10s; StatusPage
+    renders 4 service cards + 2 summary cards; StatusBar reflects
+    the same data via the deduplicated cache
+  - ✅ Live smoke: ClickHouse 2ms, Iceberg <1μs (cached handle),
+    Schwab + Polygon configured-and-OK on the operator's machine
+  - ✅ Refresh button on StatusPage forces refetch; spinner reflects
+    `isFetching`
+  - ✅ `npm run typecheck`, `npm run lint`, `npm run build` all
+    green; bundle still well under target
+
+### Tasks
+
+#### Backend
+- [x] `app/api/routes_health.py` with `HealthServicesResponse`
+      Pydantic model; per-subsystem probe functions isolated so any
+      one failing produces `state: "error"` rather than a 5xx
+- [x] Mounted at `/api/health/services` (sibling of legacy `/health`
+      which stays bool-only for back-compat)
+- [x] `tests/test_routes_health.py` — 3 tests covering shape,
+      failure-isolation, and required subsystem coverage
+
+#### Frontend
+- [x] `src/api/queries.ts` — central TanStack Query hook layer
+      (`queryKeys`, `useHealthServices`, `useSymbolBars`,
+      `useSymbolSignals`); shape-normalizer for the legacy `/api/bars`
+      response triad documented inline
+- [x] `src/lib/fmt.ts` — display formatters (price, pct, vol, time,
+      ago, latency)
+- [x] `src/routes/status.tsx` — live page with service cards +
+      backfill/monitor summary + refresh button + error banner
+- [x] `src/components/layout/StatusBar.tsx` — wired to same query;
+      single round-trip serves both surfaces (TanStack Query dedup)
+
+---
+
+## Phase FE-2 — Symbol page scaffold
+
+**Goal:** First real chart in the cockpit. Lightweight Charts wired
+through a React component, OHLCV + volume + signal markers, interval
+picker persisted per-user, recent-bars table beneath. NOT yet
+indicator overlays, coverage strip, journal panel — those are
+FE-2.1+ follow-ons. This phase establishes the chart primitive and
+proves the data pipeline (FastAPI → openapi-fetch → TanStack Query
+→ Lightweight Charts) end-to-end.
+
+**Status:** ✅ COMPLETE (parity scaffold; full parity in FE-2.1)
+**Started:** 2026-05-18
+**Completed:** 2026-05-18
+**Gate (all green):**
+  - ✅ `lightweight-charts@4.2.3` installed; chart renders in the
+    SymbolPage with autoSize + dark theme matching cockpit tokens
+  - ✅ `/symbol` (no ticker) renders a search + recent-tickers
+    picker; `/symbol/AAPL` renders chart + bars table with real data
+  - ✅ Interval picker persists per-user via `useUserSetting`;
+    switching interval triggers a new query, chart updates without
+    teardown
+  - ✅ Signal markers (arrows above/below bar by direction) render
+    when /api/signals returns data
+  - ✅ Live smoke against operator's backend: AAPL 5m bars load
+    (5 recent bars verified, ~$297 close, volume 1.4K–2.6K range)
+  - ✅ End-to-end build: 154 KB gz JS (still under 250 KB target)
+
+### Tasks
+- [x] `lightweight-charts` package installed
+- [x] `src/components/charts/OhlcvChart.tsx` — wrapper that owns
+      chart lifecycle (create/resize/dispose), separates create-
+      effect from data-update effects (no teardown on prop change)
+- [x] `src/components/tables/BarsTable.tsx` — recent bars table
+      with up/down color encoding; TanStack Table swap deferred
+      to FE-3 once virtualization is needed
+- [x] `src/routes/symbol.tsx` — page with header (price + change %),
+      interval picker, chart, bars table; falls back to SymbolPicker
+      when no ticker in URL
+- [x] Recent-tickers list persisted via `useUserSetting('symbol.recent')`
+- [x] Router updated with `/symbol` and `/symbol/:ticker` routes
+- [x] `page.symbol` flag flipped to `true` in `flags.ts`
+- [x] `src/api/queries.ts` — `useSymbolBars` + `useSymbolSignals`
+      hooks with shape-tolerant response normalizers
+
+### Deferred to FE-2.1 (scoped follow-ons)
+- [ ] Indicator overlays (`/api/indicators/series` already exists)
+- [ ] Coverage strip beneath the chart
+- [ ] Journal-trades-on-this-ticker side panel
+- [ ] Adjusted/raw toggle (waits for silver `_adj` columns)
+- [ ] "Promote to seed" button for ad-hoc symbols (waits for the
+      `/api/seed/promote` endpoint)
+- [ ] Live tick updates via WS (`bars.{symbol}` topic — waits for
+      `/ws/events`)
+
+---
+
+## Phase FE-CONTRACTS — Backend contract pass
+
+**Goal:** Close the type-chain so every cockpit-facing endpoint
+declares a Pydantic `response_model`. Add missing endpoints (seed
+universe CRUD, streaming-provider switch, sim trades, ad-hoc CH
+query, journal equity curve). Standardize the error envelope, the
+pagination shape, and the WebSocket fan-out. Move the live namespace
+to `/api/v1/*`.
+
+**Status:** ✅ APPROVED 2026-05-18 — all seven open questions
+locked. FE-CONTRACTS-1 starts next. Full plan in
+[docs/frontend_api_contracts.md](frontend_api_contracts.md).
+
+**Gate:** see [frontend_api_contracts.md §11](frontend_api_contracts.md).
+
+### Locked decisions (2026-05-18)
+
+| § | Question | Decision |
+|---|---|---|
+| 10.1 | Watchlists vs streaming | Sticky-universe model — universe is source of truth; watchlist add can promote to universe; watchlist remove never strips streaming |
+| 10.2 | `/api/v1` namespace | One-shot rename in FE-CONTRACTS-1; 307 redirects for legacy paths |
+| 10.3 | Seed universe storage | ClickHouse `seed_universe` table; bootstrap from `SEED_SYMBOLS ∪ <watchlist members>` on first run |
+| 10.4 | CH query page | Bare SQL textarea + read-only role + 10k row cap + 30s timeout + schema sidebar |
+| 10.5 | Provider switch | In-process restart now (~10s downtime); promote to hot-swap in FE-CONTRACTS-7 |
+| 10.6 | Sim trades | Instant fill UX + **realistic slippage + fees from day 1** via the existing `FeeModel`/`SlippageModel` Protocols ([app/services/sim/fees.py](../app/services/sim/fees.py)); audit fields on every trade for empirical refinement |
+| 10.7 | MCP type parity | Defer; migrate piecemeal as tools get touched |
+
+### Sub-phases
+- [x] **FE-CONTRACTS-1** ✅ COMPLETE 2026-05-18 — `app/api/schemas/`
+      package + `ErrorResponse` + `Page[T]` + apiClient middleware +
+      `/api/v1` one-shot rename. See FE-CONTRACTS-1 detail block below.
+- [x] **FE-CONTRACTS-2** ✅ COMPLETE 2026-05-18 — Bar, Signal,
+      InstrumentMatch, MarketBanner, Movers models; cockpit
+      hand-rolled types deleted. See FE-CONTRACTS-2 detail block below.
+- [ ] **FE-CONTRACTS-3** (~2 days) — Watchlist + Monitor models;
+      prefix cleanup; `/api/v1/watchlists`, `/api/v1/monitors`
+- [ ] **FE-CONTRACTS-4** (~3 days) — Seed universe migration to CH
+      + one-time bootstrap from current state; `/api/v1/seed`,
+      `/api/v1/config/streaming`
+- [ ] **FE-CONTRACTS-5** (~3 days) — `sim_trades` CH table with
+      cost-model audit fields; live sim-trade endpoints reusing the
+      backtester's `FeeModel`/`SlippageModel`; `/api/v1/sim/*`,
+      `/api/v1/sim/cost-config`, `/api/v1/backtest` typed both ways
+- [ ] **FE-CONTRACTS-6** (~2 days) — Journal performance models +
+      equity curve; `/api/v1/clickhouse/query` + `/schema`
+- [ ] **FE-CONTRACTS-7** (~3 days) — `/ws/events` topic-multiplexed
+      WebSocket replacing `/ws/signals`; promote provider switch to
+      true hot-swap
+
+---
+
+### FE-CONTRACTS-1 — detail (LANDED 2026-05-18)
+
+**Goal:** Foundation for the type chain. Schemas package + uniform
+error envelope + the one-shot `/api/v1` rename.
+
+**Status:** ✅ COMPLETE 2026-05-18
+**Gate evidence:**
+  - ✅ All cockpit pages still render against new namespace
+  - ✅ Backend regression sweep: **990 passed, 5 skipped, 0 failures**
+    (`pytest --deselect=tests/integration`)
+  - ✅ FE-CONTRACTS-1 targeted tests: **14/14 green**
+    (`tests/test_api_v1_namespace.py`)
+  - ✅ Frontend gates: `npm run typecheck`, `lint`, `build` all green;
+    bundle stays at 154 KB gz
+  - ✅ End-to-end smoke (against live backend on operator's machine):
+    - `/api/v1/health/services` → 200 with envelope
+    - `/api/v1/market/banner` → 200
+    - `/api/v1/watchlists` → 200
+    - `/api/health/services` → 307 → `/api/v1/health/services`
+    - `/watchlist/snapshot` → 307 → `/api/v1/watchlist/snapshot`
+    - `POST /watchlist/add` → 307 follow → 200 (method + body preserved)
+    - `/api/v1/nonexistent` → 404 with `{code:"not_found", message, details, request_id}`
+    - `/api/v1/bars` (missing symbol) → 422 with field-level errors in `details.errors`
+    - OpenAPI spec contains 38 `/api/v1/*` routes, 0 legacy `/api/*`
+      (redirects are `include_in_schema=False`)
+  - ✅ Legacy HTML pages (`/dashboard`, `/symbol/:ticker`, `/journal`)
+    still 200; their `/api/*` and `/watchlist/*` fetches work via 307
+  - ✅ Cockpit (`/app/`, `/app/symbol/AAPL`) still 200
+
+### Backend changes
+- [x] `app/api/schemas/__init__.py` re-exports common primitives
+- [x] `app/api/schemas/common.py` — `ErrorResponse`, `Page[T]`,
+      `AssetType`, `HealthState`, `Interval`, `OkResponse`, `isoformat_z`
+- [x] `app/api/schemas/README.md` — folder rules + migration recipe
+- [x] `app/main_api.py`:
+      - Three exception handlers (`StarletteHTTPException`,
+        `RequestValidationError`) emit `ErrorResponse` envelope
+      - Status-code → error-code default map; route can override via
+        `HTTPException(..., headers={"X-Error-Code": "..."})`
+      - All router mounts moved to `prefix="/api/v1"`
+      - Catch-all `@app.api_route("/api/{rest:path}", ...)` returns
+        307 to `/api/v1/...` preserving query string (and method+body
+        because 307)
+      - Specific redirects for legacy root-mounted `/watchlist[/...]`
+- [x] `app/api/routes_watchlist.py` — stripped hardcoded `/api/`
+      prefix from the multi-watchlist routes (mount prefix now applies
+      uniformly)
+- [x] `tests/test_api_v1_namespace.py` — 14 tests covering v1
+      reachability, redirects (query-string + method-preservation +
+      follow-through), envelope shape for 404/422/route-raised, and
+      no-redirect-loop on unknown v1 paths
+
+### Frontend changes
+- [x] `frontend/src/lib/errors.ts` — `ApiError extends Error` with
+      `code`/`status`/`details`/`requestId`; `readErrorEnvelope()`
+      best-effort parser with non-JSON fallback; `isApiError()` tag
+- [x] `frontend/src/api/client.ts` — added `withErrorEnvelope`
+      middleware so any non-2xx becomes a typed `ApiError` throw
+- [x] `frontend/src/api/queries.ts` — shared `fetchJson<T>()` helper
+      that throws `ApiError`; URLs updated `/api/*` → `/api/v1/*`
+- [x] `frontend/src/components/ApiErrorAlert.tsx` — typed alert
+      shows `message` + `code` badge + `request_id`
+- [x] Existing pages (`status.tsx`, `symbol.tsx`) use `ApiErrorAlert`
+      instead of inline banners
+
+### Migration tally for FE-CONTRACTS-2
+After FE-CONTRACTS-1 lands, the remaining work to delete every
+hand-rolled interface in `frontend/src/api/queries.ts` requires:
+  - `Bar` Pydantic model on `/api/v1/bars`
+  - `Signal` Pydantic model on `/api/v1/signals`
+  - `InstrumentSearchResponse` on `/api/v1/instruments/search`
+  - `MarketBannerResponse` on `/api/v1/market/banner`
+  - `MoversResponse` on `/api/v1/movers`
+(see [frontend_api_contracts.md §4](frontend_api_contracts.md) for
+the proposed schemas)
+
+---
+
+### FE-CONTRACTS-2 — detail (LANDED 2026-05-18)
+
+**Goal:** Type the five cockpit-blocking routes so the frontend can
+delete its hand-rolled interfaces and pick up types via codegen.
+
+**Status:** ✅ COMPLETE 2026-05-18
+**Gate evidence:**
+  - ✅ Five new schema files under `app/api/schemas/` (bars, signals,
+    instruments, market with banner+movers)
+  - ✅ All five routes declare `response_model`; OpenAPI spec
+    publishes the schemas for codegen
+  - ✅ Backend regression sweep: **1001 passed, 5 skipped, 0 failures**
+    (up from 990 — 11 new tests added in
+    `test_api_v1_response_models.py`)
+  - ✅ `npm run codegen` against live backend produces typed paths;
+    rerun produces zero diff (codegen is hermetic)
+  - ✅ Frontend `OhlcvBar`, `BarsResponse`, hand-rolled `Signal`,
+    and `normalizeBars()` shim all DELETED from
+    `frontend/src/api/queries.ts`
+  - ✅ `Bar`, `Signal`, `InstrumentMatch`, `BannerItem`, `Mover`,
+    plus their response wrappers, are now `components["schemas"]["…"]`
+    re-exports
+  - ✅ `useSymbolBars` + `useSymbolSignals` use `apiClient.GET()`
+    with full type-flow from Pydantic → TypeScript
+  - ✅ Frontend `npm run typecheck`/`lint`/`build` all green;
+    bundle 156 KB gz (still under 250 KB target)
+  - ✅ Live smoke: `/api/v1/bars` returns the typed `Bar` shape
+    (`{ts, open, high, low, close, volume, vwap, trade_count, source}`);
+    legacy `/dashboard` + cockpit `/app/symbol/AAPL` both 200
+
+### Wire-shape contract preserved
+Every new model matches the existing legacy response shape exactly,
+so static HTML consumers (`dashboard.html`, `symbol.html`,
+`journal.html`) keep parsing without changes. Specifically:
+  - `/api/v1/bars` still returns a **bare list** of bar dicts (not
+    `Page[Bar]`). Promotion to `Page[Bar]` is deferred to the phase
+    that deletes the static HTML, so the legacy consumers never see
+    a breaking change.
+  - `/api/v1/movers` keeps every field the dashboard reads
+    (`indexes`, `upstream_count`, `per_index_counts`, `filtered_out`,
+    `fetched_at`).
+
+### Backend changes
+- [x] `app/api/schemas/bars.py` — `Bar` model
+- [x] `app/api/schemas/signals.py` — `Signal` model
+- [x] `app/api/schemas/instruments.py` — `InstrumentMatch`,
+      `InstrumentSearchResponse`
+- [x] `app/api/schemas/market.py` — `BannerItem`, `BannerError`,
+      `MarketBannerResponse`, `Mover`, `MoversResponse`
+- [x] `app/api/routes_signals.py` — `/api/v1/bars` + `/api/v1/signals`
+      declare `response_model`, return typed instances
+- [x] `app/api/routes_instruments.py` — `/api/v1/instruments/search`
+      typed
+- [x] `app/api/routes_market.py` — `/api/v1/market/banner` typed
+- [x] `app/api/routes_movers.py` — `/api/v1/movers` typed
+- [x] `tests/test_api_v1_response_models.py` — 11 tests asserting
+      OpenAPI schemas present + correct response_model ref + live
+      wire-shape preserved
+
+### Frontend changes
+- [x] `frontend/src/api/types.gen.ts` — regenerated; now non-empty
+- [x] `frontend/src/api/queries.ts` — hand-rolled `OhlcvBar`,
+      `BarsResponse`, `Signal`, `normalizeBars()` DELETED; new
+      `signalDirection()` helper derives bull/bear from `Signal.type`
+      (backend has no `direction` field)
+- [x] `frontend/src/api/client.ts` — apiClient.GET wired with full
+      type chain (already done in FE-CONTRACTS-1, now actually used)
+- [x] `frontend/src/routes/symbol.tsx` — uses `bars.data` directly
+      (no more `.bars` indirection); also passes 100 instead of
+      `(symbol, interval, 100)` to `useSymbolSignals` (interval no
+      longer a backend param)
+- [x] `frontend/src/components/charts/OhlcvChart.tsx` — uses `Bar` +
+      `Signal` from queries; signal direction derived via
+      `signalDirection()` helper instead of the nonexistent
+      `s.direction` field (this was a silent bug pre-CONTRACTS-2)
+- [x] `frontend/src/components/tables/BarsTable.tsx` — uses `Bar`
+
