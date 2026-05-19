@@ -195,10 +195,13 @@ function readPalette(): Palette {
 }
 
 /**
- * Convert a Tailwind-style HSL triple ("222 18% 7%") into a CSS color
- * string Lightweight Charts can parse. LWC accepts the legacy
- * comma-separated form; the modern `hsl(h s% l%)` form fails its
- * regex.
+ * Convert a Tailwind-style HSL triple ("222 18% 7%") to an
+ * `rgb(...)` / `rgba(...)` string. Lightweight Charts' color parser
+ * rejects both modern AND legacy `hsl()` forms in some paths (its
+ * grayscale conversion in the AttributionLogoWidget throws on any
+ * HSL input). RGB / hex / named colors are the only universally
+ * accepted formats — so we resolve HSL → RGB on our side once at
+ * chart-create time.
  */
 function hslToken(triple: string, alpha?: number): string {
   const parts = triple.split(/\s+/).filter(Boolean);
@@ -207,11 +210,33 @@ function hslToken(triple: string, alpha?: number): string {
     // chart still renders rather than crashing on a parse error.
     return alpha !== undefined ? "rgba(128,128,128,0.5)" : "rgb(128,128,128)";
   }
-  const [h, s, l] = parts;
+  const h = parseFloat(parts[0]);
+  const s = parseFloat(parts[1]); // strips trailing '%'
+  const l = parseFloat(parts[2]);
+  const [r, g, b] = hslToRgb(h, s, l);
   if (alpha !== undefined) {
-    return `hsla(${h}, ${s}, ${l}, ${alpha})`;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
-  return `hsl(${h}, ${s}, ${l})`;
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+/**
+ * HSL → RGB conversion. `h` is in degrees [0..360); `s` and `l` are
+ * percentages [0..100]. Returns three integers [0..255]. Formula
+ * from the CSS Color Level 4 spec.
+ */
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  const sPct = s / 100;
+  const lPct = l / 100;
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = sPct * Math.min(lPct, 1 - lPct);
+  const f = (n: number) =>
+    lPct - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return [
+    Math.round(255 * f(0)),
+    Math.round(255 * f(8)),
+    Math.round(255 * f(4)),
+  ];
 }
 
 function toUnix(iso: string): UTCTimestamp {
