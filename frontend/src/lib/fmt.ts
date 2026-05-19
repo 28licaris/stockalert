@@ -110,3 +110,25 @@ export function isRegularSessionET(iso: string | null | undefined): boolean {
   const minutesFromMidnight = hour * 60 + minute;
   return minutesFromMidnight >= 9 * 60 + 30 && minutesFromMidnight < 16 * 60;
 }
+
+/**
+ * ET trading-day key for a timestamp — "YYYY-MM-DD (Day)".
+ * Two timestamps that share the same key belong to the same
+ * trading day; the bars table uses this to render day-boundary
+ * dividers so the overnight gap reads as a session change, not
+ * a data gap.
+ */
+export function tradingDayET(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    weekday: "short",
+  }).formatToParts(d);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("weekday")} ${get("month")} ${get("day")} ${get("year")}`;
+}

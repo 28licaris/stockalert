@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { Fragment, useMemo } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { Bar } from "@/api/queries";
 import { useUserSetting } from "@/lib/storage";
@@ -7,6 +7,7 @@ import {
   fmtTimeET,
   fmtVol,
   isRegularSessionET,
+  tradingDayET,
 } from "@/lib/fmt";
 import { cn } from "@/lib/utils";
 
@@ -47,6 +48,23 @@ export function BarsTable({ bars, limit = 50 }: BarsTableProps) {
       : bars;
     return [...stream].slice(-limit).reverse();
   }, [bars, regularOnly, limit]);
+
+  // Group rows by trading-day so the table can render a thin divider
+  // between days. Reversed-list order means days appear newest-first;
+  // within each group, bars are still newest-first too.
+  const dayGroups = useMemo(() => {
+    const groups: { day: string; rows: Bar[] }[] = [];
+    let current: { day: string; rows: Bar[] } | null = null;
+    for (const b of filtered) {
+      const day = tradingDayET(b.ts);
+      if (!current || current.day !== day) {
+        current = { day, rows: [] };
+        groups.push(current);
+      }
+      current.rows.push(b);
+    }
+    return groups;
+  }, [filtered]);
 
   return (
     <section className="rounded-md border border-border bg-bg-subtle">
@@ -104,34 +122,57 @@ export function BarsTable({ bars, limit = 50 }: BarsTableProps) {
                   </td>
                 </tr>
               ) : null}
-              {filtered.map((b) => {
-                const up = b.close >= b.open;
-                return (
-                  <tr key={b.ts} className="hover:bg-bg-muted/40">
-                    <td className="px-3 py-1 text-fg-muted">{fmtTimeET(b.ts)}</td>
-                    <td className="px-3 py-1 text-right text-fg-base">
-                      {fmtPrice(b.open)}
-                    </td>
-                    <td className="px-3 py-1 text-right text-fg-base">
-                      {fmtPrice(b.high)}
-                    </td>
-                    <td className="px-3 py-1 text-right text-fg-base">
-                      {fmtPrice(b.low)}
-                    </td>
+              {dayGroups.map((group, gi) => (
+                <Fragment key={group.day}>
+                  {/* Trading-day header. Between Mon's 09:30 row and
+                      Fri's 15:55 row a header reads "Fri May 16 …"
+                      — so the operator can SEE the day change rather
+                      than infer it from a jump in timestamps. */}
+                  <tr className="bg-bg-muted/40">
                     <td
-                      className={cn(
-                        "px-3 py-1 text-right font-semibold",
-                        up ? "text-up" : "text-down",
-                      )}
+                      colSpan={6}
+                      className="border-y border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-fg-subtle"
                     >
-                      {fmtPrice(b.close)}
-                    </td>
-                    <td className="px-3 py-1 text-right text-fg-muted">
-                      {fmtVol(b.volume)}
+                      {group.day}
+                      {gi === 0 ? null : (
+                        <span className="ml-2 text-fg-subtle/70">
+                          ← previous session
+                        </span>
+                      )}
                     </td>
                   </tr>
-                );
-              })}
+                  {group.rows.map((b) => {
+                    const up = b.close >= b.open;
+                    return (
+                      <tr key={b.ts} className="hover:bg-bg-muted/40">
+                        <td className="px-3 py-1 text-fg-muted">
+                          {fmtTimeET(b.ts)}
+                        </td>
+                        <td className="px-3 py-1 text-right text-fg-base">
+                          {fmtPrice(b.open)}
+                        </td>
+                        <td className="px-3 py-1 text-right text-fg-base">
+                          {fmtPrice(b.high)}
+                        </td>
+                        <td className="px-3 py-1 text-right text-fg-base">
+                          {fmtPrice(b.low)}
+                        </td>
+                        <td
+                          className={cn(
+                            "px-3 py-1 text-right font-semibold",
+                            up ? "text-up" : "text-down",
+                          )}
+                        >
+                          {fmtPrice(b.close)}
+                        </td>
+                        <td className="px-3 py-1 text-right text-fg-muted">
+                          {fmtVol(b.volume)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </Fragment>
+              ))}
             </tbody>
           </table>
         </div>
