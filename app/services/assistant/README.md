@@ -9,47 +9,39 @@ Full spec: [docs/assistant_plan.md](../../../docs/assistant_plan.md).
 
 ## Status
 
-**Phase AS-1 — backend-only build.** Slices 1–3 are committed
-on stacked branches. Slices 4–6 are not yet started.
+**Phase AS-1 — backend-only build.** Slices 1–4 are committed.
+Slices 5–6 are not yet started.
 
 | Slice | Status | Lands |
 |---|---|---|
 | 1. Scaffold + schemas + contract + env | ✅ committed (`feat/assistant-as1-slice1`) | shape only |
 | 2. `service.py` + Anthropic + cache + prompts + models | ✅ committed (`feat/assistant-as1-slice2`) | core loop |
 | 3. `policy.py` + `runner.py` | ✅ committed (`feat/assistant-as1-slice3`) | tool dispatch |
-| 4. CH tables + `store.py` | ⏸ next | persistence |
-| 5. `/cockpit/assistant/*` + SSE | ⏸ pending | HTTP surface |
+| 4. CH tables + `store.py` | ✅ committed (`feat/assistant-as1-slice4`) | persistence |
+| 5. `/cockpit/assistant/*` + SSE | ⏸ next | HTTP surface |
 | 6. Integration gate test | ⏸ pending | AS-1 done |
 
-### Next-session pickup — Slice 4 punch list
+### Next-session pickup — Slice 5 punch list
 
-**Goal:** persist conversation turns + tool calls to ClickHouse.
-Currently all conversations live in an in-memory dict and turns
-are lost on restart; slice 4 wires the durable CH-backed store.
+**Goal:** expose the assistant over HTTP with SSE streaming so callers
+can stream turns from a web client or CLI.
 
 Files to add:
 
 | File | Purpose |
 |---|---|
-| `app/services/assistant/store.py` | `ConversationStore` — owner-scoped reads/writes against ClickHouse `assistant_conversations` + `assistant_turns` tables. |
-| `tests/test_assistant_store.py` | Integration tests (require `clickhouse_ready` fixture): CRUD round-trip, tenant isolation, turn ordering. |
+| `app/services/assistant/stream.py` | `encode_sse(event)` — encodes `AssistantStreamEvent` to `data: {...}\n\n` SSE wire format. |
+| `app/api/routes_assistant.py` | FastAPI router: `POST /cockpit/assistant/conversations` (start), `POST /cockpit/assistant/conversations/{id}/turn` (continue, SSE response), `GET /cockpit/assistant/conversations` (list), `GET /cockpit/assistant/conversations/{id}` (load). |
+| `tests/test_assistant_stream.py` | Unit tests for SSE encoder: JSON round-trip, delimiter format, event type wire values. |
 
 Files to modify:
 
 | File | Change |
 |---|---|
-| `app/db/init.py` | Add CH DDL for `assistant_conversations` and `assistant_turns` tables. |
-| `app/services/assistant/service.py` | Accept optional `store: ConversationStore`. Replace in-memory `_conv_index` with store calls. Persist `ConversationTurn` records (including `ToolCall` objects from slice 3) on each completed turn. |
-| `app/services/assistant/__init__.py` | Re-export `ConversationStore`. |
+| `app/main_api.py` | Mount the assistant router under `/cockpit`. |
+| `app/services/assistant/__init__.py` | Re-export SSE encoder. |
 
-Acceptance criteria for slice 4:
-- `pytest tests/test_assistant_*.py -m "not integration"` green (unit tests unaffected).
-- `pytest tests/test_assistant_store.py` green against a live CH instance.
-- `load_conversation` returns the stored turns with correct ordering.
-- `list_conversations` is owner-scoped — other tenant IDs never leak.
-- A CH table scan confirms tool call records (name, args, result) are stored.
-
-Slices 5–6: see `docs/assistant_plan.md §15`.
+Slices 6: see `docs/assistant_plan.md §15`.
 
 ## Distinct from the trading `LLMAgent`
 
@@ -82,7 +74,7 @@ the full table.
 | [prompts/v1.md](prompts/v1.md) | 2 | Versioned system prompt (hash is part of cache key) |
 | [policy.py](policy.py) | 3 | `ToolPolicy` + `DevModeToolPolicy` — allowlist + write-tool flag |
 | [runner.py](runner.py) | 3 | `MCPToolRunner` — MCP dispatch + §8.4 truncation |
-| `store.py` | 4 | `ConversationStore` — owner-scoped reads/writes against CH |
+| [store.py](store.py) | 4 | `ConversationStore` — owner-scoped reads/writes against CH |
 | `stream.py` | 5 | SSE event encoder |
 
 ## Design rules (per `feedback_service_module_design`)

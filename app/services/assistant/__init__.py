@@ -19,6 +19,7 @@ from app.services.assistant.contract import AssistantService, Principal
 from app.services.assistant.models import ModelChoice, ModelRegistry
 from app.services.assistant.policy import DevModeToolPolicy, ToolPolicy, WRITE_TOOLS
 from app.services.assistant.runner import MCPToolRunner, ToolResult, ToolRunner
+from app.services.assistant.store import ConversationStore
 from app.services.assistant.schemas import (
     AssistantStreamEvent,
     ConfirmRequest,
@@ -47,6 +48,7 @@ __all__ = [
     "CacheKeyInputs",
     "CachedResponse",
     "ConfirmRequest",
+    "ConversationStore",
     "Conversation",
     "ConversationTurn",
     "ContinueRequest",

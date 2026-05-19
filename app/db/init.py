@@ -345,6 +345,57 @@ def init_schema() -> None:
         """
     )
 
+    # ── Assistant conversations + turns ───────────────────────────────
+    # ReplacingMergeTree on `version` for conversations so we can update
+    # `updated_at`, `turn_count`, and `total_cost_usd` in place.
+    # Turns are append-only (MergeTree), ordered by sequence for fast
+    # ordered reads. `tool_calls_json` stores the serialised list of
+    # ToolCall objects so the assistant can reconstruct full turn history.
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS assistant_conversations (
+            id              UUID,
+            owner_id        LowCardinality(String),
+            user_id         String,
+            title           String DEFAULT '',
+            created_at      DateTime64(3, 'UTC'),
+            updated_at      DateTime64(3, 'UTC'),
+            turn_count      UInt32 DEFAULT 0,
+            total_cost_usd  Float64 DEFAULT 0,
+            deleted_at      Nullable(DateTime64(3, 'UTC')) DEFAULT NULL,
+            version         UInt64
+        )
+        ENGINE = ReplacingMergeTree(version)
+        PARTITION BY toYYYYMM(created_at)
+        ORDER BY (owner_id, id)
+        SETTINGS index_granularity = 8192
+        """
+    )
+
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS assistant_turns (
+            id              UUID,
+            conversation_id UUID,
+            owner_id        LowCardinality(String),
+            sequence        UInt32,
+            role            LowCardinality(String),
+            content         String DEFAULT '',
+            tool_calls_json String DEFAULT '[]',
+            model           String DEFAULT '',
+            tokens_in       UInt32 DEFAULT 0,
+            tokens_out      UInt32 DEFAULT 0,
+            cost_usd        Float64 DEFAULT 0,
+            cache_hit       Bool DEFAULT 0,
+            created_at      DateTime64(3, 'UTC')
+        )
+        ENGINE = MergeTree
+        PARTITION BY toYYYYMM(created_at)
+        ORDER BY (owner_id, conversation_id, sequence)
+        SETTINGS index_granularity = 8192
+        """
+    )
+
 
 def _read_legacy_watchlist(path: str) -> Optional[list[str]]:
     """Best-effort read of the old `data/watchlist.json` file. Returns None on any error."""

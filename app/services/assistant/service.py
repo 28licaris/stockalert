@@ -38,7 +38,10 @@ from app.services.assistant.schemas import (
     ConversationTurn,
     Role,
     StreamEventType,
+    ToolCall,
+    ToolCallStatus,
 )
+from app.services.assistant.store import ConversationStore
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +298,7 @@ class DefaultAssistantService:
         prompt: prompts.SystemPrompt | None = None,
         policy: ToolPolicy | None = None,
         runner: ToolRunner | None = None,
+        store: ConversationStore | None = None,
         max_tool_iterations: int = _MAX_TOOL_ITERATIONS,
     ) -> None:
         self._client = client
@@ -303,8 +307,9 @@ class DefaultAssistantService:
         self._prompt = prompt or prompts.current()
         self._policy = policy
         self._runner = runner
+        self._store = store
         self._max_tool_iterations = max_tool_iterations
-        # In-memory store stub — replaced in slice 4.
+        # In-memory fallback when no store is injected (unit tests, slice 2).
         self._conv_index: dict[str, Conversation] = {}
 
     # ─── Public Protocol surface ─────────────────────────────────────
@@ -324,7 +329,10 @@ class DefaultAssistantService:
             created_at=now,
             updated_at=now,
         )
-        self._conv_index[conv.id] = conv
+        if self._store:
+            await asyncio.to_thread(self._store.save_conversation, conv)
+        else:
+            self._conv_index[conv.id] = conv
         return conv
 
     async def continue_conversation(
@@ -517,10 +525,9 @@ class DefaultAssistantService:
         )
         full_text = "".join(final_text_buf) or final_result.text
 
-        # Persist cache only for text-only turns (tool-assisted turns serve
-        # real-time data that must not be replayed stale).
+        # Persist cache only for text-only turns.
         if not used_tools:
-            cached = self._cache.store(
+            self._cache.store(
                 key=cache_key,
                 payload={
                     "text": full_text,
@@ -535,7 +542,36 @@ class DefaultAssistantService:
                 tokens_out=total_tokens_out,
                 cost_usd=cost_usd,
             )
-            _ = cached  # slice 4 will persist this into the `assistant_turns` table
+
+        # Persist turns to ClickHouse when the store is wired.
+        if self._store:
+            now = datetime.now(tz=timezone.utc)
+            turn_id = str(uuid.uuid4())
+            asst_turn = ConversationTurn(
+                id=turn_id,
+                conversation_id=conversation_id,
+                sequence=0,  # store orders by sequence; 0 is fine for single-turn stub
+                role=Role.ASSISTANT,
+                content=full_text,
+                model=choice.model,
+                tokens_in=total_tokens_in,
+                tokens_out=total_tokens_out,
+                cost_usd=cost_usd,
+                cache_hit=False,
+                created_at=now,
+            )
+            await asyncio.to_thread(
+                self._store.save_turn,
+                asst_turn,
+                owner_id=principal.tenant_id,
+            )
+            logger.debug(
+                "store.persist turn conv=%s model=%s tokens=%d+%d",
+                conversation_id,
+                choice.model,
+                total_tokens_in,
+                total_tokens_out,
+            )
 
         yield AssistantStreamEvent(
             type=StreamEventType.TURN_COMPLETED,
@@ -573,13 +609,30 @@ class DefaultAssistantService:
     async def load_conversation(
         self, *, principal: Principal, conversation_id: str
     ) -> tuple[Conversation, list[ConversationTurn]]:
+        if self._store:
+            conv = await asyncio.to_thread(
+                self._store.load_conversation,
+                conversation_id=conversation_id,
+                owner_id=principal.tenant_id,
+            )
+            if conv is None:
+                raise KeyError(
+                    f"conversation {conversation_id!r} not found for tenant "
+                    f"{principal.tenant_id!r}"
+                )
+            turns = await asyncio.to_thread(
+                self._store.load_turns,
+                conversation_id=conversation_id,
+                owner_id=principal.tenant_id,
+            )
+            return conv, turns
+        # In-memory fallback
         conv = self._conv_index.get(conversation_id)
         if conv is None or conv.owner_id != principal.tenant_id:
             raise KeyError(
                 f"conversation {conversation_id!r} not found for tenant "
                 f"{principal.tenant_id!r}"
             )
-        # No turn persistence in slice 2 — returns empty list.
         return conv, []
 
     async def list_conversations(
@@ -589,8 +642,16 @@ class DefaultAssistantService:
         limit: int = 50,
         include_deleted: bool = False,
     ) -> list[Conversation]:
+        if self._store:
+            return await asyncio.to_thread(
+                self._store.list_conversations,
+                owner_id=principal.tenant_id,
+                limit=limit,
+                include_deleted=include_deleted,
+            )
         owned = [
-            c for c in self._conv_index.values()
+            c
+            for c in self._conv_index.values()
             if c.owner_id == principal.tenant_id
             and (include_deleted or c.deleted_at is None)
         ]
