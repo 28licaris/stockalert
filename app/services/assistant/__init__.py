@@ -14,9 +14,12 @@ Distinct from the trading `LLMAgent` in
 autonomous per-bar trading agent. This service is interactive,
 user-driven, and cannot route orders by allowlist.
 """
-from app.services.assistant.contract import AssistantService
+from app.services.assistant.cache import CacheKeyInputs, CachedResponse, ResponseCache
+from app.services.assistant.contract import AssistantService, Principal
+from app.services.assistant.models import ModelChoice, ModelRegistry
 from app.services.assistant.schemas import (
     AssistantStreamEvent,
+    ConfirmRequest,
     Conversation,
     ConversationTurn,
     ContinueRequest,
@@ -25,13 +28,36 @@ from app.services.assistant.schemas import (
     ToolCall,
     ToolCallStatus,
 )
+from app.services.assistant.service import (
+    AnthropicLLMClient,
+    DefaultAssistantService,
+    LLMClient,
+    LLMResult,
+    LLMStream,
+    LLMToolUse,
+    LLMUsage,
+)
 
 __all__ = [
+    "AnthropicLLMClient",
     "AssistantService",
     "AssistantStreamEvent",
+    "CacheKeyInputs",
+    "CachedResponse",
+    "ConfirmRequest",
     "Conversation",
     "ConversationTurn",
     "ContinueRequest",
+    "DefaultAssistantService",
+    "LLMClient",
+    "LLMResult",
+    "LLMStream",
+    "LLMToolUse",
+    "LLMUsage",
+    "ModelChoice",
+    "ModelRegistry",
+    "Principal",
+    "ResponseCache",
     "Role",
     "StreamEventType",
     "ToolCall",
