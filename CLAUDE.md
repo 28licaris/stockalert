@@ -15,6 +15,7 @@ day/swing trading**.
 | `sim/` / strategies / indicators | [`trading_subsystem.md`](docs/standards/trading_subsystem.md) |
 | Bronze sinks / maintenance | [`data/bronze_idempotency.md`](docs/standards/data/bronze_idempotency.md) |
 | Silver schema | [`data/lean_silver.md`](docs/standards/data/lean_silver.md) |
+| Adding a symbol / ingest paths | [`data/symbol_lifecycle.md`](docs/standards/data/symbol_lifecycle.md) (**LOCKED — read first**) |
 | Trading-day math | [`data/timezone_et_vs_utc.md`](docs/standards/data/timezone_et_vs_utc.md) |
 | Athena SQL | [`data/athena_dialects.md`](docs/standards/data/athena_dialects.md) |
 

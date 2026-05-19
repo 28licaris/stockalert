@@ -13,6 +13,7 @@ Integration coverage (real CH, real provider) lives behind the
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Callable, Optional
 
 import pandas as pd
@@ -291,6 +292,76 @@ async def test_get_provider_returns_initialized_provider_after_start(
     assert provider is not None
     assert provider is svc._provider  # same handle
     assert provider is svc._fake_prov  # the fixture's fake
+
+
+# ----- worker-thread loop routing (regression for the "add via API does
+#       not actually subscribe Schwab" bug) -----
+
+
+@pytest.mark.asyncio
+async def test_add_from_worker_thread_routes_subscribe_through_main_loop(
+    svc: StreamService,
+) -> None:
+    """REGRESSION: API routes call `stream_service.add` via
+    `asyncio.to_thread`, leaving the worker thread without a running
+    event loop. The provider's `subscribe_bars` needs the loop to
+    register the WS callback, and the warmup `create_task` likewise
+    needs one. Before the fix, both silently failed and brand-new
+    symbols never reached Schwab.
+
+    The contract: when called from a worker thread, the service must
+    route subscribe + warmup back to the captured main loop via
+    `run_coroutine_threadsafe`. The `add` call itself returns success;
+    Schwab actually receives the subscribe call.
+    """
+    # Start the service in this asyncio context — captures _main_loop.
+    await svc.start()
+    assert svc._main_loop is not None
+
+    # Now invoke `add` from a real worker thread (matches the API path:
+    # `await asyncio.to_thread(stream_service.add, ...)`).
+    result = await asyncio.to_thread(svc.add, "BRAND_NEW")
+
+    assert result["changed"] == ["BRAND_NEW"]
+    # The fake provider records subscribe calls. The bug was that this
+    # set stayed empty because the call silently bailed in the thread.
+    assert "BRAND_NEW" in svc._fake_prov.subscribed
+    assert ["BRAND_NEW"] in svc._fake_prov.subscribe_calls
+
+
+@pytest.mark.asyncio
+async def test_remove_from_worker_thread_routes_unsubscribe_through_main_loop(
+    svc: StreamService,
+) -> None:
+    """Symmetric to the add case — `remove` called from a worker
+    thread must reach the provider's `unsubscribe_bars`."""
+    svc._fake_repo.write("TARGET", 1)
+    await svc.start()
+    assert "TARGET" in svc._fake_prov.subscribed
+
+    result = await asyncio.to_thread(svc.remove, "TARGET")
+
+    assert result["changed"] == ["TARGET"]
+    assert "TARGET" not in svc._fake_prov.subscribed
+    assert ["TARGET"] in svc._fake_prov.unsubscribe_calls
+
+
+@pytest.mark.asyncio
+async def test_add_from_worker_thread_without_start_skips_cleanly(
+    svc: StreamService,
+) -> None:
+    """If `add` is called from a worker thread BEFORE start() captured
+    the main loop, the subscribe is logged-and-skipped rather than
+    raising — the CH row still gets written so a later run can recover."""
+    # Don't call start. _main_loop stays None.
+    assert svc._main_loop is None
+
+    # Call from a worker thread (no running loop, no captured main).
+    result = await asyncio.to_thread(svc.add, "EARLY")
+    # The CH row was still written.
+    assert result["changed"] == ["EARLY"]
+    # But Schwab was NOT subscribed (no loop to route through).
+    assert "EARLY" not in svc._fake_prov.subscribed
 
 
 # ----- status() shape -----

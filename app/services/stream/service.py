@@ -66,6 +66,12 @@ class StreamService:
         self._provider_error: Optional[str] = None
         self._started = False
         self._subscribed: set[str] = set()
+        # The asyncio event loop captured at `start()` time. API routes
+        # call `add` / `remove` via `asyncio.to_thread`, which strips the
+        # loop from the worker thread; we use `run_coroutine_threadsafe`
+        # to route provider.subscribe_bars + warmup back to this loop.
+        # `None` outside a started service (tests / pre-start).
+        self._main_loop: Optional[asyncio.AbstractEventLoop] = None
 
         # Source-tag every streamed bar so the live_lake_writer (TA-5.7)
         # can distinguish stream-sourced rows from REST-backfilled ones
@@ -155,27 +161,67 @@ class StreamService:
     ) -> tuple[list[str], list[str]]:
         to_sub = sorted(after - before)
         to_unsub = sorted(before - after)
-        provider = (
-            self._ensure_provider() if (to_sub or to_unsub) else self._provider
-        )
+        if not to_sub and not to_unsub:
+            return [], []
+        provider = self._ensure_provider()
         if provider is None:
-            if to_sub or to_unsub:
+            logger.warning(
+                "Stream: provider unavailable, "
+                "skipping subscribe=%s unsubscribe=%s",
+                to_sub, to_unsub,
+            )
+            return [], []
+
+        # `provider.subscribe_bars` (Schwab) needs a running asyncio
+        # loop so it can capture it for sending WS commands. API
+        # routes invoke this service via `asyncio.to_thread`, which
+        # leaves the worker thread with no running loop — we route
+        # through the captured main loop in that case.
+        try:
+            asyncio.get_running_loop()
+            in_loop = True
+        except RuntimeError:
+            in_loop = False
+
+        try:
+            if in_loop:
+                if to_sub:
+                    provider.subscribe_bars(self._on_bar, to_sub)
+                if to_unsub:
+                    provider.unsubscribe_bars(to_unsub)
+            elif self._main_loop is not None and not self._main_loop.is_closed():
+                if to_sub:
+                    asyncio.run_coroutine_threadsafe(
+                        self._subscribe_on_main(to_sub),
+                        self._main_loop,
+                    ).result(timeout=5)
+                if to_unsub:
+                    asyncio.run_coroutine_threadsafe(
+                        self._unsubscribe_on_main(to_unsub),
+                        self._main_loop,
+                    ).result(timeout=5)
+            else:
                 logger.warning(
-                    "Stream: provider unavailable, "
-                    "skipping subscribe=%s unsubscribe=%s",
+                    "Stream: no event loop available "
+                    "(main loop not captured); skipping "
+                    "subscribe=%s unsubscribe=%s",
                     to_sub, to_unsub,
                 )
-            return [], []
-        try:
-            if to_sub:
-                provider.subscribe_bars(self._on_bar, to_sub)
-            if to_unsub:
-                provider.unsubscribe_bars(to_unsub)
+                return [], []
         except Exception as e:  # noqa: BLE001 — boundary
             logger.error(
                 "Stream: subscribe/unsubscribe error: %s", e, exc_info=True
             )
         return to_sub, to_unsub
+
+    async def _subscribe_on_main(self, to_sub: list[str]) -> None:
+        """Helper invoked on the main loop from worker-thread callers."""
+        if self._provider is not None:
+            self._provider.subscribe_bars(self._on_bar, to_sub)
+
+    async def _unsubscribe_on_main(self, to_unsub: list[str]) -> None:
+        if self._provider is not None:
+            self._provider.unsubscribe_bars(to_unsub)
 
     # ─────────────────────────────────────────────────────────────────
     # CH repo
@@ -265,6 +311,10 @@ class StreamService:
         if self._started:
             return
         self._started = True
+        # Capture the main event loop so worker-thread callers (API
+        # routes invoking us via asyncio.to_thread) can schedule
+        # provider.subscribe_bars + warmup tasks back onto it.
+        self._main_loop = asyncio.get_running_loop()
 
         # Empty-table bootstrap: on first startup the CH table will be
         # empty even if SEED_SYMBOLS has 100 tickers. Populate it so the
@@ -310,6 +360,7 @@ class StreamService:
                 self._provider.stop_stream()
             except Exception as e:  # noqa: BLE001 — boundary
                 logger.error("Stream: stop_stream failed: %s", e)
+        self._main_loop = None
 
     # ─────────────────────────────────────────────────────────────────
     # Public API — universe CRUD
@@ -553,14 +604,33 @@ class StreamService:
             return
         if not getattr(_s, "silver_derived_add_members_enabled", False):
             return
+
+        # Same dispatch story as _apply_subscription_diff: if we're in
+        # the main asyncio loop, create_task directly; if we're in a
+        # worker thread (asyncio.to_thread from an API route), schedule
+        # onto the captured main loop via run_coroutine_threadsafe.
         try:
-            asyncio.get_running_loop()
-        except RuntimeError:
+            loop = asyncio.get_running_loop()
+            for sym in symbols:
+                loop.create_task(
+                    self._silver_derived_warmup_one(sym),
+                    name=f"stream_warmup_{sym}",
+                )
             return
-        for sym in symbols:
-            asyncio.create_task(
-                self._silver_derived_warmup_one(sym),
-                name=f"stream_warmup_{sym}",
+        except RuntimeError:
+            pass
+
+        if self._main_loop is not None and not self._main_loop.is_closed():
+            for sym in symbols:
+                asyncio.run_coroutine_threadsafe(
+                    self._silver_derived_warmup_one(sym),
+                    self._main_loop,
+                )
+        else:
+            logger.warning(
+                "Stream: no event loop captured; warmup of %s skipped "
+                "(silver_derived_add_members_enabled is on but the "
+                "service was never started)", symbols,
             )
 
     async def _silver_derived_warmup_one(self, symbol: str) -> None:
