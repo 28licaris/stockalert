@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(poetry run pytest)",
+      "Bash(poetry run pytest *)",
+      "Bash(aws s3 ls *)",
+      "Bash(aws --profile stock-lake s3 ls *)",
+      "Bash(aws sts get-caller-identity)",
+      "Bash(aws --profile stock-lake sts get-caller-identity)",
+      "Bash(aws --profile stock-lake codebuild batch-get-* *)",
+      "Bash(aws --profile stock-lake codebuild list-* *)",
+      "Bash(aws --profile stock-lake iam get-* *)",
+      "Bash(aws --profile stock-lake iam list-* *)",
+      "Bash(aws --profile stock-lake glue get-* *)",
+      "Bash(aws --profile stock-lake glue list-* *)",
+      "Bash(aws --profile stock-lake s3api list-* *)",
+      "Bash(aws --profile stock-lake s3api get-* *)",
+      "Bash(aws --profile stock-lake s3api head-* *)",
+      "Bash(aws --profile stock-lake logs describe-* *)",
+      "Bash(aws --profile stock-lake logs filter-log-events *)",
+      "Bash(aws --profile stock-lake logs get-log-events *)"
+    ]
+  }
+}
