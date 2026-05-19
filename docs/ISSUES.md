@@ -74,6 +74,123 @@ increase, etc.) and note what's blocking.
 
 ## Open
 
+### `cockpit-chart-time-axis-broken`
+
+- **Area:** ui
+- **Filed:** 2026-05-19
+- **Status:** open
+- **Symptom:** Switching candle intervals (1m / 5m / 15m / 1h / 1d) on
+  `/app/symbol/<ticker>` makes the time-axis labels look wrong —
+  dates collapse, intraday timestamps appear on daily charts, or the
+  axis density doesn't match the interval. Operator's read:
+  "the time on X axis is all messed up."
+- **Root cause:** likely a combination of (a) `OhlcvChart.tsx` passes
+  Unix-epoch seconds via `toUnix()` for every interval, including
+  daily where Lightweight Charts expects YYYY-MM-DD strings;
+  (b) no `tickMarkFormatter` configured per interval; (c)
+  `timeVisible: true, secondsVisible: false` is set globally which
+  is wrong for the `1d` case.
+- **Suggested fix:**
+  1. In `OhlcvChart.tsx`, branch on interval at chart-create time —
+     daily/4h use `BusinessDay`-style time values (YYYY-MM-DD);
+     intraday uses `UTCTimestamp`. LWC accepts both per series, but
+     mixing them within one series breaks the axis.
+  2. Add a `tickMarkFormatter` that renders dates for `1d`/`4h`,
+     `HH:mm` for `1m`/`5m`/`15m`/`30m`, and `MMM dd HH:mm` for `1h`.
+  3. Set `timeVisible` + `secondsVisible` from a per-interval table.
+  4. After fix: switching 1m → 1d on AAPL should show distinct date
+     labels (e.g. "May 18", "May 15") not Unix offsets.
+
+### `cockpit-bars-table-overnight-gaps`
+
+- **Area:** ui
+- **Filed:** 2026-05-19
+- **Status:** open
+- **Symptom:** The "Recent bars" table beneath the chart shows
+  apparent 30-minute (and larger) gaps. The gaps are real — they
+  correspond to after-hours close → next pre-market open — but the
+  cockpit surfaces them as if data is missing rather than as session
+  boundaries.
+- **Root cause:** `BarsTable.tsx` renders the raw `bars[]` array
+  ordered by timestamp. After 20:00 ET (post-market close) there are
+  no bars until 04:00 ET the next morning, so rows jump 8 hours.
+  TradingView solves this by collapsing non-session time entirely
+  on the X-axis ("trading hours only" mode); the bars table needs
+  the same option.
+- **Suggested fix:**
+  1. Add a "Session hours only" toggle to the bars table header
+     (default ON for intraday intervals, OFF for daily).
+  2. When ON, filter rows to regular-session bars (09:30–16:00 ET).
+     Use the same ET-trading-day boundary helper documented in
+     `docs/standards/data/timezone_et_vs_utc.md` (memory pointer).
+  3. When OFF, render the raw stream but add a subtle visual divider
+     between sessions (a single thin row showing
+     "— after hours close →") so the gap isn't mistaken for missing
+     data.
+  4. Apply the same filter logic to the chart itself per
+     `cockpit-chart-time-axis-broken`'s "session-collapse" follow-on.
+
+### `cockpit-chart-indicator-overlays`
+
+- **Area:** ui
+- **Filed:** 2026-05-19
+- **Status:** open
+- **Symptom:** No way to overlay SMA, EMA, RSI, MACD, Bollinger, ATR
+  on the symbol chart. Indicator pane on legacy `/symbol/<ticker>`
+  static dashboard had this; cockpit equivalent doesn't.
+- **Root cause:** Backend support exists and is typed:
+  `GET /api/v1/indicators/series` and
+  `POST /api/v1/indicators/chart-data` (already typed in
+  FE-CONTRACTS-2 era). No frontend consumer — the `OhlcvChart`
+  component doesn't accept overlay props; the Symbol page has no
+  indicator picker.
+- **Suggested fix:**
+  1. Add an "Indicators" button + popover/menu to the Symbol page
+     header (next to the interval picker). Shows the registry list
+     (`sma`, `ema`, `rsi`, `macd`, `bollinger`, `atr`, ...) with
+     per-indicator param defaults (period=20 for SMA, period=14 for
+     RSI, etc.).
+  2. Selected indicators each fire a `useIndicatorSeries` hook keyed
+     by (symbol, interval, indicator, params).
+  3. Extend `OhlcvChart` with an `overlays` prop:
+     - **Price-pane overlays** (SMA, EMA, Bollinger, VWAP) — line
+       series on the same pane as the candles.
+     - **Separate-pane overlays** (RSI, MACD, ATR) — a new pane
+       below the volume pane, sized to ~120 px.
+  4. Color-code overlays consistently — use the existing
+     `--accent` + variants from `globals.css`.
+  5. Persist selection via `useUserSetting('symbol.indicators', [])`
+     so it survives reload. Per-symbol persistence is a follow-on.
+
+### `cockpit-chart-time-range-selector`
+
+- **Area:** ui
+- **Filed:** 2026-05-19
+- **Status:** open
+- **Symptom:** Cannot pick an X-axis time range like ThinkOrSwim or
+  TradingView (1D · 5D · 1M · 3M · 6M · YTD · 1Y · 2Y · ALL).
+  Currently only the candle interval is configurable; the chart
+  always fetches `limit=500` regardless of how far back the operator
+  wants to look.
+- **Root cause:** `symbol.tsx` only has the interval picker. The
+  `/api/v1/bars` endpoint already accepts `lookback_days` (server-
+  side window) but no UI sends it.
+- **Suggested fix:**
+  1. Add a time-range chip row to the Symbol page header (right of
+     the interval picker): `1D · 5D · 1M · 3M · 6M · YTD · 1Y · 2Y · ALL`.
+  2. Map each chip to a `lookback_days` value:
+     - 1D=1, 5D=5, 1M=30, 3M=90, 6M=180, YTD=current-day-of-year,
+       1Y=365, 2Y=730, ALL=null (omit param).
+  3. `useSymbolBars(symbol, interval, lookbackDays, limit)` extends
+     its signature; the hook computes a sensible `limit` from
+     interval × lookback to stay under the 100k server cap.
+  4. Some interval × range combinations are nonsensical (1m bars
+     over 2Y = ~750k bars). The chip row disables incompatible
+     combinations and shows a tooltip explaining why.
+  5. Persist selection via `useUserSetting('symbol.range', '1M')`.
+  6. Pair with `cockpit-chart-time-axis-broken` — the tick formatter
+     also adapts to the selected range, not just the interval.
+
 ### `cockpit-watchlists-page-no-default-selection`
 
 - **Area:** ui
