@@ -979,8 +979,8 @@ grounded in MCP read tools" path. No artifacts, no UI.
 | 2 | ✅ committed on `feat/assistant-as1-slice2` (2026-05-19) | `service.py` core: Anthropic SDK integration, prompt caching on system + tool defs, `ResponseCache` (SQLite). `prompts/v1.md` system prompt v1. `ModelRegistry` with Sonnet 4.6 default + Opus 4.7 selectable. |
 | 3 | ✅ committed on `feat/assistant-as1-slice3` (2026-05-19) | `policy.py` (`DevModeToolPolicy`, read-only allowlist, `WRITE_TOOLS` constant) + `runner.py` (`MCPToolRunner`, dispatches to MCP tools, reuses `tool_call` middleware, applies §8.4 truncation). `service.py` updated: multi-iteration turn loop (max 10), `TOOL_CALL_STARTED`/`TOOL_RESULT` events, last tool schema marked `cache_control: ephemeral`, tool-assisted turns skip cache. 108/108 assistant tests. |
 | 4 | ✅ committed on `feat/assistant-as1-slice4` (2026-05-19) | `app/db/init.py` — `assistant_conversations` (ReplacingMergeTree) + `assistant_turns` (MergeTree) DDL. `store.py` — `ConversationStore` with owner-scoped save/load for conversations and turns; `asyncio.to_thread()` wrapping in service. 12/12 integration tests green. |
-| 5 | ⏸ next | `/cockpit/assistant/*` FastAPI routes + SSE streaming (`stream.py`), confirm/cancel endpoints stubbed (no writes in AS-1). |
-| 6 | ⏸ pending | `tests/integration/test_assistant_e2e.py` (real Anthropic + real MCP) — closes the AS-1 gate. Audit row emission verified. |
+| 5 | ✅ committed on `feat/assistant-as1-slice5` (2026-05-19) | `stream.py` SSE encoder (`encode_sse`, `event_stream`). `routes_assistant.py` — 6 endpoints under `/cockpit/assistant/`: start, list, load, turn (SSE `StreamingResponse`), confirm (501 stub), cancel. Mounted in `main_api.py`. 126/126 unit tests. |
+| 6 | ⏸ next | `tests/integration/test_assistant_e2e.py` (real Anthropic + real MCP) — closes the AS-1 gate. Audit row emission verified. |
 
 **Gate:** `tests/integration/test_assistant_e2e.py` — a real
 Anthropic call asks "what's the freshness of the bronze

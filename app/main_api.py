@@ -380,6 +380,17 @@ try:
 except ImportError:
     logger.info("ℹ️  Backtest routes not available")
 
+try:
+    from app.api import routes_assistant
+    app.include_router(
+        routes_assistant.router,
+        prefix="/cockpit/assistant",
+        tags=["Assistant"],
+    )
+    logger.info("✅ Assistant routes loaded")
+except Exception as _asst_exc:  # noqa: BLE001
+    logger.warning("ℹ️  Assistant routes not mounted: %s", _asst_exc)
+
 
 # ─────────────────────────────────────────────────────────────────────
 # MCP server (Pre-Phase 3 Step 3). Mounted at /mcp — same readers that

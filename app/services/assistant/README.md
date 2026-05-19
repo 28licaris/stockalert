@@ -9,8 +9,8 @@ Full spec: [docs/assistant_plan.md](../../../docs/assistant_plan.md).
 
 ## Status
 
-**Phase AS-1 — backend-only build.** Slices 1–4 are committed.
-Slices 5–6 are not yet started.
+**Phase AS-1 — backend-only build.** Slices 1–5 are committed.
+Slice 6 (integration gate) is next.
 
 | Slice | Status | Lands |
 |---|---|---|
@@ -18,7 +18,7 @@ Slices 5–6 are not yet started.
 | 2. `service.py` + Anthropic + cache + prompts + models | ✅ committed (`feat/assistant-as1-slice2`) | core loop |
 | 3. `policy.py` + `runner.py` | ✅ committed (`feat/assistant-as1-slice3`) | tool dispatch |
 | 4. CH tables + `store.py` | ✅ committed (`feat/assistant-as1-slice4`) | persistence |
-| 5. `/cockpit/assistant/*` + SSE | ⏸ next | HTTP surface |
+| 5. `/cockpit/assistant/*` + SSE | ✅ committed (`feat/assistant-as1-slice5`) | HTTP surface |
 | 6. Integration gate test | ⏸ pending | AS-1 done |
 
 ### Next-session pickup — Slice 5 punch list
@@ -75,7 +75,7 @@ the full table.
 | [policy.py](policy.py) | 3 | `ToolPolicy` + `DevModeToolPolicy` — allowlist + write-tool flag |
 | [runner.py](runner.py) | 3 | `MCPToolRunner` — MCP dispatch + §8.4 truncation |
 | [store.py](store.py) | 4 | `ConversationStore` — owner-scoped reads/writes against CH |
-| `stream.py` | 5 | SSE event encoder |
+| [stream.py](stream.py) | 5 | SSE event encoder (`encode_sse`, `event_stream`) |
 
 ## Design rules (per `feedback_service_module_design`)
 
