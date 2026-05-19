@@ -9,8 +9,7 @@ Full spec: [docs/assistant_plan.md](../../../docs/assistant_plan.md).
 
 ## Status
 
-**Phase AS-1 — backend-only build.** Slices 1–5 are committed.
-Slice 6 (integration gate) is next.
+**Phase AS-1 — complete.** All six slices committed.
 
 | Slice | Status | Lands |
 |---|---|---|
@@ -19,29 +18,7 @@ Slice 6 (integration gate) is next.
 | 3. `policy.py` + `runner.py` | ✅ committed (`feat/assistant-as1-slice3`) | tool dispatch |
 | 4. CH tables + `store.py` | ✅ committed (`feat/assistant-as1-slice4`) | persistence |
 | 5. `/cockpit/assistant/*` + SSE | ✅ committed (`feat/assistant-as1-slice5`) | HTTP surface |
-| 6. Integration gate test | ⏸ pending | AS-1 done |
-
-### Next-session pickup — Slice 5 punch list
-
-**Goal:** expose the assistant over HTTP with SSE streaming so callers
-can stream turns from a web client or CLI.
-
-Files to add:
-
-| File | Purpose |
-|---|---|
-| `app/services/assistant/stream.py` | `encode_sse(event)` — encodes `AssistantStreamEvent` to `data: {...}\n\n` SSE wire format. |
-| `app/api/routes_assistant.py` | FastAPI router: `POST /cockpit/assistant/conversations` (start), `POST /cockpit/assistant/conversations/{id}/turn` (continue, SSE response), `GET /cockpit/assistant/conversations` (list), `GET /cockpit/assistant/conversations/{id}` (load). |
-| `tests/test_assistant_stream.py` | Unit tests for SSE encoder: JSON round-trip, delimiter format, event type wire values. |
-
-Files to modify:
-
-| File | Change |
-|---|---|
-| `app/main_api.py` | Mount the assistant router under `/cockpit`. |
-| `app/services/assistant/__init__.py` | Re-export SSE encoder. |
-
-Slices 6: see `docs/assistant_plan.md §15`.
+| 6. Integration gate test | ✅ committed (`feat/assistant-as1-slice6`) | AS-1 done |
 
 ## Distinct from the trading `LLMAgent`
 
