@@ -850,6 +850,234 @@ Detail in [data_platform_plan.md §6](data_platform_plan.md).
 
 ---
 
+### Decision 2026-05-18 — Whole-market silver + whole-market CH (B1 architecture)
+
+**Context.** Tonight's Path A (TA-5.1.7) builds silver + CH for the seed
+universe (~100 symbols). That gets alerts/dashboard working for the curated
+set. Operator raised a hard product requirement:
+
+> **"Select any symbol → see its 5-year chart in 5-10 seconds."**
+
+This requires the symbol's adjusted bars to be queryable in ~3-7 sec
+on the backend (after subtracting network + frontend overhead).
+
+**Latency budget by source (5y × 1-min × 1 symbol, ~500K rows):**
+
+| Source | Cold-cache latency | Warm |
+|---|---|---|
+| **ClickHouse (data already there)** | **~200-500 ms ✅** | ~200-500 ms |
+| Silver Iceberg from laptop | ~2-4 sec ✅ | ~2-4 sec |
+| Silver Iceberg from AWS EC2 | ~500 ms - 1 sec ✅ | ~500 ms - 1 sec |
+| Build silver slice on-demand from bronze | ~15-30 sec ❌ | <1 sec |
+| Polygon REST + adjust on-demand | ~10-30 sec ❌ | ~10-30 sec |
+
+**Conclusion: the only way to meet the budget for arbitrary symbols
+(including never-seen ones) is to have whole-market silver materialized
+and CH pre-loaded. On-demand silver slice build is too slow (>10 sec)
+for first-time queries.**
+
+**Decision: B1 — Whole-market silver + whole-market CH.**
+
+- **Silver:** all ~8-10K Polygon-covered tickers × 5y × 1-min, adjusted.
+  ~5-6B rows, ~300-500GB compressed on S3.
+- **CH:** mirrors silver. ~500GB local Docker storage (or ~$50-100/mo on
+  managed CH).
+- **Frontend:** always reads CH directly. No on-demand build paths needed.
+- **Schwab:** continues to provide live freshness for the seed universe
+  (only). Non-seed symbols rely on Polygon historical + Polygon corp_actions.
+
+**Trade-off accepted:** higher storage cost (~$0 on local Docker;
+~$50-100/mo on managed CH); one-time silver build cost ~$5 + ~2 hr.
+
+**Rejected alternative — B2 (lazy CH load from silver-on-demand):**
+- Pro: smaller CH
+- Con: 3-6 sec cold path for new symbol, hidden complexity in API
+  (loading states, retries, partial responses)
+- Verdict: operational complexity not worth saving 300-400GB of CH storage
+  that's mostly free at our scale.
+
+**Rejected alternative — Polygon adjusted=true:**
+- Saves ~5-10% silver build time (split-factor compute is essentially free)
+- Loses point-in-time reproducibility (Polygon silently re-adjusts on
+  revised splits)
+- Violates bronze immutability principle
+- Verdict: not worth it.
+
+### TA-5.6 — Whole-market silver build (planned, not started)
+
+**Goal:** materialize `silver.ohlcv_1m` for the full Polygon universe
+(~8-10K tickers × 5y).
+
+**Prerequisites:**
+- [ ] Backfill the dividend gaps in `bronze.polygon_corp_actions`
+  (2020, 2022, 2024) via CodeBuild. Local backfill is too slow
+  (PyIceberg upsert against existing 1.5M-row table = ~2 min/chunk
+  from residential, ~2-5 sec/chunk from AWS internal). Estimated
+  CodeBuild time: ~30-60 min, cost ~$0.50.
+- [ ] Drop `silver.ohlcv_1m` + `silver.bar_quality` (clean append path).
+- [ ] Confirm `silver.corp_actions` includes splits for all symbols
+  we'll materialize (a quick scan; we already verified the seed
+  universe is fully covered).
+
+**Build plan — parallel CodeBuild by year:**
+- 5 parallel CodeBuild jobs, each handling 1 year × whole market
+- Per-job: 12 months × 5-15 min/month via existing month-batched code
+  = ~1-3 hr wall-clock per job
+- All 5 in parallel: ~1-3 hr total (slowest year wins)
+- Concurrency safety: years are separate Iceberg year-partitions,
+  no commit conflicts
+- Estimated total cost: 5 × 3 hr × 60 min × $0.005/min ≈ **$5**
+
+**Alternatives considered:**
+- AWS Glue Spark (~30-60 min, ~$18) — needs PySpark rewrite, deferred
+- EMR cluster (~30-60 min, ~$20) — operational overhead, deferred
+- Step Functions Map → 60 parallel monthly CodeBuilds (~15-20 min, ~$3)
+  — risk of intra-year Iceberg commit conflicts unless we serialize
+  by year. Not worth the orchestration complexity for a one-time job.
+
+**Gate:** `silver.ohlcv_1m` row count matches expected
+(~5-6B rows), all 16 critical seed-universe splits still produce
+correct adjusted prices on Yahoo spot-checks, and a random non-seed
+symbol returns 5y of bars when queried.
+
+### TA-5.7 — Whole-market CH hot-load (planned, not started)
+
+**Goal:** load all whole-market silver into ClickHouse so frontend
+queries for any symbol meet the 5-10 sec budget.
+
+**Prerequisites:** TA-5.6 complete.
+
+**Plan:**
+- Extend `scripts/rebuild_ch_from_silver.py` (built in TA-5.5 tonight
+  for seed scope) to handle whole-market scan + batched insert.
+- CH insert rate ~1-2M rows/sec from local, so 6B rows = ~1-2 hr
+  wall-clock from a laptop. From an EC2 instance in us-east-1
+  (silver region), faster: ~30-60 min.
+- Verify `ohlcv_1m` table has appropriate ORDER BY (symbol, ts) +
+  PARTITION BY (toYYYYMM(ts)) so single-symbol queries hit only a
+  few parts.
+
+**Gate:**
+- Random non-seed symbol query (e.g. some Russell 2000 small-cap):
+  5y of bars returned in < 500 ms from CH.
+- Total `ohlcv_1m` row count matches silver.
+- Spot-check: random sample of 100 silver rows match corresponding
+  CH rows byte-for-byte (modulo timestamp precision).
+
+**Estimated total time + cost from end of TA-5.5 → TA-5.7 done:**
+~1-2 sessions (~4-8 hrs of operator wall-clock, mostly CodeBuild watching),
+~$10 in AWS compute.
+
+### TA-5.8 — Spark + Iceberg execution layer (planned, decision locked)
+
+**Context.** Operator stated intent (2026-05-18):
+
+> "We will be doing a lot of ML jobs and we need fast executing for
+> live charting and monitoring."
+
+The current Python + PyIceberg + CodeBuild stack is fine for one-off
+operator-triggered builds (silver --full ~36 min for seed, ~2 hr for
+whole-market via parallel CodeBuild). It is NOT the right execution
+layer for:
+
+1. **Recurring full-rebuild jobs** (e.g. weekly silver rebuild for
+   schema migrations, or rebuilding gold/feature tables from silver).
+2. **Large analytical queries** powering ML training (multi-billion-row
+   scans for feature engineering, label generation, walk-forward
+   backtest data prep).
+3. **Sub-30-minute SLA on whole-market silver rebuilds** for fast
+   schema iteration during ML model development.
+4. **Live-monitoring streaming compute** (this is a separate domain —
+   Kinesis/Flink — but Spark Structured Streaming overlaps).
+
+**Decision: invest in Spark + native Iceberg as the canonical execution
+layer for batch + analytical workloads.**
+
+**Engine choice: AWS Glue 4.0 (PySpark + native Iceberg connector).**
+
+Comparison:
+
+| Engine | Pros | Cons |
+|---|---|---|
+| **Glue 4.0** ✅ | Native Iceberg + AWS Glue catalog integration; no cluster mgmt; pay per DPU-second; integrates with AWS data ecosystem | Glue-specific quirks; less flexibility than raw EMR |
+| EMR Serverless | Cheaper at large scale; same managed model | Iceberg connector requires explicit config; less battle-tested with Iceberg than Glue 4.0 |
+| EMR classic cluster | Most flexibility; can run other engines (Trino, Hudi) | Cluster spinup overhead; ops burden |
+| Databricks | Best UX for ML notebooks; Delta-native | Vendor lock-in; expensive; not Iceberg-native |
+
+We pick **Glue 4.0** because: native Iceberg + native Glue catalog = zero
+config work to integrate with our existing `bronze.*` / `silver.*` /
+`gold.*` namespaces, and we're already paying for Glue catalog. The
+operational simplicity (serverless, pay-per-job) matches our small-team
+shape.
+
+**Performance targets (Glue 4.0 with 20-50 DPUs):**
+
+| Job | Today (PyIceberg) | Glue 4.0 target |
+|---|---|---|
+| Seed silver --full (100 sym × 5y) | 36 min | ~3-5 min |
+| Whole-market silver --full (10K sym × 5y) | ~2-3 hr (parallel CodeBuild) | ~20-30 min |
+| Gold/feature table generation (TBD scope) | n/a | ~5-15 min |
+| Whole-market silver → CH reload | ~30-60 min (CH-side) | unchanged (CH-bound) |
+
+**Cost targets:**
+- Per whole-market silver build: ~$5-15 (vs $5 parallel CodeBuild — comparable)
+- Per gold/feature batch job: ~$2-10 depending on scope
+- Monthly recurring cost (assuming weekly full rebuild + daily incremental):
+  ~$40-100/mo
+
+**Tasks (planned, ~1-2 dev days):**
+
+- [ ] Add `app/services/silver/spark/` module with PySpark equivalents
+  of `merge_with_precedence`, `apply_corp_actions`, `compute_bar_quality`.
+  Must produce **byte-identical output** to the existing Python build
+  for the same input (modulo `ingestion_ts` / `ingestion_run_id`).
+- [ ] Write `scripts/spark_silver_build.py` — Glue 4.0 job entrypoint
+  using the Iceberg connector. Reads bronze.{provider}_minute, writes
+  silver.ohlcv_1m + silver.bar_quality.
+- [ ] Glue job IAM role with S3 + Glue catalog perms (similar to CodeBuild
+  role but Glue-specific service principal).
+- [ ] Local parity test: `tests/test_silver_spark_parity.py` — small
+  dataset, run both Python build + Spark build, assert byte-identical
+  output. Pinned regression test.
+- [ ] Operator runbook `docs/runbook_spark_silver_build.md` for kicking
+  off via AWS console + CLI.
+- [ ] Replace CodeBuild silver --full as the default execution path in
+  `streaming_universe_model.md` add_members flow + nightly silver build.
+  CodeBuild stays as the fallback / dev escape hatch.
+
+**Gate:**
+1. Spark parity test passes (byte-identical output).
+2. Glue silver --full for seed completes in < 10 min.
+3. Glue silver --full for whole market completes in < 45 min.
+4. Yahoo spot-checks still pass against the Spark-built silver.
+
+**Sequence:** TA-5.8 lands AFTER TA-5.5 (rebuild_ch_from_silver) is
+proven working with seed scope. We don't need Spark to ship Path A.
+TA-5.6 / TA-5.7 may either (a) use parallel CodeBuild as documented, or
+(b) wait for TA-5.8 and use Spark — operator decision based on whether
+they want whole-market silver in days vs. weeks.
+
+### TA-5.9 — ML feature pipeline (planned, depends on TA-5.8)
+
+**Context.** Once silver is canonical + Spark is the execution layer,
+gold-tier ML feature tables become tractable:
+
+- `gold.bar_features_1m` — pre-computed indicator panels per symbol/time
+- `gold.event_features` — engineered features around corp actions,
+  earnings, etc.
+- `gold.label_panels` — forward-return labels for supervised training
+
+These feed model training (offline) and live inference (online — but
+live inference reads from CH, not S3, so gold needs a CH mirror similar
+to silver).
+
+**Implementation deferred until TA-5.8 ships.** Sketch:
+- One Glue job per gold table, scheduled via EventBridge (daily refresh)
+- Output schemas owned by `app/services/gold/`
+- Feature definitions tracked in `docs/feature_catalog.md` (new)
+
+---
+
 ## Phase 4 — Live → Bronze (CH 5-min flush)
 
 **Status:** not started. Deferred — nightly bronze ingest is currently

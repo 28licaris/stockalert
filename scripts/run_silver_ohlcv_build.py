@@ -158,6 +158,80 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _capture_silver_state() -> dict:
+    """Snapshot ID + row count for silver.ohlcv_1m + silver.bar_quality.
+
+    Reloads via a fresh catalog instance to bypass any caching. Returns
+    a dict ready for inclusion in the run summary. Missing/empty tables
+    are reported as snapshot_id=None, rows=0 (a valid pre-state for a
+    fresh build).
+
+    Coding standards rule 1E — verify-mutation cross-side. Without this,
+    a build that crashes mid-write or silently no-ops can report success.
+    """
+    from pyiceberg.catalog import load_catalog
+    from pyiceberg.exceptions import NoSuchTableError
+    from app.services.iceberg_catalog import _build_catalog_properties
+    from app.services.silver.schemas import silver_table_id
+
+    cat = load_catalog("fresh", **_build_catalog_properties())
+    state = {}
+    for short in ("ohlcv_1m", "bar_quality"):
+        try:
+            t = cat.load_table(silver_table_id(short))
+            snap = t.current_snapshot()
+            if snap is None:
+                state[short] = {"snapshot_id": None, "rows": 0}
+            else:
+                rows = int(
+                    snap.summary.additional_properties.get("total-records", "0")
+                )
+                state[short] = {
+                    "snapshot_id": str(snap.snapshot_id),
+                    "rows": rows,
+                }
+        except NoSuchTableError:
+            state[short] = {"snapshot_id": None, "rows": 0}
+        except Exception as e:
+            # Soft failure — surface the inability to verify but don't
+            # abort the entire run.
+            logger.warning(
+                "Could not capture state for silver.%s: %s", short, e,
+            )
+            state[short] = {"snapshot_id": None, "rows": 0, "error": str(e)}
+    return state
+
+
+def _enforce_mutation_contract(
+    result_summary: dict, pre: dict, post: dict,
+) -> None:
+    """Raise RuntimeError if the build claims rows were written but
+    no snapshot ID advanced.
+
+    The build's `_summarize()` reports `silver_rows` from
+    BuildResult.total_silver_rows. If that's > 0, we expect AT LEAST
+    silver.ohlcv_1m's snapshot to have advanced. (bar_quality may not
+    advance for some configurations, e.g. tip-fill runs, so we only
+    enforce ohlcv_1m here.)
+
+    No-mutation signature = python process was killed mid-write
+    (SIGBUS / SIGKILL / OOM) while bash + tee returned exit 0. This
+    check makes that loud.
+    """
+    claimed_rows = int(result_summary.get("silver_rows", 0) or 0)
+    pre_snap = pre["ohlcv_1m"]["snapshot_id"]
+    post_snap = post["ohlcv_1m"]["snapshot_id"]
+
+    if claimed_rows > 0 and pre_snap == post_snap:
+        raise RuntimeError(
+            f"silver_ohlcv_build NO-OP detected: build reported "
+            f"{claimed_rows:,} rows written but silver.ohlcv_1m snapshot "
+            f"is unchanged ({pre_snap}). Table was NOT modified. "
+            "Likely cause: process killed mid-write (OOM / SIGBUS) "
+            "or a swallowed exception. Re-run after investigating."
+        )
+
+
 def _resolve_window(args) -> tuple[date, date]:
     """Translate flags into (since, until)."""
     yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
@@ -280,12 +354,28 @@ def main() -> int:
         since, until, len(symbols), args.full, args.nightly, concurrency,
     )
 
+    # Verify-mutation contract (docs/standards/coding.md rule 1E):
+    # capture pre-state snapshot IDs + row counts for silver.ohlcv_1m
+    # and silver.bar_quality. After the build claims success, we re-
+    # load both tables via a FRESH catalog instance and assert the
+    # snapshot ID changed (or that the table is genuinely empty).
+    # Without this, a build that crashes mid-write or silently no-ops
+    # can return status=ok with zero rows landed.
+    pre_state = _capture_silver_state()
+    logger.info(
+        "Pre-build silver state: ohlcv_1m snapshot=%s rows=%d | "
+        "bar_quality snapshot=%s rows=%d",
+        pre_state["ohlcv_1m"]["snapshot_id"], pre_state["ohlcv_1m"]["rows"],
+        pre_state["bar_quality"]["snapshot_id"], pre_state["bar_quality"]["rows"],
+    )
+
     summary: dict = {
         "since": since.isoformat(),
         "until": until.isoformat(),
         "symbols_count": len(symbols),
         "concurrency": concurrency,
         "started_at": datetime.now(timezone.utc).isoformat(),
+        "pre_state": pre_state,
         "status": "in_progress",
     }
 
@@ -299,6 +389,21 @@ def main() -> int:
         summary["mode"] = args.mode
         summary["result"] = _summarize(result)
         summary["status"] = "ok" if result.slices_failed == 0 else "partial_fail"
+
+        # Verify-mutation post-check: if the build claims rows were
+        # written, the snapshot ID MUST have advanced. Otherwise we
+        # surface the silent-failure signature loudly.
+        post_state = _capture_silver_state()
+        summary["post_state"] = post_state
+        logger.info(
+            "Post-build silver state: ohlcv_1m snapshot=%s rows=%d (Δ=%+d) | "
+            "bar_quality snapshot=%s rows=%d (Δ=%+d)",
+            post_state["ohlcv_1m"]["snapshot_id"], post_state["ohlcv_1m"]["rows"],
+            post_state["ohlcv_1m"]["rows"] - pre_state["ohlcv_1m"]["rows"],
+            post_state["bar_quality"]["snapshot_id"], post_state["bar_quality"]["rows"],
+            post_state["bar_quality"]["rows"] - pre_state["bar_quality"]["rows"],
+        )
+        _enforce_mutation_contract(summary["result"], pre_state, post_state)
     except Exception as e:
         summary["status"] = "fail"
         summary["error"] = f"{type(e).__name__}: {e}"

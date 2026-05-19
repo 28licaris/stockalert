@@ -42,6 +42,7 @@ import pyarrow as pa
 
 from app.providers.polygon_corp_actions import PolygonCorpActionsClient
 from app.services.bronze.tables import ensure_bronze_polygon_corp_actions
+from app.services.iceberg_safe_upsert import chunked_upsert
 from app.services.silver.schemas import CorpAction
 
 logger = logging.getLogger(__name__)
@@ -147,6 +148,12 @@ class PolygonCorpActionsBronzeIngest:
 
         # Iterate by calendar year so each Polygon pagination + each
         # Iceberg upsert holds bounded memory.
+        #
+        # Logging contract: ALWAYS log the pull count for both splits
+        # AND dividends, even when zero. A missing dividend log in
+        # production was a tell-tale sign of a silent upsert-time crash
+        # (TA-5.0, 2026-05-18) — making 0-row pulls observable closes
+        # that gap.
         year = since.year
         end_year = until.year
         while year <= end_year:
@@ -156,25 +163,33 @@ class PolygonCorpActionsBronzeIngest:
             chunk_splits = await client.collect_splits(
                 since=chunk_start, until=chunk_end,
             )
+            logger.info(
+                "polygon_corp_actions_ingest: year=%d pulled %d splits",
+                year, len(chunk_splits),
+            )
             if chunk_splits:
-                logger.info(
-                    "polygon_corp_actions_ingest: year=%d pulled %d splits",
-                    year, len(chunk_splits),
-                )
                 self._upsert(table, chunk_splits, ingestion_run_id=run_id)
                 total_splits += len(chunk_splits)
 
             chunk_divs = await client.collect_dividends(
                 since=chunk_start, until=chunk_end,
             )
+            logger.info(
+                "polygon_corp_actions_ingest: year=%d pulled %d dividends",
+                year, len(chunk_divs),
+            )
             if chunk_divs:
-                logger.info(
-                    "polygon_corp_actions_ingest: year=%d pulled %d dividends",
-                    year, len(chunk_divs),
-                )
                 self._upsert(table, chunk_divs, ingestion_run_id=run_id)
                 total_dividends += len(chunk_divs)
 
+            # Year-completed marker — makes it trivial to grep
+            # `year_complete=2022` in operator logs + know exactly
+            # how far the loop got before any silent crash.
+            logger.info(
+                "polygon_corp_actions_ingest: year_complete=%d "
+                "running_total splits=%d dividends=%d",
+                year, total_splits, total_dividends,
+            )
             year += 1
 
         duration = (datetime.now(timezone.utc) - started).total_seconds()
@@ -308,6 +323,12 @@ class PolygonCorpActionsBronzeIngest:
         (symbol, ex_date, action_type) for the join. When matched,
         updates non-key columns (handles Polygon revising a prior
         announcement). When not matched, inserts.
+
+        Goes through `chunked_upsert` to dodge PyIceberg's multi-column
+        predicate-tree SIGBUS. See `app/services/iceberg_safe_upsert.py`
+        for the root-cause analysis. The outer `backfill_full_history`
+        is idempotent so partial chunk-progress on a crash heals on
+        re-run.
         """
         if not actions:
             return
@@ -319,9 +340,12 @@ class PolygonCorpActionsBronzeIngest:
                 n_collapsed,
             )
         arrow = cls._actions_to_arrow(deduped, ingestion_run_id=ingestion_run_id)
-        result = table.upsert(arrow)
+        result = chunked_upsert(
+            table, arrow, log_label="bronze.polygon_corp_actions",
+        )
         logger.info(
             "polygon_corp_actions_ingest: upsert complete "
-            "rows_updated=%d rows_inserted=%d (post-dedup rows=%d)",
-            result.rows_updated, result.rows_inserted, len(deduped),
+            "rows_updated=%d rows_inserted=%d (post-dedup rows=%d chunks=%d)",
+            result.rows_updated, result.rows_inserted,
+            len(deduped), result.chunks_committed,
         )

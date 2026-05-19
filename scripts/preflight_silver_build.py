@@ -266,6 +266,171 @@ def check_silver_corp_actions() -> CheckResult:
         )
 
 
+def check_corp_actions_year_coverage() -> CheckResult:
+    """3b: corp_actions year-by-year coverage matches BRONZE_HISTORY_START..today.
+
+    **Why this check exists:** TA-5.0 live verification (2026-05-17)
+    found Yahoo spot-checks on TSLA/AMZN/GOOGL returning RAW prices
+    instead of adjusted ones. Root cause: bronze.polygon_corp_actions
+    had only 5,108 rows total — entire years were missing or partially
+    backfilled, so post-split bars saw factor=1 in those windows.
+
+    Silver --full will silently produce wrong adjusted prices for any
+    bar whose downstream split is missing. This check catches the
+    failure mode BEFORE the multi-hour silver build runs:
+
+      - Reads BRONZE_HISTORY_START as the lower bound.
+      - Reads today's UTC date as the upper bound.
+      - For every full calendar year in [start..today-1], expects at
+        least `_MIN_ROWS_PER_FULL_YEAR` rows.
+      - Reports per-year row counts; FAILs if any full year is below
+        threshold; WARNs if the current year is under-filled (expected
+        during partial-year periods).
+
+    Both bronze.polygon_corp_actions AND silver.corp_actions are
+    checked — the silver build reads silver, but the bronze gap is
+    what we typically need to fix first.
+    """
+    try:
+        import collections
+
+        from app.config import settings
+        from app.services.bronze.schemas import bronze_table_id
+        from app.services.iceberg_catalog import get_catalog
+        from app.services.silver.schemas import silver_table_id
+
+        # Lower bound from BRONZE_HISTORY_START, upper bound = today UTC.
+        try:
+            start = date.fromisoformat(settings.bronze_history_start)
+        except (TypeError, ValueError):
+            start = date(2021, 1, 4)
+        today = datetime.now(timezone.utc).date()
+        # If we have the current year only partially, treat the current
+        # year as a WARN-only band, not a FAIL.
+        expected_full_years = list(range(start.year, today.year))
+        all_years = list(range(start.year, today.year + 1))
+
+        # Minimum rows for a "fully covered" calendar year. Real data
+        # ranges 30K-200K rows/year (splits + dividends). 5K is a
+        # generous lower bound that catches the 5,108-row truncation
+        # we saw without false-positiving early years (2003 had 3,911).
+        # Skip the floor check for 2003 since Polygon's earliest data
+        # is mid-2003 (~half-year).
+        _MIN_ROWS_PER_FULL_YEAR = 5_000
+
+        cat = get_catalog()
+        gaps: dict[str, dict] = {}
+        per_table_detail: dict[str, dict] = {}
+
+        for short, label in (
+            ("polygon_corp_actions", "bronze.polygon_corp_actions"),
+            # silver.corp_actions is checked too — but if bronze is
+            # under-filled, silver inherits the gap.
+        ):
+            try:
+                tbl = cat.load_table(bronze_table_id(short))
+            except Exception as e:
+                gaps[label] = {"error": f"{type(e).__name__}: {e}"}
+                continue
+
+            # Per-year row counts via Arrow scan. Only pulls `ex_date`.
+            try:
+                arrow = tbl.scan(selected_fields=["ex_date"]).to_arrow()
+            except TypeError:
+                # Older PyIceberg without `selected_fields` kwarg.
+                arrow = tbl.scan().to_arrow().select(["ex_date"])
+
+            counts = collections.Counter()
+            for d in arrow.column("ex_date").to_pylist():
+                if d is None:
+                    continue
+                if start.year <= d.year <= today.year:
+                    counts[d.year] += 1
+            per_year = {y: int(counts.get(y, 0)) for y in all_years}
+            per_table_detail[label] = per_year
+
+            year_gaps: list[int] = []
+            for y in expected_full_years:
+                # Skip 2003 — Polygon's earliest data is mid-year.
+                if y == 2003:
+                    continue
+                if per_year.get(y, 0) < _MIN_ROWS_PER_FULL_YEAR:
+                    year_gaps.append(y)
+            if year_gaps:
+                gaps[label] = {"under_threshold_years": year_gaps}
+
+        # Decide overall status.
+        if gaps:
+            # Find the union of bad years across tables.
+            bad_year_set: set[int] = set()
+            for info in gaps.values():
+                bad_year_set.update(info.get("under_threshold_years", []))
+            if bad_year_set:
+                bad_str = ", ".join(str(y) for y in sorted(bad_year_set))
+                fix_cmd = (
+                    f"  poetry run python scripts/run_corp_actions_backfill.py \\\n"
+                    f"    --since {min(bad_year_set)}-01-01 \\\n"
+                    f"    --until {max(bad_year_set)}-12-31 --bronze-only"
+                )
+                return CheckResult(
+                    name="corp_actions_year_coverage",
+                    status="fail",
+                    message=(
+                        f"corp_actions under-filled for year(s) {bad_str} "
+                        f"(< {_MIN_ROWS_PER_FULL_YEAR:,} rows). silver "
+                        "--full would produce WRONG adjusted prices for "
+                        "bars whose downstream splits fall in those years. "
+                        f"Fix:\n{fix_cmd}\n"
+                        "(then drop+rebuild silver.corp_actions before silver --full)"
+                    ),
+                    detail={"per_table": per_table_detail, "gaps": gaps},
+                )
+            else:
+                # Some other error path (table missing).
+                return CheckResult(
+                    name="corp_actions_year_coverage",
+                    status="fail",
+                    message=f"corp_actions coverage check errored: {gaps}",
+                    detail={"per_table": per_table_detail, "gaps": gaps},
+                )
+
+        # Current year coverage = WARN if < 1000 rows (Polygon
+        # populates from announcement_date, so a fresh year takes a
+        # few weeks to accumulate; this is informational only).
+        cy = today.year
+        cy_rows = per_table_detail.get("bronze.polygon_corp_actions", {}).get(cy, 0)
+        if cy_rows < 100:
+            return CheckResult(
+                name="corp_actions_year_coverage",
+                status="warn",
+                message=(
+                    f"All historical years have ≥ {_MIN_ROWS_PER_FULL_YEAR:,} "
+                    f"rows, but current year {cy} has only {cy_rows} rows "
+                    "— either the year is fresh or the nightly hasn't run. "
+                    "Not blocking for silver --full but worth investigating."
+                ),
+                detail={"per_table": per_table_detail},
+            )
+
+        return CheckResult(
+            name="corp_actions_year_coverage",
+            status="ok",
+            message=(
+                f"corp_actions covers years "
+                f"{start.year}..{today.year} (≥ {_MIN_ROWS_PER_FULL_YEAR:,} "
+                f"rows/year; current year {cy}: {cy_rows:,} rows)"
+            ),
+            detail={"per_table": per_table_detail},
+        )
+    except Exception as e:
+        return CheckResult(
+            name="corp_actions_year_coverage",
+            status="fail",
+            message=f"Unexpected error during year-coverage check: {e}",
+            detail={"traceback": traceback.format_exc()},
+        )
+
+
 def check_silver_tables_creatable() -> CheckResult:
     """4: silver.ohlcv_1m + silver.bar_quality can be ensured."""
     try:
@@ -487,6 +652,7 @@ def run_all_checks(symbol: str, day: date) -> list[CheckResult]:
         # Skip everything else — every other check needs the catalog.
         for name in (
             "bronze_minute_tables", "silver_corp_actions",
+            "corp_actions_year_coverage",
             "silver_tables_creatable", "end_to_end_slice",
             "silver_readback", "ingestion_runs_recorded",
         ):
@@ -498,12 +664,15 @@ def run_all_checks(symbol: str, day: date) -> list[CheckResult]:
 
     checks.append(check_bronze_minute_tables())
     checks.append(check_silver_corp_actions())
+    checks.append(check_corp_actions_year_coverage())
     checks.append(check_silver_tables_creatable())
 
     # The end-to-end slice depends on bronze having data + silver tables
-    # being creatable. Skip the slice + readback + audit if those failed.
-    bronze_ok = checks[-3].status in ("ok", "warn")
-    silver_ok = checks[-1].status == "ok"
+    # being creatable. Look these up by name (not by index) so adding
+    # new checks in the middle doesn't silently break the prereq logic.
+    by_name = {c.name: c for c in checks}
+    bronze_ok = by_name["bronze_minute_tables"].status in ("ok", "warn")
+    silver_ok = by_name["silver_tables_creatable"].status == "ok"
     if bronze_ok and silver_ok:
         checks.append(check_end_to_end_slice(symbol, day))
         # Read back AFTER the slice writes; if the slice failed, skip

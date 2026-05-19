@@ -44,6 +44,7 @@ from app.services.bronze.schemas import (
     bronze_table_id,
 )
 from app.services.iceberg_catalog import get_catalog
+from app.services.iceberg_safe_upsert import chunked_upsert
 from app.services.silver.ohlcv.merge import (
     compute_bar_quality,
     merge_with_precedence,
@@ -317,10 +318,18 @@ class SilverOhlcvBuild:
 
         try:
             if ohlcv_arrow is not None and ohlcv_arrow.num_rows > 0:
-                self._get_ohlcv_table().upsert(ohlcv_arrow)
+                # chunked_upsert: PyIceberg multi-col upsert SIGBUS guard.
+                # See app/services/iceberg_safe_upsert.py module docstring.
+                chunked_upsert(
+                    self._get_ohlcv_table(), ohlcv_arrow,
+                    log_label="silver.ohlcv_1m",
+                )
                 result.silver_rows_written = ohlcv_arrow.num_rows
             if quality_arrow is not None and quality_arrow.num_rows > 0:
-                self._get_bar_quality_table().upsert(quality_arrow)
+                chunked_upsert(
+                    self._get_bar_quality_table(), quality_arrow,
+                    log_label="silver.bar_quality",
+                )
                 result.quality_row_written = True
         except Exception as e:
             logger.exception(
@@ -624,16 +633,21 @@ class SilverOhlcvBuild:
 
     @staticmethod
     def _write_silver_table(
-        table, arrow: pa.Table, *, append: bool,
+        table, arrow: pa.Table, *, append: bool, log_label: str | None = None,
     ) -> None:
         """Write to a silver table. `append=True` uses `.append()`
         (fast, no merge logic — safe when table is empty);
-        `append=False` uses `.upsert()` (idempotent merge by identifier
-        — required for re-runs over existing data)."""
+        `append=False` uses `chunked_upsert()` (idempotent merge by
+        identifier — required for re-runs over existing data).
+
+        The upsert path goes through `chunked_upsert` so we don't
+        trip PyIceberg's multi-column predicate-tree SIGBUS — see
+        `app/services/iceberg_safe_upsert.py` for the root cause.
+        """
         if append:
             table.append(arrow)
         else:
-            table.upsert(arrow)
+            chunked_upsert(table, arrow, log_label=log_label)
 
     @staticmethod
     def _group_rows_by_symbol_day(
@@ -923,7 +937,10 @@ class SilverOhlcvBuild:
             if ohlcv_batch:
                 combined = pa.concat_tables(ohlcv_batch)
                 try:
-                    self._get_ohlcv_table().upsert(combined)
+                    chunked_upsert(
+                        self._get_ohlcv_table(), combined,
+                        log_label="silver.ohlcv_1m",
+                    )
                     # Re-attribute row counts to each contributing slice
                     # so SliceResult reflects what got written.
                     for sr, ohlcv_arrow, _ in outputs:
@@ -945,7 +962,10 @@ class SilverOhlcvBuild:
             if quality_batch:
                 combined_q = pa.concat_tables(quality_batch)
                 try:
-                    self._get_bar_quality_table().upsert(combined_q)
+                    chunked_upsert(
+                        self._get_bar_quality_table(), combined_q,
+                        log_label="silver.bar_quality",
+                    )
                     for sr, _, quality_arrow in outputs:
                         if (
                             sr.succeeded

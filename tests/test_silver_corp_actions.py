@@ -566,3 +566,198 @@ class TestCorpActionsReader:
         with patch.object(r, "_get_table", side_effect=RuntimeError("no table")):
             resp = r.get_corp_actions("aapl")
         assert resp.symbol == "AAPL"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Year-chunking regression — `backfill_full_history` must iterate year
+# by year, NEVER one-shot the whole window.
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestBackfillFullHistoryYearChunking:
+    """Locks in the TA-5.0 OOM fix: `backfill_full_history` MUST call
+    Polygon's collect_splits / collect_dividends once per calendar
+    year, not once for the whole window.
+
+    **Regression context (2026-05-17):** pulling 23 years of dividends
+    in one shot held ~3M rows in memory at once → silent OOM crash on
+    residential hardware. The fix chunks the loop by calendar year so
+    each upsert + each pagination window holds ≤ ~200K rows.
+
+    If a future refactor removes the chunking (e.g. "let's just call
+    collect_dividends once with since=2003 until=today"), THIS TEST
+    BREAKS — keeping the silent-OOM trap from coming back.
+    """
+
+    @pytest.mark.asyncio
+    async def test_chunks_call_collect_per_year(self) -> None:
+        """The backfill must call collect_splits + collect_dividends
+        exactly once per calendar year in the window."""
+        from datetime import date as _date
+        from unittest.mock import AsyncMock, MagicMock
+
+        client = MagicMock(spec=PolygonCorpActionsClient)
+        client.collect_splits = AsyncMock(return_value=[])
+        client.collect_dividends = AsyncMock(return_value=[])
+
+        # Fake table — never written to because there are no actions.
+        fake_table = MagicMock()
+
+        ingest = PolygonCorpActionsBronzeIngest(client=client, table=fake_table)
+        await ingest.backfill_full_history(
+            since=_date(2021, 1, 4), until=_date(2024, 6, 30),
+        )
+
+        # 2021, 2022, 2023, 2024 → 4 years → 4 calls each.
+        assert client.collect_splits.await_count == 4, (
+            "collect_splits should be called once per calendar year; "
+            "got %d calls — has year-chunking been removed?"
+            % client.collect_splits.await_count
+        )
+        assert client.collect_dividends.await_count == 4, (
+            "collect_dividends should be called once per calendar year; "
+            "got %d calls — has year-chunking been removed?"
+            % client.collect_dividends.await_count
+        )
+
+        # Confirm each call uses a window inside its own calendar year.
+        for call in client.collect_splits.await_args_list:
+            kwargs = call.kwargs
+            assert kwargs["since"].year == kwargs["until"].year, (
+                "year-chunk window crosses calendar years; OOM fix broken"
+            )
+        for call in client.collect_dividends.await_args_list:
+            kwargs = call.kwargs
+            assert kwargs["since"].year == kwargs["until"].year, (
+                "year-chunk window crosses calendar years; OOM fix broken"
+            )
+
+    @pytest.mark.asyncio
+    async def test_single_year_window_makes_one_call(self) -> None:
+        """A within-one-year window should result in exactly one chunk."""
+        from datetime import date as _date
+        from unittest.mock import AsyncMock, MagicMock
+
+        client = MagicMock(spec=PolygonCorpActionsClient)
+        client.collect_splits = AsyncMock(return_value=[])
+        client.collect_dividends = AsyncMock(return_value=[])
+
+        ingest = PolygonCorpActionsBronzeIngest(client=client, table=MagicMock())
+        await ingest.backfill_full_history(
+            since=_date(2024, 3, 1), until=_date(2024, 11, 30),
+        )
+
+        assert client.collect_splits.await_count == 1
+        assert client.collect_dividends.await_count == 1
+        # The single chunk should respect the caller's bounds, not
+        # widen to the full year.
+        call = client.collect_splits.await_args_list[0]
+        assert call.kwargs["since"] == _date(2024, 3, 1)
+        assert call.kwargs["until"] == _date(2024, 11, 30)
+
+    @pytest.mark.asyncio
+    async def test_clamps_chunk_to_caller_bounds(self) -> None:
+        """A multi-year window with partial first/last years should
+        clamp the first/last chunk to the caller's bounds, not extend
+        to Jan 1 / Dec 31 of those years."""
+        from datetime import date as _date
+        from unittest.mock import AsyncMock, MagicMock
+
+        client = MagicMock(spec=PolygonCorpActionsClient)
+        client.collect_splits = AsyncMock(return_value=[])
+        client.collect_dividends = AsyncMock(return_value=[])
+
+        ingest = PolygonCorpActionsBronzeIngest(client=client, table=MagicMock())
+        await ingest.backfill_full_history(
+            since=_date(2023, 6, 15), until=_date(2025, 3, 10),
+        )
+
+        # 2023 chunk → since=2023-06-15 (NOT 2023-01-01)
+        first_call = client.collect_splits.await_args_list[0]
+        assert first_call.kwargs["since"] == _date(2023, 6, 15)
+        assert first_call.kwargs["until"] == _date(2023, 12, 31)
+
+        # 2025 chunk → until=2025-03-10 (NOT 2025-12-31)
+        last_call = client.collect_splits.await_args_list[-1]
+        assert last_call.kwargs["since"] == _date(2025, 1, 1)
+        assert last_call.kwargs["until"] == _date(2025, 3, 10)
+
+    def test_upsert_routes_through_chunked_upsert(self) -> None:
+        """`_upsert` MUST delegate the actual table write to
+        `chunked_upsert` — the shared helper that guards every
+        iceberg upsert in the codebase from the PyIceberg multi-col
+        predicate-tree SIGBUS.
+
+        **Regression context (2026-05-18):** bronze.polygon_corp_actions
+        upsert reliably bus-errored on macOS at ~1,000 rows. We
+        bisected the threshold and centralized the fix in
+        `app/services/iceberg_safe_upsert.py`. The chunking math is
+        pinned in `tests/test_iceberg_safe_upsert.py` — this test
+        only pins the DELEGATION (so a refactor that bypasses the
+        helper breaks loudly).
+        """
+        from unittest.mock import MagicMock, patch
+        from app.services.silver.corp_actions.polygon_ingest import (
+            PolygonCorpActionsBronzeIngest as _Cls,
+        )
+
+        # Build a 1,500-row payload — enough to force chunking via the helper.
+        actions = [
+            CorpAction(
+                symbol=f"SYM{i:04d}", ex_date=date(2024, 1, 1),
+                action_type="cash_dividend", cash_amount=0.10,
+            )
+            for i in range(1500)
+        ]
+        fake_table = MagicMock()
+
+        with patch(
+            "app.services.silver.corp_actions.polygon_ingest.chunked_upsert"
+        ) as mock_chunked:
+            mock_chunked.return_value = MagicMock(
+                rows_updated=0, rows_inserted=1500, chunks_committed=4,
+            )
+            _Cls._upsert(fake_table, actions, ingestion_run_id="test-run")
+
+            # Must be exactly one call to the helper — the helper itself
+            # handles chunking internally.
+            assert mock_chunked.call_count == 1
+            # Bare `.upsert(...)` must NEVER be called from polygon_ingest
+            # — delegation must go through chunked_upsert.
+            assert fake_table.upsert.call_count == 0
+            # The helper got the full deduped payload.
+            arrow_arg = mock_chunked.call_args.args[1]
+            assert arrow_arg.num_rows == 1500
+
+    @pytest.mark.asyncio
+    async def test_summary_aggregates_across_years(self) -> None:
+        """Returned summary should aggregate row counts across all
+        years, not just the last chunk."""
+        from datetime import date as _date
+        from unittest.mock import AsyncMock, MagicMock
+
+        # Return 10 fake splits + 100 fake dividends per year.
+        fake_split = CorpAction(
+            symbol="X", ex_date=_date(2023, 1, 2), action_type="split", factor=2.0,
+        )
+        fake_div = CorpAction(
+            symbol="X", ex_date=_date(2023, 1, 2),
+            action_type="cash_dividend", cash_amount=0.1,
+        )
+
+        client = MagicMock(spec=PolygonCorpActionsClient)
+        client.collect_splits = AsyncMock(return_value=[fake_split] * 10)
+        client.collect_dividends = AsyncMock(return_value=[fake_div] * 100)
+
+        # Stub table.upsert to avoid actually writing.
+        fake_table = MagicMock()
+        fake_table.upsert.return_value = MagicMock(rows_updated=0, rows_inserted=110)
+
+        ingest = PolygonCorpActionsBronzeIngest(client=client, table=fake_table)
+        result = await ingest.backfill_full_history(
+            since=_date(2021, 1, 1), until=_date(2023, 12, 31),
+        )
+
+        # 3 years × 10 splits/year + 3 years × 100 dividends/year
+        assert result["splits_written"] == 30
+        assert result["dividends_written"] == 300

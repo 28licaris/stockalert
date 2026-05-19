@@ -24,7 +24,18 @@ echo "Report:          s3://${STOCK_LAKE_BUCKET}/${REPORT_KEY}"
 echo "--- summary ---"
 
 if command -v jq >/dev/null 2>&1; then
-    jq '{status, mode, since, until, symbols_count, result: {slices, slices_succeeded, slices_failed, silver_rows, duration_seconds}}' "$RESULT_FILE"
+    # NOTE: slices / slices_succeeded / slices_failed / silver_rows /
+    # duration_seconds live UNDER `.result` in the run_silver_ohlcv_build
+    # output (see scripts/run_silver_ohlcv_build.py::_summarize), not at
+    # the top level. We project + flatten so operators see one tidy block.
+    jq '{
+        status, mode, since, until, symbols_count,
+        slices:           .result.slices,
+        slices_succeeded: .result.slices_succeeded,
+        slices_failed:    .result.slices_failed,
+        silver_rows:      .result.silver_rows,
+        duration_seconds: .result.duration_seconds
+    }' "$RESULT_FILE"
 else
     cat "$RESULT_FILE"
 fi

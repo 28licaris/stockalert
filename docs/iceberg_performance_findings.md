@@ -304,3 +304,109 @@ the problem at the access-pattern level, not the architecture level.
 **If Iceberg ever fails us again**, the escape hatches in Tier 2-5
 are documented here. But for now, Iceberg + correct usage = correct
 choice.
+
+---
+
+## Addendum 2026-05-18 — PyIceberg multi-column upsert SIGBUS
+
+A second PyIceberg pathology surfaced while backfilling
+`bronze.polygon_corp_actions` for the years missed during TA-5.0.
+The script appeared to "succeed" (exit 0) but the bronze table
+counts stayed unchanged — the python process was actually being
+SIGBUS-killed mid-write, with `tee` masking the exit code.
+
+### The bug
+
+PyIceberg 0.11.1's
+[`upsert_util.create_match_filter()`](file:///Users/licaris/Library/Caches/pypoetry/virtualenvs/stockalert-YlpshXNg-py3.13/lib/python3.13/site-packages/pyiceberg/table/upsert_util.py)
+(lines 36-48) builds a match predicate one leaf per source row:
+
+```python
+def create_match_filter(df, join_cols):
+    unique_keys = df.select(join_cols).group_by(join_cols).aggregate([])
+    if len(join_cols) == 1:
+        return In(join_cols[0], unique_keys[0].to_pylist())
+    else:
+        filters = [
+            EqualTo(c, row[c]) AND ... for c in join_cols
+            for row in unique_keys.to_pylist()
+        ]
+        return Or(*filters)
+```
+
+For single-column identifiers, it uses a cheap `In(col, [vals])` —
+constant tree size regardless of row count. For **multi-column
+identifiers** (everything in our schema set: `silver.ohlcv_1m`,
+`silver.bar_quality`, `silver.corp_actions`, `bronze.polygon_corp_actions`)
+it builds an `Or(And(EqualTo, EqualTo, …), …)` tree with **5×N
+expression nodes** for a 3-column identifier, 3×N for a 2-column
+identifier.
+
+PyIceberg then walks this tree recursively in `bind()` +
+`expression_to_pyarrow()`. On **macOS arm64 + Python 3.13.5 +
+PyArrow 24.0.0**, the C++ expression compiler's stack budget is
+exhausted between ~3,000 and ~6,000 nodes (= 600-1,200 rows of a
+3-column identifier). The OS surfaces it as **SIGBUS (Bus error: 10)**
+rather than SIGSEGV due to Apple runtime guard-page handling.
+
+### Empirical bisection
+
+From [`scripts/repro_corp_actions_sigbus_2.py`](../scripts/repro_corp_actions_sigbus_2.py):
+
+| Slice size | Expression nodes (3-col id) | Result |
+|---|---|---|
+| 1 row | 5 | OK |
+| 10 rows | 59 | OK |
+| 100 rows | 599 | OK |
+| 500 rows | 2,999 | OK |
+| **1,000 rows** | **5,999** | **SIGBUS** |
+| 1,236 rows | 7,415 | SIGBUS |
+
+### The fix — centralized `chunked_upsert` helper
+
+[`app/services/iceberg_safe_upsert.py`](../app/services/iceberg_safe_upsert.py)
+exposes one helper, `chunked_upsert(table, arrow, *, chunk_size=400)`,
+that slices the source into safe-sized batches and aggregates
+results. **All seven production upsert call sites in the codebase
+were migrated to it**:
+
+- `silver/ohlcv/build.py` (4 sites: per-slice, month-batched, concurrent)
+- `silver/corp_actions/build.py` (silver merge)
+- `silver/corp_actions/polygon_ingest.py` (bronze write)
+- `ingest/live_lake_writer.py` (Schwab live → bronze)
+
+The default `chunk_size=400` leaves ~2,000 expression nodes per
+chunk — well below the 3,000-node danger zone with headroom for
+PyIceberg version drift and identifier-column-count changes.
+
+### Why this is the right fix
+
+1. **Single chokepoint** — adding a new upsert site that goes through
+   `chunked_upsert` automatically gets the protection.
+2. **No upstream dependency** — we don't have to wait for PyIceberg
+   to land a fix (PyPI's latest as of 2026-05-18 is 0.11.1 with the
+   bug).
+3. **Locked by tests** —
+   [`tests/test_iceberg_safe_upsert.py`](../tests/test_iceberg_safe_upsert.py)
+   pins the chunking math + delegation contract (10 tests). Any
+   refactor that bypasses the helper or un-chunks the path breaks
+   loudly.
+
+### Open follow-ups
+
+- **File a PyIceberg upstream issue.** The fix upstream would be to
+  switch the multi-column path to either `In(struct_field([(a,b,c)]))`
+  or to chunk internally. Minimal repro lives in
+  `scripts/repro_corp_actions_sigbus_2.py`.
+- **A future agent should NEVER call `table.upsert(...)` directly**
+  in app/scripts code. Always import `chunked_upsert`. This is
+  codified in [`docs/standards/coding.md`](standards/coding.md) rule 9.
+
+### Why this isn't fixed by Tier 1's "per-month commits"
+
+The Tier 1 fix (TA-5.1.12) reduced commit COUNT by batching, but
+each batch could still be large enough to trip the SIGBUS — the
+silver build's empty-table optimization (auto-detect-empty →
+`.append()`) is what kept silver from crashing. Once silver is
+non-empty, the corp-action-dirty rebuild path WOULD have hit the
+same SIGBUS without the new chunking guard.

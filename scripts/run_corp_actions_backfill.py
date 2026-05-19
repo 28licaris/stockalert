@@ -68,8 +68,34 @@ def _parse_date(s: str) -> date:
 
 
 async def run_bronze(since: date, until: date) -> dict:
-    """Stage 1: Polygon REST → bronze.polygon_corp_actions."""
+    """Stage 1: Polygon REST → bronze.polygon_corp_actions.
+
+    **Verify-mutation contract (coding_standards.md rule 3):**
+    After the upsert path completes, we reload the bronze table via
+    a fresh catalog instance and assert the snapshot ID changed
+    (or, if the input chunk had zero rows after dedupe, the row count
+    matches what we tried to write). Without this assertion a
+    silently-killed python process can "succeed" without writing.
+    """
+    from app.services.bronze.schemas import bronze_table_id
+    from app.services.iceberg_catalog import get_catalog
+
     logger.info("=== Stage 1/2: bronze ingest (Polygon REST → bronze) ===")
+
+    # Pre-state — captured BEFORE the ingest so post-verify is a true delta.
+    pre_cat = get_catalog()
+    pre_tbl = pre_cat.load_table(bronze_table_id("polygon_corp_actions"))
+    pre_snap = pre_tbl.current_snapshot()
+    pre_snap_id = str(pre_snap.snapshot_id) if pre_snap else None
+    pre_rows = (
+        int(pre_snap.summary.additional_properties.get("total-records", 0))
+        if pre_snap else 0
+    )
+    logger.info(
+        "Pre-ingest bronze state: snapshot_id=%s total_rows=%d",
+        pre_snap_id, pre_rows,
+    )
+
     ingest = PolygonCorpActionsBronzeIngest.from_settings()
     result = await ingest.backfill_full_history(since=since, until=until)
     logger.info(
@@ -78,6 +104,38 @@ async def run_bronze(since: date, until: date) -> dict:
         result["dividends_written"],
         result["duration_seconds"],
     )
+
+    # Post-state — fresh catalog instance to bypass any caching.
+    expected_writes = result["splits_written"] + result["dividends_written"]
+    post_cat = get_catalog()
+    post_tbl = post_cat.load_table(bronze_table_id("polygon_corp_actions"))
+    post_snap = post_tbl.current_snapshot()
+    post_snap_id = str(post_snap.snapshot_id) if post_snap else None
+    post_rows = (
+        int(post_snap.summary.additional_properties.get("total-records", 0))
+        if post_snap else 0
+    )
+    logger.info(
+        "Post-ingest bronze state: snapshot_id=%s total_rows=%d delta=%+d",
+        post_snap_id, post_rows, post_rows - pre_rows,
+    )
+
+    if expected_writes > 0 and post_snap_id == pre_snap_id:
+        # We tried to write but the snapshot ID didn't change. This is
+        # the silent-failure signature (process killed mid-commit, etc).
+        raise RuntimeError(
+            f"bronze upsert NO-OP detected: ingest claimed "
+            f"{expected_writes:,} rows written but snapshot_id is "
+            f"unchanged ({pre_snap_id}). Table was NOT modified. "
+            "Likely cause: process killed mid-upsert (OOM / SIGKILL) "
+            "or a swallowed exception. Re-run after investigating."
+        )
+
+    result["pre_snapshot_id"] = pre_snap_id
+    result["post_snapshot_id"] = post_snap_id
+    result["pre_rows"] = pre_rows
+    result["post_rows"] = post_rows
+    result["row_delta"] = post_rows - pre_rows
     return result
 
 

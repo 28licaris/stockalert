@@ -72,13 +72,24 @@ class _FakeBronzeTable:
 
 
 class _FakeSilverTable:
-    """Captures the upserted Arrow rows so tests can assert on them."""
+    """Captures the upserted Arrow rows so tests can assert on them.
+
+    Returns an UpsertResult-shaped object so `chunked_upsert` (the
+    helper every production call routes through) can read
+    `.rows_updated` / `.rows_inserted` without crashing.
+    """
 
     def __init__(self) -> None:
         self.upserts: list[pa.Table] = []
 
-    def upsert(self, arrow: pa.Table) -> None:
+    def upsert(self, arrow: pa.Table):
         self.upserts.append(arrow)
+
+        class _R:
+            rows_updated = 0
+            rows_inserted = arrow.num_rows
+
+        return _R()
 
 
 class _FakeCatalog:

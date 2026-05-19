@@ -34,6 +34,7 @@ from pyiceberg.expressions import GreaterThanOrEqual
 
 from app.config import settings
 from app.services.iceberg_catalog import get_catalog
+from app.services.iceberg_safe_upsert import chunked_upsert
 from app.services.silver.schemas import silver_table_id
 from app.services.silver.tables import ensure_silver_corp_actions
 
@@ -203,14 +204,45 @@ class SilverCorpActionsBuild:
         #    bronze's own ingestion_run_id column).
         merged = self._restamp_ingestion(merged, run_id=run_id)
 
-        # 4. Upsert into silver. Identifier join is automatic on
-        #    (symbol, ex_date, action_type).
+        # 4. Write to silver. Two paths:
+        #    - APPEND (empty target): single fast commit, no merge
+        #      logic, no predicate tree. ~30-60x faster than upsert
+        #      for big initial backfills. Same TA-5.1.12 optimization
+        #      we apply to silver.ohlcv_1m.
+        #    - chunked_upsert (non-empty target): identifier join on
+        #      (symbol, ex_date, action_type). Routed through
+        #      chunked_upsert to dodge PyIceberg's multi-column
+        #      predicate-tree SIGBUS (see iceberg_safe_upsert.py).
         silver_table = self._get_silver_table()
-        result = silver_table.upsert(merged)
+        target_empty = self._silver_table_empty(silver_table)
+        if target_empty:
+            logger.info(
+                "silver_corp_actions_build: target is empty; using single "
+                "append (fast path, no merge logic). rows=%d",
+                merged.num_rows,
+            )
+            silver_table.append(merged)
+            rows_updated = 0
+            rows_inserted = merged.num_rows
+            chunks_committed = 1
+        else:
+            logger.info(
+                "silver_corp_actions_build: target has existing rows; "
+                "using chunked upsert path. rows=%d", merged.num_rows,
+            )
+            result = chunked_upsert(
+                silver_table, merged, log_label="silver.corp_actions",
+            )
+            rows_updated = result.rows_updated
+            rows_inserted = result.rows_inserted
+            chunks_committed = result.chunks_committed
+
         logger.info(
-            "silver_corp_actions_build: silver upsert complete "
-            "rows_updated=%d rows_inserted=%d",
-            result.rows_updated, result.rows_inserted,
+            "silver_corp_actions_build: silver write complete "
+            "rows_updated=%d rows_inserted=%d chunks=%d "
+            "(write_strategy=%s)",
+            rows_updated, rows_inserted, chunks_committed,
+            "append" if target_empty else "upsert",
         )
 
         return {
@@ -218,10 +250,36 @@ class SilverCorpActionsBuild:
             "since": since.isoformat() if since else "all",
             "providers_read": [p for p, _ in per_provider_rows],
             "rows_merged": merged.num_rows,
-            "rows_updated": result.rows_updated,
-            "rows_inserted": result.rows_inserted,
+            "rows_updated": rows_updated,
+            "rows_inserted": rows_inserted,
+            "write_strategy": "append" if target_empty else "upsert",
             "duration_seconds": (datetime.now(timezone.utc) - started).total_seconds(),
         }
+
+    @staticmethod
+    def _silver_table_empty(silver_table) -> bool:
+        """True iff silver.corp_actions has no current snapshot or 0 rows.
+
+        Mirrors the SilverOhlcvBuild._silver_tables_empty() pattern
+        from TA-5.1.12. Fail-safe: any error treats the target as
+        non-empty (upsert is always correct; append is only safe on
+        a known-empty target).
+        """
+        try:
+            snap = silver_table.current_snapshot()
+        except Exception:
+            return False
+        if snap is None:
+            return True
+        try:
+            summ = snap.summary
+            summ_map = (
+                summ.additional_properties
+                if hasattr(summ, "additional_properties") else dict(summ)
+            )
+            return int(summ_map.get("total-records", "0")) == 0
+        except Exception:
+            return False
 
     # ─────────────────────────────────────────────────────────────────
     # Bronze reads

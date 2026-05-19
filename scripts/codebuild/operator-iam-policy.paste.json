@@ -1,0 +1,46 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "StartAndMonitorSilverBuildProject",
+            "Effect": "Allow",
+            "Action": [
+                "codebuild:StartBuild",
+                "codebuild:StopBuild",
+                "codebuild:BatchGetBuilds",
+                "codebuild:BatchGetProjects",
+                "codebuild:ListBuildsForProject"
+            ],
+            "Resource": [
+                "arn:aws:codebuild:us-east-1:562741918372:project/sockalert-silver-full-backfill",
+                "arn:aws:codebuild:us-east-1:562741918372:build/sockalert-silver-full-backfill:*"
+            ]
+        },
+        {
+            "Sid": "ReadBuildLogs",
+            "Effect": "Allow",
+            "Action": [
+                "logs:GetLogEvents",
+                "logs:FilterLogEvents",
+                "logs:DescribeLogStreams",
+                "logs:DescribeLogGroups"
+            ],
+            "Resource": [
+                "arn:aws:logs:us-east-1:562741918372:log-group:/aws/codebuild/sockalert-silver-full-backfill",
+                "arn:aws:logs:us-east-1:562741918372:log-group:/aws/codebuild/sockalert-silver-full-backfill:*"
+            ]
+        },
+        {
+            "Sid": "ListBuildReportsInS3",
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                "arn:aws:s3:::stock-lake-562741918372-us-east-1-an",
+                "arn:aws:s3:::stock-lake-562741918372-us-east-1-an/silver_build_reports/*"
+            ]
+        }
+    ]
+}

@@ -334,13 +334,22 @@ class LiveLakeWriter:
         Identifier `(symbol, timestamp)` drives the join. When matched,
         Iceberg updates non-key columns (handles late-arriving correction
         bars). When not matched, inserts.
+
+        Routed through `chunked_upsert` to dodge PyIceberg's multi-column
+        predicate-tree SIGBUS. The live-lake writer typically upserts
+        far fewer than 400 rows per cycle (one cycle ≤15 min ≈ 15 bars
+        per symbol × universe ≤ ~3,000 rows), but on a recovery cycle
+        catching a long backlog the chunking matters.
         """
         from app.services.iceberg_catalog import get_catalog
+        from app.services.iceberg_safe_upsert import chunked_upsert
         from app.services.bronze.schemas import bronze_table_id
 
         catalog = get_catalog()
         table = catalog.load_table(bronze_table_id(table_short_name))
-        table.upsert(arrow)
+        chunked_upsert(
+            table, arrow, log_label=f"bronze.{table_short_name}",
+        )
 
     # ─────────────────────────────────────────────────────────────────
     # Audit
