@@ -13,7 +13,7 @@ import {
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
 import { Button } from "@/components/ui/button";
 import { SymbolSearchInput } from "@/components/symbol/SymbolSearchInput";
-import { fmtAgo, fmtInt } from "@/lib/fmt";
+import { fmtInt } from "@/lib/fmt";
 import { cn } from "@/lib/utils";
 
 /**
@@ -322,7 +322,6 @@ function StreamList({
             <th className="px-4 py-2 text-left font-medium">Symbol</th>
             <th className="px-4 py-2 text-left font-medium">Company</th>
             <th className="px-4 py-2 text-right font-medium">Last</th>
-            <th className="px-4 py-2 text-left font-medium">Added</th>
             <th className="px-4 py-2 text-right font-medium" aria-label="Actions" />
           </tr>
         </thead>
@@ -352,9 +351,6 @@ function StreamList({
                     : quotes.isLoading
                       ? "…"
                       : "—"}
-                </td>
-                <td className="px-4 py-2 text-xs text-fg-muted">
-                  {fmtAgo(e.added_at)}
                 </td>
                 <td className="px-4 py-2 text-right">
                   <Button
