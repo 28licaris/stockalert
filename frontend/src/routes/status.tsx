@@ -59,7 +59,23 @@ export function StatusPage() {
         ))}
       </section>
 
-      <section className="grid gap-4 md:grid-cols-2">
+      <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <SummaryCard
+          title="Streaming"
+          rows={[
+            ["Active tickers", fmtInt(query.data?.stream?.streaming_count)],
+            ["Universe size", fmtInt(query.data?.stream?.universe_count)],
+            ["Provider", query.data?.stream?.provider ?? "—"],
+            [
+              "State",
+              query.data?.stream?.provider_error
+                ? "Error"
+                : query.data?.stream?.provider_ready
+                  ? "Ready"
+                  : "Starting",
+            ],
+          ]}
+        />
         <SummaryCard
           title="Backfill queue"
           rows={[

@@ -1,9 +1,9 @@
-import { createBrowserRouter } from "react-router-dom";
+import { createBrowserRouter, Navigate } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatusPage } from "./status";
 import { SymbolPage } from "./symbol";
 import { WatchlistsPage } from "./watchlists";
-import { SeedPage } from "./seed";
+import { StreamPage } from "./stream";
 import { ClickHousePage } from "./clickhouse";
 import { NotFoundPage } from "./not-found";
 
@@ -25,7 +25,10 @@ export const router = createBrowserRouter(
         { path: "symbol", element: <SymbolPage /> },
         { path: "symbol/:ticker", element: <SymbolPage /> },
         { path: "watchlists", element: <WatchlistsPage /> },
-        { path: "seed", element: <SeedPage /> },
+        { path: "stream", element: <StreamPage /> },
+        // Back-compat alias: the old /app/seed URL now redirects to /app/stream.
+        // The page was renamed in FE-CONTRACTS-4 finalisation.
+        { path: "seed", element: <Navigate to="/stream" replace /> },
         { path: "clickhouse", element: <ClickHousePage /> },
         { path: "*", element: <NotFoundPage /> },
       ],

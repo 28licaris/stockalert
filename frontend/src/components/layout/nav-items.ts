@@ -42,7 +42,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
 
   { label: "Symbol",      href: "/symbol",      icon: CandlestickChart, flag: "page.symbol",      category: "Markets" },
   { label: "Watchlists",  href: "/watchlists",  icon: ListChecks,       flag: "page.watchlists",  category: "Markets" },
-  { label: "Seed",        href: "/seed",        icon: Radio,            flag: "page.seed",        category: "Markets" },
+  { label: "Stream",      href: "/stream",      icon: Radio,            flag: "page.seed",        category: "Markets" },
   { label: "Monitors",    href: "/monitors",    icon: Activity,         flag: "page.monitors",    category: "Markets" },
 
   { label: "Screener",    href: "/screener",    icon: Sparkles,         flag: "page.screener",    category: "Strategies" },

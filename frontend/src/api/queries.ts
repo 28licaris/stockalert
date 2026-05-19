@@ -97,11 +97,25 @@ export interface MonitorSummary {
   errors: number;
 }
 
+export interface StreamSummary {
+  started: boolean;
+  provider: string;
+  provider_ready: boolean;
+  provider_error: string | null;
+  streaming_count: number;
+  universe_count: number;
+}
+
 export interface HealthServicesResponse {
   server_time: string;
   services: ServiceHealth[];
   backfill: BackfillQueueSummary;
   monitors: MonitorSummary;
+  /**
+   * Live Schwab subscription state (FE-CONTRACTS-4 finalisation).
+   * Optional on the wire so old API responses don't break the cockpit.
+   */
+  stream?: StreamSummary;
 }
 
 export const queryKeys = {
