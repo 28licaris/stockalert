@@ -284,6 +284,136 @@ def test_route_returns_empty_when_provider_missing(
     assert r.json()["results"] == []
 
 
+def test_lookup_uses_batch_call_not_per_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REGRESSION: /api/v1/instruments/lookup must issue a SINGLE batch
+    `provider.get_instruments(...)` call for the entire symbol list.
+
+    Pre-fix the route looped `provider.search_instruments(sym, limit=1)`
+    per symbol — 103-symbol cold lookups took ~46 seconds (one Schwab
+    round-trip per symbol). Locking the batch contract here prevents
+    accidental regressions to the N-call shape.
+    """
+    from app.api import routes_instruments
+    from app.main_api import app
+    from app.services.stream import stream_service
+
+    @asynccontextmanager
+    async def noop_lifespan(_app):
+        yield
+
+    monkeypatch.setattr(app.router, "lifespan_context", noop_lifespan)
+    routes_instruments._cache.clear()
+
+    fake_provider = AsyncMock()
+    # Batch call returns Schwab's standard /instruments shape.
+    fake_provider.get_instruments = AsyncMock(return_value={
+        "instruments": [
+            {"symbol": "AAPL", "description": "APPLE INC",
+             "exchange": "NASDAQ", "assetType": "EQUITY"},
+            {"symbol": "NVDA", "description": "NVIDIA CORP",
+             "exchange": "NASDAQ", "assetType": "EQUITY"},
+            {"symbol": "SPY", "description": "SPDR S&P 500 ETF Trust",
+             "exchange": "NYSE Arca", "assetType": "ETF"},
+        ],
+    })
+    # Also patch the per-symbol search path so we can assert it's NOT called.
+    fake_provider.search_instruments = AsyncMock(return_value=[])
+    # Mirror the real provider's normalize so the route's fallback path works.
+    fake_provider._normalize_instrument = staticmethod(
+        lambda it: {
+            "symbol": (it.get("symbol") or "").upper(),
+            "description": it.get("description") or "",
+            "exchange": it.get("exchange") or "",
+            "asset_type": it.get("assetType") or it.get("type") or "",
+        }
+    )
+    monkeypatch.setattr(stream_service, "_provider", fake_provider, raising=False)
+
+    client = TestClient(app)
+    r = client.get("/api/v1/instruments/lookup", params={"symbols": "AAPL,NVDA,SPY"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    # ONE batch call, not three.
+    assert fake_provider.get_instruments.call_count == 1
+    call_args = fake_provider.get_instruments.call_args
+    assert list(call_args.args[0]) == ["AAPL", "NVDA", "SPY"], (
+        f"batch expected all three symbols; got {call_args}"
+    )
+    assert call_args.kwargs.get("projection") == "symbol-search"
+
+    # Per-symbol search must NOT have been called.
+    assert fake_provider.search_instruments.call_count == 0
+
+    # Results preserve request order + carry descriptions.
+    assert [r["symbol"] for r in body["results"]] == ["AAPL", "NVDA", "SPY"]
+    assert body["results"][0]["description"] == "APPLE INC"
+    assert body["results"][1]["description"] == "NVIDIA CORP"
+
+
+def test_lookup_stitches_cache_hits_with_fresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REGRESSION: the batch call must only fetch symbols not in cache;
+    cached symbols are stitched back into the response without an upstream
+    round-trip. Order is preserved across cached + fresh.
+    """
+    from app.api import routes_instruments
+    from app.main_api import app
+    from app.services.stream import stream_service
+
+    @asynccontextmanager
+    async def noop_lifespan(_app):
+        yield
+
+    monkeypatch.setattr(app.router, "lifespan_context", noop_lifespan)
+    routes_instruments._cache.clear()
+
+    # Pre-warm the cache for AAPL.
+    routes_instruments._cache_put(
+        routes_instruments._lookup_cache_key("AAPL"),
+        [{"symbol": "AAPL", "description": "APPLE INC (CACHED)",
+          "exchange": "NASDAQ", "asset_type": "EQUITY"}],
+    )
+
+    fake_provider = AsyncMock()
+    fake_provider.get_instruments = AsyncMock(return_value={
+        "instruments": [
+            {"symbol": "NVDA", "description": "NVIDIA CORP",
+             "exchange": "NASDAQ", "assetType": "EQUITY"},
+            {"symbol": "SPY", "description": "SPDR ETF",
+             "exchange": "NYSE Arca", "assetType": "ETF"},
+        ],
+    })
+    fake_provider.search_instruments = AsyncMock(return_value=[])
+    fake_provider._normalize_instrument = staticmethod(
+        lambda it: {
+            "symbol": (it.get("symbol") or "").upper(),
+            "description": it.get("description") or "",
+            "exchange": it.get("exchange") or "",
+            "asset_type": it.get("assetType") or it.get("type") or "",
+        }
+    )
+    monkeypatch.setattr(stream_service, "_provider", fake_provider, raising=False)
+
+    client = TestClient(app)
+    r = client.get("/api/v1/instruments/lookup", params={"symbols": "AAPL,NVDA,SPY"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    # Batch call only included the uncached symbols.
+    fake_provider.get_instruments.assert_called_once()
+    args = fake_provider.get_instruments.call_args
+    assert sorted(args.args[0]) == ["NVDA", "SPY"]
+
+    # Order preserved; cached AAPL came from cache.
+    assert [r["symbol"] for r in body["results"]] == ["AAPL", "NVDA", "SPY"]
+    assert body["results"][0]["description"] == "APPLE INC (CACHED)"
+    assert body["cached_count"] == 1
+
+
 def test_route_swallows_provider_exception(
     app_client: TestClient, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

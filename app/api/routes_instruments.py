@@ -142,12 +142,17 @@ async def lookup_instruments(
 ):
     """Batch metadata lookup for a known set of symbols.
 
-    Used by the cockpit to enrich watchlist member rows with company
-    descriptions in one round-trip instead of N. Symbols are looked up
-    individually against the provider's `search_instruments` (with the
-    symbol itself as the prefix), then matched against the exact symbol
-    in the returned list. Results are cached using the same key the
-    autocomplete uses so prefix-typed → list-render flows are warm.
+    Used by the cockpit to enrich Stream Service / watchlist rows with
+    company descriptions in one round-trip.
+
+    Strategy:
+      1. Check the in-memory per-symbol cache (60s TTL, shared with the
+         autocomplete route so prefix-typed -> list-render flows are warm).
+      2. For uncached symbols, issue a SINGLE Schwab batch /instruments
+         call with `projection=symbol-search`. Previously this loop did
+         one HTTP round-trip per symbol — ~450ms each, ~46s for 103
+         symbols cold. The batch call is one round-trip.
+      3. Stitch cache hits + fresh results back into the requested order.
     """
     raw = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     if not raw:
@@ -155,35 +160,67 @@ async def lookup_instruments(
     if len(raw) > 500:
         raise HTTPException(400, "too many symbols (max 500 per call)")
 
-    results: list[InstrumentMatch] = []
-    cached_count = 0
     provider = stream_service.get_provider()
 
+    # Pass 1: collect cache hits; compile the list of symbols that still
+    # need an upstream call.
+    cached_count = 0
+    fresh: dict[str, dict] = {}  # symbol -> normalized instrument dict
+    needed: list[str] = []
     for sym in raw:
-        cache_key = _lookup_cache_key(sym)
-        cached = _cache_get(cache_key)
-        if cached is not None:
-            # Cache stores the result of search_instruments(query=sym, limit=1)
-            # — find the exact-symbol match if any, else mark as unknown.
-            hit = next((r for r in cached if (r.get("symbol") or "").upper() == sym), None)
-            results.append(InstrumentMatch(**(hit or _missing_match(sym))))
+        c = _cache_get(_lookup_cache_key(sym))
+        if c is not None:
+            hit = next((r for r in c if (r.get("symbol") or "").upper() == sym), None)
+            if hit is not None:
+                fresh[sym] = hit
+                cached_count += 1
+                continue
+            # Cached miss (we asked Schwab once, it didn't know the symbol).
+            # Treat as cached so we don't re-hammer Schwab.
+            fresh[sym] = _missing_match(sym)
             cached_count += 1
             continue
+        needed.append(sym)
 
-        if provider is None:
-            # Provider not ready — return placeholder and skip caching so
-            # a future call (provider warmed up) actually hits upstream.
-            results.append(InstrumentMatch(**_missing_match(sym)))
-            continue
-
+    # Pass 2: ONE batch Schwab call for everything not in cache.
+    if needed and provider is not None:
         try:
-            upstream = await provider.search_instruments(sym, limit=1)
+            data = await provider.get_instruments(needed, projection="symbol-search")
+            normalize = getattr(provider, "_normalize_instrument", None)
+            for it in (data or {}).get("instruments", []) or []:
+                norm = normalize(it) if normalize else {
+                    "symbol": (it.get("symbol") or "").upper(),
+                    "description": it.get("description") or "",
+                    "exchange": it.get("exchange") or "",
+                    "asset_type": it.get("assetType") or it.get("type") or "",
+                }
+                sym = norm["symbol"]
+                if sym:
+                    fresh[sym] = norm
+                    # Cache per symbol so future single-symbol lookups
+                    # (e.g. autocomplete pick) hit the warm path.
+                    _cache_put(_lookup_cache_key(sym), [norm])
+            # Symbols Schwab didn't return -> cache the miss so we don't
+            # re-call upstream for unknown tickers.
+            for sym in needed:
+                if sym not in fresh:
+                    fresh[sym] = _missing_match(sym)
+                    _cache_put(_lookup_cache_key(sym), [])
         except Exception as e:  # noqa: BLE001 — boundary
-            logger.warning("lookup_instruments(%r) provider error: %s", sym, e)
-            upstream = []
+            logger.warning(
+                "lookup_instruments batch (%d syms) provider error: %s",
+                len(needed), e,
+            )
+            for sym in needed:
+                fresh.setdefault(sym, _missing_match(sym))
+    else:
+        # Provider not ready — return placeholders for the needed set
+        # without caching (so a future call after warm-up hits upstream).
+        for sym in needed:
+            fresh.setdefault(sym, _missing_match(sym))
 
-        _cache_put(cache_key, upstream)
-        hit = next((r for r in upstream if (r.get("symbol") or "").upper() == sym), None)
-        results.append(InstrumentMatch(**(hit or _missing_match(sym))))
-
+    # Pass 3: emit results in the order the caller asked for.
+    results: list[InstrumentMatch] = [
+        InstrumentMatch(**fresh[sym]) for sym in raw
+    ]
     return InstrumentLookupResponse(results=results, cached_count=cached_count)
