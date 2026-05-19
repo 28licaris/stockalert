@@ -145,22 +145,69 @@ increase, etc.) and note what's blocking.
   component doesn't accept overlay props; the Symbol page has no
   indicator picker.
 - **Suggested fix:**
-  1. Add an "Indicators" button + popover/menu to the Symbol page
-     header (next to the interval picker). Shows the registry list
-     (`sma`, `ema`, `rsi`, `macd`, `bollinger`, `atr`, ...) with
-     per-indicator param defaults (period=20 for SMA, period=14 for
-     RSI, etc.).
-  2. Selected indicators each fire a `useIndicatorSeries` hook keyed
+  1. Add an "Indicators" button + popover to the Symbol page header
+     (next to the interval picker). Two sections:
+     - **Active indicators** — list of currently displayed
+       indicators with edit-in-place params, color swatch, and
+       remove button. Each row is a `(indicator, params, color)`
+       triple.
+     - **Add indicator** — combo picker (search the registry by
+       name) → opens an inline form for params + initial color,
+       then "Add."
+  2. Each active indicator fires a `useIndicatorSeries` hook keyed
      by (symbol, interval, indicator, params).
-  3. Extend `OhlcvChart` with an `overlays` prop:
+  3. Extend `OhlcvChart` with an `overlays` prop accepting an array
+     of `{indicator, params, color, series}` items:
      - **Price-pane overlays** (SMA, EMA, Bollinger, VWAP) — line
        series on the same pane as the candles.
      - **Separate-pane overlays** (RSI, MACD, ATR) — a new pane
        below the volume pane, sized to ~120 px.
-  4. Color-code overlays consistently — use the existing
-     `--accent` + variants from `globals.css`.
-  5. Persist selection via `useUserSetting('symbol.indicators', [])`
-     so it survives reload. Per-symbol persistence is a follow-on.
+  4. **Color picker per indicator.** Each indicator row in the
+     popover has a circular color swatch. Click → opens a popover
+     with the platform's named palette (up, down, accent, +
+     8 distinct trading-friendly colors) AND a freeform hex input.
+     Defaults rotate through a curated palette but the operator can
+     override.
+  5. **Persistence — the "last added" semantic.** Selection is
+     stored via `useUserSetting('chart.indicators', [...])`. Adding
+     SMA(20) blue + RSI(14) amber persists; on next chart visit
+     (same OR different symbol) the same indicators reappear with
+     the same params + colors. Per-symbol overrides are a follow-on;
+     today's model is "global default chart layout."
+
+### `cockpit-chart-default-preferences`
+
+- **Area:** ui
+- **Filed:** 2026-05-19
+- **Status:** open
+- **Symptom:** "Configurable like any trading platform" — operator
+  expects the chart to remember their last interval, last range,
+  and last indicator set across reloads + across different symbols.
+  Today the Symbol page hard-codes `DEFAULT_INTERVAL = "5m"` and
+  has no range picker at all.
+- **Root cause:** Symbol page constants instead of operator
+  preferences. The `useUserSetting` seam is already in place
+  ([frontend/src/lib/storage.ts]) so this is a wiring change, not
+  new infrastructure.
+- **Suggested fix:**
+  1. Replace the hard-coded `DEFAULT_INTERVAL` with:
+     `const [interval, setInterval] = useUserSetting<Interval>('chart.defaultInterval', '5m');`
+     Same hook for `chart.defaultRange` once the range selector
+     lands (pairs with `cockpit-chart-time-range-selector`).
+  2. Every change to the picker writes the new value through, so
+     the operator's most-recently-used interval is the default on
+     their next visit.
+  3. **Reset to defaults** affordance — a small "↺" button beside
+     the interval picker resets all chart-related preferences to
+     the platform defaults (5m interval, 1M range, no indicators).
+     One-click escape hatch.
+  4. Sync across tabs of the same browser via the localStorage
+     `storage` event so opening AAPL in one tab and changing the
+     interval doesn't leave another tab's NVDA out of sync.
+  5. **Future:** when SaaS lands, the same `useUserSetting` keys
+     migrate to per-tenant `/api/v1/me/prefs` automatically — no
+     component changes needed (the seam already abstracts this).
+     Per [frontend_api_contracts.md §7.3].
 
 ### `cockpit-chart-time-range-selector`
 

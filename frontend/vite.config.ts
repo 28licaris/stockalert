@@ -15,6 +15,13 @@ export default defineConfig({
   },
 
   server: {
+    // Bind to all interfaces so a phone / tablet / other-LAN device
+    // can reach the dev server at http://<host-LAN-IP>:5173/app/.
+    // The Vite-proxied /api + /ws requests still flow to FastAPI on
+    // 127.0.0.1:8000 because the proxy runs on the host, not the
+    // phone. Safe behind a home router; never expose the dev server
+    // to the public internet.
+    host: "0.0.0.0",
     port: 5173,
     strictPort: true,
     proxy: {
