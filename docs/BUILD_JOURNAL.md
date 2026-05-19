@@ -2057,6 +2057,47 @@ Detailed in [trading_subsystem_design.md §10](trading_subsystem_design.md#10-ph
 
 ---
 
+## Assistant track (parallel)
+
+The cockpit copilot — natural-language interface to the platform.
+Full spec in [assistant_plan.md](assistant_plan.md). User-driven
+and distinct from the trading `LLMAgent` (see
+[assistant_plan.md §3.2](assistant_plan.md)). RBAC + quota seams
+in place from day 1 so the SaaS rollout is additive (per
+[frontend_plan.md §7](frontend_plan.md)).
+
+**Status:** plan landed 2026-05-18; AS-1 awaits the five
+signoff decisions in [assistant_plan.md §18](assistant_plan.md).
+
+### Phase AS-1 — Skeleton + read-only loop
+
+**Goal:** end-to-end "ask a question, get a streamed answer
+grounded in MCP read tools" path.
+
+**Gate:** `tests/integration/test_assistant_e2e.py` —
+"what's the freshness of the bronze polygon_minute table?"
+streams a coherent answer, persists 1 conversation + 2 turns +
+1 audit row.
+
+### Phase AS-2..AS-7 — Roadmap
+
+Detailed in [assistant_plan.md §15](assistant_plan.md):
+
+- **AS-2** — Write tools with confirm-before-mutate (`run_backtest`
+  first).
+- **AS-3** — Inline rich artifacts (equity curve, OHLCV chart,
+  screener table) using the same cockpit React components.
+- **AS-4** — `/assistant` dedicated page + conversation browser
+  + branching.
+- **AS-5** — Slash commands + `@mention` context attachments.
+- **AS-6** — Extended thinking (Opus 4.7) + parallel tool dispatch.
+- **AS-7** — Quota seams + SaaS-mode dry-run
+  (`ASSISTANT_FAKE_SAAS=1`).
+- **AS-8** — Backlog: image input, voice, cross-conversation
+  memory, saved prompts, public `/api/v1/assistant`.
+
+---
+
 ## Decision log
 
 Persistent decisions made during the build. New decisions append at the

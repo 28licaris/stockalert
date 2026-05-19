@@ -361,7 +361,18 @@ swapped for an HTTP client without changing callers.
 | **Contract** | `run_backtest(model, params, window) → BacktestReport`. |
 | **Deploys as** | On-demand worker. |
 
-### 5.13 ops/observability
+### 5.13 assistant-runtime
+
+| | |
+|---|---|
+| **Purpose** | Conversational copilot — natural-language interface over MCP tools, with streaming + confirm-before-mutate writes. User-facing; distinct from the trading `LLMAgent` in §5.10. |
+| **Owns** | `AssistantService`, `ConversationStore`, `ToolPolicy`, `ToolRunner` (MCP client wrapper), `ResponseCache`, `ModelRegistry`. |
+| **Depends on** | Anthropic SDK; MCP server (in-process today, HTTP later); ClickHouse (conversations + audit); `app/auth/principal.py`. |
+| **Contract** | `AssistantService.continue_conversation(...) → AsyncIterator[AssistantStreamEvent]`. |
+| **Deploys as** | In-process under FastAPI today; standalone container if QPS justifies (HTTP surface already separated under `/cockpit/assistant/*`). |
+| **Plan** | See [assistant_plan.md](assistant_plan.md) for the full spec. |
+
+### 5.14 ops/observability
 
 Single ClickHouse `ingestion_runs` table (audit) plus structlog → stdout
 → container log aggregation. No fancy infra until needed.

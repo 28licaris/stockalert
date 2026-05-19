@@ -290,6 +290,16 @@ Both `FeatureServer` and `FeatureServerClient` satisfy
 | **Contract** | `decide(obs: Observation) → Action`. |
 | **Reproducibility** | Every saved model carries `silver_snapshot_id`, `gold_snapshot_id`, `feature_set_version`, `code_git_sha`. |
 
+> **Not to be confused with the cockpit Assistant.** The `LLMAgent`
+> here is the *autonomous trading agent* — per-bar, structured-JSON
+> output, no orders routed without backtester/executor validation.
+> The user-facing conversational copilot is a separate service spec'd
+> in [assistant_plan.md](assistant_plan.md), lives in
+> `app/services/assistant/`, and **cannot route orders by allowlist**.
+> Both share the same response-cache *pattern*; they do not share the
+> same cache file or conversation state. See
+> [assistant_plan.md §3.2](assistant_plan.md) for the full table.
+
 ### 5.6 execution
 
 | | |

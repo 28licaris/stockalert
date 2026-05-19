@@ -32,6 +32,8 @@ in SaaS mode. See §7 (SaaS-Readiness Contract) for the seams.
   surfaces backing the Lake + Coverage pages.
 - [indicator_exposure_design.md](indicator_exposure_design.md) —
   IndicatorReader behind the Indicators + Symbol pages.
+- [assistant_plan.md](assistant_plan.md) — the conversational
+  cockpit copilot (Assistant drawer + `/assistant` page in §5).
 - [ARCHITECTURE.md](ARCHITECTURE.md) — service map (the Status page
   visualizes this live).
 
@@ -549,7 +551,51 @@ and "agent dev is dark archaeology."
 Powered by: MCP `tools/list` + `tools/call` via the JSON-RPC
 transport at `/mcp`.
 
-### 5.13 `/settings` — Settings (NEW)
+### 5.13 `/assistant` — Conversational Assistant (NEW)
+
+Natural-language interface to the entire platform. Two surfaces
+sharing one component family:
+
+- **Global drawer** (`<AssistantDrawer />`): slides in from the
+  right on any cockpit page; pre-populates with page context
+  (current symbol, interval, selected entity).
+- **Dedicated page** (`/assistant`): long sessions, conversation
+  browser, branch/regenerate UX, daily-spend widget.
+
+Capabilities (phase 1):
+
+- Token-streamed answers grounded in MCP tool calls — no invented
+  data. The "Why?" link on every claim opens a panel with the
+  exact tool calls + results that grounded it.
+- Read-only tools auto-execute; **write tools (e.g. `run_backtest`)
+  require confirm-before-mutate** with a plain-English summary card.
+- Inline rich artifacts: equity curves, OHLCV charts, screener
+  tables, coverage heatmaps — rendered via the **same React
+  components** used elsewhere in the cockpit. One render path.
+- Slash commands (`/symbol`, `/screener`, `/backtest`, `/explain`)
+  and `@mentions` (watchlists, signals, runs) as structured context.
+- Conversation history persisted to ClickHouse, scoped by
+  `owner_id` (per §7.1); soft-delete; branch from any turn.
+- Cost/quota footer per turn; daily-spend widget on the dedicated
+  page; flows through `useQuotaMutation` (§7.6).
+
+Powered by: a new bounded service `app/services/assistant/`
+(Anthropic SDK + MCP client + conversation store + response cache).
+Endpoints under `/cockpit/assistant/*` (UI-internal per §7.4);
+streams via SSE.
+
+**Distinct from the trading `LLMAgent`** in
+[trading-ai-build-plan.md](trading-ai-build-plan.md): that one is
+autonomous, per-bar, output is structured `{action, size_pct, …}`
+JSON, and lives in `app/services/sim/strategies/llm_agent.py`.
+This assistant is interactive, user-driven, and cannot route
+orders. See [assistant_plan.md §3.2](assistant_plan.md) for the
+full disambiguation.
+
+Full spec, contracts, and phasing (AS-1 … AS-8) in
+[assistant_plan.md](assistant_plan.md).
+
+### 5.14 `/settings` — Settings (NEW)
 
 UI-only settings (panel layouts, theme, default interval, default
 universe). Plus a read-only view of the `app/config/settings.py`
