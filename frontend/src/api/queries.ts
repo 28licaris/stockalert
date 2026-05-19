@@ -47,6 +47,15 @@ export type WatchlistMembersMutationResponse =
 export type WatchlistStatus = components["schemas"]["WatchlistStatus"];
 export type MonitorInfo = components["schemas"]["MonitorInfo"];
 
+// Seed universe (FE-CONTRACTS-4)
+export type SeedEntry = components["schemas"]["SeedEntry"];
+export type SeedUniverseResponse =
+  components["schemas"]["SeedUniverseResponse"];
+export type SeedMutationResponse =
+  components["schemas"]["SeedMutationResponse"];
+export type AddSeedRequest = components["schemas"]["AddSeedRequest"];
+export type ImportSeedRequest = components["schemas"]["ImportSeedRequest"];
+
 // ─────────────────────────────────────────────────────────────────────
 // /api/health/services — composite Status page health
 // (response_model arriving in a later sub-phase; for now we keep the
@@ -91,6 +100,7 @@ export const queryKeys = {
     ["symbol", "signals", symbol, limit] as const,
   watchlists: ["watchlists"] as const,
   watchlist: (name: string) => ["watchlist", name] as const,
+  seed: ["seed"] as const,
 } as const;
 
 /** Small fetch helper for routes that haven't yet been typed via apiClient. */
@@ -299,5 +309,69 @@ export function useRemoveWatchlistMembers() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.watchlists });
     },
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// /api/v1/seed — Seed universe (FE-CONTRACTS-4)
+//
+// Mutations invalidate `queryKeys.seed` AND `queryKeys.watchlists`
+// because seed add/remove cascades into the default watchlist via the
+// refcounted subscribe machinery — any open Watchlists page should
+// pick the change up too.
+// ─────────────────────────────────────────────────────────────────────
+
+export function useSeedUniverse() {
+  return useQuery({
+    queryKey: queryKeys.seed,
+    queryFn: async (): Promise<SeedUniverseResponse> => {
+      const { data } = await apiClient.GET("/api/v1/seed");
+      return data as SeedUniverseResponse;
+    },
+    staleTime: 10_000,
+  });
+}
+
+function _invalidateSeedAndWatchlists(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: queryKeys.seed });
+  qc.invalidateQueries({ queryKey: queryKeys.watchlists });
+}
+
+export function useAddSeed() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (req: AddSeedRequest): Promise<SeedMutationResponse> => {
+      const { data } = await apiClient.POST("/api/v1/seed", { body: req });
+      return data as SeedMutationResponse;
+    },
+    onSuccess: () => _invalidateSeedAndWatchlists(qc),
+  });
+}
+
+export function useRemoveSeed() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (symbol: string): Promise<SeedMutationResponse> => {
+      const { data } = await apiClient.DELETE("/api/v1/seed/{symbol}", {
+        params: { path: { symbol } },
+      });
+      return data as SeedMutationResponse;
+    },
+    onSuccess: () => _invalidateSeedAndWatchlists(qc),
+  });
+}
+
+export function useImportSeed() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (
+      req: ImportSeedRequest,
+    ): Promise<SeedMutationResponse> => {
+      const { data } = await apiClient.POST("/api/v1/seed/import", {
+        body: req,
+      });
+      return data as SeedMutationResponse;
+    },
+    onSuccess: () => _invalidateSeedAndWatchlists(qc),
   });
 }

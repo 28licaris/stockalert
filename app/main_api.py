@@ -40,6 +40,7 @@ from app.api import (
     routes_monitors,
     routes_movers,
     routes_screener,
+    routes_seed,
     routes_silver,
     routes_watchlist,
 )
@@ -456,6 +457,7 @@ app.include_router(routes_corp_actions.router, prefix=_V1, tags=["CorpActions"])
 app.include_router(routes_silver.router, prefix=_V1, tags=["Silver"])
 app.include_router(routes_monitors.router, prefix=_V1, tags=["Monitors"])
 app.include_router(routes_watchlist.router, prefix=_V1, tags=["Watchlist"])
+app.include_router(routes_seed.router, prefix=_V1, tags=["Seed"])
 
 try:
     from app.api import routes_signals

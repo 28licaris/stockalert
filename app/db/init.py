@@ -151,6 +151,40 @@ def init_schema() -> None:
         """
     )
 
+    # ─────────────────────────────────────────────────────────────────
+    # Seed universe (FE-CONTRACTS-4) — explicit "permanently part of the
+    # streaming universe" set. Sticky model from §10.1: operators add
+    # symbols here to lock them into the stream + historical backfill;
+    # removing here is the ONLY way to fully stop a symbol from streaming
+    # (watchlist removal just decrements refcount).
+    #
+    # Storage is purely additive to the existing watchlist machinery —
+    # adding to seed_universe also calls WatchlistService.add_members on
+    # the default watchlist so the refcounted subscribe + backfill path
+    # is reused. The CH table itself is the audit log + cockpit's
+    # editable source-of-truth.
+    #
+    # owner_id stamps every row so multi-tenant SaaS day is a pure
+    # backfill of the column, not a schema rewrite.
+    # ─────────────────────────────────────────────────────────────────
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS seed_universe (
+            symbol      LowCardinality(String),
+            owner_id    LowCardinality(String) DEFAULT 'default-tenant',
+            asset_type  LowCardinality(String) DEFAULT '',
+            added_at    DateTime64(3, 'UTC') DEFAULT now64(3),
+            added_by    LowCardinality(String) DEFAULT '',
+            notes       String DEFAULT '',
+            is_active   UInt8 DEFAULT 1,
+            version     UInt64 DEFAULT 0
+        )
+        ENGINE = ReplacingMergeTree(version)
+        ORDER BY (owner_id, symbol)
+        SETTINGS index_granularity = 8192
+        """
+    )
+
     # ---------- Journal (Phase 3) ----------
     # account_snapshots: timestamped balance snapshots from /accounts. One row
     # per (account_hash, snapshot_time). Useful for an equity curve later.

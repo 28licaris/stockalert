@@ -3,6 +3,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { StatusPage } from "./status";
 import { SymbolPage } from "./symbol";
 import { WatchlistsPage } from "./watchlists";
+import { SeedPage } from "./seed";
 import { NotFoundPage } from "./not-found";
 
 /**
@@ -23,6 +24,7 @@ export const router = createBrowserRouter(
         { path: "symbol", element: <SymbolPage /> },
         { path: "symbol/:ticker", element: <SymbolPage /> },
         { path: "watchlists", element: <WatchlistsPage /> },
+        { path: "seed", element: <SeedPage /> },
         { path: "*", element: <NotFoundPage /> },
       ],
     },

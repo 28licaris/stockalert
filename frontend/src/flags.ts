@@ -27,6 +27,7 @@ const FLAGS: Record<string, FlagValue> = {
   "page.journal": false,
   "page.monitors": false,
   "page.watchlists": true, // enabled in FE-CONTRACTS-3
+  "page.seed": true, // enabled in FE-CONTRACTS-4
   "page.mcp": false,
   "page.settings": false,
 

@@ -878,6 +878,83 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/seed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Seed
+         * @description List the active seed universe.
+         *
+         *     On first read after the CH table is created, bootstraps from
+         *     `SEED_SYMBOLS` (curated 100) ∪ default-watchlist members so the
+         *     cockpit doesn't show an empty list out of the box.
+         */
+        get: operations["list_seed_api_v1_seed_get"];
+        put?: never;
+        /**
+         * Add Seed
+         * @description Promote a single symbol into the seed universe.
+         *
+         *     Idempotent: re-adding an already-active symbol returns
+         *     `changed=[]`. Triggers `WatchlistService.add_members("default", [sym])`
+         *     so the symbol starts streaming + backfill kicks in.
+         */
+        post: operations["add_seed_api_v1_seed_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/seed/{symbol}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove Seed
+         * @description Take a symbol OUT of the seed universe.
+         *
+         *     Calls `WatchlistService.remove_members("default", [sym])`, which
+         *     decrements the refcount. Symbols still held by another watchlist
+         *     keep streaming (sticky-universe invariant — only complete removal
+         *     from ALL watchlists fully unsubscribes).
+         */
+        delete: operations["remove_seed_api_v1_seed__symbol__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/seed/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Seed
+         * @description Bulk-import symbols into the seed universe. Idempotent.
+         */
+        post: operations["import_seed_api_v1_seed_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/signals": {
         parameters: {
             query?: never;
@@ -960,6 +1037,21 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AddSeedRequest
+         * @description Body for `POST /api/v1/seed`.
+         */
+        AddSeedRequest: {
+            /** Symbol */
+            symbol: string;
+            /**
+             * Asset Type
+             * @description Optional — provider-derived if omitted at add time.
+             */
+            asset_type?: string | null;
+            /** Notes */
+            notes?: string | null;
+        };
         /** BackfillQueueSummary */
         BackfillQueueSummary: {
             /**
@@ -1477,6 +1569,19 @@ export interface components {
             services: components["schemas"]["ServiceHealth"][];
             backfill: components["schemas"]["BackfillQueueSummary"];
             monitors: components["schemas"]["MonitorSummary"];
+        };
+        /**
+         * ImportSeedRequest
+         * @description Body for `POST /api/v1/seed/import` — bulk add.
+         */
+        ImportSeedRequest: {
+            /**
+             * Symbols
+             * @description Symbols to add to the seed universe (idempotent).
+             */
+            symbols: string[];
+            /** Notes */
+            notes?: string | null;
         };
         /**
          * IndicatorChartData
@@ -2100,6 +2205,101 @@ export interface components {
              * @default 20
              */
             limit: number;
+        };
+        /**
+         * SeedEntry
+         * @description One symbol in the operator's seed universe.
+         */
+        SeedEntry: {
+            /** Symbol */
+            symbol: string;
+            /**
+             * Asset Type
+             * @description Free-form upstream asset-type string ('EQUITY', 'FUTURE', 'INDEX', etc.). Closed enum lives at common.AssetType for the cockpit's preferred set.
+             * @default
+             */
+            asset_type: string;
+            /**
+             * Added At
+             * @description ISO 8601 with `Z` suffix. The moment this symbol was promoted into the seed universe.
+             */
+            added_at: string;
+            /**
+             * Added By
+             * @description Principal.userId of the operator who promoted the symbol. Empty for bootstrap-from-env-and-watchlist entries.
+             * @default
+             */
+            added_by: string;
+            /**
+             * Notes
+             * @description Operator-supplied freeform note.
+             * @default
+             */
+            notes: string;
+        };
+        /**
+         * SeedMutationResponse
+         * @description Response shape for add/remove/import.
+         */
+        SeedMutationResponse: {
+            /**
+             * Operation
+             * @description 'add' | 'remove' | 'import'. Single-source identifier for clients that share a result handler.
+             */
+            operation: string;
+            /**
+             * Changed
+             * @description Symbols actually affected. Empty when the mutation was a no-op (idempotent).
+             */
+            changed?: string[];
+            /**
+             * Items
+             * @description Full active seed universe after the mutation.
+             */
+            items?: components["schemas"]["SeedEntry"][];
+            /**
+             * Count
+             * @description Count after the mutation.
+             */
+            count: number;
+        };
+        /**
+         * SeedUniverseResponse
+         * @description The seed universe + a bit of side-effect context.
+         * @example {
+         *       "bootstrapped": false,
+         *       "count": 2,
+         *       "items": [
+         *         {
+         *           "added_at": "2026-05-18T19:30:00Z",
+         *           "added_by": "default-user",
+         *           "asset_type": "EQUITY",
+         *           "notes": "",
+         *           "symbol": "AAPL"
+         *         },
+         *         {
+         *           "added_at": "2026-05-18T19:30:00Z",
+         *           "added_by": "default-user",
+         *           "asset_type": "EQUITY",
+         *           "notes": "",
+         *           "symbol": "NVDA"
+         *         }
+         *       ]
+         *     }
+         */
+        SeedUniverseResponse: {
+            /** Items */
+            items: components["schemas"]["SeedEntry"][];
+            /**
+             * Count
+             * @description Number of active seed members.
+             */
+            count: number;
+            /**
+             * Bootstrapped
+             * @description True iff this read triggered a one-time bootstrap (the CH table was empty and was just populated from SEED_SYMBOLS ∪ default-watchlist members).
+             */
+            bootstrapped: boolean;
         };
         /** ServiceHealth */
         ServiceHealth: {
@@ -3847,6 +4047,123 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WatchlistSnapshotItem"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_seed_api_v1_seed_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeedUniverseResponse"];
+                };
+            };
+        };
+    };
+    add_seed_api_v1_seed_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddSeedRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeedMutationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_seed_api_v1_seed__symbol__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeedMutationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_seed_api_v1_seed_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportSeedRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeedMutationResponse"];
                 };
             };
             /** @description Validation Error */
