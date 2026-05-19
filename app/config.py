@@ -88,6 +88,12 @@ class Settings(BaseModel):
         "SILVER_PROVIDER_PRECEDENCE", "polygon,schwab"
     )
 
+    # Earliest date for which we have bronze OHLCV coverage.
+    # silver --full + silver corp-action rebuild use this as the
+    # lower bound. Override when you extend Polygon coverage further
+    # back (e.g. 20-year subscription upgrade: BRONZE_HISTORY_START=2006-01-04).
+    bronze_history_start: str = os.getenv("BRONZE_HISTORY_START", "2021-01-04")
+
     # TA-5.3.3 — silver-derived add_members flow.
     # When True, watchlist_service.add_members uses the unified
     # silver-derived flow per docs/streaming_universe_model.md:

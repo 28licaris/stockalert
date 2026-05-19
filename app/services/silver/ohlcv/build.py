@@ -74,6 +74,25 @@ class _ProviderRouting:
     adjustment_status: str
 
 
+def _bronze_history_start_from_settings() -> date:
+    """Resolve `BRONZE_HISTORY_START` env value → date.
+
+    Default: 2021-01-04 (current Polygon coverage). Override via
+    BRONZE_HISTORY_START env (e.g. "2006-01-04" when upgrading to
+    Polygon 20-year subscription). Bad value falls back to default
+    rather than raising — silver build's window args still work.
+    """
+    raw = getattr(settings, "bronze_history_start", "2021-01-04")
+    try:
+        return date.fromisoformat(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "_bronze_history_start_from_settings: invalid BRONZE_HISTORY_START=%r; "
+            "using default 2021-01-04", raw,
+        )
+        return date(2021, 1, 4)
+
+
 _PROVIDER_ROUTING: dict[str, _ProviderRouting] = {
     "polygon": _ProviderRouting(
         bronze_short="polygon_minute",
@@ -471,7 +490,7 @@ class SilverOhlcvBuild:
             symbols = get_active_universe()
         else:
             symbols = list(symbols)
-        start = start_date or date(2021, 1, 4)
+        start = start_date or _bronze_history_start_from_settings()
         end = end_date or (datetime.now(timezone.utc).date() - timedelta(days=1))
         return self.build_window(
             symbols, start, end, max_concurrency=max_concurrency,
@@ -1003,7 +1022,12 @@ class SilverOhlcvBuild:
     # We rebuild the FULL history before the latest new ex_date because
     # multiple back-dated splits could chain (rare but possible).
 
-    BRONZE_HISTORY_START = date(2021, 1, 4)
+    @property
+    def BRONZE_HISTORY_START(self) -> date:
+        """Earliest date for silver --full + corp-action rebuild windows.
+        Reads `BRONZE_HISTORY_START` env (default 2021-01-04).
+        Override when you extend Polygon coverage further back."""
+        return _bronze_history_start_from_settings()
 
     def find_corp_action_dirty_symbols(
         self, since: datetime,

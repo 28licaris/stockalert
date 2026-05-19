@@ -100,7 +100,14 @@ Then, in this order:
     (TA-5.1.12: per-month commits + auto-append-on-empty), and the
     escape hatches (`add_files` API, plain Parquet, CH-as-source) if
     Iceberg ever proves unfit again.
-19. [futures_data_plan.md](futures_data_plan.md) — plan-only
+19. [runbook_extend_polygon_history.md](runbook_extend_polygon_history.md) —
+    operator runbook for upgrading Polygon coverage from 5-year to
+    a deeper history (e.g. 20-year). Sequence: upgrade plan → set
+    `BRONZE_HISTORY_START` env → bronze flat-files backfill → corp_actions
+    backfill → drop + rebuild silver via CodeBuild → Yahoo spot-check
+    on older splits (AAPL 2014, 2020). ~15-30 hours total wall-clock,
+    mostly unattended.
+20. [futures_data_plan.md](futures_data_plan.md) — plan-only
     investigation for adding futures (ES, NQ, CL, GC, …) to the
     pipeline. Three phases: TF-1 live-only via Schwab CHART_FUTURES
     (~3 days), TF-2 Polygon Futures historical (~3-5 days), TF-3
