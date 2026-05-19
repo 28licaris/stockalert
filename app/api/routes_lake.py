@@ -7,7 +7,7 @@ and LLM-agent context flows through here. The same `BronzeReader`
 service backs the future MCP tools (Pre-Phase 3 Step 3), so the
 Pydantic response shape is the contract both surfaces share.
 
-Design rules (see `feedback_platform_design_intent` memory):
+Design rules (see `docs/standards/platform_design.md`):
 
   - Route handlers contain ZERO business logic. They wrap a service
     method, convert exceptions to HTTP status codes, and return the

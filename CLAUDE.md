@@ -57,13 +57,13 @@ user before adding a tool. Don't introduce ruff/mypy without signoff.
 
 ```
 app/api/             FastAPI routes (routes_*.py — one per domain)
-app/services/        Domain modules (see feedback_service_module_design)
+app/services/        Domain modules (see docs/standards/service_modules.md)
   bronze/            Raw ingest — append-only, per-(provider, kind) tables
   silver/            Canonical OHLCV + corp_actions (deduped, adjusted)
   ingest/            Backfill workers (polygon flatfiles, schwab, corp_actions)
   readers/           Query wrappers — what agents/MCP read through
   live/              Real-time watchlist + signal streaming
-  sim/               Backtest engine (see feedback_trading_subsystem_design)
+  sim/               Backtest engine (see docs/standards/trading_subsystem.md)
   journal/  screener/  universe/  legacy/
 app/db/              ClickHouse client + schemas
 app/providers/       base.py + alpaca/polygon/schwab subclasses

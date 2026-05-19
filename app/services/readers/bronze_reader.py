@@ -11,7 +11,7 @@ Pydantic conversion. Filters push down to Iceberg (partition pruning by
 month + row-group min/max skip by symbol/timestamp), so a per-symbol
 month-bounded query scans tens of MB out of ~36 GB.
 
-Design intent (see `feedback_platform_design_intent`):
+Design intent (see `docs/standards/platform_design.md`):
 
   - Contract-first. `get_bars(...) -> list[BronzeBar]` is the only thing
     callers depend on. The Pydantic shape in `schemas.py` is what MCP
@@ -259,7 +259,7 @@ class BronzeReader:
         the provider's bronze table. Returns `None` if no rows exist
         in the lookback window.
 
-        Why ET, not UTC: see `feedback_et_vs_utc_trading_day` memory.
+        Why ET, not UTC: see `docs/standards/data/timezone_et_vs_utc.md`.
         After-hours bars cross midnight UTC, so UTC date misclassifies
         them and would advance the counter early.
 

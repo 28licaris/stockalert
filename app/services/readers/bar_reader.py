@@ -7,7 +7,7 @@ seconds-fresh latency. The two readers are siblings, not a hierarchy —
 callers pick the tier appropriate for their query (live UI = BarReader,
 ML training = BronzeReader).
 
-Design intent (see `feedback_platform_design_intent`):
+Design intent (see `docs/standards/platform_design.md`):
 
   - Thin wrappers over `app.db.queries` functions. No SQL in the
     reader — the queries module owns the SQL; the reader owns the

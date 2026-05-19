@@ -11,7 +11,7 @@ Why this design:
   - **Same Strategy Protocol as rule-based.** The backtester doesn't
     know `on_bar` calls an LLM; the strategy is just another
     interchangeable component. This is the modularity contract
-    (`feedback_trading_subsystem_design`) made concrete.
+    (`docs/standards/trading_subsystem.md`) made concrete.
 
   - **Response caching keyed on the prompt hash.** Same (model +
     system prompt + user prompt) → identical response, fetched from
@@ -235,7 +235,7 @@ class LLMAgentStrategy:
     system_prompt, replays cost zero after the first run.
 
     Per the modularity contract, this strategy is **side-effecting**
-    (it talks to the Anthropic API). Per `feedback_trading_subsystem_design`
+    (it talks to the Anthropic API). Per `docs/standards/trading_subsystem.md`
     that's allowed as long as the file is clearly marked and lives
     next to its pure peers — the import-purity gate in
     `test_strategy_is_pure` explicitly allows `anthropic`, just not

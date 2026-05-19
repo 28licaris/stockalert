@@ -28,8 +28,7 @@ Classify the change. Different categories get different checks:
 ## Step 2 — Standards checklist
 
 For each rule, state **PASS / N/A / FAIL** with a one-line reason.
-Reference: `docs/coding_standards.md`, auto-memory
-`feedback_coding_standards`.
+Reference: [`docs/standards/coding.md`](../../../docs/standards/coding.md).
 
 1. **Pipefail.** Any new bash pipeline has `set -o pipefail`?
 2. **Log every outcome.** Including zero/empty/no-op? (Search the diff
@@ -50,7 +49,7 @@ Reference: `docs/coding_standards.md`, auto-memory
 
 ## Step 3 — Spec check
 
-Per `feedback_spec_first`:
+Per [`docs/standards/engagement.md`](../../../docs/standards/engagement.md):
 - Is everything in the diff covered by the approved requirement?
 - Any "while I was here" cleanups? → Flag them, ask whether to split.
 - Any new abstractions/helpers the user didn't ask for? → Flag.
@@ -75,7 +74,7 @@ For changes under `app/services/<x>/`:
 
 ## Step 6 — Doc discipline
 
-Per `feedback_doc_discipline`:
+Per [`docs/standards/doc_discipline.md`](../../../docs/standards/doc_discipline.md):
 - New service or contract change → `docs/ARCHITECTURE.md` updated?
 - Storage/ingestion change → `docs/data_platform_plan.md` updated?
 - Decision worth remembering → `docs/BUILD_JOURNAL.md` entry with date?

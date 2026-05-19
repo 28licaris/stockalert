@@ -18,7 +18,7 @@ gets killed in strong trends ("falling knife"). Realistic
 deployment pairs this with a trend filter (e.g. only take the
 signal when price > SMA(200)).
 
-Modularity contract (per `feedback_trading_subsystem_design`):
+Modularity contract (per `docs/standards/trading_subsystem.md`):
 - Pure function of (price + indicators). No app.db.* / providers.
 - Indicators accessed by name through Context — never via direct
   import of the RSI class.

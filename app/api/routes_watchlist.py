@@ -68,7 +68,7 @@ async def _snapshot_for(symbols: list[str]) -> list[dict]:
     `LiveBar` shape. Going through the reader would either require two
     SQL queries or a fake-abstraction "with-metadata" variant. Direct
     query access keeps one query, one response shape, and matches the
-    pattern documented in feedback_platform_design_intent: readers own
+    pattern documented in docs/standards/platform_design.md: readers own
     the canonical contract; non-canonical metrics live next to the
     consumer that needs them.
     """

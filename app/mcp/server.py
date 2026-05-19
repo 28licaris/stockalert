@@ -6,7 +6,7 @@ Tool modules in `app/mcp/tools/` register their tools onto the global
 adapter — it parses args, calls one reader/service method, and
 returns the typed Pydantic response from `app.services.readers.schemas`.
 
-Design intent (see `feedback_platform_design_intent`):
+Design intent (see `docs/standards/platform_design.md`):
 
   - Same Pydantic contract over HTTP routes AND MCP tools. Adding a
     second surface is a wiring change, not a contract change.

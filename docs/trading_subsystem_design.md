@@ -11,7 +11,7 @@ Pydantic shapes, Protocols, folder layout, and modularity guarantees
 that govern the code we're about to write.
 
 When the plan and this doc conflict, [BUILD_JOURNAL.md](BUILD_JOURNAL.md)
-wins (per `feedback_doc_discipline`).
+wins (per [`standards/doc_discipline.md`](standards/doc_discipline.md)).
 
 ---
 
@@ -44,7 +44,7 @@ configuration change, not a rewrite.
 
 ## 2. Design principles
 
-Beyond [`feedback_platform_design_intent`](https://github.com/.../memory/feedback_platform_design_intent.md):
+Beyond [`standards/platform_design.md`](standards/platform_design.md):
 
 ### 2.1 Strategy state is local; harness state is global
 
@@ -390,7 +390,7 @@ app/
         └── README.md
 ```
 
-Module rules (per `feedback_service_module_design`):
+Module rules (per [`standards/service_modules.md`](standards/service_modules.md)):
 
 - Cross-service imports come from `schemas.py` (or `strategy.py` for
   the Protocol). Never from `backtester.py` / `portfolio.py`.
