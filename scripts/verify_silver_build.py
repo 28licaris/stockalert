@@ -182,8 +182,9 @@ def cross_check_sample(
 ) -> None:
     """Phase 3: for N random (symbol, day) cells, read silver bars +
     confirm: (a) bars are sorted; (b) timestamps are unique;
-    (c) source_provider is in {polygon, schwab}; (d) _adj columns are
-    populated."""
+    (c) source_provider is in {polygon, schwab}; (d) OHLC columns are
+    populated (silver stores split-adjusted directly, no _adj suffix
+    after TA-5.1.8)."""
     from app.services.readers.silver_ohlcv_reader import SilverOhlcvReader
 
     reader = SilverOhlcvReader.from_settings()
@@ -229,9 +230,10 @@ def cross_check_sample(
         # (c) provider tag
         providers = {b.source_provider for b in resp.bars}
         provider_ok = providers.issubset({"polygon", "schwab"})
-        # (d) _adj populated (defensive)
+        # (d) OHLC populated (defensive — silver stores split-adjusted
+        # directly; no _adj suffix after TA-5.1.8 schema cleanup).
         adj_ok = all(
-            b.open_adj is not None and b.close_adj is not None
+            b.open is not None and b.close is not None
             for b in resp.bars[:10]
         )
 
