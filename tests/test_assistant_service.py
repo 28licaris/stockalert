@@ -1,9 +1,12 @@
 """Unit tests for `DefaultAssistantService`.
 
-Slice 2 scope: text-only turn loop, prompt-cache marker on the system
-block, cache hit/miss, Anthropic-failure stream-error path, slice-3
-tool-dispatch stub. No real Anthropic calls — every test uses a fake
-`LLMClient` that conforms to the Protocol declared in `service.py`.
+Slice 2: text-only turn loop, prompt-cache marker, cache hit/miss,
+Anthropic-failure stream-error path.
+
+Slice 3: tool dispatch round-trip (fake runner + fake policy), denied tools
+excluded from the prompt, LAST tool block carries the ephemeral cache marker,
+multi-iteration turn terminates at `max_tool_iterations`. No real Anthropic
+calls — every test uses a fake `LLMClient`.
 """
 from __future__ import annotations
 
@@ -24,6 +27,8 @@ from app.services.assistant.schemas import (
     ContinueRequest,
     StreamEventType,
 )
+from app.services.assistant.policy import DevModeToolPolicy, ToolPolicy
+from app.services.assistant.runner import ToolResult, ToolRunner
 from app.services.assistant.service import (
     DefaultAssistantService,
     LLMResult,
@@ -125,13 +130,60 @@ def _service(
     client: _FakeLLMClient | None = None,
     models: ModelRegistry | None = None,
     prompt: SystemPrompt | None = None,
+    policy: ToolPolicy | None = None,
+    runner: ToolRunner | None = None,
+    max_tool_iterations: int = 10,
 ) -> DefaultAssistantService:
     return DefaultAssistantService(
         client=client or _FakeLLMClient(),
         cache=ResponseCache(tmp_path / "cache.sqlite"),
         models=models or ModelRegistry(),
         prompt=prompt,
+        policy=policy,
+        runner=runner,
+        max_tool_iterations=max_tool_iterations,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Fake runner + policy for slice 3 tests
+# ─────────────────────────────────────────────────────────────────────
+
+
+class _FakeToolRunner:
+    """Captures run() calls and returns canned ToolResults."""
+
+    def __init__(
+        self,
+        tool_defs: list[dict[str, Any]] | None = None,
+        results: dict[str, ToolResult] | None = None,
+    ) -> None:
+        self._tool_defs = tool_defs or []
+        self._results = results or {}
+        self.run_calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    async def get_tool_defs(self, allowed_names: list[str]) -> list[dict[str, Any]]:
+        return [d for d in self._tool_defs if d["name"] in allowed_names]
+
+    async def run(
+        self, tool_call_id: str, name: str, args: dict[str, Any]
+    ) -> ToolResult:
+        self.run_calls.append((tool_call_id, name, args))
+        if name in self._results:
+            return self._results[name]
+        return ToolResult(tool_call_id=tool_call_id, name=name, content='{"ok": true}')
+
+
+def _fake_tool_def(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "description": f"Fake {name} tool",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    }
 
 
 async def _drain(
@@ -281,31 +333,6 @@ async def test_anthropic_exception_emits_error_then_done(tmp_path: Path) -> None
     assert "anthropic 500" in err.payload["message"]
 
 
-@pytest.mark.asyncio
-async def test_tool_use_returns_not_implemented_error_in_slice_2(
-    tmp_path: Path,
-) -> None:
-    """If the LLM emits a tool_use, slice 2 surfaces a structured error
-    (rather than silently dropping the request). Wired in slice 3."""
-    client = _FakeLLMClient(
-        chunks=["Looking up freshness... "],
-        tool_uses=[LLMToolUse(id="tc_1", name="get_lake_freshness", args={})],
-    )
-    svc = _service(tmp_path=tmp_path, client=client)
-
-    events = await _drain(
-        svc.continue_conversation(
-            principal=_StubPrincipal(),
-            conversation_id="c",
-            request=ContinueRequest(user_msg="freshness?"),
-        )
-    )
-
-    err = next(e for e in events if e.type == StreamEventType.ERROR)
-    assert err.payload["kind"] == "ToolDispatchNotImplemented"
-    assert "slice 3" in err.payload["message"]
-    assert err.payload["requested_tools"] == ["get_lake_freshness"]
-    assert events[-1].type == StreamEventType.DONE
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -481,3 +508,254 @@ async def test_cancel_is_noop(tmp_path: Path) -> None:
     """Slice 2 has no in-flight state to tear down; cancel must not raise."""
     svc = _service(tmp_path=tmp_path)
     await svc.cancel(principal=_StubPrincipal(), conversation_id="c")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Slice 3 — tool dispatch
+# ─────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_tool_dispatch_round_trip(tmp_path: Path) -> None:
+    """A turn that triggers one tool call yields the expected event sequence:
+    TEXT_DELTA* → TOOL_CALL_STARTED → TOOL_RESULT → TEXT_DELTA* →
+    TURN_COMPLETED → DONE.
+    """
+    # First LLM call: text + one tool_use
+    # Second LLM call: text only (end_turn)
+    tool_use = LLMToolUse(id="tc_1", name="get_bars", args={"symbol": "AAPL"})
+    client = _FakeLLMClient(
+        # side_effects list: first call has tool_uses, second has none
+    )
+    # Override client to return two different streams
+    call_count = 0
+    orig_stream = client.stream
+
+    def _two_phase(**kwargs: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _FakeStreamCM(
+                _FakeStream(
+                    chunks=["Checking bars... "],
+                    tool_uses=[tool_use],
+                    usage=LLMUsage(tokens_in=100, tokens_out=20),
+                )
+            )
+        return _FakeStreamCM(
+            _FakeStream(
+                chunks=["Here are the results."],
+                tool_uses=[],
+                usage=LLMUsage(tokens_in=50, tokens_out=10),
+            )
+        )
+
+    client.stream = _two_phase  # type: ignore[method-assign]
+
+    tool_result = ToolResult(
+        tool_call_id="tc_1", name="get_bars", content='{"bars": []}', truncated=False
+    )
+    policy = DevModeToolPolicy(all_tool_names=["get_bars", "run_backtest"])
+    fake_runner = _FakeToolRunner(
+        tool_defs=[_fake_tool_def("get_bars")],
+        results={"get_bars": tool_result},
+    )
+    svc = _service(tmp_path=tmp_path, client=client, policy=policy, runner=fake_runner)
+
+    events = await _drain(
+        svc.continue_conversation(
+            principal=_StubPrincipal(),
+            conversation_id="c",
+            request=ContinueRequest(user_msg="give me AAPL bars"),
+        )
+    )
+
+    types = [e.type for e in events]
+    assert StreamEventType.TOOL_CALL_STARTED in types
+    assert StreamEventType.TOOL_RESULT in types
+    assert StreamEventType.TURN_COMPLETED in types
+    assert types[-1] == StreamEventType.DONE
+
+    # Order: all text deltas before TOOL_CALL_STARTED, more text after TOOL_RESULT
+    started_idx = types.index(StreamEventType.TOOL_CALL_STARTED)
+    result_idx = types.index(StreamEventType.TOOL_RESULT)
+    assert started_idx < result_idx
+
+    # Tool was dispatched
+    assert fake_runner.run_calls == [("tc_1", "get_bars", {"symbol": "AAPL"})]
+
+
+@pytest.mark.asyncio
+async def test_denied_tools_excluded_from_prompt(tmp_path: Path) -> None:
+    """Denied tools must never appear in the `tools=` parameter sent to the LLM."""
+    client = _FakeLLMClient()
+    policy = DevModeToolPolicy(all_tool_names=["get_bars", "run_backtest"])
+    fake_runner = _FakeToolRunner(
+        tool_defs=[_fake_tool_def("get_bars"), _fake_tool_def("run_backtest")]
+    )
+    svc = _service(tmp_path=tmp_path, client=client, policy=policy, runner=fake_runner)
+
+    await _drain(
+        svc.continue_conversation(
+            principal=_StubPrincipal(),
+            conversation_id="c",
+            request=ContinueRequest(user_msg="hi"),
+        )
+    )
+
+    kwargs = client.calls[0]
+    tool_names_in_prompt = [t["name"] for t in kwargs["tools"]]
+    assert "run_backtest" not in tool_names_in_prompt
+    assert "get_bars" in tool_names_in_prompt
+
+
+@pytest.mark.asyncio
+async def test_last_tool_block_carries_ephemeral_cache_marker(tmp_path: Path) -> None:
+    """The LAST tool schema block must have cache_control: ephemeral so
+    Anthropic can cache the (system + tool_list) prefix."""
+    client = _FakeLLMClient()
+    policy = DevModeToolPolicy(all_tool_names=["tool_a", "tool_b", "tool_c"])
+    fake_runner = _FakeToolRunner(
+        tool_defs=[
+            _fake_tool_def("tool_a"),
+            _fake_tool_def("tool_b"),
+            _fake_tool_def("tool_c"),
+        ]
+    )
+    svc = _service(tmp_path=tmp_path, client=client, policy=policy, runner=fake_runner)
+
+    await _drain(
+        svc.continue_conversation(
+            principal=_StubPrincipal(),
+            conversation_id="c",
+            request=ContinueRequest(user_msg="hi"),
+        )
+    )
+
+    kwargs = client.calls[0]
+    tools = kwargs["tools"]
+    assert len(tools) == 3
+    # Only the last tool carries the cache marker
+    assert tools[-1].get("cache_control") == {"type": "ephemeral"}
+    assert "cache_control" not in tools[0]
+    assert "cache_control" not in tools[1]
+
+
+@pytest.mark.asyncio
+async def test_no_tools_when_no_policy_or_runner(tmp_path: Path) -> None:
+    """Without policy/runner, the LLM sees an empty tools list."""
+    client = _FakeLLMClient()
+    svc = _service(tmp_path=tmp_path, client=client)  # no policy, no runner
+
+    await _drain(
+        svc.continue_conversation(
+            principal=_StubPrincipal(),
+            conversation_id="c",
+            request=ContinueRequest(user_msg="hi"),
+        )
+    )
+
+    assert client.calls[0]["tools"] == []
+
+
+@pytest.mark.asyncio
+async def test_multi_iteration_terminates_at_max_iterations(tmp_path: Path) -> None:
+    """The turn loop must stop after max_tool_iterations even if the LLM
+    keeps requesting tool calls."""
+    # LLM always returns a tool_use (infinite loop without the cap)
+    always_tool = LLMToolUse(id="tc_x", name="get_bars", args={})
+
+    call_count = 0
+    client = _FakeLLMClient()
+
+    def _always_tools(**kwargs: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        return _FakeStreamCM(
+            _FakeStream(
+                chunks=[],
+                tool_uses=[always_tool],
+                usage=LLMUsage(tokens_in=10, tokens_out=5),
+            )
+        )
+
+    client.stream = _always_tools  # type: ignore[method-assign]
+
+    policy = DevModeToolPolicy(all_tool_names=["get_bars"])
+    fake_runner = _FakeToolRunner(tool_defs=[_fake_tool_def("get_bars")])
+    svc = _service(
+        tmp_path=tmp_path,
+        client=client,
+        policy=policy,
+        runner=fake_runner,
+        max_tool_iterations=3,
+    )
+
+    events = await _drain(
+        svc.continue_conversation(
+            principal=_StubPrincipal(),
+            conversation_id="c",
+            request=ContinueRequest(user_msg="loop me"),
+        )
+    )
+
+    # Must terminate — check DONE is emitted
+    assert events[-1].type == StreamEventType.DONE
+    # LLM was called at most max_tool_iterations times
+    assert call_count <= 3
+
+
+@pytest.mark.asyncio
+async def test_tool_turn_not_cached(tmp_path: Path) -> None:
+    """Turns that used tools must not be stored in the response cache.
+    Tool results are real-time — replaying them stale would be wrong.
+    """
+    tool_use = LLMToolUse(id="tc_1", name="get_bars", args={})
+    call_count = 0
+    client = _FakeLLMClient()
+
+    def _phase_stream(**kwargs: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        if call_count % 2 == 1:
+            return _FakeStreamCM(
+                _FakeStream(
+                    chunks=["Looking..."],
+                    tool_uses=[tool_use],
+                    usage=LLMUsage(tokens_in=10, tokens_out=5),
+                )
+            )
+        return _FakeStreamCM(
+            _FakeStream(
+                chunks=["Done."],
+                tool_uses=[],
+                usage=LLMUsage(tokens_in=10, tokens_out=5),
+            )
+        )
+
+    client.stream = _phase_stream  # type: ignore[method-assign]
+
+    policy = DevModeToolPolicy(all_tool_names=["get_bars"])
+    fake_runner = _FakeToolRunner(tool_defs=[_fake_tool_def("get_bars")])
+    svc = _service(tmp_path=tmp_path, client=client, policy=policy, runner=fake_runner)
+
+    request = ContinueRequest(user_msg="tool query")
+    principal = _StubPrincipal()
+
+    # First call
+    await _drain(
+        svc.continue_conversation(
+            principal=principal, conversation_id="c1", request=request
+        )
+    )
+    # Second identical call — must NOT hit cache (tool result could differ)
+    await _drain(
+        svc.continue_conversation(
+            principal=principal, conversation_id="c2", request=request
+        )
+    )
+
+    # If cached, client would only have been called twice total (1+0) or
+    # three times (1 tool run + 1 text) on the first request.  Without caching
+    # the second request makes another full round of calls.
+    assert call_count >= 4, "second request should hit the LLM, not a cached replay"

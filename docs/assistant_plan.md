@@ -6,7 +6,7 @@ English; an LLM-backed agent plans, calls the system's MCP tools,
 streams back results, and renders rich artifacts (charts, tables,
 backtest equity curves) inline in the chat.
 
-**Status:** plan only. No code written yet.
+**Status:** AS-1 slices 1–3 committed. Slices 4–6 pending.
 
 **Goal:** make the platform reachable by *language* — "show me NVDA
 divergences this week", "run an EMA-cross backtest on the
@@ -976,9 +976,9 @@ grounded in MCP read tools" path. No artifacts, no UI.
 | Slice | Status | Contents |
 |---|---|---|
 | 1 | ✅ committed on `feat/assistant-as1-slice1` (2026-05-18) | `app/services/assistant/` scaffold + README + `schemas.py` + `contract.py` (`AssistantService` Protocol) + `ANTHROPIC_API_KEY` in `.env.example` + schema shape tests. |
-| 2 | ⏸ next | `service.py` core: Anthropic SDK integration, prompt caching on system + tool defs, `ResponseCache` (SQLite). `prompts/v1.md` system prompt v1. `ModelRegistry` with Sonnet 4.6 default + Opus 4.7 selectable. |
-| 3 | ⏸ pending | `policy.py` (`DevModeToolPolicy`, read-only allowlist) + `runner.py` (`ToolRunner`, dispatches to MCP tools, reuses `tool_call` middleware, applies §8.4 truncation). |
-| 4 | ⏸ pending | CH tables (`assistant_conversations`, `assistant_turns`) appended to `app/db/init.py` + `store.py` (`ConversationStore`) + owner-scoped reads. |
+| 2 | ✅ committed on `feat/assistant-as1-slice2` (2026-05-19) | `service.py` core: Anthropic SDK integration, prompt caching on system + tool defs, `ResponseCache` (SQLite). `prompts/v1.md` system prompt v1. `ModelRegistry` with Sonnet 4.6 default + Opus 4.7 selectable. |
+| 3 | ✅ committed on `feat/assistant-as1-slice3` (2026-05-19) | `policy.py` (`DevModeToolPolicy`, read-only allowlist, `WRITE_TOOLS` constant) + `runner.py` (`MCPToolRunner`, dispatches to MCP tools, reuses `tool_call` middleware, applies §8.4 truncation). `service.py` updated: multi-iteration turn loop (max 10), `TOOL_CALL_STARTED`/`TOOL_RESULT` events, last tool schema marked `cache_control: ephemeral`, tool-assisted turns skip cache. 108/108 assistant tests. |
+| 4 | ⏸ next | CH tables (`assistant_conversations`, `assistant_turns`) appended to `app/db/init.py` + `store.py` (`ConversationStore`) + owner-scoped reads. |
 | 5 | ⏸ pending | `/cockpit/assistant/*` FastAPI routes + SSE streaming (`stream.py`), confirm/cancel endpoints stubbed (no writes in AS-1). |
 | 6 | ⏸ pending | `tests/integration/test_assistant_e2e.py` (real Anthropic + real MCP) — closes the AS-1 gate. Audit row emission verified. |
 

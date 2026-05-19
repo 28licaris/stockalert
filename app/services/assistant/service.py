@@ -14,6 +14,8 @@ against `AssistantService`, never against `DefaultAssistantService`.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json as _json
 import logging
 import uuid
 from dataclasses import dataclass
@@ -24,6 +26,8 @@ from app.services.assistant import prompts
 from app.services.assistant.cache import CacheKeyInputs, CachedResponse, ResponseCache
 from app.services.assistant.contract import Principal
 from app.services.assistant.models import ModelChoice, ModelRegistry
+from app.services.assistant.policy import ToolPolicy
+from app.services.assistant.runner import ToolResult, ToolRunner
 from app.services.assistant.schemas import (
     DEFAULT_TENANT_ID,
     DEFAULT_USER_ID,
@@ -37,6 +41,8 @@ from app.services.assistant.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+_MAX_TOOL_ITERATIONS: int = 10
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -270,15 +276,14 @@ def _estimate_cost_usd(model: str, usage: LLMUsage) -> float:
 
 
 class DefaultAssistantService:
-    """Concrete `AssistantService` for slice 2.
+    """Concrete `AssistantService` for AS-1 slices 2–3.
 
-    Implements the read-only, text-streaming happy path of
-    `continue_conversation`. Tool dispatch raises `NotImplementedError`
-    (slice 3 wires it). Persistence + history is stubbed in-memory
-    (slice 4 swaps in the ClickHouse-backed `ConversationStore`).
+    Slice 2: text-only streaming, prompt-cache marker, SQLite response cache.
+    Slice 3: tool dispatch via injected `ToolRunner` + `ToolPolicy`, multi-
+             iteration turn loop, TOOL_CALL_STARTED / TOOL_RESULT events.
 
-    Constructor takes everything as injected dependencies so tests
-    can substitute fakes without monkey-patching anything global.
+    Persistence + history is stubbed in-memory (slice 4 swaps in the
+    ClickHouse-backed `ConversationStore`).
     """
 
     def __init__(
@@ -288,12 +293,18 @@ class DefaultAssistantService:
         cache: ResponseCache,
         models: ModelRegistry,
         prompt: prompts.SystemPrompt | None = None,
+        policy: ToolPolicy | None = None,
+        runner: ToolRunner | None = None,
+        max_tool_iterations: int = _MAX_TOOL_ITERATIONS,
     ) -> None:
         self._client = client
         self._cache = cache
         self._models = models
         self._prompt = prompt or prompts.current()
-        # In-memory stub for slice 2. Replaced in slice 4.
+        self._policy = policy
+        self._runner = runner
+        self._max_tool_iterations = max_tool_iterations
+        # In-memory store stub — replaced in slice 4.
         self._conv_index: dict[str, Conversation] = {}
 
     # ─── Public Protocol surface ─────────────────────────────────────
@@ -323,26 +334,42 @@ class DefaultAssistantService:
         conversation_id: str,
         request: ContinueRequest,
     ) -> AsyncIterator[AssistantStreamEvent]:
-        """Stream one assistant turn.
+        """Stream one assistant turn, including any tool-call iterations.
 
-        Slice 2 scope:
-          - text-only request → text-streaming response
-          - cache lookup before network; cache store after
-          - tool_use blocks → NotImplementedError (slice 3)
-          - any Anthropic exception → ERROR event + DONE (no raise)
+        Event order for a tool-assisted turn:
+          TEXT_DELTA* → TOOL_CALL_STARTED → TOOL_RESULT → TEXT_DELTA*
+          → TURN_COMPLETED → DONE
+
+        Cache: only text-only turns (stop_reason=end_turn with no tool
+        calls) are stored. Tool-assisted turns are skipped — results are
+        real-time data and must not be replayed from cache.
         """
         choice = self._models.pick(
             use_extended_thinking=request.use_extended_thinking,
             override_model=request.model,
         )
-        messages = [{"role": "user", "content": request.user_msg}]
-        tools: list[dict[str, Any]] = []  # slice 3 supplies the MCP tools
+        messages: list[dict[str, Any]] = [{"role": "user", "content": request.user_msg}]
+
+        # Build tool defs from the policy allowlist -------------------------------------
+        tool_defs: list[dict[str, Any]] = []
+        if self._policy and self._runner:
+            allowed = self._policy.allowed_for(principal)
+            tool_defs = await self._runner.get_tool_defs(allowed)
+            # Mark the last tool schema with the ephemeral cache marker so
+            # Anthropic can cache the (system + tool list) prefix across turns.
+            if tool_defs:
+                tool_defs[-1] = {**tool_defs[-1], "cache_control": {"type": "ephemeral"}}
 
         # Cache lookup -----------------------------------------------------------------
+        tool_sha = (
+            hashlib.sha256(_json.dumps(tool_defs, sort_keys=True).encode()).hexdigest()
+            if tool_defs
+            else ""
+        )
         key_inputs = CacheKeyInputs(
             model=choice.model,
             system_prompt_sha256=self._prompt.sha256,
-            tool_schema_sha256="",  # no tools in slice 2
+            tool_schema_sha256=tool_sha,
             messages=messages,
             tool_results=[],
             use_extended_thinking=request.use_extended_thinking,
@@ -353,110 +380,177 @@ class DefaultAssistantService:
         if hit is not None:
             logger.info(
                 "assistant.turn cache hit key=%s… principal=%s",
-                cache_key[:12], principal.user_id,
+                cache_key[:12],
+                principal.user_id,
             )
             async for event in self._replay_cached(hit, choice=choice):
                 yield event
             return
 
-        # Anthropic stream -------------------------------------------------------------
+        # Multi-iteration turn loop ----------------------------------------------------
         system_blocks = self._build_system_blocks()
-        try:
-            async with self._client.stream(
-                model=choice.model,
-                system_blocks=system_blocks,
-                tools=tools,
-                messages=messages,
-                max_tokens=choice.max_tokens,
-                temperature=choice.temperature,
-                thinking_budget=choice.thinking_budget,
-            ) as stream:
-                text_buf: list[str] = []
-                async for chunk in stream:
-                    text_buf.append(chunk)
-                    yield AssistantStreamEvent(
-                        type=StreamEventType.TEXT_DELTA,
-                        payload={"text": chunk},
+        used_tools = False
+        final_result: Any = None
+        final_text_buf: list[str] = []
+        total_tokens_in = 0
+        total_tokens_out = 0
+        total_cache_read = 0
+
+        for iteration in range(self._max_tool_iterations + 1):
+            if iteration == self._max_tool_iterations:
+                logger.warning(
+                    "assistant.turn: max_tool_iterations=%d reached conv=%s",
+                    self._max_tool_iterations,
+                    conversation_id,
+                )
+                break
+
+            try:
+                async with self._client.stream(
+                    model=choice.model,
+                    system_blocks=system_blocks,
+                    tools=tool_defs,
+                    messages=messages,
+                    max_tokens=choice.max_tokens,
+                    temperature=choice.temperature,
+                    thinking_budget=choice.thinking_budget,
+                ) as stream:
+                    text_buf: list[str] = []
+                    async for chunk in stream:
+                        text_buf.append(chunk)
+                        yield AssistantStreamEvent(
+                            type=StreamEventType.TEXT_DELTA,
+                            payload={"text": chunk},
+                        )
+                    result = await stream.result()
+            except Exception as exc:  # noqa: BLE001 — surfaced as stream ERROR
+                logger.exception(
+                    "assistant.turn failed conv=%s principal=%s",
+                    conversation_id,
+                    principal.user_id,
+                )
+                yield AssistantStreamEvent(
+                    type=StreamEventType.ERROR,
+                    payload={
+                        "kind": exc.__class__.__name__,
+                        "message": str(exc),
+                    },
+                )
+                yield AssistantStreamEvent(type=StreamEventType.DONE)
+                return
+
+            total_tokens_in += result.usage.tokens_in
+            total_tokens_out += result.usage.tokens_out
+            total_cache_read += result.usage.cache_read_input_tokens
+            final_result = result
+            final_text_buf = text_buf
+
+            if result.tool_uses and self._runner:
+                used_tools = True
+
+                # Append the assistant turn (text + tool_use blocks) to the transcript
+                assistant_content: list[dict[str, Any]] = []
+                text_assembled = "".join(text_buf)
+                if text_assembled:
+                    assistant_content.append({"type": "text", "text": text_assembled})
+                for tu in result.tool_uses:
+                    assistant_content.append(
+                        {
+                            "type": "tool_use",
+                            "id": tu.id,
+                            "name": tu.name,
+                            "input": tu.args,
+                        }
                     )
-                result = await stream.result()
-        except Exception as exc:  # noqa: BLE001 — surfaced as a stream ERROR
-            logger.exception(
-                "assistant.turn failed conv=%s principal=%s",
-                conversation_id, principal.user_id,
-            )
-            yield AssistantStreamEvent(
-                type=StreamEventType.ERROR,
-                payload={
-                    "kind": exc.__class__.__name__,
-                    "message": str(exc),
-                },
-            )
+                    yield AssistantStreamEvent(
+                        type=StreamEventType.TOOL_CALL_STARTED,
+                        payload={
+                            "name": tu.name,
+                            "call_id": tu.id,
+                            "args": tu.args,
+                        },
+                    )
+                messages.append({"role": "assistant", "content": assistant_content})
+
+                # Dispatch tools and collect results
+                tool_result_content: list[dict[str, Any]] = []
+                for tu in result.tool_uses:
+                    tr: ToolResult = await self._runner.run(tu.id, tu.name, tu.args)
+                    yield AssistantStreamEvent(
+                        type=StreamEventType.TOOL_RESULT,
+                        payload={
+                            "name": tr.name,
+                            "call_id": tr.tool_call_id,
+                            "content": tr.content,
+                            "truncated": tr.truncated,
+                            "error": tr.error,
+                            "elapsed_s": tr.elapsed_s,
+                        },
+                    )
+                    tool_result_content.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tr.tool_call_id,
+                            "content": (
+                                tr.content if not tr.error else f"Error: {tr.error}"
+                            ),
+                        }
+                    )
+                messages.append({"role": "user", "content": tool_result_content})
+                # Continue to next iteration
+            else:
+                # No tool calls (or no runner) — turn is complete
+                break
+
+        if final_result is None:
+            # Defensive guard — should not happen
             yield AssistantStreamEvent(type=StreamEventType.DONE)
             return
 
-        # Tool dispatch is slice 3. If the model asked for tools today,
-        # surface it as a structured error rather than silently dropping.
-        if result.tool_uses:
-            logger.error(
-                "assistant.turn received %d tool_use block(s) but ToolRunner "
-                "is not wired yet (slice 3). conv=%s",
-                len(result.tool_uses), conversation_id,
-            )
-            yield AssistantStreamEvent(
-                type=StreamEventType.ERROR,
-                payload={
-                    "kind": "ToolDispatchNotImplemented",
-                    "message": (
-                        "The model requested tool execution, but the assistant's "
-                        "tool runner lands in slice 3 of AS-1. Re-run after that "
-                        "slice merges, or rephrase to avoid tool use."
-                    ),
-                    "requested_tools": [t.name for t in result.tool_uses],
-                },
-            )
-            yield AssistantStreamEvent(type=StreamEventType.DONE)
-            return
-
-        cost_usd = _estimate_cost_usd(choice.model, result.usage)
-        full_text = "".join(text_buf) or result.text
-
-        # Persist cache entry ----------------------------------------------------------
-        cached = self._cache.store(
-            key=cache_key,
-            payload={
-                "text": full_text,
-                "stop_reason": result.stop_reason,
-                "tool_uses": [],  # invariant in slice 2; tested below
-                "usage": {
-                    "tokens_in": result.usage.tokens_in,
-                    "tokens_out": result.usage.tokens_out,
-                    "cache_read_input_tokens": result.usage.cache_read_input_tokens,
-                    "cache_creation_input_tokens": result.usage.cache_creation_input_tokens,
-                },
-            },
-            tokens_in=result.usage.tokens_in,
-            tokens_out=result.usage.tokens_out,
-            cost_usd=cost_usd,
+        cost_usd = _estimate_cost_usd(
+            choice.model,
+            LLMUsage(
+                tokens_in=total_tokens_in,
+                tokens_out=total_tokens_out,
+                cache_read_input_tokens=total_cache_read,
+            ),
         )
+        full_text = "".join(final_text_buf) or final_result.text
+
+        # Persist cache only for text-only turns (tool-assisted turns serve
+        # real-time data that must not be replayed stale).
+        if not used_tools:
+            cached = self._cache.store(
+                key=cache_key,
+                payload={
+                    "text": full_text,
+                    "stop_reason": final_result.stop_reason,
+                    "usage": {
+                        "tokens_in": total_tokens_in,
+                        "tokens_out": total_tokens_out,
+                        "cache_read_input_tokens": total_cache_read,
+                    },
+                },
+                tokens_in=total_tokens_in,
+                tokens_out=total_tokens_out,
+                cost_usd=cost_usd,
+            )
+            _ = cached  # slice 4 will persist this into the `assistant_turns` table
 
         yield AssistantStreamEvent(
             type=StreamEventType.TURN_COMPLETED,
             payload={
-                "turn_id": str(uuid.uuid4()),  # ephemeral in slice 2
+                "turn_id": str(uuid.uuid4()),  # ephemeral in slices 2–3
                 "model": choice.model,
-                "tokens_in": result.usage.tokens_in,
-                "tokens_out": result.usage.tokens_out,
-                "cache_read_input_tokens": result.usage.cache_read_input_tokens,
+                "tokens_in": total_tokens_in,
+                "tokens_out": total_tokens_out,
+                "cache_read_input_tokens": total_cache_read,
                 "cost_usd": cost_usd,
                 "cache_hit": False,
-                "stop_reason": result.stop_reason,
+                "stop_reason": final_result.stop_reason,
             },
         )
         yield AssistantStreamEvent(type=StreamEventType.DONE)
-
-        # `cached` is what slice 4 will persist into the
-        # `assistant_turns` table; for slice 2 it lives in the cache only.
-        _ = cached
 
     async def confirm_tool_call(
         self,
@@ -565,4 +659,5 @@ __all__ = [
     "LLMStream",
     "LLMToolUse",
     "LLMUsage",
+    "_MAX_TOOL_ITERATIONS",
 ]
