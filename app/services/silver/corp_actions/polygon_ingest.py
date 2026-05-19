@@ -113,6 +113,13 @@ class PolygonCorpActionsBronzeIngest:
         failure restart is safe — re-running covers the same range
         without duplicates.
 
+        **Internally chunks by calendar year** to avoid OOM. Earlier
+        attempts to pull the full 23-year window in one shot crashed
+        silently during the dividend pull (millions of rows held in
+        memory at once on residential hardware). Year-chunking holds
+        at most ~150K rows in memory per chunk while still producing
+        identical output via Iceberg upsert.
+
         Returns a summary dict:
             {
                 "ingestion_run_id": "...",
@@ -135,29 +142,53 @@ class PolygonCorpActionsBronzeIngest:
         client = self._get_client()
         table = self._get_table()
 
-        splits = await client.collect_splits(since=since, until=until)
-        logger.info(
-            "polygon_corp_actions_ingest: pulled %d splits from Polygon",
-            len(splits),
-        )
-        if splits:
-            self._upsert(table, splits, ingestion_run_id=run_id)
+        total_splits = 0
+        total_dividends = 0
 
-        dividends = await client.collect_dividends(since=since, until=until)
-        logger.info(
-            "polygon_corp_actions_ingest: pulled %d dividends from Polygon",
-            len(dividends),
-        )
-        if dividends:
-            self._upsert(table, dividends, ingestion_run_id=run_id)
+        # Iterate by calendar year so each Polygon pagination + each
+        # Iceberg upsert holds bounded memory.
+        year = since.year
+        end_year = until.year
+        while year <= end_year:
+            chunk_start = max(date(year, 1, 1), since)
+            chunk_end = min(date(year, 12, 31), until)
+
+            chunk_splits = await client.collect_splits(
+                since=chunk_start, until=chunk_end,
+            )
+            if chunk_splits:
+                logger.info(
+                    "polygon_corp_actions_ingest: year=%d pulled %d splits",
+                    year, len(chunk_splits),
+                )
+                self._upsert(table, chunk_splits, ingestion_run_id=run_id)
+                total_splits += len(chunk_splits)
+
+            chunk_divs = await client.collect_dividends(
+                since=chunk_start, until=chunk_end,
+            )
+            if chunk_divs:
+                logger.info(
+                    "polygon_corp_actions_ingest: year=%d pulled %d dividends",
+                    year, len(chunk_divs),
+                )
+                self._upsert(table, chunk_divs, ingestion_run_id=run_id)
+                total_dividends += len(chunk_divs)
+
+            year += 1
 
         duration = (datetime.now(timezone.utc) - started).total_seconds()
+        logger.info(
+            "polygon_corp_actions_ingest: full backfill done — "
+            "splits=%d dividends=%d duration=%.1fs",
+            total_splits, total_dividends, duration,
+        )
         return {
             "ingestion_run_id": run_id,
             "since": since.isoformat(),
             "until": until.isoformat(),
-            "splits_written": len(splits),
-            "dividends_written": len(dividends),
+            "splits_written": total_splits,
+            "dividends_written": total_dividends,
             "duration_seconds": duration,
         }
 
