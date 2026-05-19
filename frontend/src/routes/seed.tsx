@@ -4,12 +4,14 @@ import { Plus, RefreshCw, Search, Upload, X } from "lucide-react";
 import {
   useAddSeed,
   useImportSeed,
+  useInstrumentLookup,
   useRemoveSeed,
   useSeedUniverse,
   type SeedEntry,
 } from "@/api/queries";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
 import { Button } from "@/components/ui/button";
+import { SymbolSearchInput } from "@/components/symbol/SymbolSearchInput";
 import { fmtAgo, fmtInt } from "@/lib/fmt";
 import { cn } from "@/lib/utils";
 
@@ -141,12 +143,11 @@ function AddRow() {
   const [symbol, setSymbol] = useState("");
   const [notes, setNotes] = useState("");
 
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const sym = symbol.trim().toUpperCase();
-    if (!sym) return;
+  const doAdd = (sym: string) => {
+    const norm = sym.trim().toUpperCase();
+    if (!norm) return;
     add.mutate(
-      { symbol: sym, notes: notes.trim() || null },
+      { symbol: norm, notes: notes.trim() || null },
       {
         onSuccess: () => {
           setSymbol("");
@@ -157,17 +158,14 @@ function AddRow() {
   };
 
   return (
-    <form
-      onSubmit={submit}
-      className="space-y-2 rounded-md border border-border bg-bg-subtle p-4"
-    >
+    <div className="space-y-2 rounded-md border border-border bg-bg-subtle p-4">
       <div className="flex flex-wrap gap-2">
-        <input
+        <SymbolSearchInput
           value={symbol}
-          onChange={(e) => setSymbol(e.target.value)}
-          placeholder="symbol"
-          maxLength={32}
-          className="h-9 w-32 rounded-md border border-border bg-bg-base px-3 font-mono text-sm uppercase text-fg-base focus:border-accent focus:outline-none"
+          onChange={setSymbol}
+          onSubmit={(value, match) => doAdd(match ? match.symbol : value)}
+          placeholder="Search ticker"
+          className="w-60"
         />
         <input
           value={notes}
@@ -176,7 +174,11 @@ function AddRow() {
           maxLength={500}
           className="h-9 flex-1 rounded-md border border-border bg-bg-base px-3 text-sm text-fg-base focus:border-accent focus:outline-none"
         />
-        <Button type="submit" disabled={!symbol.trim() || add.isPending}>
+        <Button
+          type="button"
+          onClick={() => doAdd(symbol)}
+          disabled={!symbol.trim() || add.isPending}
+        >
           <Plus className="h-4 w-4" />
           Add to seed
         </Button>
@@ -187,7 +189,7 @@ function AddRow() {
           (Already in seed universe — no change.)
         </p>
       ) : null}
-    </form>
+    </div>
   );
 }
 
@@ -279,6 +281,18 @@ function SeedList({
 }) {
   const remove = useRemoveSeed();
 
+  // Batch-lookup company descriptions for the rendered set. Memoizing
+  // the symbol array keeps the hook's cache stable across re-renders.
+  const symbols = useMemo(() => entries.map((e) => e.symbol), [entries]);
+  const lookup = useInstrumentLookup(symbols);
+  const descMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of lookup.data?.results ?? []) {
+      if (r.description) m.set(r.symbol.toUpperCase(), r.description);
+    }
+    return m;
+  }, [lookup.data]);
+
   if (loading) {
     return (
       <ul className="space-y-1">
@@ -306,6 +320,7 @@ function SeedList({
         <thead className="bg-bg-muted text-xs uppercase tracking-wider text-fg-subtle">
           <tr>
             <th className="px-4 py-2 text-left font-medium">Symbol</th>
+            <th className="px-4 py-2 text-left font-medium">Description</th>
             <th className="px-4 py-2 text-left font-medium">Added</th>
             <th className="px-4 py-2 text-left font-medium">By</th>
             <th className="px-4 py-2 text-left font-medium">Notes</th>
@@ -313,40 +328,46 @@ function SeedList({
           </tr>
         </thead>
         <tbody className="divide-y divide-border-subtle">
-          {entries.map((e) => (
-            <tr key={e.symbol} className="hover:bg-bg-muted/40">
-              <td className="px-4 py-2">
-                <Link
-                  to={`/symbol/${encodeURIComponent(e.symbol)}`}
-                  className="font-mono font-medium text-fg-base hover:text-accent"
-                >
-                  {e.symbol}
-                </Link>
-              </td>
-              <td className="px-4 py-2 text-xs text-fg-muted">
-                {fmtAgo(e.added_at)}
-              </td>
-              <td className="px-4 py-2 text-xs text-fg-subtle">
-                {e.added_by || "—"}
-              </td>
-              <td className="px-4 py-2 text-xs text-fg-muted">
-                {e.notes || ""}
-              </td>
-              <td className="px-4 py-2 text-right">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => remove.mutate(e.symbol)}
-                  disabled={remove.isPending}
-                  aria-label={`Remove ${e.symbol} from seed universe`}
-                  title="Remove from seed (decrements default-watchlist refcount)"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </Button>
-              </td>
-            </tr>
-          ))}
+          {entries.map((e) => {
+            const desc = descMap.get(e.symbol.toUpperCase());
+            return (
+              <tr key={e.symbol} className="hover:bg-bg-muted/40">
+                <td className="px-4 py-2">
+                  <Link
+                    to={`/symbol/${encodeURIComponent(e.symbol)}`}
+                    className="font-mono font-medium text-fg-base hover:text-accent"
+                  >
+                    {e.symbol}
+                  </Link>
+                </td>
+                <td className="px-4 py-2 text-xs text-fg-muted">
+                  {desc ?? (lookup.isLoading ? "…" : "")}
+                </td>
+                <td className="px-4 py-2 text-xs text-fg-muted">
+                  {fmtAgo(e.added_at)}
+                </td>
+                <td className="px-4 py-2 text-xs text-fg-subtle">
+                  {e.added_by || "—"}
+                </td>
+                <td className="px-4 py-2 text-xs text-fg-muted">
+                  {e.notes || ""}
+                </td>
+                <td className="px-4 py-2 text-right">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => remove.mutate(e.symbol)}
+                    disabled={remove.isPending}
+                    aria-label={`Remove ${e.symbol} from seed universe`}
+                    title="Remove from seed (decrements default-watchlist refcount)"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       {remove.error ? (

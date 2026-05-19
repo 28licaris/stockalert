@@ -1,10 +1,10 @@
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useEffect, useState } from "react";
-import { Search } from "lucide-react";
+import { useState } from "react";
 import { OhlcvChart } from "@/components/charts/OhlcvChart";
 import { BarsTable } from "@/components/tables/BarsTable";
 import { Button } from "@/components/ui/button";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
+import { SymbolSearchInput } from "@/components/symbol/SymbolSearchInput";
 import {
   useSymbolBars,
   useSymbolSignals,
@@ -140,57 +140,43 @@ function SymbolPicker() {
   );
   const [input, setInput] = useState("");
 
-  const go = (t: string) => {
-    const sym = t.trim().toUpperCase();
-    if (!sym) return;
+  const go = (sym: string) => {
+    const norm = sym.trim().toUpperCase();
+    if (!norm) return;
     setRecent((prev) => {
-      const next = [sym, ...prev.filter((p) => p !== sym)].slice(0, 12);
+      const next = [norm, ...prev.filter((p) => p !== norm)].slice(0, 12);
       return next;
     });
-    navigate(`/symbol/${encodeURIComponent(sym)}`);
+    navigate(`/symbol/${encodeURIComponent(norm)}`);
   };
-
-  useEffect(() => {
-    // Auto-focus the input on mount so keyboard flow is fast.
-    const el = document.getElementById("symbol-input");
-    el?.focus();
-  }, []);
 
   return (
     <div className="mx-auto max-w-xl space-y-6 p-8">
       <header>
         <h1 className="text-2xl font-semibold text-fg-base">Symbol</h1>
         <p className="mt-1 text-sm text-fg-muted">
-          Enter a ticker to view OHLCV bars, signals, and indicators.
+          Search by ticker or company name. Pick a suggestion or hit
+          Enter on what you've typed.
         </p>
       </header>
 
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          go(input);
-        }}
-        className="flex gap-2"
-      >
-        <label htmlFor="symbol-input" className="sr-only">
-          Ticker
-        </label>
-        <div className="flex flex-1 items-center gap-2 rounded-md border border-border bg-bg-subtle px-3">
-          <Search className="h-4 w-4 text-fg-subtle" />
-          <input
-            id="symbol-input"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="AAPL"
-            autoComplete="off"
-            spellCheck={false}
-            className="h-9 flex-1 bg-transparent text-sm uppercase tracking-wide text-fg-base focus:outline-none"
-          />
-        </div>
-        <Button type="submit" disabled={!input.trim()}>
+      <div className="flex gap-2">
+        <SymbolSearchInput
+          value={input}
+          onChange={setInput}
+          onSubmit={(value, match) => go(match ? match.symbol : value)}
+          placeholder="AAPL · Apple Inc · etc"
+          autoFocus
+          className="flex-1"
+        />
+        <Button
+          type="button"
+          onClick={() => go(input)}
+          disabled={!input.trim()}
+        >
           Open
         </Button>
-      </form>
+      </div>
 
       {recent.length > 0 ? (
         <section>

@@ -247,6 +247,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instruments/lookup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lookup Instruments
+         * @description Batch metadata lookup for a known set of symbols.
+         *
+         *     Used by the cockpit to enrich watchlist member rows with company
+         *     descriptions in one round-trip instead of N. Symbols are looked up
+         *     individually against the provider's `search_instruments` (with the
+         *     symbol itself as the prefix), then matched against the exact symbol
+         *     in the returned list. Results are cached using the same key the
+         *     autocomplete uses so prefix-typed → list-render flows are warm.
+         */
+        get: operations["lookup_instruments_api_v1_instruments_lookup_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/market/banner": {
         parameters: {
             query?: never;
@@ -1709,6 +1736,46 @@ export interface components {
             value?: number | null;
         };
         /**
+         * InstrumentLookupResponse
+         * @description Batch lookup of `{symbol → InstrumentMatch}` for already-known symbols.
+         *
+         *     Used by the cockpit to enrich a list of watchlist members (or any
+         *     other symbol collection) with descriptions without N round-trips.
+         *     Symbols the upstream provider couldn't resolve map to a synthetic
+         *     entry with empty description — clients can detect this by
+         *     `description == ""`. Order in `results` follows the input symbol
+         *     list so the cockpit can render in the original order.
+         * @example {
+         *       "cached_count": 1,
+         *       "results": [
+         *         {
+         *           "asset_type": "EQUITY",
+         *           "description": "Apple Inc",
+         *           "exchange": "NASDAQ",
+         *           "symbol": "AAPL"
+         *         },
+         *         {
+         *           "asset_type": "",
+         *           "description": "",
+         *           "exchange": "",
+         *           "symbol": "FAKEXYZ"
+         *         }
+         *       ]
+         *     }
+         */
+        InstrumentLookupResponse: {
+            /**
+             * Results
+             * @description One entry per requested symbol, in the order the client asked. Unknown symbols appear with empty `description` rather than being silently dropped — clients always get exactly len(symbols) entries.
+             */
+            results: components["schemas"]["InstrumentMatch"][];
+            /**
+             * Cached Count
+             * @description How many entries were served from the in-process cache. Useful for tuning TTL.
+             */
+            cached_count: number;
+        };
+        /**
          * InstrumentMatch
          * @description One autocomplete suggestion.
          */
@@ -3028,6 +3095,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstrumentSearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lookup_instruments_api_v1_instruments_lookup_get: {
+        parameters: {
+            query: {
+                /** @description Comma-separated symbols to resolve. Order is preserved in the response. Unknown symbols come back with an empty `description` rather than being dropped. */
+                symbols: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstrumentLookupResponse"];
                 };
             };
             /** @description Validation Error */

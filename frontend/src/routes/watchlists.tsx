@@ -1,16 +1,18 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Plus, RefreshCw, Trash2, X } from "lucide-react";
 import {
   useAddWatchlistMembers,
   useCreateWatchlist,
   useDeleteWatchlist,
+  useInstrumentLookup,
   useRemoveWatchlistMembers,
   useWatchlists,
   type Watchlist,
 } from "@/api/queries";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
 import { Button } from "@/components/ui/button";
+import { SymbolSearchInput } from "@/components/symbol/SymbolSearchInput";
 import { fmtAgo, fmtInt } from "@/lib/fmt";
 import { cn } from "@/lib/utils";
 
@@ -334,37 +336,57 @@ function AddMembersForm({ name }: { name: string }) {
   const add = useAddWatchlistMembers();
   const [input, setInput] = useState("");
 
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const symbols = input
-      .split(/[,\s]+/)
-      .map((s) => s.trim().toUpperCase())
-      .filter(Boolean);
+  // Bulk paste detection: if the operator types/pastes multiple tokens
+  // (commas, spaces, newlines), the autocomplete dropdown stops being
+  // helpful. Suppress it so the suggestion popup doesn't fight the bulk
+  // workflow. Single-token input still gets full autocomplete.
+  const isBulk = /[,\s]/.test(input.trim());
+
+  const doAdd = (symbols: string[]) => {
     if (symbols.length === 0) return;
-    add.mutate(
-      { name, symbols },
-      {
-        onSuccess: () => setInput(""),
-      },
-    );
+    add.mutate({ name, symbols }, { onSuccess: () => setInput("") });
   };
 
   return (
-    <form onSubmit={submit} className="border-b border-border px-4 py-3">
+    <div className="border-b border-border px-4 py-3">
       <div className="flex gap-2">
-        <input
+        <SymbolSearchInput
           value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Add symbols (comma- or space-separated)"
-          className="h-9 flex-1 rounded-md border border-border bg-bg-base px-3 font-mono text-sm uppercase text-fg-base focus:border-accent focus:outline-none"
+          onChange={setInput}
+          onSubmit={(value, match) => {
+            // If the operator picked a suggestion: add that one symbol.
+            // Otherwise honor the bulk-paste path (split on comma/space/newline).
+            if (match) {
+              doAdd([match.symbol]);
+            } else {
+              const symbols = value
+                .split(/[,\s\n]+/)
+                .map((s) => s.trim().toUpperCase())
+                .filter(Boolean);
+              doAdd(symbols);
+            }
+          }}
+          placeholder="Search ticker — or paste a list (comma / space separated)"
+          suppressDropdown={isBulk}
+          className="flex-1"
         />
-        <Button type="submit" disabled={!input.trim() || add.isPending}>
+        <Button
+          type="button"
+          onClick={() => {
+            const symbols = input
+              .split(/[,\s\n]+/)
+              .map((s) => s.trim().toUpperCase())
+              .filter(Boolean);
+            doAdd(symbols);
+          }}
+          disabled={!input.trim() || add.isPending}
+        >
           <Plus className="h-4 w-4" />
           Add
         </Button>
       </div>
       {add.error ? <div className="mt-2"><ApiErrorAlert error={add.error} /></div> : null}
-    </form>
+    </div>
   );
 }
 
@@ -381,6 +403,19 @@ function MembersList({
   onRemove: (symbol: string) => void;
   isPending: boolean;
 }) {
+  // Enrich symbol list with descriptions via batch /instruments/lookup.
+  // Memoize the input array so the hook's stable-key dedup actually
+  // dedupes (a fresh array on every render would defeat the cache).
+  const memberArray = useMemo(() => [...members], [members]);
+  const lookup = useInstrumentLookup(memberArray);
+  const descMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of lookup.data?.results ?? []) {
+      if (r.description) m.set(r.symbol.toUpperCase(), r.description);
+    }
+    return m;
+  }, [lookup.data]);
+
   if (members.length === 0) {
     return (
       <div className="px-4 py-6 text-center text-sm text-fg-subtle">
@@ -390,29 +425,37 @@ function MembersList({
   }
   return (
     <ul className="divide-y divide-border-subtle">
-      {members.map((symbol) => (
-        <li
-          key={symbol}
-          className="flex items-center justify-between gap-2 px-4 py-2 hover:bg-bg-muted/40"
-        >
-          <Link
-            to={`/symbol/${encodeURIComponent(symbol)}`}
-            className="font-mono text-sm font-medium text-fg-base hover:text-accent"
+      {members.map((symbol) => {
+        const desc = descMap.get(symbol.toUpperCase());
+        return (
+          <li
+            key={symbol}
+            className="flex items-center justify-between gap-3 px-4 py-2 hover:bg-bg-muted/40"
           >
-            {symbol}
-          </Link>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={() => onRemove(symbol)}
-            disabled={isPending}
-            aria-label={`Remove ${symbol} from ${watchlistName}`}
-          >
-            <X className="h-3.5 w-3.5" />
-          </Button>
-        </li>
-      ))}
+            <div className="flex min-w-0 items-baseline gap-3">
+              <Link
+                to={`/symbol/${encodeURIComponent(symbol)}`}
+                className="font-mono text-sm font-medium text-fg-base hover:text-accent"
+              >
+                {symbol}
+              </Link>
+              <span className="truncate text-xs text-fg-muted">
+                {desc ?? (lookup.isLoading ? "…" : "")}
+              </span>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => onRemove(symbol)}
+              disabled={isPending}
+              aria-label={`Remove ${symbol} from ${watchlistName}`}
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </li>
+        );
+      })}
     </ul>
   );
 }

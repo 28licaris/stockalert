@@ -50,3 +50,46 @@ class InstrumentSearchResponse(BaseModel):
             }
         }
     )
+
+
+class InstrumentLookupResponse(BaseModel):
+    """Batch lookup of `{symbol → InstrumentMatch}` for already-known symbols.
+
+    Used by the cockpit to enrich a list of watchlist members (or any
+    other symbol collection) with descriptions without N round-trips.
+    Symbols the upstream provider couldn't resolve map to a synthetic
+    entry with empty description — clients can detect this by
+    `description == ""`. Order in `results` follows the input symbol
+    list so the cockpit can render in the original order.
+    """
+
+    results: list[InstrumentMatch] = Field(
+        ...,
+        description="One entry per requested symbol, in the order the client asked. Unknown symbols appear with empty `description` rather than being silently dropped — clients always get exactly len(symbols) entries.",
+    )
+    cached_count: int = Field(
+        ...,
+        description="How many entries were served from the in-process cache. Useful for tuning TTL.",
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "results": [
+                    {
+                        "symbol": "AAPL",
+                        "description": "Apple Inc",
+                        "exchange": "NASDAQ",
+                        "asset_type": "EQUITY",
+                    },
+                    {
+                        "symbol": "FAKEXYZ",
+                        "description": "",
+                        "exchange": "",
+                        "asset_type": "",
+                    },
+                ],
+                "cached_count": 1,
+            }
+        }
+    )

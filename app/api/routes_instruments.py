@@ -21,7 +21,11 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.api.schemas.instruments import InstrumentMatch, InstrumentSearchResponse
+from app.api.schemas.instruments import (
+    InstrumentLookupResponse,
+    InstrumentMatch,
+    InstrumentSearchResponse,
+)
 from app.services.live.watchlist_service import watchlist_service
 
 logger = logging.getLogger(__name__)
@@ -111,3 +115,75 @@ async def search_instruments(
         results=[InstrumentMatch(**r) for r in results],
         cached=False,
     )
+
+
+def _lookup_cache_key(symbol: str) -> tuple[str, int]:
+    """Cache key for a single-symbol lookup. Shared TTL with the search
+    cache so a prefix-match warmup also serves the lookup case."""
+    return (symbol.lower(), 1)
+
+
+def _missing_match(symbol: str) -> dict:
+    """Synthetic entry for symbols the provider couldn't resolve. Clients
+    detect this by `description == ""`."""
+    return {"symbol": symbol, "description": "", "exchange": "", "asset_type": ""}
+
+
+@router.get("/instruments/lookup", response_model=InstrumentLookupResponse)
+async def lookup_instruments(
+    symbols: str = Query(
+        ...,
+        description=(
+            "Comma-separated symbols to resolve. Order is preserved in "
+            "the response. Unknown symbols come back with an empty "
+            "`description` rather than being dropped."
+        ),
+    ),
+):
+    """Batch metadata lookup for a known set of symbols.
+
+    Used by the cockpit to enrich watchlist member rows with company
+    descriptions in one round-trip instead of N. Symbols are looked up
+    individually against the provider's `search_instruments` (with the
+    symbol itself as the prefix), then matched against the exact symbol
+    in the returned list. Results are cached using the same key the
+    autocomplete uses so prefix-typed → list-render flows are warm.
+    """
+    raw = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    if not raw:
+        raise HTTPException(400, "symbols list is empty")
+    if len(raw) > 500:
+        raise HTTPException(400, "too many symbols (max 500 per call)")
+
+    results: list[InstrumentMatch] = []
+    cached_count = 0
+    provider = getattr(watchlist_service, "_provider", None)
+
+    for sym in raw:
+        cache_key = _lookup_cache_key(sym)
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            # Cache stores the result of search_instruments(query=sym, limit=1)
+            # — find the exact-symbol match if any, else mark as unknown.
+            hit = next((r for r in cached if (r.get("symbol") or "").upper() == sym), None)
+            results.append(InstrumentMatch(**(hit or _missing_match(sym))))
+            cached_count += 1
+            continue
+
+        if provider is None:
+            # Provider not ready — return placeholder and skip caching so
+            # a future call (provider warmed up) actually hits upstream.
+            results.append(InstrumentMatch(**_missing_match(sym)))
+            continue
+
+        try:
+            upstream = await provider.search_instruments(sym, limit=1)
+        except Exception as e:  # noqa: BLE001 — boundary
+            logger.warning("lookup_instruments(%r) provider error: %s", sym, e)
+            upstream = []
+
+        _cache_put(cache_key, upstream)
+        hit = next((r for r in upstream if (r.get("symbol") or "").upper() == sym), None)
+        results.append(InstrumentMatch(**(hit or _missing_match(sym))))
+
+    return InstrumentLookupResponse(results=results, cached_count=cached_count)

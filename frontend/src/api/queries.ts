@@ -47,6 +47,10 @@ export type WatchlistMembersMutationResponse =
 export type WatchlistStatus = components["schemas"]["WatchlistStatus"];
 export type MonitorInfo = components["schemas"]["MonitorInfo"];
 
+// Instruments lookup (batch — for enriching member lists)
+export type InstrumentLookupResponse =
+  components["schemas"]["InstrumentLookupResponse"];
+
 // Seed universe (FE-CONTRACTS-4)
 export type SeedEntry = components["schemas"]["SeedEntry"];
 export type SeedUniverseResponse =
@@ -101,6 +105,10 @@ export const queryKeys = {
   watchlists: ["watchlists"] as const,
   watchlist: (name: string) => ["watchlist", name] as const,
   seed: ["seed"] as const,
+  instrumentSearch: (query: string, limit: number) =>
+    ["instruments", "search", query, limit] as const,
+  instrumentLookup: (symbols: string) =>
+    ["instruments", "lookup", symbols] as const,
 } as const;
 
 /** Small fetch helper for routes that haven't yet been typed via apiClient. */
@@ -374,4 +382,71 @@ export function useImportSeed() {
     },
     onSuccess: () => _invalidateSeedAndWatchlists(qc),
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// /api/v1/instruments — autocomplete + batch lookup
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Prefix search for the SymbolSearchInput combobox. Disabled when
+ * `query` is empty so the dropdown stays quiet on focus-without-type.
+ * Server-side cache absorbs the keystroke burst.
+ */
+export function useInstrumentSearch(query: string, limit: number = 10) {
+  const trimmed = query.trim();
+  return useQuery({
+    queryKey: queryKeys.instrumentSearch(trimmed.toLowerCase(), limit),
+    queryFn: async (): Promise<InstrumentSearchResponse> => {
+      const { data } = await apiClient.GET("/api/v1/instruments/search", {
+        params: { query: { q: trimmed, limit } },
+      });
+      return data as InstrumentSearchResponse;
+    },
+    enabled: trimmed.length >= 1,
+    staleTime: 60_000,
+    // No refetch on focus / mount — autocomplete results are stable
+    // across the debounce window.
+    refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * Batch metadata lookup for an already-known list of symbols. Returns
+ * a stable `symbol → InstrumentMatch` map the caller renders against.
+ *
+ * Called by member lists (watchlist, seed) to enrich each row with
+ * the company description in ONE round-trip instead of N. The query
+ * key is the comma-joined symbol list, so callers that pass the same
+ * list dedupe naturally.
+ */
+export function useInstrumentLookup(symbols: ReadonlyArray<string>) {
+  // Stable key: dedupe + sort so {AAPL, NVDA} and {NVDA, AAPL} share cache.
+  const key = useMemoSortedJoined(symbols);
+
+  return useQuery({
+    queryKey: queryKeys.instrumentLookup(key),
+    queryFn: async (): Promise<InstrumentLookupResponse> => {
+      const { data } = await apiClient.GET("/api/v1/instruments/lookup", {
+        params: { query: { symbols: key } },
+      });
+      return data as InstrumentLookupResponse;
+    },
+    enabled: key.length > 0,
+    staleTime: 5 * 60_000, // company descriptions are stable; 5min cache
+    refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * Build a stable comma-joined string for use in a query key. The hook
+ * memoizes by length+content so an unchanged list doesn't re-render
+ * the consumer.
+ */
+function useMemoSortedJoined(symbols: ReadonlyArray<string>): string {
+  // Pure (no React imports needed) — but a downstream useMemo on the
+  // caller side is the responsible move if the list comes from a
+  // computed value. For now: re-derive each render; it's cheap.
+  const unique = Array.from(new Set(symbols.map((s) => s.toUpperCase()))).sort();
+  return unique.join(",");
 }
