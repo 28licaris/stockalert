@@ -51,6 +51,16 @@ export type MonitorInfo = components["schemas"]["MonitorInfo"];
 export type InstrumentLookupResponse =
   components["schemas"]["InstrumentLookupResponse"];
 
+// ClickHouse query (FE-CONTRACTS-6a)
+export type CHColumn = components["schemas"]["CHColumn"];
+export type CHTable = components["schemas"]["CHTable"];
+export type ClickHouseSchemaResponse =
+  components["schemas"]["ClickHouseSchemaResponse"];
+export type ClickHouseQueryRequest =
+  components["schemas"]["ClickHouseQueryRequest"];
+export type ClickHouseQueryResponse =
+  components["schemas"]["ClickHouseQueryResponse"];
+
 // Seed universe (FE-CONTRACTS-4)
 export type SeedEntry = components["schemas"]["SeedEntry"];
 export type SeedUniverseResponse =
@@ -109,6 +119,7 @@ export const queryKeys = {
     ["instruments", "search", query, limit] as const,
   instrumentLookup: (symbols: string) =>
     ["instruments", "lookup", symbols] as const,
+  clickhouseSchema: ["clickhouse", "schema"] as const,
 } as const;
 
 /** Small fetch helper for routes that haven't yet been typed via apiClient. */
@@ -449,4 +460,44 @@ function useMemoSortedJoined(symbols: ReadonlyArray<string>): string {
   // computed value. For now: re-derive each render; it's cheap.
   const unique = Array.from(new Set(symbols.map((s) => s.toUpperCase()))).sort();
   return unique.join(",");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// /api/v1/clickhouse — ad-hoc query page (FE-CONTRACTS-6a)
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Schema browser. Cached server-side (60s); cockpit caches a further
+ * 30s so rapid expand/collapse doesn't refetch.
+ */
+export function useClickHouseSchema() {
+  return useQuery({
+    queryKey: queryKeys.clickhouseSchema,
+    queryFn: async (): Promise<ClickHouseSchemaResponse> => {
+      const { data } = await apiClient.GET("/api/v1/clickhouse/schema");
+      return data as ClickHouseSchemaResponse;
+    },
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * Execute a SQL query. Modeled as a mutation (rather than a query)
+ * because each run is a side-effect-free but explicit user action —
+ * we don't want TanStack auto-refetching on focus, mount, etc.
+ *
+ * The cockpit also wants `data` to clear between submissions so the
+ * old result doesn't linger while a new query is in flight.
+ */
+export function useExecuteClickHouseQuery() {
+  return useMutation({
+    mutationFn: async (
+      req: ClickHouseQueryRequest,
+    ): Promise<ClickHouseQueryResponse> => {
+      const { data } = await apiClient.POST("/api/v1/clickhouse/query", {
+        body: req,
+      });
+      return data as ClickHouseQueryResponse;
+    },
+  });
 }

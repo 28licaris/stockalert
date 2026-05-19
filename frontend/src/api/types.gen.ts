@@ -982,6 +982,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/clickhouse/schema": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Clickhouse Schema
+         * @description List user tables + columns for the cockpit's schema sidebar.
+         *
+         *     Hides `system.*` and `INFORMATION_SCHEMA.*`. Cached server-side
+         *     for ~60s.
+         */
+        get: operations["list_clickhouse_schema_api_v1_clickhouse_schema_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/clickhouse/query": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Execute Clickhouse Query
+         * @description Execute a single read-only SQL statement against ClickHouse.
+         *
+         *     Safety rails are applied in the service layer:
+         *       - CH `readonly=1` (DDL/DML rejected by the engine)
+         *       - row cap (clamped to ≤30k, default 1000)
+         *       - timeout (clamped to ≤120s, default 30s)
+         *       - max_bytes_to_read = 1 GiB
+         *       - max_memory_usage = 4 GiB
+         *
+         *     CH errors (syntax error, readonly violation, timeout, etc.)
+         *     surface as HTTP 400 with the typed ErrorResponse envelope so the
+         *     cockpit can display them inline below the SQL editor.
+         */
+        post: operations["execute_clickhouse_query_api_v1_clickhouse_query_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/signals": {
         parameters: {
             query?: never;
@@ -1372,6 +1426,42 @@ export interface components {
             count: number;
         };
         /**
+         * CHColumn
+         * @description One column on a CH table.
+         */
+        CHColumn: {
+            /** Name */
+            name: string;
+            /**
+             * Type
+             * @description ClickHouse type string (e.g. 'UInt64', 'String', 'DateTime64(3)', 'LowCardinality(String)'). Kept as the raw upstream string — cockpit doesn't normalize.
+             */
+            type: string;
+        };
+        /**
+         * CHTable
+         * @description One table in the schema browser.
+         */
+        CHTable: {
+            /** Database */
+            database: string;
+            /** Name */
+            name: string;
+            /**
+             * Engine
+             * @description MergeTree, ReplacingMergeTree, etc. Empty for views.
+             * @default
+             */
+            engine: string;
+            /**
+             * Row Count
+             * @description Cheap row estimate from `system.tables.total_rows`. Null when CH didn't propagate a count (typical for views and freshly-created tables).
+             */
+            row_count?: number | null;
+            /** Columns */
+            columns: components["schemas"]["CHColumn"][];
+        };
+        /**
          * Candidate
          * @description One symbol that passed all rules, with its diagnostic metrics.
          */
@@ -1430,6 +1520,102 @@ export interface components {
             provider: string;
             /** Indicators */
             indicators: components["schemas"]["IndicatorSpecRequest"][];
+        };
+        /**
+         * ClickHouseQueryRequest
+         * @description Body for `POST /api/v1/clickhouse/query`.
+         *
+         *     `max_rows` and `timeout_seconds` cap the operator's request from the
+         *     cockpit side. The server clamps them against its own hard ceiling
+         *     so a malicious / typo'd value can't blow them out.
+         */
+        ClickHouseQueryRequest: {
+            /**
+             * Sql
+             * @description The SQL to execute. Trailing semicolon is stripped. CH applies `readonly=1` so DDL / DML / SETTINGS attempts are rejected by the engine itself.
+             */
+            sql: string;
+            /**
+             * Max Rows
+             * @description Per-query cap on returned rows (server clamps to ≤30k).
+             * @default 1000
+             */
+            max_rows: number;
+            /**
+             * Timeout Seconds
+             * @description Per-query execution timeout in seconds (server clamps to ≤120).
+             * @default 30
+             */
+            timeout_seconds: number;
+        };
+        /**
+         * ClickHouseQueryResponse
+         * @description Result of a single query execution.
+         * @example {
+         *       "columns": [
+         *         {
+         *           "name": "symbol",
+         *           "type": "LowCardinality(String)"
+         *         },
+         *         {
+         *           "name": "row_count",
+         *           "type": "UInt64"
+         *         }
+         *       ],
+         *       "duration_ms": 12.4,
+         *       "row_count": 2,
+         *       "rows": [
+         *         [
+         *           "AAPL",
+         *           1583
+         *         ],
+         *         [
+         *           "NVDA",
+         *           1582
+         *         ]
+         *       ],
+         *       "truncated": false
+         *     }
+         */
+        ClickHouseQueryResponse: {
+            /**
+             * Columns
+             * @description Column metadata in the order returned by the engine.
+             */
+            columns: components["schemas"]["CHColumn"][];
+            /**
+             * Rows
+             * @description Row data as a 2-D list. Cell values are JSON-safe — datetimes are ISO strings, nulls are JSON null. The cockpit renders each cell with its column type for alignment / formatting hints.
+             */
+            rows: unknown[][];
+            /**
+             * Row Count
+             * @description Number of rows in `rows`. Equal to len(rows).
+             */
+            row_count: number;
+            /**
+             * Truncated
+             * @description True iff the query produced more rows than `max_rows` and was server-side truncated.
+             */
+            truncated: boolean;
+            /**
+             * Duration Ms
+             * @description Query execution time in milliseconds (wall clock, server-measured).
+             */
+            duration_ms: number;
+        };
+        /**
+         * ClickHouseSchemaResponse
+         * @description Full schema listing. Cached server-side for ~60s.
+         */
+        ClickHouseSchemaResponse: {
+            /** Tables */
+            tables: components["schemas"]["CHTable"][];
+            /**
+             * Cached
+             * @description True if served from the in-process cache rather than a fresh CH round-trip.
+             */
+            cached: boolean;
         };
         /**
          * CorpAction
@@ -4263,6 +4449,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SeedMutationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_clickhouse_schema_api_v1_clickhouse_schema_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClickHouseSchemaResponse"];
+                };
+            };
+        };
+    };
+    execute_clickhouse_query_api_v1_clickhouse_query_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClickHouseQueryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClickHouseQueryResponse"];
                 };
             };
             /** @description Validation Error */

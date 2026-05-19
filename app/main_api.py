@@ -30,6 +30,7 @@ from app.services.live.monitor_manager import monitor_manager
 from app.services.live.watchlist_service import watchlist_service
 from app.api import (
     routes_backfill,
+    routes_clickhouse,
     routes_corp_actions,
     routes_health,
     routes_indicators,
@@ -458,6 +459,7 @@ app.include_router(routes_silver.router, prefix=_V1, tags=["Silver"])
 app.include_router(routes_monitors.router, prefix=_V1, tags=["Monitors"])
 app.include_router(routes_watchlist.router, prefix=_V1, tags=["Watchlist"])
 app.include_router(routes_seed.router, prefix=_V1, tags=["Seed"])
+app.include_router(routes_clickhouse.router, prefix=_V1, tags=["ClickHouse"])
 
 try:
     from app.api import routes_signals

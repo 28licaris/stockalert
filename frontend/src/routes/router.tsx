@@ -4,6 +4,7 @@ import { StatusPage } from "./status";
 import { SymbolPage } from "./symbol";
 import { WatchlistsPage } from "./watchlists";
 import { SeedPage } from "./seed";
+import { ClickHousePage } from "./clickhouse";
 import { NotFoundPage } from "./not-found";
 
 /**
@@ -25,6 +26,7 @@ export const router = createBrowserRouter(
         { path: "symbol/:ticker", element: <SymbolPage /> },
         { path: "watchlists", element: <WatchlistsPage /> },
         { path: "seed", element: <SeedPage /> },
+        { path: "clickhouse", element: <ClickHousePage /> },
         { path: "*", element: <NotFoundPage /> },
       ],
     },

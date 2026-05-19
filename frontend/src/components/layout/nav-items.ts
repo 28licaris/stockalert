@@ -53,6 +53,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: "Indicators",  href: "/indicators",  icon: LineChart,        flag: "page.indicators",  category: "Data" },
   { label: "Lake",        href: "/lake",        icon: Database,         flag: "page.lake",        category: "Data" },
   { label: "Coverage",    href: "/coverage",    icon: BarChart3,        flag: "page.coverage",    category: "Data" },
+  { label: "ClickHouse",  href: "/clickhouse",  icon: Database,         flag: "page.clickhouse",  category: "Data" },
 
   { label: "MCP",         href: "/mcp",         icon: Wrench,           flag: "page.mcp",         category: "Agent" },
 
