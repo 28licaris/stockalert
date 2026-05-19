@@ -134,7 +134,66 @@ export const queryKeys = {
   instrumentLookup: (symbols: string) =>
     ["instruments", "lookup", symbols] as const,
   clickhouseSchema: ["clickhouse", "schema"] as const,
+  jobs: ["jobs"] as const,
 } as const;
+
+// ─────────────────────────────────────────────────────────────────────
+// /api/v1/jobs — scheduled job registry
+// ─────────────────────────────────────────────────────────────────────
+
+export type JobStatus = "idle" | "running" | "ok" | "error" | "unknown";
+
+export interface JobMetadata {
+  name: string;
+  display_name: string;
+  schedule: string;
+  setting_key: string | null;
+  runnable: boolean;
+  last_success: string | null;
+  last_run_at: string | null;
+  last_status: JobStatus;
+  last_error: string | null;
+  running: boolean;
+}
+
+export interface JobListing {
+  jobs: JobMetadata[];
+}
+
+export interface JobRunResult {
+  job: string;
+  status: "started" | "already_running" | "not_found" | "not_runnable";
+  started_at: string | null;
+  detail: string | null;
+}
+
+export function useJobs() {
+  return useQuery({
+    queryKey: queryKeys.jobs,
+    queryFn: () => fetchJson<JobListing>("/api/v1/jobs"),
+    refetchInterval: 10_000,
+    refetchOnWindowFocus: true,
+    staleTime: 5_000,
+  });
+}
+
+export function useRunJob() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (name: string): Promise<JobRunResult> => {
+      const res = await fetch(
+        `/api/v1/jobs/${encodeURIComponent(name)}/run`,
+        { method: "POST" },
+      );
+      if (!res.ok) {
+        const envelope = await readErrorEnvelope(res.clone());
+        throw new ApiError(envelope, res.status);
+      }
+      return (await res.json()) as JobRunResult;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.jobs }),
+  });
+}
 
 /** Small fetch helper for routes that haven't yet been typed via apiClient. */
 async function fetchJson<T>(url: string): Promise<T> {

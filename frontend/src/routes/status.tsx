@@ -1,9 +1,13 @@
-import { RefreshCw } from "lucide-react";
+import { Play, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
 import {
   useHealthServices,
+  useJobs,
+  useRunJob,
   type HealthState,
+  type JobMetadata,
+  type JobStatus,
   type ServiceHealth,
   type StreamSummary,
 } from "@/api/queries";
@@ -81,7 +85,159 @@ export function StatusPage() {
           ]}
         />
       </section>
+
+      <ScheduledJobsSection />
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Scheduled jobs — registry of background loops with a play button.
+// ─────────────────────────────────────────────────────────────────────
+
+function ScheduledJobsSection() {
+  const jobs = useJobs();
+  const run = useRunJob();
+
+  return (
+    <section className="space-y-3">
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-fg-subtle">
+            Scheduled jobs
+          </h2>
+          <p className="mt-1 text-xs text-fg-muted">
+            Background loops that keep the data layer fresh. Click ▶ to
+            trigger a manual run; the registry refuses to start a job
+            that's already in flight.
+          </p>
+        </div>
+        {jobs.isFetching ? (
+          <span className="text-[10px] uppercase tracking-wider text-fg-subtle">
+            Refreshing…
+          </span>
+        ) : null}
+      </div>
+
+      {jobs.error ? <ApiErrorAlert error={jobs.error} /> : null}
+      {run.error ? <ApiErrorAlert error={run.error} /> : null}
+
+      <div className="overflow-hidden rounded-lg border border-border bg-bg-subtle">
+        <table className="w-full text-sm">
+          <thead className="bg-bg-muted text-xs uppercase tracking-wider text-fg-subtle">
+            <tr>
+              <th className="px-4 py-2 text-left font-medium">Job</th>
+              <th className="px-4 py-2 text-left font-medium">Schedule</th>
+              <th className="px-4 py-2 text-left font-medium">Last success</th>
+              <th className="px-4 py-2 text-left font-medium">Status</th>
+              <th className="px-4 py-2 text-right font-medium" aria-label="Actions" />
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border-subtle">
+            {jobs.isLoading ? (
+              <tr>
+                <td colSpan={5} className="px-4 py-4 text-center text-xs text-fg-subtle">
+                  Loading…
+                </td>
+              </tr>
+            ) : (jobs.data?.jobs ?? []).length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-4 py-4 text-center text-xs text-fg-subtle">
+                  No jobs registered. (Background loops may not be enabled — check your .env.)
+                </td>
+              </tr>
+            ) : (
+              (jobs.data?.jobs ?? []).map((job) => (
+                <JobRow
+                  key={job.name}
+                  job={job}
+                  onRun={() => run.mutate(job.name)}
+                  triggering={run.isPending && run.variables === job.name}
+                />
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+const JOB_STATUS_BG: Record<JobStatus, string> = {
+  ok: "bg-success",
+  running: "bg-accent animate-pulse",
+  error: "bg-danger",
+  idle: "bg-fg-subtle/40",
+  unknown: "bg-warning",
+};
+
+const JOB_STATUS_LABEL: Record<JobStatus, string> = {
+  ok: "Ready",
+  running: "Running…",
+  error: "Last run failed",
+  idle: "Not yet run",
+  unknown: "Unknown",
+};
+
+function JobRow({
+  job,
+  onRun,
+  triggering,
+}: {
+  job: JobMetadata;
+  onRun: () => void;
+  triggering: boolean;
+}) {
+  const disabled = !job.runnable || job.running || triggering;
+  return (
+    <tr className="hover:bg-bg-muted/40">
+      <td className="px-4 py-2">
+        <div className="font-medium text-fg-base">{job.display_name}</div>
+        <div className="font-mono text-[11px] text-fg-subtle">{job.name}</div>
+      </td>
+      <td
+        className="px-4 py-2 text-xs text-fg-muted"
+        title={job.setting_key ? `env: ${job.setting_key}` : undefined}
+      >
+        {job.schedule}
+      </td>
+      <td className="px-4 py-2 text-xs text-fg-muted">
+        {job.last_success ? fmtAgo(job.last_success) : "—"}
+      </td>
+      <td className="px-4 py-2">
+        <span className="inline-flex items-center gap-2 text-xs text-fg-base">
+          <span
+            aria-hidden
+            className={cn("h-2 w-2 rounded-full", JOB_STATUS_BG[job.last_status])}
+          />
+          {JOB_STATUS_LABEL[job.last_status]}
+        </span>
+        {job.last_status === "error" && job.last_error ? (
+          <div className="mt-1 line-clamp-2 font-mono text-[11px] text-fg-subtle" title={job.last_error}>
+            {job.last_error}
+          </div>
+        ) : null}
+      </td>
+      <td className="px-4 py-2 text-right">
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          onClick={onRun}
+          disabled={disabled}
+          aria-label={`Run ${job.display_name} now`}
+          title={
+            !job.runnable
+              ? "No manual trigger registered for this job"
+              : job.running
+                ? "Job is already running"
+                : `Run ${job.display_name} now`
+          }
+        >
+          <Play className={cn("h-4 w-4", triggering && "animate-pulse")} />
+        </Button>
+      </td>
+    </tr>
   );
 }
 

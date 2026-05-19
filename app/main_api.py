@@ -26,6 +26,7 @@ from app.db import (
     reset_bar_batcher,
 )
 from app.services.ingest.backfill_service import backfill_service
+from app.services.jobs import audit_run, job_registry
 from app.services.live.monitor_manager import monitor_manager
 from app.services.live.watchlist_service import watchlist_service
 from app.services.stream import stream_service
@@ -36,6 +37,7 @@ from app.api import (
     routes_health,
     routes_indicators,
     routes_instruments,
+    routes_jobs,
     routes_journal,
     routes_lake,
     routes_market,
@@ -71,6 +73,125 @@ async def _safe_start(label: str, coro_factory):
     except Exception as exc:
         logger.exception("✗ %s failed to start: %s — continuing without it", label, exc)
         return None
+
+
+def _register_background_jobs(
+    *,
+    polygon_started: bool,
+    schwab_started: bool,
+    silver_started: bool,
+    live_lake_writer_started: bool,
+    journal_started: bool,
+) -> None:
+    """Catalog every running background loop with the JobRegistry.
+
+    Each `name` matches the `ingestion_runs.job_name` written by the
+    loop (so `JobRegistry.list()` can join last_success). `run_now`
+    callables either reuse the loop's existing one-cycle function (for
+    loops that self-audit) or wrap a one-shot call in
+    `audit_run(name)` (for loops that don't). Adding a new background
+    loop = add one block here + write to `ingestion_runs` from the
+    loop OR wrap with `audit_run`.
+    """
+    from app.config import settings as _s
+
+    # Backfill gap sweeper — sync `sweep_now` doesn't self-audit, wrap it.
+    async def _run_gap_sweeper_once() -> None:
+        async with audit_run("backfill_gap_sweeper"):
+            await asyncio.to_thread(backfill_service.sweep_now)
+
+    job_registry.register(
+        name="backfill_gap_sweeper",
+        display_name="Backfill gap sweeper",
+        schedule="daily at 06:00 UTC (7d window)",
+        setting_key=None,
+        run_now=_run_gap_sweeper_once,
+    )
+
+    # Live lake writer — `run_cycle` already writes to ingestion_runs,
+    # so the manual run just invokes it without an audit wrapper.
+    if live_lake_writer_started:
+        async def _run_live_lake_writer_once() -> None:
+            from app.services.ingest.live_lake_writer import get_live_lake_writer
+
+            await get_live_lake_writer().run_cycle()
+
+        job_registry.register(
+            name="live_lake_writer",
+            display_name="Live lake writer",
+            schedule=f"every {_s.live_lake_writer_cycle_minutes} min",
+            setting_key="LIVE_LAKE_WRITER_CYCLE_MINUTES",
+            run_now=_run_live_lake_writer_once,
+        )
+
+    # Nightly Polygon — refresh_polygon_lake_yesterday doesn't audit.
+    if polygon_started:
+        async def _run_polygon_once() -> None:
+            from app.services.ingest.nightly_polygon_refresh import (
+                refresh_polygon_lake_yesterday,
+            )
+
+            async with audit_run("nightly_polygon_refresh"):
+                await refresh_polygon_lake_yesterday()
+
+        job_registry.register(
+            name="nightly_polygon_refresh",
+            display_name="Nightly Polygon refresh",
+            schedule=f"daily at {int(_s.polygon_nightly_run_hour_utc):02d}:00 UTC",
+            setting_key="POLYGON_NIGHTLY_RUN_HOUR_UTC",
+            run_now=_run_polygon_once,
+        )
+
+    # Nightly Schwab — refresh_schwab_bronze_yesterday doesn't audit.
+    if schwab_started:
+        async def _run_schwab_once() -> None:
+            from app.services.ingest.nightly_schwab_refresh import (
+                refresh_schwab_bronze_yesterday,
+            )
+
+            async with audit_run("nightly_schwab_refresh"):
+                await refresh_schwab_bronze_yesterday()
+
+        job_registry.register(
+            name="nightly_schwab_refresh",
+            display_name="Nightly Schwab refresh",
+            schedule=f"daily at {int(_s.schwab_nightly_run_hour_utc):02d}:00 UTC",
+            setting_key="SCHWAB_NIGHTLY_RUN_HOUR_UTC",
+            run_now=_run_schwab_once,
+        )
+
+    # Silver OHLCV build — run_silver_ohlcv_build_nightly self-audits.
+    if silver_started:
+        async def _run_silver_ohlcv_build_once() -> None:
+            from app.services.silver.ohlcv.nightly import (
+                run_silver_ohlcv_build_nightly,
+            )
+
+            await run_silver_ohlcv_build_nightly()
+
+        job_registry.register(
+            name="silver_ohlcv_build",
+            display_name="Silver OHLCV build",
+            schedule=f"daily at {int(_s.silver_ohlcv_build_run_hour_utc):02d}:00 UTC",
+            setting_key="SILVER_OHLCV_BUILD_RUN_HOUR_UTC",
+            run_now=_run_silver_ohlcv_build_once,
+        )
+
+    # Journal sync — `sync_all` doesn't write ingestion_runs, wrap it.
+    if journal_started:
+        from app.services.journal.journal_sync import journal_sync_service as _js
+
+        async def _run_journal_sync_once() -> None:
+            async with audit_run("journal_sync"):
+                await _js.sync_all(force=True)
+
+        job_registry.register(
+            name="journal_sync",
+            display_name="Journal sync (Schwab)",
+            schedule="every 5 min",
+            setting_key=None,
+            run_now=_run_journal_sync_once,
+        )
 
 
 @asynccontextmanager
@@ -295,6 +416,23 @@ async def lifespan(app: FastAPI):
             if ws in active_connections:
                 active_connections.remove(ws)
 
+    # ── Job registry ──────────────────────────────────────────────────
+    # Register each background loop with the JobRegistry so the cockpit
+    # Status page can list it (with last-success from `ingestion_runs`)
+    # and offer a manual "run now" button. Registration mirrors the
+    # conditional starts above — we only register a job if its loop was
+    # actually launched. The `run_now` callables either invoke the
+    # loop's own one-cycle entry point (which self-audits) or are
+    # wrapped in `audit_run(...)` so each manual run lands one
+    # `ingestion_runs` row uniformly.
+    _register_background_jobs(
+        polygon_started=nightly_lake_task is not None,
+        schwab_started=nightly_schwab_task is not None,
+        silver_started=nightly_silver_ohlcv_task is not None,
+        live_lake_writer_started=_llw_settings.live_lake_writer_enabled,
+        journal_started=_settings.journal_enabled and _journal_has_creds,
+    )
+
     app.state.broadcast_signal = broadcast_signal
     logger.info("✅ Application startup complete")
 
@@ -483,6 +621,7 @@ app.include_router(routes_monitors.router, prefix=_V1, tags=["Monitors"])
 app.include_router(routes_watchlist.router, prefix=_V1, tags=["Watchlist"])
 app.include_router(routes_seed.router, prefix=_V1, tags=["Seed"])
 app.include_router(routes_stream.router, prefix=_V1, tags=["Stream"])
+app.include_router(routes_jobs.router, prefix=_V1, tags=["Jobs"])
 app.include_router(routes_clickhouse.router, prefix=_V1, tags=["ClickHouse"])
 
 try:
