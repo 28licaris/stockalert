@@ -2,16 +2,18 @@ import { useState } from "react";
 import { Outlet } from "react-router-dom";
 import { useUserSetting } from "@/lib/storage";
 import { cn } from "@/lib/utils";
+import { MarketBanner } from "@/components/market/MarketBanner";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import { StatusBar } from "./StatusBar";
 
 /**
- * The chrome around every cockpit page. Three persistent regions:
- *   - Sidebar (collapsible on desktop; slide-in drawer on mobile)
- *   - Topbar  (search, user)
- *   - StatusBar (subsystem health pills)
- * Page content renders inside <Outlet/> between Topbar and StatusBar.
+ * The chrome around every cockpit page. Persistent regions:
+ *   - Sidebar      (collapsible on desktop; slide-in drawer on mobile)
+ *   - MarketBanner (always-visible index/futures tape; md+ only)
+ *   - Topbar       (search, user)
+ *   - StatusBar    (subsystem health pills at the bottom)
+ * Page content renders inside <Outlet/>.
  */
 export function AppShell() {
   const [collapsed, setCollapsed] = useUserSetting<boolean>(
@@ -38,6 +40,7 @@ export function AppShell() {
             collapsed ? "md:ml-14" : "md:ml-56",
           )}
         >
+          <MarketBanner />
           <Topbar onMobileMenuOpen={() => setMobileOpen(true)} />
           <main className="min-h-0 flex-1 overflow-auto bg-bg-base">
             <Outlet />

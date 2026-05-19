@@ -68,6 +68,25 @@ Companion docs:
    eventually lifting `frontend/` into its own repo. See *Lift-out
    contract* below.
 
+**Persistent chrome around every page** (in `components/layout/AppShell.tsx`):
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Sidebar │ MarketBanner  (index / futures tape, 10s refresh) │
+│         ├──────────────────────────────────────────────────┤
+│         │ Topbar         (search trigger, user chip)        │
+│         ├──────────────────────────────────────────────────┤
+│         │                                                  │
+│         │ <Outlet />     (the active route)                │
+│         │                                                  │
+│         ├──────────────────────────────────────────────────┤
+│         │ StatusBar      (subsystem health pills)          │
+└─────────┴──────────────────────────────────────────────────┘
+```
+
+The MarketBanner is `md+` only — the cockpit is desktop-first, and a
+tape strip on a 375px phone would crowd the topbar instead of helping.
+
 **Runtime flow (production):**
 
 - FastAPI serves the SPA at `/app/` (see
@@ -202,7 +221,11 @@ frontend/
     │   └── utils.ts           cn() helper for shadcn
     ├── components/
     │   ├── layout/            AppShell, Sidebar, Topbar, StatusBar
-    │   └── ui/                shadcn primitives (button, etc.)
+    │   ├── market/            MarketBanner (always-visible tape strip)
+    │   ├── charts/            OhlcvChart wrapper
+    │   ├── tables/            BarsTable etc.
+    │   ├── ui/                shadcn primitives (button, etc.)
+    │   └── ApiErrorAlert.tsx  Typed error alert reading ErrorResponse
     ├── routes/
     │   ├── router.tsx         React Router config
     │   ├── status.tsx         /  (placeholder)

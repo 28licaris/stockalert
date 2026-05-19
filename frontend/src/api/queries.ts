@@ -70,6 +70,8 @@ export interface HealthServicesResponse {
 
 export const queryKeys = {
   healthServices: ["health", "services"] as const,
+  marketBanner: (symbols: string | undefined) =>
+    ["market", "banner", symbols ?? "default"] as const,
   symbolBars: (symbol: string, interval: string, limit: number) =>
     ["symbol", "bars", symbol, interval, limit] as const,
   symbolSignals: (symbol: string, limit: number) =>
@@ -92,6 +94,33 @@ export function useHealthServices() {
     queryFn: () =>
       fetchJson<HealthServicesResponse>("/api/v1/health/services"),
     refetchInterval: 10_000, // 10s — health changes fast enough to feel live
+    refetchOnWindowFocus: true,
+    staleTime: 5_000,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// /api/v1/market/banner — index + futures tape (always-visible strip)
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Index/futures tape strip. Passing `symbols=undefined` lets the
+ * backend pick from `settings.market_banner_symbols`. Refresh cadence
+ * matches the legacy dashboard (10s) so the AppShell strip feels
+ * live without thrashing Schwab's quote API.
+ */
+export function useMarketBanner(symbols?: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.marketBanner(symbols),
+    queryFn: async (): Promise<MarketBannerResponse> => {
+      const params = symbols ? { query: { symbols } } : undefined;
+      const { data } = await apiClient.GET("/api/v1/market/banner", {
+        params: params as { query: { symbols: string } },
+      });
+      // apiClient throws ApiError on non-2xx; data is non-null here.
+      return data as MarketBannerResponse;
+    },
+    refetchInterval: 10_000,
     refetchOnWindowFocus: true,
     staleTime: 5_000,
   });

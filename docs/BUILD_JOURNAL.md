@@ -3684,3 +3684,51 @@ so static HTML consumers (`dashboard.html`, `symbol.html`,
       `s.direction` field (this was a silent bug pre-CONTRACTS-2)
 - [x] `frontend/src/components/tables/BarsTable.tsx` — uses `Bar`
 
+---
+
+### Cockpit MarketBanner — drop-in (LANDED 2026-05-18)
+
+**Goal:** Surface the always-visible market tape (index + futures
+last/change) on every cockpit page, mirroring the legacy dashboard.
+
+**Status:** ✅ COMPLETE 2026-05-18
+**Gate evidence:**
+  - ✅ `useMarketBanner()` hook in `queries.ts` uses `apiClient.GET`
+    with full type chain (Pydantic `MarketBannerResponse` → TS)
+  - ✅ `<MarketBanner>` component in
+    `frontend/src/components/market/MarketBanner.tsx` —
+    horizontal scrollable strip of chips; per-chip color-coded
+    `change_pct`; click → `/symbol/<symbol>` for equity-style
+    symbols (index `$SPX` and future `/MNQM26` chips degrade to
+    non-link spans since they don't have cockpit symbol pages yet)
+  - ✅ Wired into `AppShell` above `Topbar`, persistent on every
+    route; `md:` breakpoint hides it on phones (cockpit is
+    desktop-first)
+  - ✅ Loading state: 4 skeleton chips; error state: muted
+    "market data unavailable" (banner failures shouldn't shout)
+  - ✅ Auto-refresh every 10s (matching Status page cadence);
+    same TanStack Query dedup pattern as `useHealthServices`
+  - ✅ Live smoke against operator backend:
+    `/api/v1/market/banner` returned real Schwab quotes
+    (SPX 7403.05, NDX 28994.37) with the typed shape
+  - ✅ Frontend gates: typecheck / lint / build all green; bundle
+    157 KB gz (target <250 KB)
+
+**Files**
+- [x] `frontend/src/api/queries.ts` — added `useMarketBanner` hook
+      + `queryKeys.marketBanner`
+- [x] `frontend/src/components/market/MarketBanner.tsx` — new
+- [x] `frontend/src/components/layout/AppShell.tsx` — mounts the
+      banner above the Topbar inside the content column
+- [x] `frontend/README.md` — added the chrome-layout diagram
+
+**Out of scope (deliberate)**
+- No `/symbol/$SPX` route yet — clicking an index doesn't navigate.
+  Index pages would need different chart logic (no OHLCV bars for
+  pure indexes) so it's its own follow-on, not a banner bug.
+- No marquee animation. Bloomberg-terminal aesthetic prefers static
+  legibility over motion; revisit if user feedback says otherwise.
+- No price-flash on update (green/red brief flash). Easy to add
+  later as a `useEffect` watching `item.last` — defer until real
+  data feeds make the difference perceptible.
+
