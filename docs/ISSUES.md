@@ -74,6 +74,40 @@ increase, etc.) and note what's blocking.
 
 ## Open
 
+### `cockpit-watchlists-page-no-default-selection`
+
+- **Area:** ui
+- **Filed:** 2026-05-19
+- **Status:** open
+- **Symptom:** Navigating to `/app/watchlists` shows the list of
+  watchlists on the left but the right-hand detail panel renders
+  the empty-state placeholder ("Select a watchlist on the left").
+  The operator expected at minimum the `default` watchlist to be
+  pre-selected — and ideally the most-recently-active one the user
+  last interacted with.
+- **Root cause:** `WatchlistsPage` in
+  [frontend/src/routes/watchlists.tsx](../frontend/src/routes/watchlists.tsx)
+  initializes `selected` as `null` and never auto-picks. The page
+  only opens a detail panel after the operator clicks a row.
+- **Suggested fix:** Two parts.
+  1. **Now (FE-CONTRACTS-3 follow-up):** auto-select on first load
+     using a fallback chain: `useUserSetting('watchlists.lastSelected')`
+     → first item whose name matches a `default` constant → first
+     item in the list. Persist `selected` to that
+     `useUserSetting` key on every selection change so the choice
+     survives reload.
+  2. **Later (FE-11+ SaaS phase):** when real auth lands, move the
+     same "last active watchlist" state from `localStorage` into
+     a per-tenant prefs endpoint (`GET/PUT /api/v1/me/prefs`),
+     keyed under `watchlists.lastSelected`. The cockpit's
+     `useUserSetting` hook already abstracts this — the SaaS swap
+     becomes a single-file change to its backing store.
+- **Notes:** the `useUserSetting` seam already exists at
+  [frontend/src/lib/storage.ts](../frontend/src/lib/storage.ts);
+  this fix is genuinely additive (~10 lines on the page + one
+  `useEffect`). Bundling it with the next FE-3 polish pass so
+  the commit covers "Watchlists page UX rough edges" as a group.
+
 ### `ta2-live-anthropic-run-deferred`
 
 - **Area:** tests, mcp
