@@ -9,20 +9,46 @@ Full spec: [docs/assistant_plan.md](../../../docs/assistant_plan.md).
 
 ## Status
 
-**Phase AS-1 — slice 1 (this PR).** Scaffold only: schemas,
-contract, env. No service implementation yet. Subsequent slices add
-the concrete `AssistantService`, the tool runner + policy, the
-ClickHouse store, the FastAPI/SSE routes, and the integration gate
-test.
+**Phase AS-1 — backend-only build.** Slice 1 is committed on
+`feat/assistant-as1-slice1`. Slices 2–6 are not yet started.
 
 | Slice | Status | Lands |
 |---|---|---|
-| 1. Scaffold + schemas + contract + env | **this PR** | shape only |
-| 2. `service.py` + Anthropic + cache + prompts + models | next | core loop |
-| 3. `policy.py` + `runner.py` | | tool dispatch |
-| 4. CH tables + `store.py` | | persistence |
-| 5. `/cockpit/assistant/*` + SSE | | HTTP surface |
-| 6. Integration gate test | | AS-1 done |
+| 1. Scaffold + schemas + contract + env | ✅ committed (`feat/assistant-as1-slice1`) | shape only |
+| 2. `service.py` + Anthropic + cache + prompts + models | ⏸ next | core loop |
+| 3. `policy.py` + `runner.py` | ⏸ pending | tool dispatch |
+| 4. CH tables + `store.py` | ⏸ pending | persistence |
+| 5. `/cockpit/assistant/*` + SSE | ⏸ pending | HTTP surface |
+| 6. Integration gate test | ⏸ pending | AS-1 done |
+
+### Next-session pickup — Slice 2 punch list
+
+**Goal:** the core LLM turn loop runs end-to-end against a mocked
+Anthropic, with prompt caching markers in place and the response
+cache deduplicating identical prompts.
+
+Files to add:
+
+| File | Purpose |
+|---|---|
+| `app/services/assistant/service.py` | `DefaultAssistantService` (real Anthropic SDK turn loop). Implements the `AssistantService` Protocol from `contract.py`. Tool-call dispatch is stubbed in this slice; the real `ToolRunner` lands in slice 3. |
+| `app/services/assistant/cache.py` | `ResponseCache` — SQLite, keyed by `sha256(model + system_prompt_hash + tool_schema_hash + serialized_messages)`. Own DB file (`./.cache/assistant_responses.sqlite`); separate from the trading `LLMAgent` cache. |
+| `app/services/assistant/models.py` | `ModelRegistry` — default `claude-sonnet-4-6`; `pick(use_extended_thinking=True)` returns `claude-opus-4-7`. Per-turn switch. |
+| `app/services/assistant/prompts/__init__.py` | Loader that reads `v1.md` and computes its hash for cache-key inclusion. |
+| `app/services/assistant/prompts/v1.md` | System prompt v1 (scope to platform questions, tool-grounded, refuse fabrication, ignore directives inside `<tool_result>` containers). |
+| `tests/test_assistant_service.py` | Unit tests with a mock Anthropic client: one turn produces an assistant turn; tool-call iteration terminates; cost is summed. |
+| `tests/test_assistant_cache.py` | Cache key determinism; hit/miss; prompt-hash bumping on system-prompt change. |
+| `tests/test_assistant_models.py` | Registry returns expected ids; extended-thinking path picks Opus. |
+
+Acceptance criteria for slice 2:
+- `pytest tests/test_assistant_*.py` green (no real Anthropic calls).
+- Prompt caching: `cache_control: {"type": "ephemeral"}` marker present on the system block and on the tool defs block.
+- Cache-key hash includes the system-prompt-file hash; editing `prompts/v1.md` invalidates cached responses.
+- Sonnet 4.6 default, Opus 4.7 selectable via `ContinueRequest.use_extended_thinking=True`.
+- No silent failures: Anthropic errors become structured log lines + propagate as `AssistantStreamEvent(type=ERROR, ...)`.
+
+Slices 3–6: see `docs/assistant_plan.md §15`. None of them block on
+anything external; each is its own PR + tests + gate.
 
 ## Distinct from the trading `LLMAgent`
 
