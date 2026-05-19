@@ -51,8 +51,8 @@ export function SymbolPage() {
     latest && prevClose ? ((latest.close - prevClose) / prevClose) * 100 : null;
 
   return (
-    <div className="flex h-full flex-col gap-4 p-4 md:p-6">
-      <header className="flex flex-wrap items-end justify-between gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-3 p-3 md:p-4">
+      <header className="flex shrink-0 flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-fg-base">
             {ticker}
@@ -82,16 +82,24 @@ export function SymbolPage() {
         <IntervalPicker value={interval} onChange={setInterval} />
       </header>
 
-      {bars.error ? <ApiErrorAlert error={bars.error} /> : null}
+      {bars.error ? (
+        <div className="shrink-0">
+          <ApiErrorAlert error={bars.error} />
+        </div>
+      ) : null}
 
-      <OhlcvChart bars={bars.data ?? []} signals={signals.data ?? []} />
+      {/* Chart fills available vertical space — passes height=undefined
+          so the chart takes 100% of its parent (this flex-1 div). */}
+      <div className="min-h-0 flex-1">
+        <OhlcvChart bars={bars.data ?? []} signals={signals.data ?? []} />
+      </div>
 
-      <section className="space-y-2">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
-          Recent bars
-        </h2>
+      {/* Bars table sits at the bottom: collapsed by default, expand
+          for debug. The component owns its open/closed state via
+          useUserSetting so it persists across reloads. */}
+      <div className="shrink-0">
         <BarsTable bars={bars.data ?? []} limit={50} />
-      </section>
+      </div>
     </div>
   );
 }

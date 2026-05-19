@@ -61,3 +61,52 @@ export function fmtTime(iso: string | null | undefined): string {
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleTimeString();
 }
+
+/** ET-formatted timestamp ("MM/DD HH:mm ET") for tables that care about
+ * the trading-day boundary. Uses `America/New_York` so DST auto-applies.
+ * String, not Date, because table rows compare visual values. */
+export function fmtTimeET(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+/**
+ * True iff the ISO timestamp falls within the US equity regular
+ * trading session (09:30–16:00 America/New_York), Mon–Fri.
+ *
+ * Uses `Intl.DateTimeFormat` to extract ET parts so DST is handled
+ * by the browser's timezone database — no hand-rolled offset math.
+ * Cheap to call per row (~µs); BarsTable filter calls this once
+ * per bar.
+ */
+export function isRegularSessionET(iso: string | null | undefined): boolean {
+  if (!iso) return false;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return false;
+  // Intl returns the date's components in the target TZ.
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+  const get = (type: string) =>
+    parts.find((p) => p.type === type)?.value ?? "";
+  const weekday = get("weekday");
+  if (weekday === "Sat" || weekday === "Sun") return false;
+  const hour = parseInt(get("hour"), 10);
+  const minute = parseInt(get("minute"), 10);
+  if (Number.isNaN(hour) || Number.isNaN(minute)) return false;
+  const minutesFromMidnight = hour * 60 + minute;
+  return minutesFromMidnight >= 9 * 60 + 30 && minutesFromMidnight < 16 * 60;
+}

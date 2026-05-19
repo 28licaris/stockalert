@@ -16,6 +16,11 @@ import { signalDirection } from "@/api/queries";
 interface OhlcvChartProps {
   bars: ReadonlyArray<Bar>;
   signals?: ReadonlyArray<Signal>;
+  /**
+   * If provided, fixes the chart at that pixel height. Omit to let
+   * the chart fill its container — pair with a parent that has a
+   * concrete height (e.g. `className="flex-1"` inside a flex column).
+   */
   height?: number;
 }
 
@@ -34,7 +39,7 @@ interface OhlcvChartProps {
  * so they work with `<alpha-value>`. We translate at this boundary
  * via `hslToken`.
  */
-export function OhlcvChart({ bars, signals, height = 480 }: OhlcvChartProps) {
+export function OhlcvChart({ bars, signals, height }: OhlcvChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -148,7 +153,10 @@ export function OhlcvChart({ bars, signals, height = 480 }: OhlcvChartProps) {
   return (
     <div
       ref={containerRef}
-      style={{ height }}
+      // When `height` is omitted the chart fills its parent (the
+      // parent must give it a concrete height — typically via
+      // `flex-1` inside a flex column). When set, fixes pixel height.
+      style={height ? { height } : { height: "100%" }}
       className="w-full rounded-md border border-border bg-bg-base"
       aria-label="OHLCV candlestick chart"
     />
