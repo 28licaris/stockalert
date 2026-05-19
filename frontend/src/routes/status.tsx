@@ -5,6 +5,7 @@ import {
   useHealthServices,
   type HealthState,
   type ServiceHealth,
+  type StreamSummary,
 } from "@/api/queries";
 import { fmtAgo, fmtInt, fmtLatency } from "@/lib/fmt";
 import { cn } from "@/lib/utils";
@@ -62,19 +63,7 @@ export function StatusPage() {
       <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <SummaryCard
           title="Streaming"
-          rows={[
-            ["Active tickers", fmtInt(query.data?.stream?.streaming_count)],
-            ["Universe size", fmtInt(query.data?.stream?.universe_count)],
-            ["Provider", query.data?.stream?.provider ?? "—"],
-            [
-              "State",
-              query.data?.stream?.provider_error
-                ? "Error"
-                : query.data?.stream?.provider_ready
-                  ? "Ready"
-                  : "Starting",
-            ],
-          ]}
+          rows={streamingRows(query.data?.stream)}
         />
         <SummaryCard
           title="Backfill queue"
@@ -157,6 +146,49 @@ function SummaryCard({
       </dl>
     </div>
   );
+}
+
+/**
+ * Streaming tile rows.
+ *
+ * `streaming_count` (live Schwab subscriptions) and `universe_count`
+ * (active rows in `stream_universe`) should match in normal operation
+ * — the StreamService writes the CH row and subscribes Schwab in the
+ * same call. They only diverge when a subscribe is rejected (invalid
+ * symbol, REACHED_SYMBOL_LIMIT, token error). When they match we show
+ * a single "Streaming" number to keep the tile uncluttered; when they
+ * diverge we surface the drift as a warning row so the operator can
+ * act.
+ */
+function streamingRows(
+  s: StreamSummary | undefined,
+): ReadonlyArray<readonly [string, string]> {
+  const streaming = s?.streaming_count;
+  const universe = s?.universe_count;
+  const stateLabel = s?.provider_error
+    ? "Error"
+    : s?.provider_ready
+      ? "Ready"
+      : "Starting";
+
+  const rows: Array<readonly [string, string]> = [
+    ["Streaming", fmtInt(streaming)],
+    ["Provider", s?.provider ?? "—"],
+    ["State", stateLabel],
+  ];
+
+  if (
+    streaming != null &&
+    universe != null &&
+    streaming !== universe
+  ) {
+    rows.splice(1, 0, [
+      "Not subscribed",
+      fmtInt(universe - streaming),
+    ]);
+  }
+
+  return rows;
 }
 
 function loadingSkeleton(n: number): ServiceHealth[] {
