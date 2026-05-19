@@ -1,4 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { ApiError, readErrorEnvelope } from "@/lib/errors";
 import { apiClient } from "./client";
 import type { components } from "./types.gen";
@@ -33,6 +37,15 @@ export type MarketBannerResponse =
   components["schemas"]["MarketBannerResponse"];
 export type Mover = components["schemas"]["Mover"];
 export type MoversResponse = components["schemas"]["MoversResponse"];
+
+// Watchlists + monitors (FE-CONTRACTS-3)
+export type Watchlist = components["schemas"]["Watchlist"];
+export type CreateWatchlistRequest =
+  components["schemas"]["CreateWatchlistRequest"];
+export type WatchlistMembersMutationResponse =
+  components["schemas"]["WatchlistMembersMutationResponse"];
+export type WatchlistStatus = components["schemas"]["WatchlistStatus"];
+export type MonitorInfo = components["schemas"]["MonitorInfo"];
 
 // ─────────────────────────────────────────────────────────────────────
 // /api/health/services — composite Status page health
@@ -76,6 +89,8 @@ export const queryKeys = {
     ["symbol", "bars", symbol, interval, limit] as const,
   symbolSignals: (symbol: string, limit: number) =>
     ["symbol", "signals", symbol, limit] as const,
+  watchlists: ["watchlists"] as const,
+  watchlist: (name: string) => ["watchlist", name] as const,
 } as const;
 
 /** Small fetch helper for routes that haven't yet been typed via apiClient. */
@@ -184,4 +199,105 @@ export function signalDirection(signal: Signal): "bull" | "bear" | "unknown" {
   if (t.includes("bull")) return "bull";
   if (t.includes("bear")) return "bear";
   return "unknown";
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// /api/v1/watchlists — CRUD on named watchlists (FE-CONTRACTS-3)
+// ─────────────────────────────────────────────────────────────────────
+
+export function useWatchlists() {
+  return useQuery({
+    queryKey: queryKeys.watchlists,
+    queryFn: async (): Promise<Watchlist[]> => {
+      const { data } = await apiClient.GET("/api/v1/watchlists", {
+        params: { query: { include_inactive: false, with_members: true } },
+      });
+      return data ?? [];
+    },
+    staleTime: 5_000,
+  });
+}
+
+/**
+ * Mutation hooks invalidate the watchlist cache so any open
+ * Watchlists page picks up the change immediately. The pattern keeps
+ * components stateless — they just call `mutate({...})` and TanStack
+ * Query handles the rest.
+ */
+
+export function useCreateWatchlist() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (req: CreateWatchlistRequest): Promise<Watchlist> => {
+      const { data } = await apiClient.POST("/api/v1/watchlists", {
+        body: req,
+      });
+      return data as Watchlist;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.watchlists });
+    },
+  });
+}
+
+export function useDeleteWatchlist() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (name: string): Promise<{ deleted: string }> => {
+      const { data } = await apiClient.DELETE("/api/v1/watchlists/{name}", {
+        params: { path: { name } },
+      });
+      return data as { deleted: string };
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.watchlists });
+    },
+  });
+}
+
+export interface MutateMembersInput {
+  name: string;
+  symbols: string[];
+}
+
+export function useAddWatchlistMembers() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (
+      input: MutateMembersInput,
+    ): Promise<WatchlistMembersMutationResponse> => {
+      const { data } = await apiClient.POST(
+        "/api/v1/watchlists/{name}/members",
+        {
+          params: { path: { name: input.name } },
+          body: { symbols: input.symbols },
+        },
+      );
+      return data as WatchlistMembersMutationResponse;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.watchlists });
+    },
+  });
+}
+
+export function useRemoveWatchlistMembers() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (
+      input: MutateMembersInput,
+    ): Promise<WatchlistMembersMutationResponse> => {
+      const { data } = await apiClient.DELETE(
+        "/api/v1/watchlists/{name}/members",
+        {
+          params: { path: { name: input.name } },
+          body: { symbols: input.symbols },
+        },
+      );
+      return data as WatchlistMembersMutationResponse;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.watchlists });
+    },
+  });
 }

@@ -26,7 +26,7 @@ const FLAGS: Record<string, FlagValue> = {
   "page.runs": false,
   "page.journal": false,
   "page.monitors": false,
-  "page.watchlists": false,
+  "page.watchlists": true, // enabled in FE-CONTRACTS-3
   "page.mcp": false,
   "page.settings": false,
 

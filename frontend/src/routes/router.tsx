@@ -2,6 +2,7 @@ import { createBrowserRouter } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatusPage } from "./status";
 import { SymbolPage } from "./symbol";
+import { WatchlistsPage } from "./watchlists";
 import { NotFoundPage } from "./not-found";
 
 /**
@@ -21,6 +22,7 @@ export const router = createBrowserRouter(
         { index: true, element: <StatusPage /> },
         { path: "symbol", element: <SymbolPage /> },
         { path: "symbol/:ticker", element: <SymbolPage /> },
+        { path: "watchlists", element: <WatchlistsPage /> },
         { path: "*", element: <NotFoundPage /> },
       ],
     },

@@ -643,9 +643,11 @@ export interface paths {
         };
         /**
          * List Monitors
-         * @description List all active monitors.
+         * @description List all active monitors, keyed by monitor identity.
          *
-         *     FIXED: Made async and added error handling.
+         *     Wire shape: `{ "<indicator>:<symbol>:<signal_type>": MonitorInfo, ... }`.
+         *     The bare-dict shape is preserved so the cockpit reads it as
+         *     `Record<string, MonitorInfo>` without extra unwrapping.
          */
         get: operations["list_monitors_api_v1_monitors_get"];
         put?: never;
@@ -1404,7 +1406,10 @@ export interface components {
              */
             count: number;
         };
-        /** CreateWatchlistRequest */
+        /**
+         * CreateWatchlistRequest
+         * @description Body for `POST /api/v1/watchlists`.
+         */
         CreateWatchlistRequest: {
             /** Name */
             name: string;
@@ -1419,6 +1424,17 @@ export interface components {
              * @default
              */
             description: string;
+        };
+        /**
+         * DeleteWatchlistResponse
+         * @description Response for `DELETE /api/v1/watchlists/{name}`.
+         */
+        DeleteWatchlistResponse: {
+            /**
+             * Deleted
+             * @description Name of the watchlist that was soft-deleted.
+             */
+            deleted: string;
         };
         /** GapFillRequest */
         GapFillRequest: {
@@ -1681,6 +1697,24 @@ export interface components {
             count: number;
         };
         /**
+         * LegacyWatchlistMutationResponse
+         * @description Shape returned by legacy `POST /api/v1/watchlist/add` and `/remove`.
+         *
+         *     Different from the multi-list mutation response — the legacy shape
+         *     omits `watchlist` and uses `symbols` instead of `members`.
+         */
+        LegacyWatchlistMutationResponse: {
+            /** Added */
+            added?: string[];
+            /** Removed */
+            removed?: string[];
+            /**
+             * Symbols
+             * @description Full active member list of the default watchlist after the mutation.
+             */
+            symbols: string[];
+        };
+        /**
          * MarketBannerResponse
          * @description The full banner payload.
          * @example {
@@ -1720,7 +1754,61 @@ export interface components {
              */
             errors?: components["schemas"]["BannerError"][];
         };
-        /** MonitorRequest */
+        /**
+         * MonitorActionResponse
+         * @description Response from start/stop mutations.
+         */
+        MonitorActionResponse: {
+            /**
+             * Status
+             * @description 'success' on the happy path; failure modes are surfaced as HTTPException with ErrorResponse envelope.
+             */
+            status: string;
+            /** Message */
+            message: string;
+            /**
+             * Details
+             * @description Per-ticker result from the monitor manager (free-form; mirrors the existing dashboard shape).
+             */
+            details?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * MonitorInfo
+         * @description A single running monitor's state.
+         */
+        MonitorInfo: {
+            /**
+             * Tickers
+             * @description Symbols this monitor task is watching.
+             */
+            tickers: string[];
+            /**
+             * Indicator
+             * @description Indicator name driving the rule (e.g. 'rsi', 'macd', 'tsi').
+             */
+            indicator: string;
+            /**
+             * Signal Type
+             * @description Type of divergence the monitor fires on (e.g. 'hidden_bullish_divergence').
+             */
+            signal_type: string;
+            /**
+             * Status
+             * @description One of: 'running', 'completed', 'cancelled', 'failed: <msg>', 'unknown'.
+             */
+            status: string;
+            /**
+             * Started At
+             * @description ISO 8601 with `Z` suffix.
+             */
+            started_at?: string | null;
+        };
+        /**
+         * MonitorRequest
+         * @description Body for `POST /api/v1/monitors/start` and `/stop`.
+         */
         MonitorRequest: {
             /** Tickers */
             tickers: string[];
@@ -1872,7 +1960,10 @@ export interface components {
              */
             note: string;
         };
-        /** RenameWatchlistRequest */
+        /**
+         * RenameWatchlistRequest
+         * @description Body for `PATCH /api/v1/watchlists/{name}`.
+         */
         RenameWatchlistRequest: {
             /** New Name */
             new_name: string;
@@ -2181,7 +2272,10 @@ export interface components {
              */
             count: number;
         };
-        /** SymbolsRequest */
+        /**
+         * SymbolsRequest
+         * @description Body for member-mutation endpoints.
+         */
         SymbolsRequest: {
             /**
              * Symbols
@@ -2214,6 +2308,174 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /**
+         * Watchlist
+         * @description A user-owned named watchlist.
+         * @example {
+         *       "description": "Mega-cap tech longs",
+         *       "is_active": true,
+         *       "kind": "user",
+         *       "member_count": 3,
+         *       "members": [
+         *         "AAPL",
+         *         "NVDA",
+         *         "GOOGL"
+         *       ],
+         *       "name": "tech_focus",
+         *       "updated_at": "2026-05-18T18:30:00Z"
+         *     }
+         */
+        Watchlist: {
+            /** Name */
+            name: string;
+            /**
+             * Kind
+             * @description One of: 'user', 'baseline', 'adhoc'. Free-form on the wire so a future kind doesn't break existing clients.
+             */
+            kind: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Is Active
+             * @description Soft-delete flag. Active=True is the happy path; inactive watchlists are hidden from default list responses.
+             */
+            is_active: boolean;
+            /**
+             * Updated At
+             * @description ISO 8601 with `Z` suffix. Null if never updated.
+             */
+            updated_at?: string | null;
+            /**
+             * Members
+             * @description Active member symbols, in insertion order. Null when the endpoint didn't include members.
+             */
+            members?: string[] | null;
+            /**
+             * Member Count
+             * @description Convenience count; null when members aren't included.
+             */
+            member_count?: number | null;
+        };
+        /**
+         * WatchlistMembersMutationResponse
+         * @description Shape returned by `POST/DELETE /api/v1/watchlists/{name}/members`.
+         *
+         *     Wire shape preserved from `WatchlistService.add_members` /
+         *     `.remove_members` so the legacy dashboard keeps parsing this.
+         */
+        WatchlistMembersMutationResponse: {
+            /**
+             * Watchlist
+             * @description The watchlist that was mutated.
+             */
+            watchlist: string;
+            /**
+             * Added
+             * @description Symbols newly activated for this watchlist (POST). Empty for remove operations.
+             */
+            added?: string[];
+            /**
+             * Removed
+             * @description Symbols deactivated (DELETE). Empty for add operations.
+             */
+            removed?: string[];
+            /**
+             * Members
+             * @description Full active member list after the mutation.
+             */
+            members: string[];
+        };
+        /**
+         * WatchlistSnapshotItem
+         * @description Latest-bar snapshot for one watchlist member.
+         *
+         *     Wire shape preserved from `_snapshot_for()` in routes_watchlist.
+         *     Note: `bar_count` is a watchlist-quality metric (it indicates
+         *     whether the symbol has been receiving bars), not a market metric,
+         *     so it deliberately doesn't live on the canonical `Bar` shape.
+         */
+        WatchlistSnapshotItem: {
+            /** Symbol */
+            symbol: string;
+            /**
+             * Bar Count
+             * @description Number of bars stored for this symbol. 0 means the symbol is configured but no bars have arrived yet.
+             */
+            bar_count: number;
+            /** Ts */
+            ts?: string | null;
+            /** Open */
+            open?: number | null;
+            /** High */
+            high?: number | null;
+            /** Low */
+            low?: number | null;
+            /** Close */
+            close?: number | null;
+            /** Volume */
+            volume?: number | null;
+        };
+        /**
+         * WatchlistStatus
+         * @description Shape returned by the legacy `GET /api/v1/watchlist` — global stream status.
+         */
+        WatchlistStatus: {
+            /**
+             * Started
+             * @description Whether the live-bar stream has been started.
+             */
+            started: boolean;
+            /**
+             * Provider
+             * @description Active stream provider (e.g. 'schwab', 'polygon').
+             */
+            provider: string;
+            /**
+             * Provider Ready
+             * @description True iff the provider's underlying client/OAuth/etc. is initialized.
+             */
+            provider_ready: boolean;
+            /**
+             * Provider Error
+             * @description Last provider init error; null when healthy.
+             */
+            provider_error?: string | null;
+            /**
+             * Symbol Count
+             * @description Member count of the DEFAULT watchlist (legacy field).
+             */
+            symbol_count: number;
+            /**
+             * Symbols
+             * @description DEFAULT watchlist members (legacy field; new code reads /api/v1/watchlists/<name>/members).
+             */
+            symbols: string[];
+            /**
+             * Streaming Symbols
+             * @description Symbols currently subscribed across ALL watchlists + baseline. The new global subscription set.
+             */
+            streaming_symbols: string[];
+            /** Subscribed Count */
+            subscribed_count: number;
+            /**
+             * Baseline Count
+             * @description Count of symbols held by 'baseline' watchlists (always-streamed).
+             */
+            baseline_count: number;
+            /**
+             * Refcounted Count
+             * @description Count of symbols held by ref-counted (user/adhoc) watchlists.
+             */
+            refcounted_count: number;
+            /**
+             * Watchlist Count
+             * @description Total active watchlists (default + user + baseline + adhoc).
+             */
+            watchlist_count: number;
         };
     };
     responses: never;
@@ -3125,7 +3387,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        [key: string]: components["schemas"]["MonitorInfo"];
+                    };
                 };
             };
         };
@@ -3149,7 +3413,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["MonitorActionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3182,7 +3446,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["MonitorActionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3211,7 +3475,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["WatchlistStatus"];
                 };
             };
         };
@@ -3235,7 +3499,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["LegacyWatchlistMutationResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3268,7 +3532,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["LegacyWatchlistMutationResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3297,7 +3561,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["WatchlistSnapshotItem"][];
                 };
             };
         };
@@ -3320,7 +3584,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Watchlist"][];
                 };
             };
             /** @description Validation Error */
@@ -3353,7 +3617,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Watchlist"];
                 };
             };
             /** @description Validation Error */
@@ -3384,7 +3648,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Watchlist"];
                 };
             };
             /** @description Validation Error */
@@ -3415,7 +3679,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DeleteWatchlistResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3450,7 +3714,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Watchlist"];
                 };
             };
             /** @description Validation Error */
@@ -3481,7 +3745,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": string[];
                 };
             };
             /** @description Validation Error */
@@ -3516,7 +3780,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["WatchlistMembersMutationResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3551,7 +3815,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["WatchlistMembersMutationResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3582,7 +3846,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["WatchlistSnapshotItem"][];
                 };
             };
             /** @description Validation Error */

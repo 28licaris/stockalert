@@ -13,11 +13,20 @@ Two URL families coexist here:
 from __future__ import annotations
 
 import logging
-from typing import List
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
 
+from app.api.schemas.watchlists import (
+    CreateWatchlistRequest,
+    DeleteWatchlistResponse,
+    LegacyWatchlistMutationResponse,
+    RenameWatchlistRequest,
+    SymbolsRequest,
+    Watchlist,
+    WatchlistMembersMutationResponse,
+    WatchlistSnapshotItem,
+    WatchlistStatus,
+)
 from app.db import queries, watchlist_repo
 from app.services.live.watchlist_service import watchlist_service
 
@@ -93,92 +102,96 @@ async def _snapshot_for(symbols: list[str]) -> list[dict]:
     return snapshot
 
 
-class SymbolsRequest(BaseModel):
-    symbols: List[str] = Field(..., description="Stock symbols, e.g. ['SPY', 'AAPL']")
-
-
 # ============================================================================
 # Legacy single-watchlist routes  (operate on the implicit `default` watchlist)
 # ============================================================================
 
 
-@router.get("/watchlist")
-async def get_watchlist():
+@router.get("/watchlist", response_model=WatchlistStatus)
+async def get_watchlist() -> WatchlistStatus:
     """Return the current (default) watchlist and stream status."""
-    return watchlist_service.status()
+    return WatchlistStatus(**watchlist_service.status())
 
 
-@router.post("/watchlist/add")
-async def add_to_watchlist(req: SymbolsRequest):
+@router.post("/watchlist/add", response_model=LegacyWatchlistMutationResponse)
+async def add_to_watchlist(req: SymbolsRequest) -> LegacyWatchlistMutationResponse:
     """Add one or more symbols and immediately subscribe to their live bars."""
     try:
-        return watchlist_service.add(req.symbols)
+        result = watchlist_service.add(req.symbols)
     except Exception as e:
         logger.error("Watchlist add failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+    return LegacyWatchlistMutationResponse(
+        added=result.get("added", []),
+        symbols=result.get("symbols", []),
+    )
 
 
-@router.post("/watchlist/remove")
-async def remove_from_watchlist(req: SymbolsRequest):
+@router.post("/watchlist/remove", response_model=LegacyWatchlistMutationResponse)
+async def remove_from_watchlist(req: SymbolsRequest) -> LegacyWatchlistMutationResponse:
     """Remove one or more symbols and unsubscribe from their live bars."""
     try:
-        return watchlist_service.remove(req.symbols)
+        result = watchlist_service.remove(req.symbols)
     except Exception as e:
         logger.error("Watchlist remove failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+    return LegacyWatchlistMutationResponse(
+        removed=result.get("removed", []),
+        symbols=result.get("symbols", []),
+    )
 
 
-@router.get("/watchlist/snapshot")
-async def watchlist_snapshot():
+@router.get("/watchlist/snapshot", response_model=list[WatchlistSnapshotItem])
+async def watchlist_snapshot() -> list[WatchlistSnapshotItem]:
     """Latest bar for each symbol in the default watchlist."""
-    return await _snapshot_for(watchlist_service.list_symbols())
+    rows = await _snapshot_for(watchlist_service.list_symbols())
+    return [WatchlistSnapshotItem(**r) for r in rows]
 
 
 # ============================================================================
-# Multi-watchlist routes (Phase 1.3) — `/api/watchlists` family
+# Multi-watchlist routes (Phase 1.3) — `/api/v1/watchlists` family
 # ============================================================================
 
 
-class CreateWatchlistRequest(BaseModel):
-    name: str = Field(..., min_length=1, max_length=64)
-    kind: str = Field("user", description="One of: user, baseline, adhoc")
-    description: str = Field("", max_length=500)
-
-
-class RenameWatchlistRequest(BaseModel):
-    new_name: str = Field(..., min_length=1, max_length=64)
-
-
-@router.get("/watchlists")
-async def list_watchlists_endpoint(include_inactive: bool = False, with_members: bool = True):
+@router.get("/watchlists", response_model=list[Watchlist])
+async def list_watchlists_endpoint(
+    include_inactive: bool = False,
+    with_members: bool = True,
+) -> list[Watchlist]:
     """List all watchlists. By default returns active ones with their member lists."""
     wls = watchlist_service.list_watchlists(include_inactive=include_inactive)
-    return [_serialize_wl(wl, with_members=with_members) for wl in wls]
+    return [Watchlist(**_serialize_wl(wl, with_members=with_members)) for wl in wls]
 
 
-@router.post("/watchlists", status_code=201)
-async def create_watchlist_endpoint(req: CreateWatchlistRequest):
+@router.post(
+    "/watchlists",
+    status_code=201,
+    response_model=Watchlist,
+)
+async def create_watchlist_endpoint(req: CreateWatchlistRequest) -> Watchlist:
     """Create (or reactivate) a watchlist. Idempotent."""
     if req.kind not in watchlist_repo.VALID_KINDS:
         raise HTTPException(400, f"invalid kind '{req.kind}'; allowed: {sorted(watchlist_repo.VALID_KINDS)}")
     try:
         wl = watchlist_service.create_watchlist(req.name, kind=req.kind, description=req.description)
-        return _serialize_wl(wl, with_members=True)
+        return Watchlist(**_serialize_wl(wl, with_members=True))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
 
-@router.get("/watchlists/{name}")
-async def get_watchlist_endpoint(name: str):
+@router.get("/watchlists/{name}", response_model=Watchlist)
+async def get_watchlist_endpoint(name: str) -> Watchlist:
     """Single watchlist with its members."""
     wl = watchlist_service.get_watchlist(name)
     if wl is None or not wl.get("is_active"):
         raise HTTPException(404, f"watchlist '{name}' not found")
-    return _serialize_wl(wl, with_members=True)
+    return Watchlist(**_serialize_wl(wl, with_members=True))
 
 
-@router.patch("/watchlists/{name}")
-async def rename_watchlist_endpoint(name: str, req: RenameWatchlistRequest):
+@router.patch("/watchlists/{name}", response_model=Watchlist)
+async def rename_watchlist_endpoint(
+    name: str, req: RenameWatchlistRequest
+) -> Watchlist:
     """Rename a watchlist (members move with it)."""
     if name == "default":
         # Keep `default` as a stable shim target so the legacy /watchlist routes
@@ -187,23 +200,23 @@ async def rename_watchlist_endpoint(name: str, req: RenameWatchlistRequest):
         raise HTTPException(400, "the 'default' watchlist cannot be renamed")
     try:
         wl = watchlist_service.rename_watchlist(name, req.new_name)
-        return _serialize_wl(wl, with_members=True)
+        return Watchlist(**_serialize_wl(wl, with_members=True))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
 
-@router.delete("/watchlists/{name}")
-async def delete_watchlist_endpoint(name: str):
+@router.delete("/watchlists/{name}", response_model=DeleteWatchlistResponse)
+async def delete_watchlist_endpoint(name: str) -> DeleteWatchlistResponse:
     """Soft-delete a watchlist. Members move with it (refcount on subscriptions decrements)."""
     if name == "default":
         raise HTTPException(400, "the 'default' watchlist cannot be deleted")
     if not watchlist_service.delete_watchlist(name):
         raise HTTPException(404, f"watchlist '{name}' not found or already inactive")
-    return {"deleted": name}
+    return DeleteWatchlistResponse(deleted=name)
 
 
-@router.get("/watchlists/{name}/members")
-async def list_members_endpoint(name: str):
+@router.get("/watchlists/{name}/members", response_model=list[str])
+async def list_members_endpoint(name: str) -> list[str]:
     """List active members of a watchlist."""
     wl = watchlist_service.get_watchlist(name)
     if wl is None or not wl.get("is_active"):
@@ -211,33 +224,57 @@ async def list_members_endpoint(name: str):
     return watchlist_service.list_members(name)
 
 
-@router.post("/watchlists/{name}/members")
-async def add_members_endpoint(name: str, req: SymbolsRequest):
+@router.post(
+    "/watchlists/{name}/members",
+    response_model=WatchlistMembersMutationResponse,
+)
+async def add_members_endpoint(
+    name: str, req: SymbolsRequest
+) -> WatchlistMembersMutationResponse:
     """Add symbols to a watchlist (auto-creates it). Idempotent. Triggers backfill for newly-added symbols."""
     try:
-        return watchlist_service.add_members(name, req.symbols)
+        result = watchlist_service.add_members(name, req.symbols)
     except Exception as e:
         logger.error("Watchlist add_members failed: %s", e, exc_info=True)
         raise HTTPException(500, str(e))
+    return WatchlistMembersMutationResponse(
+        watchlist=result.get("watchlist", name),
+        added=result.get("added", []),
+        members=result.get("members", []),
+    )
 
 
-@router.delete("/watchlists/{name}/members")
-async def remove_members_endpoint(name: str, req: SymbolsRequest):
+@router.delete(
+    "/watchlists/{name}/members",
+    response_model=WatchlistMembersMutationResponse,
+)
+async def remove_members_endpoint(
+    name: str, req: SymbolsRequest
+) -> WatchlistMembersMutationResponse:
     """Remove symbols from a watchlist. Idempotent."""
     wl = watchlist_service.get_watchlist(name)
     if wl is None or not wl.get("is_active"):
         raise HTTPException(404, f"watchlist '{name}' not found")
     try:
-        return watchlist_service.remove_members(name, req.symbols)
+        result = watchlist_service.remove_members(name, req.symbols)
     except Exception as e:
         logger.error("Watchlist remove_members failed: %s", e, exc_info=True)
         raise HTTPException(500, str(e))
+    return WatchlistMembersMutationResponse(
+        watchlist=result.get("watchlist", name),
+        removed=result.get("removed", []),
+        members=result.get("members", []),
+    )
 
 
-@router.get("/watchlists/{name}/snapshot")
-async def watchlist_snapshot_endpoint(name: str):
+@router.get(
+    "/watchlists/{name}/snapshot",
+    response_model=list[WatchlistSnapshotItem],
+)
+async def watchlist_snapshot_endpoint(name: str) -> list[WatchlistSnapshotItem]:
     """Latest bar for each symbol in the named watchlist."""
     wl = watchlist_service.get_watchlist(name)
     if wl is None or not wl.get("is_active"):
         raise HTTPException(404, f"watchlist '{name}' not found")
-    return await _snapshot_for(watchlist_service.list_members(name))
+    rows = await _snapshot_for(watchlist_service.list_members(name))
+    return [WatchlistSnapshotItem(**r) for r in rows]

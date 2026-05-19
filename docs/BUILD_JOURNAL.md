@@ -3512,8 +3512,10 @@ locked. FE-CONTRACTS-1 starts next. Full plan in
 - [x] **FE-CONTRACTS-2** ✅ COMPLETE 2026-05-18 — Bar, Signal,
       InstrumentMatch, MarketBanner, Movers models; cockpit
       hand-rolled types deleted. See FE-CONTRACTS-2 detail block below.
-- [ ] **FE-CONTRACTS-3** (~2 days) — Watchlist + Monitor models;
-      prefix cleanup; `/api/v1/watchlists`, `/api/v1/monitors`
+- [x] **FE-CONTRACTS-3** ✅ COMPLETE 2026-05-18 — Watchlist +
+      Monitor models; `/api/v1/watchlists`, `/api/v1/monitors`
+      response_model coverage; first real CRUD page at
+      `/app/watchlists`. See detail block below.
 - [ ] **FE-CONTRACTS-4** (~3 days) — Seed universe migration to CH
       + one-time bootstrap from current state; `/api/v1/seed`,
       `/api/v1/config/streaming`
@@ -3731,4 +3733,86 @@ last/change) on every cockpit page, mirroring the legacy dashboard.
 - No price-flash on update (green/red brief flash). Easy to add
   later as a `useEffect` watching `item.last` — defer until real
   data feeds make the difference perceptible.
+
+---
+
+### FE-CONTRACTS-3 — detail (LANDED 2026-05-18)
+
+**Goal:** Type the watchlist (13 routes) and monitor (3 routes)
+surfaces. Build the first real CRUD page in the cockpit:
+`/app/watchlists`.
+
+**Status:** ✅ COMPLETE 2026-05-18
+**Gate evidence:**
+  - ✅ 12 new Pydantic models published in OpenAPI:
+    Watchlist, CreateWatchlistRequest, RenameWatchlistRequest,
+    SymbolsRequest, DeleteWatchlistResponse,
+    WatchlistMembersMutationResponse, WatchlistSnapshotItem,
+    WatchlistStatus, LegacyWatchlistMutationResponse,
+    MonitorInfo, MonitorRequest, MonitorActionResponse
+  - ✅ All 13 watchlist routes + 3 monitor routes declare
+    response_model. Monitors uses `dict[str, MonitorInfo]` so the
+    legacy keyed-dict wire shape is preserved
+  - ✅ Backend regression sweep: **1014 passed, 5 skipped, 0 failed**
+    (was 1001; +13 new tests in test_api_v1_watchlists_monitors.py)
+  - ✅ Frontend gates: typecheck / lint / build green; bundle
+    159 KB gz (target <250 KB)
+  - ✅ Full CRUD round-trip smoke against live backend: create
+    → add 3 members → remove 1 → delete watchlist → verify gone
+  - ✅ `useWatchlists`, `useCreateWatchlist`, `useDeleteWatchlist`,
+    `useAddWatchlistMembers`, `useRemoveWatchlistMembers` hooks
+    use `apiClient.GET/POST/DELETE` with full type chain; mutations
+    invalidate `queryKeys.watchlists` so any open page refreshes
+  - ✅ `page.watchlists` flag flipped to `true`; sidebar nav now
+    shows the Watchlists entry
+
+### Page UI shipped (FE-3 first cut)
+  - List active watchlists with kind + member count
+  - Click a watchlist → expanded detail panel
+  - Create new watchlist (name + optional description)
+  - Add members (comma- or space-separated, normalized to uppercase)
+  - Remove individual members (× button per member)
+  - Soft-delete a watchlist (with confirm step)
+  - Default watchlist marked "shim · cannot delete"
+  - Each member symbol is a Link to /symbol/<sym> for chart view
+  - Loading skeletons, ApiErrorAlert for failures, refresh button
+
+### Sticky-universe model documented
+The page intro text states the locked
+[§10.1 sticky-universe model](frontend_api_contracts.md): adding
+a symbol to a watchlist that isn't in the universe will subscribe
+streaming + backfill, but removing from a watchlist will NOT
+unsubscribe. Operator-explicit removal-from-universe is FE-CONTRACTS-4.
+
+### Backend changes
+- [x] `app/api/schemas/watchlists.py` — 9 models
+- [x] `app/api/schemas/monitors.py` — 3 models
+- [x] `app/api/routes_watchlist.py` — every route typed; local
+      Pydantic models removed; route bodies build typed responses
+      from service dicts
+- [x] `app/api/routes_monitors.py` — rewritten with response_model
+      annotations and the new typed request/response classes
+- [x] `tests/test_api_v1_watchlists_monitors.py` — 13 tests
+      (OpenAPI presence + per-route response_model assertion +
+      live wire shape + CRUD round-trip)
+
+### Frontend changes
+- [x] `frontend/src/api/types.gen.ts` — regenerated; now contains
+      every Watchlist + Monitor schema
+- [x] `frontend/src/api/queries.ts` — typed re-exports + 5 hooks
+      (`useWatchlists`, `useCreateWatchlist`, `useDeleteWatchlist`,
+      `useAddWatchlistMembers`, `useRemoveWatchlistMembers`)
+- [x] `frontend/src/routes/watchlists.tsx` — new page (~330 lines)
+- [x] `frontend/src/routes/router.tsx` — `/watchlists` route
+- [x] `frontend/src/flags.ts` — `page.watchlists` flipped on
+
+### Deferred (scoped follow-ons)
+- [ ] PATCH /watchlists/{name} rename — endpoint typed; UI deferred
+      because mutation pattern is the same as the others
+- [ ] Live snapshot column (last price per member) — waits for
+      silver→CH hot-load completion
+- [ ] "Use as screener universe" — depends on FE-3 screener page
+- [ ] Drag-drop member reorder — nice-to-have
+- [ ] Soft-deleted watchlists view + restore — `include_inactive=true`
+      already supported by the API
 
