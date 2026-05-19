@@ -2,17 +2,21 @@
 """
 One-time setup: get a Schwab refresh token via OAuth in the browser.
 
-Supports two flows:
+Default flow (recommended — no extra tooling):
+  1. In .env set SCHWAB_CALLBACK_URL=https://127.0.0.1:8080/oauth/callback
+     (or any 127.0.0.1 / localhost HTTPS URL; must match the Schwab
+     Developer Portal app registration).
+  2. Run this script. Your browser opens to Schwab's sign-in page.
+  3. After sign-in the browser tries to redirect and shows
+     "site can't be reached" — that's expected.
+  4. Copy the full URL from the address bar and paste it back into
+     this script. It extracts the auth code and writes the refresh
+     token to data/.schwab_refresh_token.
 
-  Paste flow (no ngrok): Set SCHWAB_CALLBACK_URL to a local HTTPS URL
-  (e.g. https://127.0.0.1:8080/oauth/callback). After you sign in, the browser
-  will show "site can't be reached" — copy the full URL from the address bar
-  and paste it when the script asks. The script extracts the code and saves
-  the token. No ngrok or extra tools needed.
-
-  Server flow (ngrok): Set SCHWAB_CALLBACK_URL to your ngrok HTTPS URL + /callback.
-  Run ngrok http 8765, then run this script. After sign-in you'll see
-  "Authorization successful" and the script will receive the token automatically.
+Server-callback flow (advanced — only if you've intentionally set up
+a non-localhost callback, e.g. via a public tunnel forwarding to
+port 8765): set SCHWAB_CALLBACK_URL accordingly and have the tunnel
+running before launching this script.
 """
 import webbrowser
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -144,7 +148,12 @@ def main() -> None:
         sys.exit(1)
     if not REDIRECT_URI or not REDIRECT_URI.startswith("https://"):
         print("Schwab requires an HTTPS callback URL.")
-        print("Set SCHWAB_CALLBACK_URL in .env to your ngrok HTTPS URL + /callback (e.g. https://abc.ngrok-free.app/callback).")
+        print("Set SCHWAB_CALLBACK_URL in .env. Recommended (no extra tooling):")
+        print("  SCHWAB_CALLBACK_URL=https://127.0.0.1:8080/oauth/callback")
+        print("After sign-in the browser will show \"site can't be reached\";")
+        print("paste the full address-bar URL when this script prompts.")
+        print()
+        print("Make sure the same URL is registered in your Schwab Developer Portal app.")
         sys.exit(1)
 
     use_paste = _is_localhost_callback()
@@ -155,10 +164,13 @@ def main() -> None:
     print(f"  {REDIRECT_URI}")
     print()
     if use_paste:
-        print("Mode: paste URL (no ngrok). After sign-in the browser will show \"site can't be reached\".")
+        print("Mode: paste URL (default — no extra tooling).")
+        print("After sign-in the browser will show \"site can't be reached\".")
         print("Copy the full URL from the address bar and paste it when prompted.")
     else:
-        print("Mode: server. Ensure ngrok is running:  ngrok http 8765")
+        print("Mode: server callback (advanced — only needed if you've intentionally")
+        print("configured a non-localhost callback, e.g. through a public tunnel).")
+        print("Ensure your tunnel is forwarding to port 8765 before continuing.")
     print()
     print("Opening the authorize URL in your browser...")
     print(url)

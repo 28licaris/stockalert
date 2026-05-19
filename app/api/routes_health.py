@@ -60,6 +60,17 @@ class MonitorSummary(BaseModel):
     errors: int = 0
 
 
+class StreamSummary(BaseModel):
+    """Live Schwab subscription state — drives the cockpit's streaming tile."""
+
+    started: bool = False
+    provider: str = ""
+    provider_ready: bool = False
+    provider_error: Optional[str] = None
+    streaming_count: int = 0
+    universe_count: int = 0
+
+
 class HealthServicesResponse(BaseModel):
     """Composite health snapshot for the cockpit Status page."""
 
@@ -69,6 +80,7 @@ class HealthServicesResponse(BaseModel):
     services: list[ServiceHealth]
     backfill: BackfillQueueSummary
     monitors: MonitorSummary
+    stream: StreamSummary = Field(default_factory=StreamSummary)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -186,6 +198,24 @@ async def _backfill_summary() -> BackfillQueueSummary:
         return BackfillQueueSummary()
 
 
+async def _stream_summary() -> StreamSummary:
+    try:
+        from app.services.stream import stream_service
+
+        s = await asyncio.to_thread(stream_service.status)
+        return StreamSummary(
+            started=bool(s.get("started", False)),
+            provider=str(s.get("provider") or ""),
+            provider_ready=bool(s.get("provider_ready", False)),
+            provider_error=s.get("provider_error"),
+            streaming_count=int(s.get("streaming_count", 0) or 0),
+            universe_count=int(s.get("universe_count", 0) or 0),
+        )
+    except Exception as exc:  # noqa: BLE001 — boundary
+        logger.debug("stream summary probe failed: %s", exc)
+        return StreamSummary()
+
+
 async def _monitor_summary() -> MonitorSummary:
     try:
         from app.services.live.monitor_manager import monitor_manager
@@ -214,7 +244,7 @@ async def _monitor_summary() -> MonitorSummary:
 async def health_services() -> HealthServicesResponse:
     from datetime import datetime, timezone
 
-    services, backfill, monitors = await asyncio.gather(
+    services, backfill, monitors, stream = await asyncio.gather(
         asyncio.gather(
             _check_clickhouse(),
             _check_iceberg(),
@@ -223,6 +253,7 @@ async def health_services() -> HealthServicesResponse:
         ),
         _backfill_summary(),
         _monitor_summary(),
+        _stream_summary(),
     )
 
     return HealthServicesResponse(
@@ -230,4 +261,5 @@ async def health_services() -> HealthServicesResponse:
         services=list(services),
         backfill=backfill,
         monitors=monitors,
+        stream=stream,
     )

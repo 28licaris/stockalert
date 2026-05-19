@@ -26,7 +26,7 @@ from app.api.schemas.instruments import (
     InstrumentMatch,
     InstrumentSearchResponse,
 )
-from app.services.live.watchlist_service import watchlist_service
+from app.services.stream import stream_service
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +93,10 @@ async def search_instruments(
             cached=True,
         )
 
-    # Get the live provider from the watchlist service so we don't reconstruct
+    # Get the live provider from the stream service so we don't reconstruct
     # OAuth state per call. Falls back to an empty list if the provider isn't
     # ready (e.g. token expired) — caller treats this as "no suggestions".
-    provider = getattr(watchlist_service, "_provider", None)
+    provider = stream_service.get_provider()
     if provider is None:
         logger.debug("search_instruments: provider not ready, returning empty list")
         return InstrumentSearchResponse(query=query, results=[], cached=False)
@@ -157,7 +157,7 @@ async def lookup_instruments(
 
     results: list[InstrumentMatch] = []
     cached_count = 0
-    provider = getattr(watchlist_service, "_provider", None)
+    provider = stream_service.get_provider()
 
     for sym in raw:
         cache_key = _lookup_cache_key(sym)

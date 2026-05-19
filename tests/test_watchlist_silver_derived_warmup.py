@@ -1,24 +1,32 @@
 """
-Tests for the silver-derived add_members warmup path (TA-5.3.3).
+Tests for the silver-derived warmup path (TA-5.3.3) — now owned by
+StreamService.
 
 The TA-5.3 unified add-symbol flow per docs/streaming_universe_model.md
 replaces the legacy 3-call _enqueue_backfill path with:
   1. SilverToChBackfill.backfill_symbol(days=730) — silver.ohlcv_1m → CH
   2. SchwabTipFill.tip_fill(symbol) — silver-watermark → live gap (≤48d)
 
+Post-FE-CONTRACTS-4-finalisation this lives on `StreamService`
+(see docs/frontend_api_contracts.md §10.1 locked sticky-universe
+model). WatchlistService's `add_members` auto-extends the stream
+universe; if the flag is ON, StreamService.add fires the silver-
+derived warmup. If the flag is OFF, WatchlistService falls back to
+the legacy quick/intraday/daily backfill for the newly-added
+symbols.
+
 These tests verify:
-  - Flag OFF (default): add_members keeps using the legacy path
-  - Flag ON: add_members fires the silver-derived warmup tasks
-  - Per-symbol warmup runs steps 1 + 2 sequentially in the right order
-  - Failure in step 1 doesn't block step 2 (logs but continues)
-  - Failure in step 2 is logged but doesn't propagate
-  - Symbol is added to the watchlist regardless of warmup outcome
+  - Flag OFF: WatchlistService fires the legacy backfill path.
+  - Flag ON: StreamService fires the silver-derived chain on add.
+  - Per-symbol chain runs silver→CH THEN tip-fill in order.
+  - Step-1 failure does not block step 2 (silver-missing path).
+  - Step-2 failure is logged but does not raise.
+  - The no-running-loop guard returns cleanly from sync calls.
 """
 from __future__ import annotations
 
 import asyncio
 from typing import Callable, Optional
-from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -28,10 +36,12 @@ from app.services.ingest.silver_to_ch_backfill import SilverToChBackfillResult
 from app.services.ingest.schwab_tip_fill import TipFillResult
 from app.services.live import watchlist_service as wls_module
 from app.services.live.watchlist_service import WatchlistService
+from app.services.stream import service as stream_module
+from app.services.stream.service import StreamService
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Fakes (mirrors tests/test_watchlist_service.py FakeRepo / FakeDataProvider)
+# Fakes
 # ─────────────────────────────────────────────────────────────────────
 
 
@@ -119,82 +129,142 @@ class _FakeRepo:
         return out
 
 
+class _FakeUniverseRepo:
+    """Minimal in-memory shim for the stream_universe CH calls."""
+
+    def __init__(self) -> None:
+        self.rows: dict[str, dict] = {}
+
+    def list_active(self) -> list[dict]:
+        return [
+            {"symbol": sym, "asset_type": "", "added_at": "", "added_by": "", "notes": ""}
+            for sym, r in self.rows.items()
+            if r["is_active"]
+        ]
+
+    def is_active(self, sym: str) -> bool:
+        r = self.rows.get(sym)
+        return bool(r and r["is_active"])
+
+    def write(self, sym: str, is_active: int, **kw) -> None:
+        self.rows[sym] = {"is_active": bool(is_active), **kw}
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Stream service fixture (subscription mechanics + warmup live here)
+# ─────────────────────────────────────────────────────────────────────
+
+
 @pytest.fixture
-def svc(monkeypatch) -> WatchlistService:
-    fake_repo = _FakeRepo()
+def stream_svc(monkeypatch) -> StreamService:
+    fake_repo = _FakeUniverseRepo()
     fake_prov = _FakeDataProvider()
-    monkeypatch.setattr(wls_module, "watchlist_repo", fake_repo)
-    monkeypatch.setattr(wls_module, "get_stream_provider", lambda: fake_prov)
-    s = WatchlistService(backfill=None)
-    s._provider = fake_prov  # bypass lazy init
+
+    monkeypatch.setattr(
+        StreamService, "_read_universe",
+        lambda self, *, owner_id=None: fake_repo.list_active(),
+    )
+    monkeypatch.setattr(
+        StreamService, "_is_active",
+        lambda self, sym, *, owner_id=None: fake_repo.is_active(sym),
+    )
+    monkeypatch.setattr(
+        StreamService, "_write_row",
+        lambda self, sym, owner, is_active, *, asset_type="", added_by="", notes="":
+            fake_repo.write(sym, is_active, asset_type=asset_type, added_by=added_by, notes=notes),
+    )
+    monkeypatch.setattr(
+        StreamService, "is_empty",
+        lambda self, *, owner_id=None: not any(r["is_active"] for r in fake_repo.rows.values()),
+    )
+    monkeypatch.setattr(
+        StreamService, "bootstrap_if_empty",
+        lambda self, *, owner_id=None: (False, 0),
+    )
+    monkeypatch.setattr(stream_module, "get_stream_provider", lambda: fake_prov)
+
+    s = StreamService()
+    s._provider = fake_prov
     s._fake_repo = fake_repo  # type: ignore[attr-defined]
     return s
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Flag dispatch in add_members
+# Watchlist service fixture (flag-off legacy path runs here)
+# ─────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def wl_svc(monkeypatch) -> WatchlistService:
+    fake_repo = _FakeRepo()
+    monkeypatch.setattr(wls_module, "watchlist_repo", fake_repo)
+
+    # Replace the lazy-imported stream_service inside add_members with
+    # a no-op fake so the auto-extend hook doesn't try to reach CH.
+    class _NoopStream:
+        def ensure_streaming(self, symbols, **kw):
+            return []
+
+        def is_streaming(self, symbol):
+            return False
+
+        def status(self):
+            return {}
+
+    import app.services.stream as stream_pkg
+    monkeypatch.setattr(stream_pkg, "stream_service", _NoopStream())
+
+    s = WatchlistService(backfill=None)
+    s._fake_repo = fake_repo  # type: ignore[attr-defined]
+    return s
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Flag dispatch: watchlist legacy backfill fires only when flag is OFF
 # ─────────────────────────────────────────────────────────────────────
 
 
 class TestAddMembersFlagDispatch:
-    @pytest.mark.asyncio
-    async def test_flag_off_uses_legacy_path(
-        self, svc: WatchlistService, monkeypatch: pytest.MonkeyPatch,
+    """The watchlist auto-extend path delegates streaming + silver
+    warmup to StreamService. The watchlist itself only fires the
+    legacy quick/intraday/daily backfill, and only when the flag is OFF.
+    """
+
+    def test_flag_off_fires_legacy_backfill(
+        self, wl_svc: WatchlistService, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from app.config import settings
         monkeypatch.setattr(settings, "silver_derived_add_members_enabled", False)
 
-        legacy_calls: list[tuple] = []
-        silver_calls: list[str] = []
+        legacy_calls: list[list[str]] = []
+        monkeypatch.setattr(
+            wl_svc, "_enqueue_warmup_legacy",
+            lambda symbols: legacy_calls.append(list(symbols)),
+        )
 
-        def _spy_legacy(symbols, *, kind, days):
-            legacy_calls.append((tuple(symbols), kind, days))
+        wl_svc.add_members("a", ["NVDA", "AAPL"])
+        # Legacy path got called once with both symbols.
+        assert legacy_calls == [["NVDA", "AAPL"]]
 
-        def _spy_new(symbols):
-            silver_calls.extend(symbols)
-
-        monkeypatch.setattr(svc, "_enqueue_backfill", _spy_legacy)
-        monkeypatch.setattr(svc, "_enqueue_silver_derived_warmup", _spy_new)
-
-        await svc.start()
-        svc.add_members("a", ["NVDA"])
-
-        # Legacy: three calls (quick / intraday / daily).
-        kinds = [c[1] for c in legacy_calls]
-        assert set(kinds) == {"quick", "intraday", "daily"}
-        # New path NOT called.
-        assert silver_calls == []
-
-    @pytest.mark.asyncio
-    async def test_flag_on_uses_silver_derived_path(
-        self, svc: WatchlistService, monkeypatch: pytest.MonkeyPatch,
+    def test_flag_on_skips_legacy_backfill(
+        self, wl_svc: WatchlistService, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from app.config import settings
         monkeypatch.setattr(settings, "silver_derived_add_members_enabled", True)
 
-        legacy_calls: list[tuple] = []
-        silver_calls: list[str] = []
+        legacy_calls: list[list[str]] = []
+        monkeypatch.setattr(
+            wl_svc, "_enqueue_warmup_legacy",
+            lambda symbols: legacy_calls.append(list(symbols)),
+        )
 
-        def _spy_legacy(symbols, *, kind, days):
-            legacy_calls.append((tuple(symbols), kind, days))
-
-        def _spy_new(symbols):
-            silver_calls.extend(symbols)
-
-        monkeypatch.setattr(svc, "_enqueue_backfill", _spy_legacy)
-        monkeypatch.setattr(svc, "_enqueue_silver_derived_warmup", _spy_new)
-
-        await svc.start()
-        svc.add_members("a", ["NVDA", "AAPL"])
-
-        # New path: ONE call with both symbols.
-        assert sorted(silver_calls) == ["AAPL", "NVDA"]
-        # Legacy NOT called.
+        wl_svc.add_members("a", ["NVDA"])
+        # Stream service owns warmup when flag is on — watchlist legacy NOT called.
         assert legacy_calls == []
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Per-symbol warmup chain
+# Per-symbol warmup chain (now on StreamService)
 # ─────────────────────────────────────────────────────────────────────
 
 
@@ -204,11 +274,10 @@ class TestWarmupChain:
 
     @pytest.mark.asyncio
     async def test_runs_silver_to_ch_then_tip_fill_in_order(
-        self, svc: WatchlistService, monkeypatch: pytest.MonkeyPatch,
+        self, stream_svc: StreamService, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         order: list[str] = []
 
-        # Fake SilverToChBackfill.
         class _FakeS2C:
             @classmethod
             def from_settings(cls):
@@ -220,7 +289,6 @@ class TestWarmupChain:
                     symbol=symbol, bars_read=100, bars_written=100,
                 )
 
-        # Fake SchwabTipFill.
         class _FakeTip:
             @classmethod
             def from_settings(cls):
@@ -239,7 +307,7 @@ class TestWarmupChain:
             _FakeTip,
         )
 
-        await svc._silver_derived_warmup_one("NVDA")
+        await stream_svc._silver_derived_warmup_one("NVDA")
 
         assert order == [
             "silver_to_ch:NVDA:days=730",  # DEFAULT_BACKFILL_DAYS
@@ -248,12 +316,8 @@ class TestWarmupChain:
 
     @pytest.mark.asyncio
     async def test_s2c_failure_does_not_block_tip_fill(
-        self, svc: WatchlistService, monkeypatch: pytest.MonkeyPatch,
+        self, stream_svc: StreamService, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """If silver→CH fails (silver missing / raise / partial), the
-        tip-fill still runs. For a brand-new symbol, this is the
-        expected path: silver has nothing → s2c does nothing → tip-fill
-        provides the 48-day data."""
         tip_called = {"n": 0}
 
         class _FailingS2C:
@@ -282,14 +346,12 @@ class TestWarmupChain:
             _FakeTip,
         )
 
-        # Should NOT raise.
-        await svc._silver_derived_warmup_one("NVDA")
-        # Tip-fill ran despite the s2c failure.
+        await stream_svc._silver_derived_warmup_one("NVDA")
         assert tip_called["n"] == 1
 
     @pytest.mark.asyncio
     async def test_tip_fill_failure_is_logged_not_raised(
-        self, svc: WatchlistService, monkeypatch: pytest.MonkeyPatch,
+        self, stream_svc: StreamService, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         class _OkS2C:
             @classmethod
@@ -316,15 +378,13 @@ class TestWarmupChain:
             _FailingTip,
         )
 
-        # Should NOT raise — warmup is fire-and-forget.
-        await svc._silver_derived_warmup_one("NVDA")
+        # Fire-and-forget — must not raise.
+        await stream_svc._silver_derived_warmup_one("NVDA")
 
     @pytest.mark.asyncio
     async def test_s2c_returns_error_result_continues_to_tip_fill(
-        self, svc: WatchlistService, monkeypatch: pytest.MonkeyPatch,
+        self, stream_svc: StreamService, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """When silver→CH returns a SilverToChBackfillResult with an
-        error string (not an exception), still continue to tip-fill."""
         tip_called = {"n": 0}
 
         class _ErrorResultS2C:
@@ -355,7 +415,7 @@ class TestWarmupChain:
             _FakeTip,
         )
 
-        await svc._silver_derived_warmup_one("NVDA")
+        await stream_svc._silver_derived_warmup_one("NVDA")
         assert tip_called["n"] == 1
 
 
@@ -366,40 +426,60 @@ class TestWarmupChain:
 
 class TestEnqueueSemantics:
     def test_no_running_loop_no_raise(self) -> None:
-        """When called from sync context with no event loop running
-        (pre-startup, sync test), the method silently skips rather
-        than raising. Mirrors `_enqueue_backfill`'s no-loop guard."""
-        s = WatchlistService(backfill=None)
+        """When called from sync context with no event loop running,
+        the method silently skips rather than raising."""
+        s = StreamService()
         # Sync call, no event loop: must not raise.
-        s._enqueue_silver_derived_warmup(["NVDA"])
+        s._enqueue_warmup(["NVDA"])
 
     @pytest.mark.asyncio
     async def test_empty_symbols_is_noop(
-        self, svc: WatchlistService, monkeypatch: pytest.MonkeyPatch,
+        self, stream_svc: StreamService, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         called = {"n": 0}
 
         async def _spy(sym):
             called["n"] += 1
 
-        monkeypatch.setattr(svc, "_silver_derived_warmup_one", _spy)
-        svc._enqueue_silver_derived_warmup([])
-        # Yield a tick to let any erroneously-created tasks run.
+        monkeypatch.setattr(stream_svc, "_silver_derived_warmup_one", _spy)
+        from app.config import settings
+        monkeypatch.setattr(settings, "silver_derived_add_members_enabled", True)
+        stream_svc._enqueue_warmup([])
         await asyncio.sleep(0)
         assert called["n"] == 0
 
     @pytest.mark.asyncio
     async def test_one_task_per_symbol(
-        self, svc: WatchlistService, monkeypatch: pytest.MonkeyPatch,
+        self, stream_svc: StreamService, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         seen: list[str] = []
 
         async def _spy(sym):
             seen.append(sym)
 
-        monkeypatch.setattr(svc, "_silver_derived_warmup_one", _spy)
-        svc._enqueue_silver_derived_warmup(["NVDA", "AAPL", "MSFT"])
-        # Yield until all tasks complete.
+        monkeypatch.setattr(stream_svc, "_silver_derived_warmup_one", _spy)
+        from app.config import settings
+        monkeypatch.setattr(settings, "silver_derived_add_members_enabled", True)
+        stream_svc._enqueue_warmup(["NVDA", "AAPL", "MSFT"])
         for _ in range(5):
             await asyncio.sleep(0)
         assert sorted(seen) == ["AAPL", "MSFT", "NVDA"]
+
+    @pytest.mark.asyncio
+    async def test_flag_off_is_noop(
+        self, stream_svc: StreamService, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When SILVER_DERIVED_ADD_MEMBERS_ENABLED is off, _enqueue_warmup
+        skips scheduling entirely (the watchlist's legacy path is what
+        handles backfill in that branch)."""
+        seen: list[str] = []
+
+        async def _spy(sym):
+            seen.append(sym)
+
+        monkeypatch.setattr(stream_svc, "_silver_derived_warmup_one", _spy)
+        from app.config import settings
+        monkeypatch.setattr(settings, "silver_derived_add_members_enabled", False)
+        stream_svc._enqueue_warmup(["NVDA"])
+        await asyncio.sleep(0)
+        assert seen == []

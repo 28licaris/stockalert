@@ -28,6 +28,7 @@ from app.db import (
 from app.services.ingest.backfill_service import backfill_service
 from app.services.live.monitor_manager import monitor_manager
 from app.services.live.watchlist_service import watchlist_service
+from app.services.stream import stream_service
 from app.api import (
     routes_backfill,
     routes_clickhouse,
@@ -43,6 +44,7 @@ from app.api import (
     routes_screener,
     routes_seed,
     routes_silver,
+    routes_stream,
     routes_watchlist,
 )
 from app.services.journal.journal_sync import journal_sync_service
@@ -110,12 +112,30 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.info("✅ Backfill service ready")
 
+    # Stream service starts first — it owns Schwab subscriptions and the
+    # stream_universe table. Watchlist service depends on it (auto-extend
+    # on add) so order matters.
+    await _safe_start("Stream service", lambda: stream_service.start())
+    try:
+        s_status = stream_service.status()
+        logger.info(
+            "✅ Stream service started (provider=%s, universe=%d, subscribed=%d)",
+            s_status["provider"],
+            s_status.get("universe_count", 0),
+            s_status.get("streaming_count", 0),
+        )
+        if s_status.get("provider_error"):
+            logger.warning("Stream provider error: %s", s_status["provider_error"])
+    except Exception as e:
+        logger.warning("stream_service.status() failed: %s", e)
+
     await _safe_start("Watchlist service", lambda: watchlist_service.start())
     try:
         status = watchlist_service.status()
         logger.info(
-            "✅ Watchlist service started (provider=%s, symbols=%d, streaming=%d)",
-            status["provider"], status["symbol_count"], status.get("subscribed_count", 0),
+            "✅ Watchlist service started (CRUD-only; watchlists=%d, default-members=%d)",
+            status.get("watchlist_count", 0),
+            status.get("symbol_count", 0),
         )
     except Exception as e:
         logger.warning("watchlist_service.status() failed: %s", e)
@@ -138,11 +158,11 @@ async def lifespan(app: FastAPI):
         logger.info("ℹ️  Live lake writer disabled (LIVE_LAKE_WRITER_ENABLED=false)")
 
     # Wire the periodic gap sweeper: every 15 min the backfill service will
-    # ask `watchlist_service` for the current streaming set and auto-enqueue
+    # ask `stream_service` for the current streaming set and auto-enqueue
     # gap-fill jobs for any symbol with within-session holes.
     def _streaming_symbols_for_sweeper() -> list[str]:
         try:
-            return list(watchlist_service.status().get("streaming_symbols") or [])
+            return list(stream_service.status().get("streaming_symbols") or [])
         except Exception as e:
             logger.warning("gap sweeper: could not enumerate streaming symbols: %s", e)
             return []
@@ -327,6 +347,9 @@ async def lifespan(app: FastAPI):
     await watchlist_service.stop()
     logger.info("✅ Watchlist service stopped")
 
+    await stream_service.stop()
+    logger.info("✅ Stream service stopped")
+
     await backfill_service.stop()
     logger.info("✅ Backfill service stopped")
 
@@ -459,6 +482,7 @@ app.include_router(routes_silver.router, prefix=_V1, tags=["Silver"])
 app.include_router(routes_monitors.router, prefix=_V1, tags=["Monitors"])
 app.include_router(routes_watchlist.router, prefix=_V1, tags=["Watchlist"])
 app.include_router(routes_seed.router, prefix=_V1, tags=["Seed"])
+app.include_router(routes_stream.router, prefix=_V1, tags=["Stream"])
 app.include_router(routes_clickhouse.router, prefix=_V1, tags=["ClickHouse"])
 
 try:

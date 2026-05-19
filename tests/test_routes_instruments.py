@@ -3,7 +3,8 @@ Unit tests for `SchwabProvider.search_instruments` + `GET /api/instruments/searc
 
 Both layers are exercised without touching the real Schwab API:
   - Provider tests monkey-patch `_market_data_get` to return canned responses.
-  - Route tests inject a fake provider into `watchlist_service._provider`.
+  - Route tests inject a fake provider into `stream_service._provider`
+    (the StreamService owns the streaming-provider handle post-FE-CONTRACTS-4).
 """
 from __future__ import annotations
 
@@ -217,7 +218,7 @@ async def test_search_provider_error_returns_empty(monkeypatch: pytest.MonkeyPat
 def app_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     """TestClient with FastAPI lifespan disabled and a fake provider injected."""
     from app.main_api import app
-    from app.services.live.watchlist_service import watchlist_service
+    from app.services.stream import stream_service
 
     @asynccontextmanager
     async def noop_lifespan(_app):
@@ -230,7 +231,7 @@ def app_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
         {"symbol": "NVDA", "description": "NVIDIA Corp",
          "exchange": "NASDAQ", "asset_type": "EQUITY"},
     ])
-    monkeypatch.setattr(watchlist_service, "_provider", fake_provider, raising=False)
+    monkeypatch.setattr(stream_service, "_provider", fake_provider, raising=False)
 
     return TestClient(app)
 
@@ -250,8 +251,8 @@ def test_route_caches_repeat_query(app_client: TestClient, monkeypatch: pytest.M
     from app.api import routes_instruments
     routes_instruments._cache.clear()
 
-    from app.services.live.watchlist_service import watchlist_service
-    spy = watchlist_service._provider.search_instruments  # type: ignore[union-attr]
+    from app.services.stream import stream_service
+    spy = stream_service._provider.search_instruments  # type: ignore[union-attr]
 
     r1 = app_client.get("/api/instruments/search", params={"q": "AAPL"})
     r2 = app_client.get("/api/instruments/search", params={"q": "AAPL"})
@@ -275,8 +276,8 @@ def test_route_returns_empty_when_provider_missing(
     """No provider configured -> route returns 200 with empty results."""
     from app.api import routes_instruments
     routes_instruments._cache.clear()
-    from app.services.live.watchlist_service import watchlist_service
-    monkeypatch.setattr(watchlist_service, "_provider", None, raising=False)
+    from app.services.stream import stream_service
+    monkeypatch.setattr(stream_service, "_provider", None, raising=False)
 
     r = app_client.get("/api/instruments/search", params={"q": "TSLA"})
     assert r.status_code == 200
@@ -289,11 +290,11 @@ def test_route_swallows_provider_exception(
     """Provider exception must not surface as HTTP 500."""
     from app.api import routes_instruments
     routes_instruments._cache.clear()
-    from app.services.live.watchlist_service import watchlist_service
+    from app.services.stream import stream_service
 
     failing = AsyncMock()
     failing.search_instruments = AsyncMock(side_effect=RuntimeError("oops"))
-    monkeypatch.setattr(watchlist_service, "_provider", failing, raising=False)
+    monkeypatch.setattr(stream_service, "_provider", failing, raising=False)
 
     r = app_client.get("/api/instruments/search", params={"q": "BAD"})
     assert r.status_code == 200

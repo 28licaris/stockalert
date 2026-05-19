@@ -80,7 +80,11 @@ export function SymbolSearchInput({
   const [highlight, setHighlight] = useState(-1);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
 
-  const debounced = useDebouncedValue(value, 250);
+  // 120ms debounce: fast enough to feel instant on a typical Schwab REST
+  // round-trip (~150–250ms cold, ~5ms when the cache hits) while still
+  // collapsing keystroke bursts into one call. The backend caches by
+  // (query, limit) for 60s so re-typed prefixes are local-only.
+  const debounced = useDebouncedValue(value, 120);
   const search = useInstrumentSearch(debounced, limit);
   const results = useMemo<InstrumentMatch[]>(
     () => search.data?.results ?? [],

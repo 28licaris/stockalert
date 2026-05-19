@@ -1,19 +1,24 @@
 """
-Unit tests for app.services.watchlist_service.WatchlistService.
+Unit tests for the post-FE-CONTRACTS-4 WatchlistService.
 
-These are pure unit tests: the watchlist_repo is replaced with an in-memory
-fake, and the data provider is a `FakeDataProvider` that records calls.
-The real repo's FINAL/soft-delete semantics are covered by
-`tests/test_watchlist_repo.py`.
+WatchlistService is now CRUD-only: it no longer owns Schwab
+subscriptions, refcounts, or baselines. Per docs/frontend_api_contracts.md
+§10.1, those concerns moved to `StreamService`. These tests verify:
+
+  - Pure CRUD passes through to the repo correctly.
+  - `add_members` calls `stream_service.ensure_streaming` (auto-extend).
+  - `remove_members` / `delete_watchlist` do NOT touch the stream
+    (sticky-universe invariant).
+  - `status()` composes legacy + stream fields without owning state.
+
+Subscription mechanics are covered in `test_stream_service.py`.
 """
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Optional
 
-import pandas as pd
 import pytest
 
-from app.providers.base import DataProvider
 from app.services.live import watchlist_service as wls_module
 from app.services.live.watchlist_service import WatchlistService
 
@@ -21,47 +26,52 @@ from app.services.live.watchlist_service import WatchlistService
 # ----- Fakes -----
 
 
-class FakeDataProvider(DataProvider):
-    """In-process provider that records subscribe/unsubscribe calls."""
+class FakeStreamService:
+    """Records ensure_streaming/remove/status calls. NEVER subscribes."""
 
     def __init__(self) -> None:
-        self.subscribed: set[str] = set()
-        self.subscribe_calls: list[list[str]] = []
-        self.unsubscribe_calls: list[list[str]] = []
-        self.stopped = False
-        self._callback: Optional[Callable] = None
+        self.universe: set[str] = set()
+        self.ensure_calls: list[tuple[list[str], str]] = []
+        self.remove_calls: list[str] = []
 
-    def start_stream(self) -> None:
-        pass
+    def ensure_streaming(self, symbols, *, added_by: str = "", source: str = "watchlist") -> list[str]:
+        added = []
+        for s in symbols:
+            ss = (s or "").strip().upper()
+            if ss and ss not in self.universe:
+                self.universe.add(ss)
+                added.append(ss)
+        self.ensure_calls.append((list(added), source))
+        return added
 
-    def stop_stream(self) -> None:
-        self.stopped = True
+    def is_streaming(self, symbol: str) -> bool:
+        return (symbol or "").strip().upper() in self.universe
 
-    def subscribe_bars(self, callback, tickers: list[str]) -> None:
-        self._callback = callback
-        for t in tickers:
-            self.subscribed.add(t)
-        self.subscribe_calls.append(list(tickers))
+    def remove(self, symbol: str, *, owner_id: Optional[str] = None) -> dict:
+        ss = (symbol or "").strip().upper()
+        was = ss in self.universe
+        self.universe.discard(ss)
+        self.remove_calls.append(ss)
+        return {"operation": "remove", "changed": [ss] if was else [], "items": [], "count": len(self.universe)}
 
-    def unsubscribe_bars(self, tickers: list[str]) -> None:
-        for t in tickers:
-            self.subscribed.discard(t)
-        self.unsubscribe_calls.append(list(tickers))
-
-    async def historical_df(self, symbol, start, end, timeframe="1Min"):
-        return pd.DataFrame()
+    def status(self) -> dict:
+        return {
+            "started": True,
+            "provider": "fake-stream",
+            "provider_ready": True,
+            "provider_error": None,
+            "streaming_count": len(self.universe),
+            "streaming_symbols": sorted(self.universe),
+            "universe_count": len(self.universe),
+        }
 
 
 class FakeRepo:
-    """In-memory shim that mimics app.db.watchlist_repo's surface area."""
+    """In-memory shim that mimics app.db.watchlist_repo's surface."""
 
     def __init__(self) -> None:
-        # name -> {kind, description, is_active}
         self.watchlists: dict[str, dict] = {}
-        # name -> set[symbol]
         self.members: dict[str, set[str]] = {}
-
-    # ---- watchlists ----
 
     def list_watchlists(self, include_inactive: bool = False) -> list[dict]:
         out = []
@@ -95,8 +105,6 @@ class FakeRepo:
         self.watchlists[new] = meta
         self.members[new] = self.members.pop(old, set())
         return self.get_watchlist(new)  # type: ignore[return-value]
-
-    # ---- members ----
 
     def list_members(self, name: str) -> list[str]:
         if not self.watchlists.get(name, {}).get("is_active"):
@@ -149,177 +157,144 @@ class FakeRepo:
 @pytest.fixture
 def svc(monkeypatch) -> WatchlistService:
     fake_repo = FakeRepo()
-    fake_prov = FakeDataProvider()
+    fake_stream = FakeStreamService()
 
     monkeypatch.setattr(wls_module, "watchlist_repo", fake_repo)
-    monkeypatch.setattr(wls_module, "get_stream_provider", lambda: fake_prov)
 
-    # backfill=None disables auto-enqueue so these tests don't pull in the
-    # real loader/provider. Backfill behavior is covered in test_backfill_service.py.
+    # The auto-extend hook lazy-imports `app.services.stream` inside
+    # add_members. Replace the module's `stream_service` so the hook
+    # talks to our fake.
+    import app.services.stream as stream_module
+    monkeypatch.setattr(stream_module, "stream_service", fake_stream)
+
     s = WatchlistService(backfill=None)
-    s._provider = fake_prov  # bypass lazy init
     s._fake_repo = fake_repo  # type: ignore[attr-defined]
-    s._fake_prov = fake_prov  # type: ignore[attr-defined]
+    s._fake_stream = fake_stream  # type: ignore[attr-defined]
     return s
 
 
-# ----- start() -----
+# ----- start/stop are no-ops -----
 
 
 @pytest.mark.asyncio
-async def test_start_subscribes_to_all_active_members(svc: WatchlistService) -> None:
+async def test_start_is_idempotent_and_no_subscription_state(svc: WatchlistService) -> None:
+    await svc.start()
+    await svc.start()  # second call: no error
+    assert not hasattr(svc, "_refcount")
+    assert not hasattr(svc, "_baseline")
+    assert not hasattr(svc, "_subscribed")
+    assert svc._started is True
+
+
+@pytest.mark.asyncio
+async def test_stop_does_not_unsubscribe(svc: WatchlistService) -> None:
+    await svc.start()
+    await svc.stop()
+    # WatchlistService should never have touched the stream during stop.
+    assert svc._fake_stream.remove_calls == []
+
+
+# ----- add_members auto-extends the stream universe -----
+
+
+def test_add_members_auto_extends_stream(svc: WatchlistService) -> None:
     svc._fake_repo.create_watchlist("a")
-    svc._fake_repo.create_watchlist("b")
-    svc._fake_repo.add_members("a", ["AAPL", "MSFT"])
-    svc._fake_repo.add_members("b", ["MSFT", "GOOGL"])
-
-    await svc.start()
-
-    assert svc._fake_prov.subscribed == {"AAPL", "GOOGL", "MSFT"}
-    assert svc._refcount == {"AAPL": 1, "MSFT": 2, "GOOGL": 1}
-    # MSFT was de-duplicated, so we expect exactly one subscribe call carrying all three.
-    assert svc._fake_prov.subscribe_calls == [["AAPL", "GOOGL", "MSFT"]]
-
-
-@pytest.mark.asyncio
-async def test_start_keeps_baseline_subscribed(svc: WatchlistService) -> None:
-    svc._fake_repo.create_watchlist("base", kind="baseline")
-    svc._fake_repo.add_members("base", ["SPY", "QQQ"])
-
-    await svc.start()
-
-    assert svc._fake_prov.subscribed == {"SPY", "QQQ"}
-    assert svc._baseline == {"SPY", "QQQ"}
-    # Baseline symbols are NOT in the refcount map - they are tracked separately.
-    assert svc._refcount == {}
-
-
-# ----- add_members() -----
-
-
-@pytest.mark.asyncio
-async def test_add_member_subscribes_once(svc: WatchlistService) -> None:
-    svc._fake_repo.create_watchlist("a")
-    await svc.start()
-    assert svc._fake_prov.subscribed == set()
-
-    result = svc.add_members("a", ["NVDA"])
-    assert result["added"] == ["NVDA"]
-    assert "NVDA" in svc._fake_prov.subscribed
-
-    # Re-adding is a no-op for newly-added; provider not called again.
-    result = svc.add_members("a", ["NVDA"])
-    assert result["added"] == []
-    assert len(svc._fake_prov.subscribe_calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_same_symbol_in_two_watchlists_subscribed_once(svc: WatchlistService) -> None:
-    svc._fake_repo.create_watchlist("a")
-    svc._fake_repo.create_watchlist("b")
-    await svc.start()
-
-    svc.add_members("a", ["AMZN"])
-    svc.add_members("b", ["AMZN"])
-
-    flat_subs = [s for batch in svc._fake_prov.subscribe_calls for s in batch]
-    assert flat_subs == ["AMZN"]  # only one provider subscribe call
-    assert svc._refcount["AMZN"] == 2
-
-
-@pytest.mark.asyncio
-async def test_add_normalizes_and_dedupes_input(svc: WatchlistService) -> None:
-    svc._fake_repo.create_watchlist("a")
-    await svc.start()
-    result = svc.add_members("a", ["aapl", "  AAPL ", "msft", "", None])  # type: ignore[list-item]
+    result = svc.add_members("a", ["AAPL", "MSFT"])
     assert sorted(result["added"]) == ["AAPL", "MSFT"]
 
+    # ensure_streaming was called once with both new symbols.
+    assert svc._fake_stream.ensure_calls == [(["AAPL", "MSFT"], "watchlist:a")]
+    assert svc._fake_stream.universe == {"AAPL", "MSFT"}
 
-# ----- remove_members() -----
+
+def test_add_member_already_in_stream_is_noop_on_extend(svc: WatchlistService) -> None:
+    svc._fake_repo.create_watchlist("a")
+    # Pre-populate the stream so AAPL is already known.
+    svc._fake_stream.universe.add("AAPL")
+
+    result = svc.add_members("a", ["AAPL"])
+    assert result["added"] == ["AAPL"]
+
+    # ensure_streaming was called but returned [] (no promotions).
+    assert svc._fake_stream.ensure_calls == [([], "watchlist:a")]
 
 
-@pytest.mark.asyncio
-async def test_remove_from_one_watchlist_keeps_subscribed_if_in_other(svc: WatchlistService) -> None:
+def test_add_member_idempotent(svc: WatchlistService) -> None:
+    svc._fake_repo.create_watchlist("a")
+    svc.add_members("a", ["NVDA"])
+    # Re-adding the same symbol returns no new additions.
+    result = svc.add_members("a", ["NVDA"])
+    assert result["added"] == []
+
+
+# ----- remove_members is sticky (does NOT touch the stream) -----
+
+
+def test_remove_members_does_not_touch_stream(svc: WatchlistService) -> None:
+    svc._fake_repo.create_watchlist("a")
+    svc.add_members("a", ["TSLA"])
+    assert "TSLA" in svc._fake_stream.universe
+
+    result = svc.remove_members("a", ["TSLA"])
+    assert result["removed"] == ["TSLA"]
+    # Stream universe is sticky — TSLA is still being streamed.
+    assert "TSLA" in svc._fake_stream.universe
+    assert svc._fake_stream.remove_calls == []
+
+
+def test_remove_member_from_one_of_two_watchlists_keeps_streaming(svc: WatchlistService) -> None:
     svc._fake_repo.create_watchlist("a")
     svc._fake_repo.create_watchlist("b")
-    svc._fake_repo.add_members("a", ["TSLA"])
-    svc._fake_repo.add_members("b", ["TSLA"])
-    await svc.start()
-    assert "TSLA" in svc._fake_prov.subscribed
-
-    svc.remove_members("a", ["TSLA"])
-    assert "TSLA" in svc._fake_prov.subscribed  # b still owns it
-    assert svc._refcount["TSLA"] == 1
-
-    svc.remove_members("b", ["TSLA"])
-    assert "TSLA" not in svc._fake_prov.subscribed
-    assert "TSLA" not in svc._refcount
+    svc.add_members("a", ["GOOG"])
+    svc.add_members("b", ["GOOG"])
+    svc.remove_members("a", ["GOOG"])
+    svc.remove_members("b", ["GOOG"])
+    # Even after removing from BOTH watchlists, the stream universe
+    # still contains GOOG (only StreamService.remove can evict it).
+    assert "GOOG" in svc._fake_stream.universe
 
 
-@pytest.mark.asyncio
-async def test_baseline_symbol_not_unsubscribed_when_user_watchlist_drops_it(svc: WatchlistService) -> None:
-    svc._fake_repo.create_watchlist("base", kind="baseline")
-    svc._fake_repo.create_watchlist("user")
-    svc._fake_repo.add_members("base", ["IWM"])
-    svc._fake_repo.add_members("user", ["IWM"])
-    await svc.start()
-    assert "IWM" in svc._fake_prov.subscribed
-    assert svc._refcount["IWM"] == 1  # only the 'user' watchlist contributes to refcount
-
-    svc.remove_members("user", ["IWM"])
-    assert "IWM" in svc._fake_prov.subscribed  # baseline still owns it
-    assert "IWM" in svc._baseline
-    assert svc._refcount.get("IWM", 0) == 0
+# ----- delete_watchlist is sticky too -----
 
 
-# ----- delete_watchlist() -----
-
-
-@pytest.mark.asyncio
-async def test_delete_watchlist_unsubscribes_only_orphans(svc: WatchlistService) -> None:
+def test_delete_watchlist_does_not_touch_stream(svc: WatchlistService) -> None:
     svc._fake_repo.create_watchlist("a")
-    svc._fake_repo.create_watchlist("b")
-    svc._fake_repo.add_members("a", ["F", "GM"])  # F overlaps, GM is exclusive to a
-    svc._fake_repo.add_members("b", ["F"])
-    await svc.start()
-    assert {"F", "GM"}.issubset(svc._fake_prov.subscribed)
+    svc.add_members("a", ["AMD"])
+    assert svc._fake_stream.universe == {"AMD"}
 
-    assert svc.delete_watchlist("a") is True
-    assert "GM" not in svc._fake_prov.subscribed  # orphaned
-    assert "F" in svc._fake_prov.subscribed       # still owned by b
-    assert svc._refcount.get("GM", 0) == 0
-    assert svc._refcount["F"] == 1
+    deleted = svc.delete_watchlist("a")
+    assert deleted is True
+    # Stream universe is sticky.
+    assert svc._fake_stream.universe == {"AMD"}
+    assert svc._fake_stream.remove_calls == []
+
+
+# ----- status() composes legacy + stream fields -----
+
+
+def test_status_delegates_streaming_fields_to_stream_service(svc: WatchlistService) -> None:
+    svc._fake_repo.create_watchlist(wls_module.DEFAULT_WATCHLIST_NAME)
+    svc.add_members(wls_module.DEFAULT_WATCHLIST_NAME, ["X", "Y"])
+
+    st = svc.status()
+    assert st["symbols"] == ["X", "Y"]
+    assert st["symbol_count"] == 2
+    assert sorted(st["streaming_symbols"]) == ["X", "Y"]
+    assert st["subscribed_count"] == 2
+    # Legacy fields kept at zero (refcount/baseline gone).
+    assert st["baseline_count"] == 0
+    assert st["refcounted_count"] == 0
 
 
 # ----- legacy shim -----
 
 
-@pytest.mark.asyncio
-async def test_legacy_add_remove_target_default_watchlist(svc: WatchlistService) -> None:
+def test_legacy_add_remove_target_default_watchlist(svc: WatchlistService) -> None:
     svc._fake_repo.create_watchlist(wls_module.DEFAULT_WATCHLIST_NAME)
-    await svc.start()
-
     result = svc.add(["NEW1", "NEW2"])
     assert sorted(result["added"]) == ["NEW1", "NEW2"]
-    assert "NEW1" in svc._fake_prov.subscribed
 
     result = svc.remove(["NEW1"])
     assert result["removed"] == ["NEW1"]
-    assert "NEW1" not in svc._fake_prov.subscribed
-
-    st = svc.status()
-    assert st["symbols"] == ["NEW2"]
-    assert st["symbol_count"] == 1
-    assert "NEW2" in st["streaming_symbols"]
-
-
-@pytest.mark.asyncio
-async def test_stop_unsubscribes_everything(svc: WatchlistService) -> None:
-    svc._fake_repo.create_watchlist("a")
-    svc._fake_repo.add_members("a", ["X", "Y"])
-    await svc.start()
-    assert svc._fake_prov.subscribed == {"X", "Y"}
-
-    await svc.stop()
-    assert svc._fake_prov.subscribed == set()
-    assert svc._fake_prov.stopped is True
+    # Stream is sticky — NEW1 still streamed even though removed from watchlist.
+    assert "NEW1" in svc._fake_stream.universe

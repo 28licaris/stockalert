@@ -15,6 +15,30 @@ DEFAULT_WATCHLIST_NAME = "default"
 LEGACY_WATCHLIST_JSON = "data/watchlist.json"
 
 
+def _migrate_seed_to_stream_universe(client) -> None:
+    """One-shot: rename `seed_universe` -> `stream_universe` if needed.
+
+    Pre-FE-CONTRACTS-4-final the table was named `seed_universe`. The
+    sticky-universe model now owns the streaming subscription set, so
+    the name was updated to reflect its actual role.
+
+    Idempotent:
+      - if `stream_universe` already exists, no-op.
+      - if `seed_universe` exists and `stream_universe` does not,
+        rename in place (data preserved).
+      - if neither exists, no-op (the CREATE TABLE below will create
+        `stream_universe` fresh).
+    """
+    stream_exists = client.command("EXISTS TABLE stream_universe") == 1
+    if stream_exists:
+        return
+    seed_exists = client.command("EXISTS TABLE seed_universe") == 1
+    if not seed_exists:
+        return
+    client.command("RENAME TABLE seed_universe TO stream_universe")
+    logger.info("Renamed CH table seed_universe -> stream_universe")
+
+
 def init_schema() -> None:
     db = settings.clickhouse_database
     admin = get_admin_client()
@@ -22,6 +46,8 @@ def init_schema() -> None:
     admin.close()
 
     client = get_client()
+
+    _migrate_seed_to_stream_universe(client)
 
     client.command(
         """
@@ -152,24 +178,20 @@ def init_schema() -> None:
     )
 
     # ─────────────────────────────────────────────────────────────────
-    # Seed universe (FE-CONTRACTS-4) — explicit "permanently part of the
-    # streaming universe" set. Sticky model from §10.1: operators add
-    # symbols here to lock them into the stream + historical backfill;
-    # removing here is the ONLY way to fully stop a symbol from streaming
-    # (watchlist removal just decrements refcount).
-    #
-    # Storage is purely additive to the existing watchlist machinery —
-    # adding to seed_universe also calls WatchlistService.add_members on
-    # the default watchlist so the refcounted subscribe + backfill path
-    # is reused. The CH table itself is the audit log + cockpit's
-    # editable source-of-truth.
-    #
+    # Stream universe (FE-CONTRACTS-4) — operator-curated "always
+    # streaming into ClickHouse 24/7" set. Per the locked sticky-
+    # universe model in docs/frontend_api_contracts.md §10.1:
+    #   - StreamService owns this table.
+    #   - StreamService.add subscribes to Schwab + writes a row.
+    #   - StreamService.remove unsubscribes + marks is_active=0.
+    #   - Watchlist add auto-extends via StreamService.ensure_streaming.
+    #   - Watchlist remove does NOT affect this table (sticky).
     # owner_id stamps every row so multi-tenant SaaS day is a pure
     # backfill of the column, not a schema rewrite.
     # ─────────────────────────────────────────────────────────────────
     client.command(
         """
-        CREATE TABLE IF NOT EXISTS seed_universe (
+        CREATE TABLE IF NOT EXISTS stream_universe (
             symbol      LowCardinality(String),
             owner_id    LowCardinality(String) DEFAULT 'default-tenant',
             asset_type  LowCardinality(String) DEFAULT '',

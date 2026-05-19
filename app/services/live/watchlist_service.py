@@ -1,35 +1,30 @@
 """
-Watchlist Service - multi-watchlist live-bar ingestion with per-symbol refcounting.
+Watchlist Service - multi-watchlist CRUD over `app.db.watchlist_repo`.
 
-Source of truth for the persisted watchlist data is `app.db.watchlist_repo`
-(ClickHouse). This service is the *behavioural* layer:
-  - tracks an in-memory refcount per symbol (= number of active watchlists
-    that contain it),
-  - subscribes to / unsubscribes from the configured `DataProvider` only when
-    a symbol crosses the 0 <-> 1 boundary,
-  - keeps baseline symbols subscribed regardless of refcount,
-  - forwards every incoming live bar to the OHLCV batcher.
+Architecture: per docs/frontend_api_contracts.md §10.1 (locked sticky-
+universe model), the *live streaming* set is owned by
+`app.services.stream.stream_service`, not this module. Watchlists are
+pure user-facing organization:
 
-The legacy single-watchlist API (`add`, `remove`, `list_symbols`) is kept as a
-thin compatibility shim that operates on the `DEFAULT_WATCHLIST_NAME`
-watchlist. It is used by `routes_watchlist.py` until Phase 1.3 introduces the
-multi-watchlist HTTP endpoints.
+  - Adding a symbol to a watchlist auto-extends the stream universe
+    (`stream_service.ensure_streaming`) if the symbol isn't already
+    being streamed. The new symbol gets a silver-derived warmup so
+    its chart is usable immediately.
+  - Removing a symbol from a watchlist does NOT touch the stream.
+    Universe membership is sticky; only an explicit
+    `stream_service.remove` (the cockpit's Stream Universe page)
+    strips a symbol from the live stream.
 
-Design constraints honoured here:
-  - Provider-agnostic: only `app.providers.base.DataProvider` is referenced.
-  - All persistent state goes through the repo (no JSON file writes).
-  - Adds / removes are idempotent and safe to retry.
+This module is therefore a thin CRUD shim on top of `watchlist_repo`
+plus the auto-extend hook into the stream service.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-import threading
-from typing import Iterable, Optional
+from typing import Optional
 
-from app.config import get_stream_provider, settings
-from app.db import get_bar_batcher, watchlist_repo
-from app.providers.base import DataProvider
+from app.db import watchlist_repo
 from app.services.ingest.backfill_service import backfill_service
 
 logger = logging.getLogger(__name__)
@@ -39,211 +34,34 @@ BASELINE_WATCHLIST_NAME = "baseline"
 
 
 class WatchlistService:
-    """
-    Singleton orchestrator that keeps the live-bar subscription set in sync
-    with the union of every active watchlist's active members. See module
-    docstring for the design.
+    """Multi-watchlist CRUD + auto-extend hook into StreamService.
+
+    Singleton (`watchlist_service`) is the production instance.
     """
 
     def __init__(self, backfill=backfill_service) -> None:
-        self._lock = threading.Lock()
-        self._provider: Optional[DataProvider] = None
-        self._provider_error: Optional[str] = None
         self._started = False
-        # Stamp every streamed bar with the *stream* provider's identity
-        # so the live_lake_writer (TA-5.7) can distinguish stream-sourced
-        # rows from REST-backfilled ones (which use the bare provider
-        # name, e.g. "schwab"). Suffix `-stream` is the contract:
-        # live_lake_writer reads CH ohlcv_1m WHERE source = "{provider}-stream".
-        # Explicit DATA_SOURCE_TAG still wins for operators who need to
-        # override (e.g. polygon-iex); they're responsible for matching
-        # the live_lake_writer config if they do.
-        base_tag = (
-            (settings.data_source_tag or "").strip()
-            or settings.effective_stream_provider
-        )
-        if settings.data_source_tag:
-            self._source = base_tag
-        else:
-            self._source = f"{base_tag}-stream" if base_tag else ""
-
-        # Symbol -> # of active watchlists containing it (excludes baseline membership;
-        # baseline is tracked separately so refcount==0 cannot evict a baseline symbol).
-        self._refcount: dict[str, int] = {}
-        # Symbols currently subscribed via the provider.
-        self._subscribed: set[str] = set()
-        # Symbols that must remain subscribed regardless of refcount.
-        self._baseline: set[str] = set()
-        # Backfill service (None disables auto-enqueue; used by unit tests).
         self._backfill = backfill
 
-    # ---------- helpers ----------
-
-    def _ensure_provider(self) -> Optional[DataProvider]:
-        if self._provider is not None:
-            return self._provider
-        try:
-            # Use the *stream* provider explicitly so users can configure a
-            # cheaper live feed (STREAM_PROVIDER) while keeping a different
-            # HISTORY_PROVIDER for backfill.
-            self._provider = get_stream_provider()
-            self._provider_error = None
-            logger.info(
-                "Watchlist: stream provider initialized (%s)",
-                settings.effective_stream_provider,
-            )
-            return self._provider
-        except Exception as e:
-            self._provider_error = str(e)
-            logger.error("Watchlist: could not initialize stream provider: %s", e)
-            return None
-
-    async def _on_bar(self, bar) -> None:
-        """Provider callback - forward every bar to the OHLCV batch writer."""
-        ts = getattr(bar, "timestamp", None) or getattr(bar, "ts", None)
-        symbol = getattr(bar, "ticker", None) or getattr(bar, "symbol", None)
-        if not ts or not symbol:
-            return
-        try:
-            await get_bar_batcher().add(
-                {
-                    "symbol": symbol,
-                    "timestamp": ts,
-                    "open": float(bar.open),
-                    "high": float(bar.high),
-                    "low": float(bar.low),
-                    "close": float(bar.close),
-                    "volume": float(getattr(bar, "volume", 0) or 0),
-                    "vwap": float(getattr(bar, "vwap", 0) or 0),
-                    "trade_count": int(getattr(bar, "trade_count", 0) or 0),
-                    "source": self._source,
-                }
-            )
-        except Exception as e:
-            logger.error("Watchlist: failed to enqueue bar for %s: %s", symbol, e)
-
-    def _desired_subscriptions(self) -> set[str]:
-        """Symbols that *should* be subscribed right now."""
-        return self._baseline | {s for s, n in self._refcount.items() if n > 0}
-
-    def _apply_subscription_diff(
-        self,
-        before: set[str],
-        after: set[str],
-    ) -> tuple[list[str], list[str]]:
-        """
-        Compute the (to_subscribe, to_unsubscribe) deltas and call the provider.
-        Returns the lists actually issued (empty if no provider).
-        """
-        to_sub = sorted(after - before)
-        to_unsub = sorted(before - after)
-        provider = self._ensure_provider() if (to_sub or to_unsub) else self._provider
-        if provider is None:
-            if to_sub or to_unsub:
-                logger.warning(
-                    "Watchlist: provider unavailable, skipping subscribe=%s unsubscribe=%s",
-                    to_sub, to_unsub,
-                )
-            return [], []
-        try:
-            if to_sub:
-                provider.subscribe_bars(self._on_bar, to_sub)
-            if to_unsub:
-                provider.unsubscribe_bars(to_unsub)
-        except Exception as e:
-            logger.error("Watchlist: provider subscribe/unsubscribe error: %s", e, exc_info=True)
-        return to_sub, to_unsub
-
-    def _increment(self, symbols: Iterable[str]) -> None:
-        for s in symbols:
-            self._refcount[s] = self._refcount.get(s, 0) + 1
-
-    def _decrement(self, symbols: Iterable[str]) -> None:
-        for s in symbols:
-            n = self._refcount.get(s, 0)
-            if n <= 1:
-                self._refcount.pop(s, None)
-            else:
-                self._refcount[s] = n - 1
-
-    def _reconcile(self) -> None:
-        """Bring the provider's subscription set in line with `_desired_subscriptions()`."""
-        with self._lock:
-            desired = self._desired_subscriptions()
-            before = set(self._subscribed)
-            self._apply_subscription_diff(before, desired)
-            self._subscribed = desired
-
-    # ---------- lifecycle ----------
+    # ─────────────────────────────────────────────────────────────────
+    # Lifecycle (no-op subscription-wise; StreamService owns that)
+    # ─────────────────────────────────────────────────────────────────
 
     async def start(self) -> None:
-        """
-        Rebuild in-memory refcount from the repo and subscribe to the union
-        of all active members + baseline. Idempotent.
+        """Mark service started. Stream subscriptions are owned by
+        `stream_service` and started by main_api lifespan separately.
         """
         if self._started:
             return
         self._started = True
-
-        # Rebuild refcount from repo.
-        with self._lock:
-            self._refcount.clear()
-            self._baseline = watchlist_repo.list_all_active_symbols(kinds={"baseline"})
-            for wl in watchlist_repo.list_watchlists():
-                if wl["kind"] == "baseline":
-                    continue  # baseline tracked separately so we never evict it
-                for sym in watchlist_repo.list_members(wl["name"]):
-                    self._refcount[sym] = self._refcount.get(sym, 0) + 1
-
-        self._reconcile()
-        status = self.status()
-        logger.info(
-            "Watchlist: started (baseline=%d, refcounted=%d, subscribed=%d)",
-            len(self._baseline), len(self._refcount), len(self._subscribed),
-        )
-        if status["provider_error"]:
-            logger.warning("Watchlist: provider error: %s", status["provider_error"])
-
-        # Auto-enqueue backfill for every symbol we just subscribed to.
-        # Branches on the same TA-5.3.3 flag as add_members so behavior
-        # is consistent across restart + symbol-add paths.
-        subs = sorted(self._subscribed)
-        from app.config import settings as _s
-        if getattr(_s, "silver_derived_add_members_enabled", False):
-            # NEW (TA-5.3.3): silver-derived warmup per symbol.
-            self._enqueue_silver_derived_warmup(subs)
-        else:
-            # LEGACY (Path ②). Three resolutions; server-side coverage
-            # checks turn each into a no-op if data is already there.
-            #   - QUICK 1-min (30d):    fills streamer-downtime gaps.
-            #   - INTRADAY 5-min (270d): so 5m/15m/30m/1h/4h charts cover ~9 mo.
-            #   - DAILY (2y):            so the 1d chart covers ~2 years.
-            self._enqueue_backfill(subs, kind="quick", days=30)
-            self._enqueue_backfill(subs, kind="intraday", days=270)
-            self._enqueue_backfill(subs, kind="daily", days=365 * 2)
+        logger.info("Watchlist service started (CRUD-only; streaming owned by stream_service)")
 
     async def stop(self) -> None:
-        """Unsubscribe everything and tear down the stream."""
-        if not self._started:
-            return
         self._started = False
-        with self._lock:
-            currently = sorted(self._subscribed)
-            self._subscribed.clear()
-            self._refcount.clear()
-            self._baseline.clear()
-        if self._provider and currently:
-            try:
-                self._provider.unsubscribe_bars(currently)
-            except Exception as e:
-                logger.error("Watchlist: unsubscribe_bars during stop failed: %s", e)
-        if self._provider:
-            try:
-                self._provider.stop_stream()
-            except Exception as e:
-                logger.error("Watchlist: stop_stream failed: %s", e)
 
-    # ---------- multi-watchlist CRUD ----------
+    # ─────────────────────────────────────────────────────────────────
+    # Multi-watchlist CRUD
+    # ─────────────────────────────────────────────────────────────────
 
     def list_watchlists(self, include_inactive: bool = False) -> list[dict]:
         return watchlist_repo.list_watchlists(include_inactive=include_inactive)
@@ -251,85 +69,91 @@ class WatchlistService:
     def get_watchlist(self, name: str) -> Optional[dict]:
         return watchlist_repo.get_watchlist(name)
 
-    def create_watchlist(self, name: str, kind: str = "user", description: str = "") -> dict:
-        wl = watchlist_repo.create_watchlist(name, kind=kind, description=description)
-        # Newly-created watchlists are empty, so no refcount change. If `kind=='baseline'`
-        # the baseline set is updated lazily by add_members/start (an empty baseline
-        # watchlist has no effect anyway).
-        return wl
+    def create_watchlist(
+        self, name: str, kind: str = "user", description: str = "",
+    ) -> dict:
+        return watchlist_repo.create_watchlist(
+            name, kind=kind, description=description,
+        )
 
     def delete_watchlist(self, name: str) -> bool:
-        """Soft-delete and decrement refcount for every member."""
+        """Soft-delete a watchlist. Sticky-universe invariant: members
+        stay in the stream universe (only StreamService.remove can
+        evict them from streaming).
+        """
         wl = watchlist_repo.get_watchlist(name)
         if wl is None or not wl["is_active"]:
             return False
-        members = watchlist_repo.list_members(name)
-        deleted = watchlist_repo.delete_watchlist(name)
-        if not deleted:
-            return False
-        with self._lock:
-            if wl["kind"] == "baseline":
-                # Baseline membership came from this watchlist; recompute from repo.
-                self._baseline = watchlist_repo.list_all_active_symbols(kinds={"baseline"})
-            else:
-                self._decrement(members)
-        self._reconcile()
-        return True
+        return watchlist_repo.delete_watchlist(name)
 
     def rename_watchlist(self, old: str, new: str) -> dict:
-        # Refcount totals do not change on rename; the same members move with it.
         return watchlist_repo.rename_watchlist(old, new)
 
     def list_members(self, name: str) -> list[str]:
         return watchlist_repo.list_members(name)
 
     def add_members(self, name: str, symbols: list[str]) -> dict:
-        """
-        Add `symbols` to watchlist `name`. Auto-creates the watchlist if missing.
+        """Add `symbols` to watchlist `name`. Auto-creates the watchlist
+        if missing.
+
+        Side-effects (locked sticky-universe model):
+          1. CH write: `watchlist_repo.add_members`.
+          2. Stream auto-extend: any newly-added symbol not already in
+             the stream universe gets promoted via
+             `stream_service.ensure_streaming` (which subscribes Schwab
+             + queues a silver-derived warmup).
+          3. Backfill warmup: for any symbol already in the stream but
+             new to this watchlist, fire the legacy backfill path if
+             `silver_derived_add_members_enabled` is off (otherwise
+             stream_service.add already fired the silver path).
+
         Returns:
             {
                 "watchlist": name,
-                "added": [symbols newly activated for this watchlist],
+                "added": [symbols newly active in this watchlist],
                 "members": [full active list after the change],
             }
         """
-        # Discover whether this is a baseline watchlist for refcount accounting.
-        wl = watchlist_repo.get_watchlist(name)
-        kind = wl["kind"] if wl else "user"
         newly = watchlist_repo.add_members(name, symbols)
-        with self._lock:
-            if kind == "baseline":
-                # Pull a fresh baseline set so we account for cross-baseline overlaps.
-                self._baseline = watchlist_repo.list_all_active_symbols(kinds={"baseline"})
-            else:
-                self._increment(newly)
-        self._reconcile()
-        # Fill in whatever history we're missing for the newly-added symbols.
-        # Fire-and-forget. Two paths coexist during the TA-5.3 rollout:
-        #
-        # NEW (TA-5.3.3 — silver-derived). Enabled via
-        # SILVER_DERIVED_ADD_MEMBERS_ENABLED=true. Per
-        # docs/streaming_universe_model.md:
-        #   1. silver_to_ch_backfill (silver.ohlcv_1m → CH, 730d)
-        #   2. schwab_rest_tip_fill  (silver watermark → live, ≤48d)
-        # CH is canonical-derived (S3 silver is the source of truth).
-        #
-        # LEGACY (Path ② — provider REST → CH direct). Three backfills:
-        #   - QUICK 1-min for the last 30d
-        #   - INTRADAY 5-min for the last 270d
-        #   - DAILY for the last 2y
-        # Scheduled for removal in TA-5.5 once silver-derived is
-        # operator-verified.
+
         if newly:
-            # Local import keeps watchlist_service module-load free of
-            # `app.config.settings` cycles in tests that monkeypatch it.
-            from app.config import settings as _s
-            if getattr(_s, "silver_derived_add_members_enabled", False):
-                self._enqueue_silver_derived_warmup(newly)
-            else:
-                self._enqueue_backfill(newly, kind="quick", days=30)
-                self._enqueue_backfill(newly, kind="intraday", days=270)
-                self._enqueue_backfill(newly, kind="daily", days=365 * 2)
+            # Auto-extend the stream universe (sticky). Lazy import to
+            # avoid a circular at module load. For symbols not yet in
+            # the stream, this subscribes Schwab + (when the flag is
+            # on) fires the silver-derived warmup chain in stream_service.
+            try:
+                from app.services.stream import stream_service
+
+                promoted = stream_service.ensure_streaming(
+                    newly, source=f"watchlist:{name}",
+                )
+                if promoted:
+                    logger.info(
+                        "Watchlist '%s': auto-extended stream universe with %d new symbol(s): %s",
+                        name, len(promoted), promoted,
+                    )
+            except Exception as exc:  # noqa: BLE001 — boundary
+                logger.warning(
+                    "Watchlist '%s': stream auto-extend failed: %s",
+                    name, exc,
+                )
+
+            # Legacy quick/intraday/daily backfill — fires only when the
+            # silver-derived flag is OFF. When the flag is ON, stream
+            # service's add() already handles warmup for symbols it just
+            # promoted; symbols already in the stream are assumed warm
+            # (the nightly silver chain keeps them current).
+            try:
+                from app.config import settings as _s
+
+                use_legacy = not getattr(
+                    _s, "silver_derived_add_members_enabled", False,
+                )
+            except Exception:  # noqa: BLE001 — boundary
+                use_legacy = True
+            if use_legacy:
+                self._enqueue_warmup_legacy(newly)
+
         return {
             "watchlist": name,
             "added": newly,
@@ -337,164 +161,88 @@ class WatchlistService:
         }
 
     def remove_members(self, name: str, symbols: list[str]) -> dict:
-        wl = watchlist_repo.get_watchlist(name)
-        kind = wl["kind"] if wl else "user"
+        """Remove `symbols` from watchlist `name`.
+
+        Sticky-universe invariant: this does NOT touch the stream
+        universe or any Schwab subscriptions. Symbols continue to
+        stream until an operator explicitly calls
+        `stream_service.remove`.
+        """
         removed = watchlist_repo.remove_members(name, symbols)
-        with self._lock:
-            if kind == "baseline":
-                self._baseline = watchlist_repo.list_all_active_symbols(kinds={"baseline"})
-            else:
-                self._decrement(removed)
-        self._reconcile()
         return {
             "watchlist": name,
             "removed": removed,
             "members": watchlist_repo.list_members(name),
         }
 
-    def _enqueue_backfill(self, symbols: list[str], *, kind: str, days: int) -> None:
-        """Fire-and-forget backfill enqueue. Tolerates no-loop / no-backfill state.
+    # ─────────────────────────────────────────────────────────────────
+    # Backfill warmup (legacy Path ②, used only when silver-derived
+    # add_members is disabled)
+    # ─────────────────────────────────────────────────────────────────
 
-        **LEGACY (Path ②)** — provider REST → CH direct. Scheduled for
-        removal in TA-5.5 once the silver-derived path is operator-verified.
+    def _enqueue_warmup_legacy(self, symbols: list[str]) -> None:
+        """Fire-and-forget: quick/intraday/daily backfill via
+        `backfill_service`. Caller controls the silver-vs-legacy flag
+        decision; this method just dispatches.
         """
         if not symbols or self._backfill is None:
             return
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            # No running loop (called from sync test or pre-startup); skip.
             return
         for sym in symbols:
             try:
-                if kind == "deep":
-                    self._backfill.enqueue_deep(sym, days=days)
-                elif kind == "daily":
-                    self._backfill.enqueue_daily(sym, days=days)
-                elif kind == "intraday":
-                    self._backfill.enqueue_intraday(sym, days=days)
-                else:
-                    self._backfill.enqueue_quick(sym, days=days)
-            except Exception as e:
+                self._backfill.enqueue_quick(sym, days=30)
+                self._backfill.enqueue_intraday(sym, days=270)
+                self._backfill.enqueue_daily(sym, days=365 * 2)
+            except Exception as e:  # noqa: BLE001 — boundary
                 logger.warning("Auto-backfill enqueue failed for %s: %s", sym, e)
 
-    def _enqueue_silver_derived_warmup(self, symbols: list[str]) -> None:
-        """Fire-and-forget: silver→CH backfill + Schwab REST tip-fill.
-
-        TA-5.3.3 unified add-symbol flow per
-        docs/streaming_universe_model.md. Per symbol (sequential within
-        the symbol, parallel across symbols):
-          1. SilverToChBackfill — silver.ohlcv_1m → CH ohlcv_1m (730d)
-          2. SchwabTipFill — silver watermark → live gap (≤48d), dual
-             write to bronze + CH
-
-        Both calls are best-effort: failures are logged but the symbol
-        stays subscribed. Brand-new symbols (no silver history) get
-        zero from step 1 and the full 48d from step 2, which is the
-        expected cockpit "warming up" UX.
-        """
-        if not symbols:
-            return
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            # No running loop (sync test / pre-startup); skip.
-            return
-        for sym in symbols:
-            asyncio.create_task(
-                self._silver_derived_warmup_one(sym),
-                name=f"silver_warmup_{sym}",
-            )
-
-    async def _silver_derived_warmup_one(self, symbol: str) -> None:
-        """One symbol's silver-derived warmup chain. Errors logged but
-        not raised — the symbol is already subscribed; failed warmup
-        just means the chart shows live-only until next nightly silver
-        chain catches up."""
-        # Step 1: silver → CH (sync; offload to thread).
-        try:
-            from app.services.ingest.silver_to_ch_backfill import (
-                DEFAULT_BACKFILL_DAYS,
-                SilverToChBackfill,
-            )
-
-            silver_to_ch = SilverToChBackfill.from_settings()
-            s2c = await asyncio.to_thread(
-                silver_to_ch.backfill_symbol,
-                symbol, days=DEFAULT_BACKFILL_DAYS,
-            )
-            logger.info(
-                "silver→CH warmup: %s read=%d written=%d snapshot=%s",
-                symbol, s2c.bars_read, s2c.bars_written, s2c.snapshot_id,
-            )
-            if not s2c.succeeded:
-                logger.warning(
-                    "silver→CH warmup for %s failed: %s "
-                    "(continuing to tip-fill)", symbol, s2c.error,
-                )
-        except Exception as e:
-            logger.exception(
-                "silver→CH warmup for %s raised: %s (continuing to "
-                "tip-fill)", symbol, e,
-            )
-
-        # Step 2: Schwab REST tip-fill (async).
-        try:
-            from app.services.ingest.schwab_tip_fill import SchwabTipFill
-
-            tip = SchwabTipFill.from_settings()
-            tf = await tip.tip_fill(symbol)
-            logger.info(
-                "tip-fill: %s fetched=%d bronze=%d ch=%d",
-                symbol, tf.bars_fetched,
-                tf.bars_written_bronze, tf.bars_written_ch,
-            )
-            if not tf.succeeded:
-                logger.warning(
-                    "tip-fill for %s failed: %s", symbol, tf.error,
-                )
-        except Exception as e:
-            logger.exception("tip-fill for %s raised: %s", symbol, e)
-
-    # ---------- observability ----------
-
-    def streaming_symbols(self) -> list[str]:
-        with self._lock:
-            return sorted(self._subscribed)
-
-    def refcounts(self) -> dict[str, int]:
-        with self._lock:
-            return dict(self._refcount)
+    # ─────────────────────────────────────────────────────────────────
+    # Observability
+    # ─────────────────────────────────────────────────────────────────
 
     def status(self) -> dict:
-        # `symbols` / `symbol_count` mirror the DEFAULT watchlist members so the
-        # current dashboard keeps working. `streaming_symbols` is the new field
-        # that reflects the global subscription set across all watchlists +
-        # baseline; the Phase 1.3 dashboard will use that one.
-        default_members = self.list_symbols()
-        with self._lock:
-            return {
-                "started": self._started,
-                "provider": settings.effective_stream_provider,
-                "provider_ready": self._provider is not None,
-                "provider_error": self._provider_error,
-                "symbol_count": len(default_members),
-                "symbols": default_members,
-                "streaming_symbols": sorted(self._subscribed),
-                "subscribed_count": len(self._subscribed),
-                "baseline_count": len(self._baseline),
-                "refcounted_count": len(self._refcount),
-                "watchlist_count": len(watchlist_repo.list_watchlists()),
-            }
+        """Compose a status dict for the legacy /watchlist endpoint.
 
-    # ---------- legacy single-watchlist shim (kept for routes_watchlist.py) ----------
-    # These operate on DEFAULT_WATCHLIST_NAME so existing /watchlist endpoints
-    # keep working until Phase 1.3 swaps them out.
+        Streaming fields delegate to `stream_service` so existing
+        cockpit code that reads `streaming_symbols` / `subscribed_count`
+        continues to work without modification.
+        """
+        default_members = self.list_symbols()
+        stream_status: dict = {}
+        try:
+            from app.services.stream import stream_service
+
+            stream_status = stream_service.status()
+        except Exception as exc:  # noqa: BLE001 — boundary
+            logger.warning("watchlist status: stream_service.status() failed: %s", exc)
+            stream_status = {}
+        return {
+            "started": self._started,
+            "provider": stream_status.get("provider"),
+            "provider_ready": stream_status.get("provider_ready"),
+            "provider_error": stream_status.get("provider_error"),
+            "symbol_count": len(default_members),
+            "symbols": default_members,
+            "streaming_symbols": stream_status.get("streaming_symbols", []),
+            "subscribed_count": stream_status.get("streaming_count", 0),
+            # Retained for back-compat; the new model has neither a
+            # baseline nor a refcount.
+            "baseline_count": 0,
+            "refcounted_count": 0,
+            "watchlist_count": len(watchlist_repo.list_watchlists()),
+        }
+
+    # ─────────────────────────────────────────────────────────────────
+    # Legacy single-watchlist shim (kept for routes_watchlist.py)
+    # ─────────────────────────────────────────────────────────────────
 
     def list_symbols(self) -> list[str]:
         try:
             return watchlist_repo.list_members(DEFAULT_WATCHLIST_NAME)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — boundary
             logger.error("Watchlist legacy list_symbols failed: %s", e)
             return []
 

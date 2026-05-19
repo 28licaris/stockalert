@@ -943,7 +943,11 @@ class SchwabProvider(DataProvider):
         Symbol autocomplete via Schwab `/instruments`. Strategy:
           1. `symbol-regex` matches by ticker prefix (covers 'NVD' -> NVDA).
           2. `desc-search` matches by company name (covers 'apple' -> AAPL).
-          3. Merge, dedupe by symbol, then re-rank by relevance so EQUITIES
+             Skipped for 1-char queries (yields thousands of unranked hits).
+          3. Run (1) and (2) in parallel via asyncio.gather so total latency
+             is max(call1, call2) instead of call1 + call2 — typically ~half
+             the wall-clock for 2+ char queries.
+          4. Merge, dedupe by symbol, then re-rank by relevance so EQUITIES
              with exact / prefix matches float to the top BEFORE applying
              `limit`. Without re-ranking, Schwab returns alphabetical lists
              where AAPL is buried behind APPLESEED mutual funds.
@@ -955,37 +959,35 @@ class SchwabProvider(DataProvider):
             return []
         q_upper = q.upper()
 
-        merged: dict[str, dict] = {}
-
-        # 1) Prefix match on symbol
         regex = self._to_prefix_regex(q)
+        coros: list[asyncio.Future] = []
+        labels: list[str] = []
         if regex:
-            try:
-                data = await self._market_data_get(
-                    INSTRUMENTS_PATH,
-                    {"symbol": regex, "projection": "symbol-regex"},
-                )
-                for it in (data or {}).get("instruments", []) or []:
-                    norm = self._normalize_instrument(it)
-                    if norm["symbol"]:
-                        merged.setdefault(norm["symbol"], norm)
-            except Exception as e:
-                logger.debug("Schwab symbol-regex search failed for %r: %s", q, e)
-
-        # 2) Description search (only if the query has > 1 character — single
-        # chars produce ~thousands of matches and aren't useful for AC).
+            coros.append(self._market_data_get(
+                INSTRUMENTS_PATH,
+                {"symbol": regex, "projection": "symbol-regex"},
+            ))
+            labels.append("symbol-regex")
         if len(q) >= 2:
-            try:
-                data = await self._market_data_get(
-                    INSTRUMENTS_PATH,
-                    {"symbol": q, "projection": "desc-search"},
-                )
-                for it in (data or {}).get("instruments", []) or []:
+            coros.append(self._market_data_get(
+                INSTRUMENTS_PATH,
+                {"symbol": q, "projection": "desc-search"},
+            ))
+            labels.append("desc-search")
+
+        merged: dict[str, dict] = {}
+        if coros:
+            # gather with return_exceptions so one failure doesn't sink
+            # the other — autocomplete needs at most one source to work.
+            results = await asyncio.gather(*coros, return_exceptions=True)
+            for label, result in zip(labels, results):
+                if isinstance(result, Exception):
+                    logger.debug("Schwab %s search failed for %r: %s", label, q, result)
+                    continue
+                for it in (result or {}).get("instruments", []) or []:
                     norm = self._normalize_instrument(it)
                     if norm["symbol"]:
                         merged.setdefault(norm["symbol"], norm)
-            except Exception as e:
-                logger.debug("Schwab desc-search failed for %r: %s", q, e)
 
         # Rank, then cap. Sort key:
         #   1. higher score first
