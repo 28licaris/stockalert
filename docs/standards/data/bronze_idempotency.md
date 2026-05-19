@@ -1,57 +1,34 @@
 # Bronze Idempotency — Append-Only Hot Path
 
-Bronze sinks in this repo **always `append`**, never
-`overwrite(filter=...)` or `delete(...)` in the hot path.
+Bronze sinks **always `append`**. Never `overwrite(filter=...)` or
+`delete(...)` in the hot path.
 
 ## Why
 
-PyIceberg's `overwrite(filter)` and `delete(filter)` both require
-reading existing data files to determine which rows are affected. On
-`bronze.polygon_minute` (35+ GB, 2.1B rows), that's hundreds of MB of
-S3 I/O per write — completely unacceptable for a daily nightly job, much
-less a 5-minute live writer.
+PyIceberg `overwrite` / `delete` read existing files to find affected
+rows. On `bronze.polygon_minute` (35+ GB), that's hundreds of MB of
+S3 I/O per write. Phase 1 dev: the call hung indefinitely.
 
-This was hit during Phase 1 development; the call hung indefinitely.
+## Model
 
-## The idempotency model instead
+- **Bronze:** `table.append(arrow_df)`. New file + snapshot. No read
+  pass.
+- **Idempotency upstream:** watermark ledger
+  (`lake_archive_watermarks`) + ET-basis gap detection
+  (`missing_weekdays`) for nightly; last-flushed-ts cursor for future
+  live writer.
+- **Silver-build dedups:** provider precedence + `argMax` per
+  `(symbol, ts)`. Duplicate bronze rows are tolerated by design.
 
-- **Bronze**: always `table.append(arrow_df)`. Fast — just writes a new
-  file and commits a snapshot. No read pass.
+## Apply
 
-- **Upstream provides idempotency:**
-  - Nightly jobs → watermark ledger (CH `lake_archive_watermarks`) +
-    ET-basis gap detection (`missing_weekdays`).
-  - Future live writer → "last-flushed-ts" cursor.
+New bronze sink → follow `app/services/bronze/sink.py`.
+`BronzeIcebergSink.append(arrow)` is the entire write op.
 
-- **Silver-build handles dedup:** provider precedence + `argMax`-style
-  per-`(symbol, ts)` selection. Duplicate bronze rows are tolerated
-  because silver is the canonical layer.
+## Maintenance → Athena, not PyIceberg
 
-## How to apply
-
-When writing a new bronze sink (alpaca, databento, options-day, etc.),
-follow `app/services/bronze/sink.py`. `BronzeIcebergSink.append(arrow)`
-is the entire write op.
-
-Don't introduce overwrite or delete in bronze.
-
-## For maintenance — use Athena
-
-Cleanup and compaction use Athena. Athena's partition-pruned
-`DELETE ... WHERE timestamp BETWEEN ...` and
-`OPTIMIZE table REWRITE DATA USING BIN_PACK` skip the PyIceberg slow
-path entirely.
-
-`scripts/compact_bronze_monthly.py` is the canonical pattern.
-
-See [`athena_dialects.md`](athena_dialects.md) for the DDL / DML quoting
-rules when writing Athena SQL from Python.
-
-## Related
-
-- [`lean_silver.md`](lean_silver.md) — silver is the canonical
-  deduped layer; bronze tolerates duplicates by design.
-- [`../coding.md`](../coding.md) rule 5 — verify cross-side after any
-  write.
-- [`../platform_design.md`](../platform_design.md) principle 5 —
-  medallion architecture.
+Cleanup / OPTIMIZE: Athena's partition-pruned
+`DELETE … WHERE timestamp BETWEEN …` and
+`OPTIMIZE … REWRITE DATA USING BIN_PACK`. Pattern:
+`scripts/compact_bronze_monthly.py`. SQL quoting:
+[`athena_dialects.md`](athena_dialects.md).

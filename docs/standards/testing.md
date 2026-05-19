@@ -1,70 +1,48 @@
-# Testing — Markers, Fixtures, Async
+# Testing
 
-Tests are the contract surface. Modules are designed liftable to
-containers; the Pydantic contract is what tests should pin. If the
-contract is well-tested, the implementation can be swapped without
-breaking callers — which is the whole point of the architecture.
+The Pydantic contract is the test surface. If the contract is
+well-tested, the impl can be swapped without breaking callers — the
+whole point of the architecture.
 
 ## Layout
 
-- `tests/` — unit tests. No external deps. Must pass on a laptop with
-  zero AWS / ClickHouse / provider credentials.
-- `tests/integration/` — live ClickHouse / S3 / provider tests. Gated
-  by the `integration` marker; skipped in default runs.
+- `tests/` — unit, no external deps. Must pass with zero AWS / CH /
+  provider creds.
+- `tests/integration/` — live CH / S3 / provider. Gated by
+  `integration` marker.
 
-## Markers
-
-- `@pytest.mark.integration` — required on any test touching live
-  services. Default `poetry run pytest` runs unit only.
+## Commands
 
 ```bash
-poetry run pytest -m "not integration"   # unit only (fast)
-poetry run pytest -m integration         # live-service tests
+poetry run pytest -m "not integration"   # unit only (default)
+poetry run pytest -m integration         # live-service
 ```
 
-## Fixtures
+## Key fixture
 
-- `clickhouse_ready` (session-scoped, in `tests/conftest.py`) — skips
-  gracefully if ClickHouse is unreachable and auto-runs
-  `app.db.init_schema()`. Any test touching CH must depend on it. Never
-  open a CH client ad-hoc inside a test.
-
-- Shared fixtures live in `conftest.py` (root or nested), not duplicated
-  per file.
+`clickhouse_ready` (session-scoped, in `tests/conftest.py`) skips
+gracefully if CH unreachable and auto-runs `init_schema()`. Any
+CH-touching test depends on it. **Never** open a CH client ad-hoc.
 
 ## Async
 
-`pytest-asyncio` is configured. `async def test_*` works in most files
-without per-test decorators. If a test silently stalls, check
-`asyncio_mode` in `pyproject.toml`.
+`pytest-asyncio` configured; `async def test_*` works without per-test
+decorators. If a test silently stalls, check `asyncio_mode` in
+`pyproject.toml`.
 
 ## What to test (priority order)
 
-1. **The Pydantic contract** (`schemas.py`) — input / output shape is
-   the public boundary. Every field, every validator.
+1. **Pydantic contract** — every field, every validator.
 2. **Result-object branches** — every `status="ok" | "skipped" |
-   "error"` path. Don't just test the happy path.
-3. **Idempotency** — call twice with the same inputs, assert the second
-   call is a no-op (or produces the same state). Non-negotiable for any
-   ingest / backfill code.
-4. **Cross-side mutation verification** — after a write, re-read via a
-   *new* client / catalog and assert (snapshot changed, rows present).
-   See [`coding.md`](coding.md) rule 5.
+   "error"`.
+3. **Idempotency** — call twice; second is no-op or same state.
+4. **Cross-side mutation verify** — re-read via fresh client. See
+   [`coding.md`](coding.md) §5.
 
-## Anti-patterns
+## Forbidden
 
-- A test that asserts only "no exception raised". That's not a test;
-  it's a smoke check. Assert on returned state.
-- Mocking the database when the test exists to verify a write.
-  Integration tests must hit a real ClickHouse / real Iceberg.
-- New fixtures in individual test files when they would belong in
-  `conftest.py`.
-- Skipping the `integration` marker because "it works locally for me".
-  CI runs default `pytest`; unmarked tests block the build.
-
-## Related
-
-- [`service_modules.md`](service_modules.md) — what makes the contract
-  testable in isolation.
-- [`coding.md`](coding.md) — cross-side mutation verification, the
-  "no silent failures" foundation.
+- Asserting only "no exception raised" — that's a smoke check, not a
+  test.
+- Mocking the DB when the test exists to verify a write.
+- New fixtures in test files when they belong in `conftest.py`.
+- Skipping the `integration` marker on a live-service test — blocks CI.

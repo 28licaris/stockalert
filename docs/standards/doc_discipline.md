@@ -1,57 +1,39 @@
 # Doc Discipline
 
-The doc layer in `docs/` is part of the build, not an afterthought.
+**Locked 2026-05-18.** Detailed commit messages are the build journal.
+**Do not write to `docs/BUILD_JOURNAL.md`** — read it for historical
+context only.
 
-Every microservice / module folder (under `app/services/`, future
-`trading_ai/*`, or any service tree) has its own `README.md` describing
-what the service does, what it owns, its public contract, and how to
-test it.
+Why: the journal duplicated what the commit history already captured in
+a more searchable form. Two writes for the same information cost more
+than they paid back.
 
-> **New folder → README in the same commit, not later.**
+## Rules
 
-## When to update which doc
+1. **Every microservice folder has a `README.md`** — what it owns, its
+   public contract, how to test it. **New folder → README in the same
+   commit.**
 
-When making an architectural change, update the relevant doc in the
-**same change** as the code:
+2. **Plan docs update in the same change as the code.** Doc-to-change
+   map:
 
-| Change                                | Doc to update                              |
-|---------------------------------------|--------------------------------------------|
-| New service or contract change        | [`ARCHITECTURE.md`](../ARCHITECTURE.md) service map + spec |
-| Storage / ingestion change            | [`data_platform_plan.md`](../data_platform_plan.md) |
-| AI-trading change                     | [`trading-ai-build-plan.md`](../trading-ai-build-plan.md) |
-| Any decision with a reason            | [`BUILD_JOURNAL.md`](../BUILD_JOURNAL.md) decision log, today's date |
-| Standards rule change                 | [`standards/`](README.md) — new/edited doc + index entry |
+   | Change                                | Update                                |
+   |---------------------------------------|---------------------------------------|
+   | New service / contract change         | [`ARCHITECTURE.md`](../ARCHITECTURE.md) |
+   | Storage / ingestion change            | [`data_platform_plan.md`](../data_platform_plan.md) |
+   | AI-trading change                     | [`trading-ai-build-plan.md`](../trading-ai-build-plan.md) |
+   | Standards rule change                 | [`standards/`](README.md) (doc + index entry) |
+   | Phase / gate / decision log           | **Commit message**, not BUILD_JOURNAL |
 
-## Why
+3. **Write the commit message like a journal entry.** Phase prefix,
+   scope, files changed, gates passed, deferred follow-ups. The git log
+   is the source of truth.
 
-Future contributors (human and AI agent) pick up the build by reading
-[`BUILD_JOURNAL.md`](../BUILD_JOURNAL.md) first. If the docs drift from
-reality, that entry point misleads. Per-service READMEs prevent
-contributors from having to read every file in a folder to understand
-its role.
+4. **When plan and code conflict, code wins.** (The "journal wins" rule
+   is retired with BUILD_JOURNAL.)
 
-## How to apply
+## How this interacts with engagement
 
-- Treat doc updates as part of the same task as the code change, not a
-  follow-up. PRs that add a service without a README, or move
-  architecture without updating the plans, are incomplete.
-
-- When the [`BUILD_JOURNAL.md`](../BUILD_JOURNAL.md) and a plan doc
-  conflict, the journal wins — it's the chronological record of what
-  actually happened. The plan represents intent at a moment in time.
-
-## Plans are guidance, not authorization
-
-A plan doc does not pre-authorize an implementation choice. See
-[`engagement.md`](engagement.md). The plan describes what we intend to
-build; the spec for any specific code change still needs explicit user
-signoff.
-
-This is the same rule that produced the lean-silver standard — see
-[`data/lean_silver.md`](data/lean_silver.md).
-
-## Related
-
-- [`engagement.md`](engagement.md) — spec-first.
-- [`service_modules.md`](service_modules.md) — README is part of the
-  folder template.
+A plan doc does not pre-authorize an implementation choice — see
+[`engagement.md`](engagement.md). The plan describes intent at a moment
+in time; specific code changes still need explicit signoff.
