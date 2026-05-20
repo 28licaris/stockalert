@@ -1,5 +1,10 @@
 # StockAlert Data Architecture v2 — Production Grade
 
+> **DETAILED IMPLEMENTATION REFERENCE: see [`docs/architecture_v2/`](../../architecture_v2/README.md).**
+> This file is the high-level summary. The split-by-topic deep dive lives in
+> the v2 folder: schema, S3 layout, Spark, providers, migration phases,
+> runbook, decisions. Update both when changing the design.
+
 **Status:** PROPOSED — supersedes the medallion lock-in in
 [`symbol_lifecycle.md`](symbol_lifecycle.md) once approved.
 Read this before touching ingest, lake, or ML training code.
