@@ -7,23 +7,23 @@ OHLCV columns) and [`04_spark.md`](04_spark.md) (Spark patterns).
 ## TL;DR
 
 ```
-   data.polygon_adjusted ─┐
-   data.schwab_universe   ├─► FEATURE JOB (Spark, weekly + ad-hoc)
-   data.market_corp_actions┘            │
+   equities.polygon_adjusted ─┐
+   equities.schwab_universe   ├─► FEATURE JOB (Spark, weekly + ad-hoc)
+   equities.market_corp_actions┘            │
                                         ▼
-                              data.features_1m_v{N}   ← Iceberg, snapshot-pinned
+                              equities.features_1m_v{N}   ← Iceberg, snapshot-pinned
                                         │
                                         ▼
                               LABEL JOB (Spark)
                                         │
                                         ▼
-                              data.labels_v{N}
+                              equities.labels_v{N}
                                         │
-   data.point_in_time_universe ────────►├─►  TRAIN JOB (SageMaker / local)
+   equities.point_in_time_universe ────────►├─►  TRAIN JOB (SageMaker / local)
                                         │       │
                                         │       ▼
                                         │   s3://stockalert-models/<name>/<ver>/
-                                        │   + data.model_registry
+                                        │   + equities.model_registry
                                         │       │
                             ┌───────────┴───────┴──────────────┐
                             ▼                                  ▼
@@ -59,14 +59,14 @@ pinning end-to-end.
 
 ## New Iceberg tables
 
-### `data.features_1m_v{N}`
+### `equities.features_1m_v{N}`
 
 One row per `(symbol, timestamp)` with all engineered features for
 that bar. `v{N}` is the feature-set version — never mutate; bump
 version for any schema change. Old versions stay queryable.
 
 ```sql
-CREATE TABLE lake.data.features_1m_v1 (
+CREATE TABLE lake.equities.features_1m_v1 (
     symbol                STRING NOT NULL,
     timestamp             TIMESTAMP NOT NULL,
 
@@ -117,14 +117,14 @@ Expected size: ~12k symbols × 5y × ~390 bars/day × 252 trading days
 ≈ 5B rows × ~150 bytes/row uncompressed → **~50 GB zstd-compressed
 per feature-set version**.
 
-### `data.labels_v{N}`
+### `equities.labels_v{N}`
 
 Separate from features so the same features can be tested against
 multiple label definitions (forward returns at different horizons,
 triple-barrier with different barrier widths, etc.).
 
 ```sql
-CREATE TABLE lake.data.labels_v1_fwd5m (
+CREATE TABLE lake.equities.labels_v1_fwd5m (
     symbol               STRING NOT NULL,
     timestamp            TIMESTAMP NOT NULL,
     fwd_log_ret_5m       DOUBLE NOT NULL,        -- regression target
@@ -139,7 +139,7 @@ TBLPROPERTIES ('format-version' = '2');
 Naming convention: `labels_v{N}_{type}{horizon}`. Examples:
 `labels_v1_fwd5m`, `labels_v1_triple_2sigma_60m`, `labels_v2_max_dd_1d`.
 
-### `data.point_in_time_universe`
+### `equities.point_in_time_universe`
 
 The universe membership history. One row per `(date, symbol)` for
 every date a symbol was investable. Used by the training job to
@@ -147,7 +147,7 @@ filter out symbols that didn't yet exist (or had been delisted) at
 the historical training timestamp.
 
 ```sql
-CREATE TABLE lake.data.point_in_time_universe (
+CREATE TABLE lake.equities.point_in_time_universe (
     date           DATE NOT NULL,
     symbol         STRING NOT NULL,
     in_universe    BOOLEAN NOT NULL,
@@ -167,13 +167,13 @@ starting cut). Updated daily.
 universe excludes everything that died; training on today's universe
 trains on winners only.
 
-### `data.model_registry`
+### `equities.model_registry`
 
 One row per `(name, version)` model. The S3 path holds the artifact;
 this table holds the metadata.
 
 ```sql
-CREATE TABLE lake.data.model_registry (
+CREATE TABLE lake.equities.model_registry (
     name                       STRING NOT NULL,        -- 'swing_5m_xgb'
     version                    STRING NOT NULL,        -- '2025-05-20-a3f1'
     s3_uri                     STRING NOT NULL,        -- model.pkl location
@@ -214,14 +214,14 @@ TBLPROPERTIES (
 );
 ```
 
-### `data.backtest_runs` & `data.backtest_trades`
+### `equities.backtest_runs` & `equities.backtest_trades`
 
 Snapshot-pinned backtest history for ML model evaluation. These are
 **lake-only**; the existing CH `agent_runs` continues to hold live
 paper-trading state for the cockpit.
 
 ```sql
-CREATE TABLE lake.data.backtest_runs (
+CREATE TABLE lake.equities.backtest_runs (
     run_id                STRING NOT NULL,           -- UUID
     model_name            STRING NOT NULL,
     model_version         STRING NOT NULL,
@@ -251,7 +251,7 @@ CREATE TABLE lake.data.backtest_runs (
 PARTITIONED BY (model_name)
 TBLPROPERTIES ('format-version' = '2');
 
-CREATE TABLE lake.data.backtest_trades (
+CREATE TABLE lake.equities.backtest_trades (
     run_id                STRING NOT NULL,            -- FK → backtest_runs.run_id
     symbol                STRING NOT NULL,
     entry_timestamp       TIMESTAMP NOT NULL,
@@ -269,13 +269,13 @@ PARTITIONED BY (bucket(16, run_id), month(entry_timestamp))
 TBLPROPERTIES ('format-version' = '2');
 ```
 
-### `data.feature_drift_metrics`
+### `equities.feature_drift_metrics`
 
 Daily drift measurements per (feature, symbol-bucket). Lets you
 detect when the live distribution diverges from training.
 
 ```sql
-CREATE TABLE lake.data.feature_drift_metrics (
+CREATE TABLE lake.equities.feature_drift_metrics (
     date              DATE NOT NULL,
     feature_name      STRING NOT NULL,
     symbol_bucket     INT NOT NULL,           -- bucketed for per-segment monitoring
@@ -298,8 +298,8 @@ TBLPROPERTIES ('format-version' = '2');
 | | |
 |---|---|
 | **Code** | `app/ml/features/v1.py` (the shared module) + `scripts/spark/feature_build_v1.py` (the Spark driver) |
-| **Reads** | `lake.data.polygon_adjusted`, `lake.data.schwab_universe` (UNION via the cross-provider pattern from `02_schema.md`) |
-| **Writes** | `lake.data.features_1m_v1` |
+| **Reads** | `lake.equities.polygon_adjusted`, `lake.equities.schwab_universe` (UNION via the cross-provider pattern from `02_schema.md`) |
+| **Writes** | `lake.equities.features_1m_v1` |
 | **Where** | EMR Serverless, weekly cron + on-demand for backfills |
 | **Cost** | ~$3 per whole-market run, ~$0.10 per single-symbol incremental |
 | **Cadence** | Sunday 07:00 UTC (after `polygon_adjustment_job` completes at 06:00 UTC) |
@@ -358,12 +358,12 @@ def features_udf(pdf):
 
 bars = spark.sql("""
     SELECT symbol, timestamp, open, high, low, close, volume, vwap
-    FROM lake.data.polygon_adjusted
+    FROM lake.equities.polygon_adjusted
     WHERE timestamp >= TIMESTAMP '2018-01-01'
 """)
 
 snapshot_id = spark.sql(
-    "SELECT max(snapshot_id) FROM lake.data.polygon_adjusted.snapshots"
+    "SELECT max(snapshot_id) FROM lake.equities.polygon_adjusted.snapshots"
 ).collect()[0][0]
 
 features = (bars.groupBy("symbol")
@@ -371,7 +371,7 @@ features = (bars.groupBy("symbol")
                 .withColumn("source_snapshot_id", F.lit(snapshot_id))
                 .withColumn("feature_set_version", F.lit("v1")))
 
-features.writeTo("lake.data.features_1m_v1").overwritePartitions()
+features.writeTo("lake.equities.features_1m_v1").overwritePartitions()
 ```
 
 ### Stage 2 — Labeling
@@ -379,8 +379,8 @@ features.writeTo("lake.data.features_1m_v1").overwritePartitions()
 | | |
 |---|---|
 | **Code** | `scripts/spark/label_build_v1_fwd5m.py` |
-| **Reads** | `lake.data.polygon_adjusted` (for forward returns) |
-| **Writes** | `lake.data.labels_v1_fwd5m` |
+| **Reads** | `lake.equities.polygon_adjusted` (for forward returns) |
+| **Writes** | `lake.equities.labels_v1_fwd5m` |
 | **Where** | EMR Serverless, runs after feature build |
 | **Cost** | ~$1 per whole-market run |
 
@@ -391,7 +391,7 @@ Two common label types for day/swing trading:
 SELECT symbol, timestamp,
        LN(LEAD(close, 5) OVER (PARTITION BY symbol ORDER BY timestamp)
           / close) AS fwd_log_ret_5m
-FROM lake.data.polygon_adjusted
+FROM lake.equities.polygon_adjusted
 ```
 
 **Triple-barrier (classification, Lopez de Prado §3):**
@@ -412,8 +412,8 @@ def triple_barrier_udf(pdf):
 | | |
 |---|---|
 | **Code** | `scripts/ml/train_v1.py` |
-| **Reads** | `lake.data.features_1m_v1`, `lake.data.labels_v1_fwd5m`, `lake.data.point_in_time_universe` |
-| **Writes** | `s3://stockalert-models/<name>/<version>/` + `lake.data.model_registry` |
+| **Reads** | `lake.equities.features_1m_v1`, `lake.equities.labels_v1_fwd5m`, `lake.equities.point_in_time_universe` |
+| **Writes** | `s3://stockalert-models/<name>/<version>/` + `lake.equities.model_registry` |
 | **Where** | SageMaker training job OR local Python on a 32-GB box |
 | **Cost** | ~$5 per whole-market XGBoost run (~30 min on ml.m5.4xlarge) |
 | **Cadence** | Weekly, or on-demand for experiments |
@@ -453,15 +453,15 @@ from app.ml.cv import walk_forward_splits
 #       — Serializes via the library-native format (Gate 10), writes
 #         snapshot_ids.json alongside, returns the version string.
 #   write_registry_row(name: str, version: str, status: str, ...)
-#       — Insert into lake.data.model_registry.
+#       — Insert into lake.equities.model_registry.
 #   sharpe_scorer  — sklearn-compatible scorer wrapping
 #                    sqrt(252*390) * mean(ret) / std(ret).
 
 # 1. Pin Iceberg snapshots so this run is reproducible
 snaps = pin_current_snapshots([
-    "lake.data.features_1m_v1",
-    "lake.data.labels_v1_fwd5m",
-    "lake.data.point_in_time_universe",
+    "lake.equities.features_1m_v1",
+    "lake.equities.labels_v1_fwd5m",
+    "lake.equities.point_in_time_universe",
 ])
 
 # 2. Materialize training set via Spark → Parquet on S3
@@ -504,7 +504,7 @@ write_registry_row(name="swing_5m_xgb", version=version, status="training", ...)
 |---|---|
 | **Code** | `app/services/sim/` (existing module, ported to v2) |
 | **Reads** | Pinned snapshots from `model_registry`, plus `polygon_adjusted` + `schwab_universe` UNION for the hold-out window |
-| **Writes** | `lake.data.backtest_runs`, `lake.data.backtest_trades` (Iceberg — see DDL below). The CH `agent_runs` table continues to hold live paper-trading run records; the lake tables are for snapshot-pinned reproducible backtests. |
+| **Writes** | `lake.equities.backtest_runs`, `lake.equities.backtest_trades` (Iceberg — see DDL below). The CH `agent_runs` table continues to hold live paper-trading run records; the lake tables are for snapshot-pinned reproducible backtests. |
 | **Where** | Local Python or EMR Serverless, depending on scope |
 
 Walk-forward backtest IS the truth signal. Cross-validation is
@@ -570,11 +570,11 @@ Three monitors, three response modes:
 
 | Metric | Source | Trigger | Response |
 |---|---|---|---|
-| **Feature drift** | `data.feature_drift_metrics` (daily Spark job comparing live vs training distributions via KS test) | `drift_severity = 'alert'` for 3 consecutive days | Email; investigate; consider retraining |
+| **Feature drift** | `equities.feature_drift_metrics` (daily Spark job comparing live vs training distributions via KS test) | `drift_severity = 'alert'` for 3 consecutive days | Email; investigate; consider retraining |
 | **Prediction calibration** | Live `signals` joined with realized forward returns (hourly CH MV) | Predicted-vs-realized correlation drops >20% from training | Page; consider rollback to previous model version |
 | **PnL attribution** | Daily aggregation of `sim_trades` vs backtest expectation | Live PnL underperforms backtest expectation by >2σ over 10 days | Freeze model (status → 'retired'); investigate before reinstating |
 
-All three are CH MVs or daily Spark jobs writing to `data.*` tables.
+All three are CH MVs or daily Spark jobs writing to `lake.equities.*` tables.
 Cockpit `/app/ml/health` page renders them.
 
 ### Stage 7 — Retraining loop
@@ -591,7 +591,7 @@ Weekly cron (Sunday 08:00 UTC, after feature/label builds):
    - If canary live-PnL ≥ challenger backtest expectation → promote to `prod`, retire previous prod
    - Otherwise: retire challenger, keep prod
 
-Promotion is a single UPDATE to `data.model_registry.status`. The
+Promotion is a single UPDATE to `equities.model_registry.status`. The
 signal worker re-reads the registry every 60s.
 
 ## Reproducibility — the snapshot pin contract
@@ -605,12 +605,12 @@ Every model artifact directory contains a `snapshot_ids.json`:
   "feature_set_version": "v1",
   "label_version": "v1_fwd5m",
   "snapshots": {
-    "lake.data.polygon_adjusted":       4218764512837645000,
-    "lake.data.schwab_universe":        7843219874523648000,
-    "lake.data.market_corp_actions":    9012345678901234567,
-    "lake.data.features_1m_v1":         1234567890123456789,
-    "lake.data.labels_v1_fwd5m":        2345678901234567890,
-    "lake.data.point_in_time_universe": 3456789012345678901
+    "lake.equities.polygon_adjusted":       4218764512837645000,
+    "lake.equities.schwab_universe":        7843219874523648000,
+    "lake.equities.market_corp_actions":    9012345678901234567,
+    "lake.equities.features_1m_v1":         1234567890123456789,
+    "lake.equities.labels_v1_fwd5m":        2345678901234567890,
+    "lake.equities.point_in_time_universe": 3456789012345678901
   },
   "train_start": "2020-01-01",
   "train_end":   "2024-06-30",
@@ -622,7 +622,7 @@ A year later, anyone can recreate the training set:
 
 ```python
 features = spark.sql("""
-    SELECT * FROM lake.data.features_1m_v1
+    SELECT * FROM lake.equities.features_1m_v1
     VERSION AS OF 1234567890123456789
 """)
 # ... identical to what was trained on
@@ -633,7 +633,7 @@ be **lifted** for snapshots referenced by production models. Use
 table tags:
 
 ```sql
-ALTER TABLE lake.data.features_1m_v1
+ALTER TABLE lake.equities.features_1m_v1
 CREATE TAG `model-swing_5m_xgb-2025-05-20-a3f1`
 AS OF VERSION 1234567890123456789
 RETAIN 5 YEARS;
@@ -681,8 +681,8 @@ on a 5k-symbol universe with weekly retraining.
 
 | v1 plan | v2 ML pipeline equivalent |
 |---|---|
-| `gold.features_1m` (designed, not implemented) | `data.features_1m_v{N}` (this doc) |
-| `gold.universes` (designed) | `data.point_in_time_universe` (this doc) |
+| `gold.features_1m` (designed, not implemented) | `equities.features_1m_v{N}` (this doc) |
+| `gold.universes` (designed) | `equities.point_in_time_universe` (this doc) |
 | `feature_set_version` column (designed) | Now also `source_snapshot_id` for full lineage |
 | Ad-hoc model training in notebooks | `scripts/ml/train_v{N}.py` with model_registry |
 | (no formal monitoring) | drift + calibration + PnL attribution monitors |

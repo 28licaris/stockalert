@@ -159,9 +159,9 @@ edge so downstream code stays single-shape.
 Polygon is NOT on the live critical path in v2 (Schwab covers
 everything live). Polygon dependencies:
 
-- `data.polygon_raw` — frozen at the last refresh date; queryable forever
-- `data.polygon_adjusted` — frozen at the last adjustment-job run
-- `data.market_corp_actions` — frozen; new splits don't get ingested
+- `equities.polygon_raw` — frozen at the last refresh date; queryable forever
+- `equities.polygon_adjusted` — frozen at the last adjustment-job run
+- `equities.market_corp_actions` — frozen; new splits don't get ingested
 - Polygon flat-files job — stops working (no source)
 - Polygon REST `/aggs` (if used) — stops working
 

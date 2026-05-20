@@ -90,7 +90,7 @@ read 1/N of each month's data instead of all of it.**
 
 ### Concrete numbers
 
-For `data.polygon_raw` at 12,000 symbols × 5 years × 1-minute:
+For `equities.polygon_raw` at 12,000 symbols × 5 years × 1-minute:
 
 | Layout | Files / month | File size | Total scan for 5y of 1 symbol |
 |---|---|---|---|
@@ -105,7 +105,7 @@ sizes hit Iceberg's recommended ~128 MB target.
 | Dataset | Symbols | Bucket count N | Symbols per bucket |
 |---|---|---|---|
 | `polygon_raw` / `polygon_adjusted` | ~12,000 | 32 | ~375 |
-| `schwab_universe` | ~108 today; grows to ~500 long-term | 16 | ~7-30 |
+| `schwab_universe` | ~250 (Top-N by 30d ADV — Gate 13) | 16 | ~16 |
 | `market_corp_actions` | low row volume | no bucketing | n/a |
 
 Schwab universe gets 16 buckets — small data; over-bucketing creates
@@ -117,7 +117,7 @@ If we ever decide 32 isn't enough (e.g. add micro-cap coverage and
 symbol count grows to 50k), Iceberg supports partition evolution:
 
 ```sql
-ALTER TABLE lake.polygon_raw
+ALTER TABLE lake.equities.polygon_raw
 SET PARTITION SPEC (bucket(64, symbol), month(timestamp));
 ```
 
@@ -155,7 +155,7 @@ built-in procedure:
 
 ```sql
 CALL lake.system.rewrite_data_files(
-    table => 'lake.schwab_universe',
+    table => 'lake.equities.schwab_universe',
     options => map('target-file-size-bytes', '134217728', 'min-file-size-bytes', '67108864')
 );
 ```
@@ -172,7 +172,7 @@ Iceberg keeps every write commit as a separate snapshot. Default
 retention is unlimited, which grows metadata over time. Configure:
 
 ```sql
-ALTER TABLE lake.polygon_raw
+ALTER TABLE lake.equities.polygon_raw
 SET TBLPROPERTIES (
     'history.expire.min-snapshots-to-keep' = '20',
     'history.expire.max-snapshot-age-ms' = '7776000000'  -- 90 days
@@ -185,7 +185,7 @@ ML training pipelines pin specific snapshots; those stay protected.
 Older snapshots are expired by a periodic maintenance call:
 
 ```sql
-CALL lake.system.expire_snapshots('lake.polygon_raw');
+CALL lake.system.expire_snapshots('lake.equities.polygon_raw');
 ```
 
 Run weekly via EMR Serverless (same cron as compaction).
@@ -194,10 +194,10 @@ Run weekly via EMR Serverless (same cron as compaction).
 
 | Layer | Size | Cost / month |
 |---|---|---|
-| `data.polygon_raw` | ~120 GB | $2.80 (S3 Standard @ $0.023/GB) |
-| `data.polygon_adjusted` | ~140 GB | $3.30 |
-| `data.schwab_universe` | ~5 GB → ~50 GB at 10y | $0.10 → $1.15 |
-| `data.market_corp_actions` | ~10 MB | <$0.01 |
+| `equities.polygon_raw` | ~120 GB | $2.80 (S3 Standard @ $0.023/GB) |
+| `equities.polygon_adjusted` | ~140 GB | $3.30 |
+| `equities.schwab_universe` | ~5 GB → ~50 GB at 10y | $0.10 → $1.15 |
+| `equities.market_corp_actions` | ~10 MB | <$0.01 |
 | Iceberg metadata (across all 4 tables) | <500 MB | $0.01 |
 | `raw/polygon/...` (CSV.gz flat-files) | ~300 GB | $7.00 (Standard) or $0.30 (Glacier Deep Archive) |
 | Glue catalog | 4 tables × ~100 commits/year | $0.05 |
@@ -219,7 +219,7 @@ the underlying Parquet files directly:
 ```python
 duckdb.sql("""
     SELECT * FROM read_parquet(
-        's3://stockalert-lake/data/polygon_raw/data/**/*.parquet',
+        's3://stockalert-lake/equities/polygon_raw/data/**/*.parquet',
         hive_partitioning = 1
     )
     WHERE symbol = 'AAPL'

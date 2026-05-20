@@ -23,10 +23,10 @@ joins and unions are trivial.
 
 | Value | Where it lives | Meaning |
 |---|---|---|
-| `"polygon-raw"` | `data.polygon_raw` | Polygon flat-files, untouched |
-| `"polygon-adjusted"` | `data.polygon_adjusted` | Polygon raw + corp-actions applied by `polygon_adjustment_job` |
-| `"schwab-live"` | `data.schwab_universe`, CH.ohlcv_1m | Schwab CHART_EQUITY WebSocket |
-| `"schwab-rest-pricehistory"` | `data.schwab_universe`, CH.ohlcv_1m | Schwab REST tip-fill (on-add) |
+| `"polygon-raw"` | `equities.polygon_raw` | Polygon flat-files, untouched |
+| `"polygon-adjusted"` | `equities.polygon_adjusted` | Polygon raw + corp-actions applied by `polygon_adjustment_job` |
+| `"schwab-live"` | `equities.schwab_universe`, CH.ohlcv_1m | Schwab CHART_EQUITY WebSocket |
+| `"schwab-rest-pricehistory"` | `equities.schwab_universe`, CH.ohlcv_1m | Schwab REST tip-fill (on-add) |
 | `"schwab-nightly"` | (legacy v1; not used in v2 daily path) | Schwab REST nightly batch |
 
 ### Why `adj_factor` as a column
@@ -49,10 +49,10 @@ adjusts at the API and doesn't expose the pre-split price.
 `adj_factor` on `polygon_adjusted` carries real information because
 we computed it from raw + splits.
 
-## Iceberg DDL — `data.polygon_raw`
+## Iceberg DDL — `equities.polygon_raw`
 
 ```sql
-CREATE TABLE lake.data.polygon_raw (
+CREATE TABLE lake.equities.polygon_raw (
     symbol      STRING NOT NULL,
     timestamp   TIMESTAMP NOT NULL,
     open        DOUBLE NOT NULL,
@@ -80,10 +80,10 @@ TBLPROPERTIES (
 **Note**: no `adj_factor` on raw tables — they're unadjusted by
 definition.
 
-## Iceberg DDL — `data.polygon_adjusted`
+## Iceberg DDL — `equities.polygon_adjusted`
 
 ```sql
-CREATE TABLE lake.data.polygon_adjusted (
+CREATE TABLE lake.equities.polygon_adjusted (
     symbol      STRING NOT NULL,
     timestamp   TIMESTAMP NOT NULL,
     open        DOUBLE NOT NULL,
@@ -113,10 +113,10 @@ TBLPROPERTIES (
 );
 ```
 
-## Iceberg DDL — `data.schwab_universe`
+## Iceberg DDL — `equities.schwab_universe`
 
 ```sql
-CREATE TABLE lake.data.schwab_universe (
+CREATE TABLE lake.equities.schwab_universe (
     symbol      STRING NOT NULL,
     timestamp   TIMESTAMP NOT NULL,
     open        DOUBLE NOT NULL,
@@ -130,7 +130,7 @@ CREATE TABLE lake.data.schwab_universe (
     adj_factor  DOUBLE NOT NULL DEFAULT 1.0  -- Always 1.0; Schwab adjusts at API
 )
 PARTITIONED BY (
-    bucket(16, symbol),   -- 16 buckets for smaller universe (108 syms / 16 ≈ 7 per bucket)
+    bucket(16, symbol),   -- 16 buckets for Top-250-by-ADV universe (Gate 13): ~250 syms / 16 ≈ 16 per bucket
     month(timestamp)
 )
 TBLPROPERTIES (
@@ -142,10 +142,10 @@ TBLPROPERTIES (
 );
 ```
 
-## Iceberg DDL — `data.market_corp_actions`
+## Iceberg DDL — `equities.market_corp_actions`
 
 ```sql
-CREATE TABLE lake.data.market_corp_actions (
+CREATE TABLE lake.equities.market_corp_actions (
     symbol       STRING NOT NULL,
     ex_date      DATE NOT NULL,            -- Ex-dividend / split date
     action_type  STRING NOT NULL,          -- 'split' | 'dividend' | 'special_dividend'
@@ -227,19 +227,19 @@ Phase 5 cutover, only Schwab writes (live + REST) remain.
 
 ## Cross-table queries — the schema parity payoff
 
-Because `data.polygon_adjusted` and `data.schwab_universe` share the
+Because `equities.polygon_adjusted` and `equities.schwab_universe` share the
 same column set (with `adj_factor` defaulting to 1.0 on Schwab), a
 continuous cross-provider view is a one-line UNION:
 
 ```sql
 SELECT symbol, timestamp, close, volume, adj_factor, source
-FROM lake.polygon_adjusted
+FROM lake.equities.polygon_adjusted
 WHERE symbol = 'AAPL' AND timestamp < TIMESTAMP '2025-01-01'
 
 UNION ALL
 
 SELECT symbol, timestamp, close, volume, adj_factor, source
-FROM lake.schwab_universe
+FROM lake.equities.schwab_universe
 WHERE symbol = 'AAPL' AND timestamp >= TIMESTAMP '2025-01-01'
 
 ORDER BY timestamp
@@ -262,7 +262,7 @@ read the schema-as-of-that-snapshot — no surprise schema changes.
 
 When adding a column in the future:
 ```python
-spark.sql("ALTER TABLE lake.polygon_adjusted ADD COLUMN open_to_close_ret DOUBLE")
+spark.sql("ALTER TABLE lake.equities.polygon_adjusted ADD COLUMN open_to_close_ret DOUBLE")
 ```
 
 Old rows show NULL for the new column; new writes fill it.

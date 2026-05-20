@@ -9,9 +9,9 @@ LIVE TIER (ClickHouse) — user-facing charting, indicators, screener, sim.
 LAKE TIER (S3 + Iceberg) — analytical / ML training workloads.
 
 Datasets:
-  data.polygon_raw       — whole-market 5y Polygon flat-files, RAW, immutable
-  data.polygon_adjusted  — whole-market 5y, SPLIT-ADJUSTED (one-time + corp-action incrementals)
-  data.schwab_universe   — Schwab 1-min bars, ALREADY ADJUSTED by Schwab, grows live
+  equities.polygon_raw       — whole-market 5y Polygon flat-files, RAW, immutable
+  equities.polygon_adjusted  — whole-market 5y, SPLIT-ADJUSTED (one-time + corp-action incrementals)
+  equities.schwab_universe   — Schwab 1-min bars, ALREADY ADJUSTED by Schwab, grows live
 ```
 
 **Schwab data needs no adjustment math** — Schwab returns split-adjusted
@@ -53,10 +53,10 @@ for cluster-scale batch reads via Spark, single-user reads via DuckDB.
 
 | Table | Contents | Source | Adjusted? |
 |---|---|---|---|
-| `data.polygon_raw` | Polygon flat-files, **whole-market** | one-time bulk + optional periodic | **no (raw)** |
-| `data.polygon_adjusted` | Polygon, whole-market, **split-adjusted** | computed by `polygon_adjustment_job` | **yes** |
-| `data.schwab_universe` | Schwab live + REST tip-fill mirror | `lake_archive_job` hourly | **yes (Schwab native)** |
-| `data.market_corp_actions` | Splits + dividends, whole-market | Polygon REST corp-actions ingest, weekly | n/a |
+| `equities.polygon_raw` | Polygon flat-files, **whole-market** | one-time bulk + optional periodic | **no (raw)** |
+| `equities.polygon_adjusted` | Polygon, whole-market, **split-adjusted** | computed by `polygon_adjustment_job` | **yes** |
+| `equities.schwab_universe` | Schwab live + REST tip-fill mirror | `lake_archive_job` hourly | **yes (Schwab native)** |
+| `equities.market_corp_actions` | Splits + dividends, whole-market | Polygon REST corp-actions ingest, weekly | n/a |
 
 Detailed S3 layout + partition strategy: [03_s3_layout.md](03_s3_layout.md).
 Schema definitions + DDL: [02_schema.md](02_schema.md).
@@ -76,7 +76,7 @@ Schwab CHART_EQUITY WebSocket
         │
         │ lake_archive_job (every 1 hour)
         ▼
-   data.schwab_universe   (Iceberg)
+   equities.schwab_universe   (Iceberg)
 ```
 
 - CH is the source of truth for live charting.
@@ -103,7 +103,7 @@ POST /api/v1/stream {"symbol": "PG"}
 ```
 
 For 1-min data deeper than 48 days for the new symbol: lazy query
-of `data.polygon_adjusted` via DuckDB at chart-render time. Most
+of `equities.polygon_adjusted` via DuckDB at chart-render time. Most
 users never hit this; 5-year zoom uses daily candles.
 
 ### C. Polygon historical (one-time + incremental)
@@ -112,23 +112,23 @@ users never hit this; 5-year zoom uses daily candles.
 ONE-TIME BULK (already done):
    Polygon flat-files (5y whole-market)
         ▼
-   data.polygon_raw   (Iceberg, RAW)
+   equities.polygon_raw   (Iceberg, RAW)
 
 ONE-TIME ADJUSTMENT BUILD (Phase 1 of v2 migration):
-   data.polygon_raw + data.market_corp_actions
+   equities.polygon_raw + equities.market_corp_actions
         ▼
    polygon_adjustment_job (Spark batch)
         ▼
-   data.polygon_adjusted   (Iceberg, ADJUSTED, whole-market)
+   equities.polygon_adjusted   (Iceberg, ADJUSTED, whole-market)
 
 INCREMENTAL (when new corp actions land):
    Polygon REST corp-actions ingest (weekly cron)
         ▼
-   data.market_corp_actions   (Iceberg)
+   equities.market_corp_actions   (Iceberg)
         ▼
    polygon_adjustment_job --since <date>   (re-adjusts only affected symbols)
         ▼
-   data.polygon_adjusted   (updated for affected symbols)
+   equities.polygon_adjusted   (updated for affected symbols)
 ```
 
 The adjustment job runs:
@@ -138,10 +138,10 @@ The adjustment job runs:
 
 ### D. (Optional) Ongoing Polygon flat-file refresh
 
-If the operator wants `data.polygon_raw` to keep growing (vs frozen
+If the operator wants `equities.polygon_raw` to keep growing (vs frozen
 at the bulk-load date), the existing `nightly_polygon_refresh` job
 can stay enabled. It writes yesterday's whole-market flat-file into
-`data.polygon_raw` (then triggers an incremental adjustment).
+`equities.polygon_raw` (then triggers an incremental adjustment).
 
 Disabled by default in v2 — adds Polygon subscription cost without
 clear ROI for live charting (Schwab covers the universe). Re-enable
@@ -171,7 +171,7 @@ import duckdb
 
 # Single-symbol deep history
 df = duckdb.sql("""
-    SELECT * FROM iceberg_scan('s3://stockalert-lake/data/polygon_adjusted/')
+    SELECT * FROM iceberg_scan('s3://stockalert-lake/equities/polygon_adjusted/')
     WHERE symbol = 'AAPL'
       AND timestamp BETWEEN '2020-01-01' AND '2024-12-31'
 """).df()
@@ -180,13 +180,30 @@ df = duckdb.sql("""
 DuckDB reads Iceberg natively. Symbol-bucket partitioning makes
 single-symbol queries fast (~1-3s for 5y of 1-min data).
 
+### Cockpit deep history + Agent — `/api/v1/lake/bars` + MCP (Phase 4+)
+
+The same DuckDB read path is wrapped two ways:
+
+1. **HTTP endpoint** `GET /api/v1/lake/bars?symbol=...&start=...&end=...`
+   — cockpit chart falls back here when the zoom range exceeds CH
+   retention. UNION across `equities.polygon_adjusted` +
+   `equities.schwab_universe` with `source` preserved for audit.
+2. **MCP tools** (`app/mcp/tools.py`) — the assistant agent calls
+   `lake_bars`, `lake_cross_provider_diff`, `lake_snapshot_list`
+   directly. Same DuckDB query under the hood. Gate 7 decision —
+   the agent surface ships in the same commit batch as the HTTP
+   endpoint (CV11/CV12/CV12b in [06_migration.md](06_migration.md)).
+
+DuckDB cold-start: ~500ms first request, ~50ms cached. Acceptable
+for deep-history fall-through; not on the hot chart path.
+
 ### ML training — Spark
 
 For cluster compute. Same Iceberg tables, scaled out.
 
 ```python
 spark.sql("""
-    SELECT * FROM lake.polygon_adjusted
+    SELECT * FROM lake.equities.polygon_adjusted
     VERSION AS OF 1234567890   -- snapshot pinned for reproducibility
     WHERE timestamp BETWEEN '2020-01-01' AND '2024-12-31'
 """).write.parquet("s3://stockalert-features/train_v1/")
@@ -203,9 +220,9 @@ breaking the other.
 |---|---|---|
 | Schwab outage | Live ticks stop; chart shows last bar + "stale" badge | Unaffected; reads existing snapshots |
 | Schwab token expired | Same; OAuth refresh needed | Unaffected |
-| Polygon subscription ends | Unaffected (Schwab only on live tier) | `data.polygon_raw` frozen at last refresh; existing snapshots queryable forever. `schwab_universe` keeps growing |
+| Polygon subscription ends | Unaffected (Schwab only on live tier) | `equities.polygon_raw` frozen at last refresh; existing snapshots queryable forever. `schwab_universe` keeps growing |
 | ClickHouse down | Live API 503s | Unaffected |
-| CH corrupted | Restore from `data.schwab_universe` (~1 hour for universe) | n/a |
+| CH corrupted | Restore from `equities.schwab_universe` (~1 hour for universe) | n/a |
 | S3 region outage | Unaffected (CH local) | ML pipelines pause |
 | Glue catalog down | Unaffected | Iceberg writes fail; direct S3 reads of known snapshots still work |
 | Bad corp-action data | Unaffected | Next adjustment-job run repairs the symbol |
@@ -220,10 +237,10 @@ In v1, the layers were named by their POSITION in the pipeline
 
 | v1 | v2 | What it actually contains |
 |---|---|---|
-| `bronze.polygon_minute` | `data.polygon_raw` | Polygon flat-file bars, untouched |
-| `bronze.schwab_minute` | merged into `data.schwab_universe` | Schwab bars (already adjusted) |
-| `silver.ohlcv_1m` | `data.polygon_adjusted` + `data.schwab_universe` | Computed adjusted (Polygon) or pass-through (Schwab) |
-| `bronze.polygon_corp_actions` | `data.market_corp_actions` | Splits + dividends |
+| `bronze.polygon_minute` | `equities.polygon_raw` | Polygon flat-file bars, untouched |
+| `bronze.schwab_minute` | merged into `equities.schwab_universe` | Schwab bars (already adjusted) |
+| `silver.ohlcv_1m` | `equities.polygon_adjusted` + `equities.schwab_universe` | Computed adjusted (Polygon) or pass-through (Schwab) |
+| `bronze.polygon_corp_actions` | `equities.market_corp_actions` | Splits + dividends |
 
 The medallion vocabulary obscured a real semantic split: Schwab data
 is adjusted by the provider; Polygon raw is unadjusted; the

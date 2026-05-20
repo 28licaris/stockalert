@@ -6,14 +6,21 @@
 |---|---|---|
 | **Live API chart query** | ClickHouse | <200ms target; no Spark on the request path |
 | **Operator ad-hoc** (one user, one symbol) | DuckDB | Single-process, no cluster; ~1-3s for 5y of one symbol |
-| **`polygon_adjustment_job`** (whole-market, weekly) | Spark on EMR Serverless | Cluster-scale needed for the 5-year × 12k-symbol join with corp_actions |
-| **ML feature engineering** (whole-market, batch) | Spark on EMR Serverless | Same |
+| **`polygon_adjustment_job`** (whole-market, weekly) | Local PySpark by default; EMR Serverless if local can't keep up | Tree-join on 5y × 12k symbols fits a 16 GB dev box; EMR Serverless is the escape hatch (Gate 5) |
+| **ML feature engineering** (whole-market, batch) | Local PySpark; EMR Serverless escape hatch | Same |
 | **Backtest runs** (10s-100s of symbols, hours of compute) | Spark or local Python | Either works |
 | **Snapshot-pinned training data export** | Spark (parallel writes) | Iceberg time-travel + parallel Parquet output |
-| **Single-symbol deep history** (chart zoom past CH) | DuckDB via `/api/v1/lake/bars` endpoint | One-symbol scan is fast enough for DuckDB |
+| **Single-symbol deep history** (chart zoom past CH) | DuckDB via `/api/v1/lake/bars` endpoint **+ MCP tools** (`lake_bars`, `lake_cross_provider_diff`, `lake_snapshot_list`) | One-symbol scan is fast enough for DuckDB; agent gets the same query path (Gate 7) |
 
 **Spark is only invoked for batch jobs.** It never sits on the live
 request path.
+
+**Gate 5 policy:** local-first. Default runner for every Spark script
+in this doc is `python scripts/spark/<job>.py` on a 16 GB dev box.
+EMR Serverless setup ships in Phase 1 (CV4) so the on-demand AWS path
+exists, but jobs only escalate there if local wall-clock exceeds
+~30 min. The EMR launcher details below are the escape-hatch contract,
+not the steady state.
 
 ## Required JARs
 
@@ -85,7 +92,7 @@ from scripts.spark import get_spark
 spark = get_spark()
 
 df = spark.sql("""
-    SELECT * FROM lake.polygon_adjusted
+    SELECT * FROM lake.equities.polygon_adjusted
     WHERE symbol = 'AAPL'
       AND timestamp BETWEEN '2020-01-01' AND '2024-12-31'
     ORDER BY timestamp
@@ -104,7 +111,7 @@ df = spark.sql("""
     SELECT * FROM (
         SELECT symbol, timestamp, open, high, low, close, volume,
                adj_factor, source
-        FROM lake.polygon_adjusted
+        FROM lake.equities.polygon_adjusted
         WHERE symbol = 'AAPL'
           AND timestamp < TIMESTAMP '2025-01-01'
 
@@ -113,7 +120,7 @@ df = spark.sql("""
         SELECT symbol, timestamp, open, high, low, close, volume,
                1.0 AS adj_factor,    -- Schwab already adjusted
                source
-        FROM lake.schwab_universe
+        FROM lake.equities.schwab_universe
         WHERE symbol = 'AAPL'
           AND timestamp >= TIMESTAMP '2025-01-01'
     ) ORDER BY timestamp
@@ -131,7 +138,7 @@ from pyspark.sql.window import Window
 
 bars = spark.sql("""
     SELECT symbol, timestamp, close, volume
-    FROM lake.polygon_adjusted
+    FROM lake.equities.polygon_adjusted
     WHERE timestamp >= TIMESTAMP '2023-01-01'
 """)
 
@@ -164,23 +171,23 @@ EMR Serverless app. **Cost: ~$2-3 per run.**
 # The training pipeline pins this snapshot_id in its config, so a model
 # trained today can be re-trained on byte-identical data tomorrow.
 df = spark.sql("""
-    SELECT * FROM lake.polygon_adjusted
+    SELECT * FROM lake.equities.polygon_adjusted
     VERSION AS OF 1234567890
     WHERE symbol IN ('AAPL', 'MSFT', 'NVDA')
 """)
 
 # Equivalent timestamp form:
 df = spark.sql("""
-    SELECT * FROM lake.polygon_adjusted
+    SELECT * FROM lake.equities.polygon_adjusted
     TIMESTAMP AS OF '2025-01-15 12:00:00'
     WHERE symbol IN ('AAPL', 'MSFT', 'NVDA')
 """)
 ```
 
-Snapshot IDs are surfaced via `lake.polygon_adjusted.snapshots`:
+Snapshot IDs are surfaced via `lake.equities.polygon_adjusted.snapshots`:
 
 ```python
-spark.sql("SELECT * FROM lake.polygon_adjusted.snapshots ORDER BY committed_at DESC").show()
+spark.sql("SELECT * FROM lake.equities.polygon_adjusted.snapshots ORDER BY committed_at DESC").show()
 ```
 
 ### Pattern 5 — Incremental read (changed rows only)
@@ -189,7 +196,7 @@ spark.sql("SELECT * FROM lake.polygon_adjusted.snapshots ORDER BY committed_at D
 # Only rows touched since the prior training run.
 # Useful when corp_actions fire and only a few symbols' history changes.
 df = spark.sql("""
-    SELECT * FROM lake.polygon_adjusted.changes
+    SELECT * FROM lake.equities.polygon_adjusted.changes
     WHERE _change_type IN ('INSERT', 'UPDATE_AFTER')
       AND _commit_snapshot_id > 1234567890
 """)
@@ -207,8 +214,8 @@ diff = spark.sql("""
            p.close AS polygon_close,
            s.close AS schwab_close,
            abs(p.close - s.close) AS diff
-    FROM lake.polygon_adjusted p
-    JOIN lake.schwab_universe s
+    FROM lake.equities.polygon_adjusted p
+    JOIN lake.equities.schwab_universe s
       ON p.symbol = s.symbol AND p.timestamp = s.timestamp
     WHERE abs(p.close - s.close) > 0.01
 """)
@@ -222,7 +229,7 @@ ex-date may differ by 1 trading day from Schwab's).
 ```python
 """scripts/spark/polygon_adjustment_job.py
 
-Reads data.polygon_raw + data.market_corp_actions → writes data.polygon_adjusted.
+Reads equities.polygon_raw + equities.market_corp_actions → writes equities.polygon_adjusted.
 
 Invoked:
   - Once after the initial 5y bulk load.
@@ -241,7 +248,7 @@ def adjust(symbols: list[str] | None, since: date | None) -> tuple[int, int]:
     spark = get_spark("polygon_adjustment")
 
     # 1) Read raw bars + corp_actions
-    raw = spark.sql("SELECT * FROM lake.polygon_raw")
+    raw = spark.sql("SELECT * FROM lake.equities.polygon_raw")
     if symbols:
         raw = raw.where(F.col("symbol").isin(symbols))
     if since:
@@ -291,7 +298,7 @@ def adjust(symbols: list[str] | None, since: date | None) -> tuple[int, int]:
     )
 
     # 3) Idempotent upsert via Iceberg merge-on-read
-    adjusted.writeTo("lake.polygon_adjusted").using("iceberg").overwritePartitions()
+    adjusted.writeTo("lake.equities.polygon_adjusted").using("iceberg").overwritePartitions()
 
     return adjusted.select("symbol").distinct().count(), adjusted.count()
 
@@ -387,7 +394,7 @@ pip install pyspark==3.5.* 'pyiceberg[s3fs,glue]'
 
 # AWS credentials (uses your normal profile)
 export AWS_PROFILE=stockalert-dev
-export STOCK_LAKE_BUCKET_S3=s3://stockalert-lake/data/
+export STOCK_LAKE_BUCKET_S3=s3://stockalert-lake/equities/
 export STOCKALERT_SPARK_LOCAL_MODE=true
 
 # Run any Spark job:

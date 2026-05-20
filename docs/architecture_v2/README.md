@@ -48,7 +48,7 @@ v2 fixes both by **splitting the live tier from the ML tier**:
 | [05_providers.md](05_providers.md) | DataProvider interface, Schwab vs Polygon vs Alpaca split, swap-in strategy |
 | [06_migration.md](06_migration.md) | The 5-phase migration plan, commit-by-commit checklist, rollback procedures |
 | [07_runbook.md](07_runbook.md) | Operator procedures: running adjustments, restoring CH from lake, monitoring, cost watching |
-| [08_decisions.md](08_decisions.md) | Open decisions awaiting approval (gates 1-7 lake; gates 8-12 ML) |
+| [08_decisions.md](08_decisions.md) | Approved decisions log (gates 1-14: lake/Spark infra, ML pipeline, scope) |
 | 09 — *(reserved for future scalability doc; see note in `10_ml_pipeline.md`)* | |
 | [10_ml_pipeline.md](10_ml_pipeline.md) | ML pipeline: features, labels, training, inference, monitoring, snapshot pinning |
 
@@ -56,19 +56,25 @@ v2 fixes both by **splitting the live tier from the ML tier**:
 
 - [x] v1 (medallion) implemented and operational
 - [x] v2 design documented in this folder
+- [x] All 14 approval gates signed off 2026-05-20 (see [`08_decisions.md`](08_decisions.md))
 - [ ] Phase 1: Create v2 Iceberg tables + one-time polygon_adjustment_job
-- [ ] Phase 2: live_lake_writer → data.schwab_universe
+- [ ] Phase 2: live_lake_writer → equities.schwab_universe
 - [ ] Phase 3: On-add hot path direct Schwab REST → CH (cuts over from silver build)
-- [ ] Phase 4: /api/v1/lake/bars endpoint via DuckDB
-- [ ] Phase 5: Drop legacy bronze.*/silver.* (T+30d after v2 stable)
+- [ ] Phase 4: /api/v1/lake/bars endpoint + MCP tool wrappers via DuckDB
+- [ ] Phase 5: Drop legacy bronze.*/silver.* (T+7d after v2 stable)
 
-## Approval gates (block Phase 1)
+## Approval gates
 
-12 gates in [`08_decisions.md`](08_decisions.md) need operator sign-off
-before v2 code changes land. Gates 1-7 cover lake/Spark infra (block
-Phase 1); gates 8-12 cover the ML pipeline (block first model training,
-not the lake build itself). Phases are each independently reversible;
-this folder + sign-off → implementation can resume.
+All 14 gates in [`08_decisions.md`](08_decisions.md) are approved.
+Gates 1-7 cover lake/Spark infra; 8-11 cover the ML pipeline (block
+first model training, not the lake build itself); 12-14 cover backfill
+scope, universe seed, and CH schema. Phases are each independently
+reversible.
+
+Three non-default decisions to remember when reading the design docs:
+namespace is `equities` (not `data`), Phase 5 quarantine is 7 days
+(not 30), and the lake-read endpoint ships with MCP tool wrappers
+(CV12b in [`06_migration.md`](06_migration.md)).
 
 ## How to use this folder
 

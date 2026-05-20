@@ -115,7 +115,7 @@ from `source = "schwab-live"`.
 
 ```bash
 export STOCKALERT_SPARK_LOCAL_MODE=true
-export STOCK_LAKE_BUCKET_S3=s3://stockalert-lake/data/
+export STOCK_LAKE_BUCKET_S3=s3://stockalert-lake/equities/
 export AWS_PROFILE=stockalert-dev
 
 cd /path/to/stockalert
@@ -124,7 +124,7 @@ poetry run python scripts/spark/polygon_adjustment_job.py \
 ```
 
 Expected: ~30s for one symbol, ~12 months. Output in
-`s3://stockalert-lake/data/polygon_adjusted/`.
+`s3://stockalert-lake/equities/polygon_adjusted/`.
 
 ### Run `polygon_adjustment_job` whole-market (production)
 
@@ -183,7 +183,7 @@ Per-symbol incremental run: ~1 min each on EMR Serverless.
 
 spark.sql("""
   CALL lake.system.rewrite_data_files(
-    table => 'lake.data.schwab_universe',
+    table => 'lake.equities.schwab_universe',
     options => map(
       'target-file-size-bytes', '134217728',
       'min-file-size-bytes', '67108864'
@@ -192,7 +192,7 @@ spark.sql("""
 """)
 ```
 
-Repeat for `data.polygon_adjusted` (less frequent — monthly is fine).
+Repeat for `equities.polygon_adjusted` (less frequent — monthly is fine).
 
 ### Expire old Iceberg snapshots
 
@@ -201,7 +201,7 @@ Repeat for `data.polygon_adjusted` (less frequent — monthly is fine).
 # accessible via VERSION AS OF). Reduces metadata bloat.
 spark.sql("""
   CALL lake.system.expire_snapshots(
-    table => 'lake.data.polygon_adjusted',
+    table => 'lake.equities.polygon_adjusted',
     older_than => TIMESTAMP '$(date -u -d '90 days ago' +%Y-%m-%dT%H:%M:%S)Z',
     retain_last => 20
   )
@@ -212,7 +212,7 @@ Run weekly. Combined cost (compaction + expire) ~$1/month on EMR Serverless.
 
 ## Disaster recovery procedures
 
-### Restore CH `ohlcv_1m` from `data.schwab_universe`
+### Restore CH `ohlcv_1m` from `equities.schwab_universe`
 
 If ClickHouse is wiped or corrupted:
 
@@ -233,7 +233,7 @@ syms_csv = ",".join(f"'{s}'" for s in syms)
 
 df = duckdb.sql(f"""
     SELECT symbol, timestamp, open, high, low, close, volume, vwap, trade_count, source
-    FROM iceberg_scan('s3://stockalert-lake/data/schwab_universe/')
+    FROM iceberg_scan('s3://stockalert-lake/equities/schwab_universe/')
     WHERE symbol IN ({syms_csv})
 """).arrow()
 
@@ -250,12 +250,12 @@ If `polygon_adjustment_job` writes corrupted data:
 
 ```python
 # Find the last known-good snapshot
-spark.sql("SELECT * FROM lake.polygon_adjusted.snapshots ORDER BY committed_at DESC LIMIT 10").show()
+spark.sql("SELECT * FROM lake.equities.polygon_adjusted.snapshots ORDER BY committed_at DESC LIMIT 10").show()
 
 # Roll back to a specific snapshot
 spark.sql("""
     CALL lake.system.rollback_to_snapshot(
-      'lake.polygon_adjusted',
+      'lake.equities.polygon_adjusted',
       <snapshot_id>
     )
 """)
@@ -264,7 +264,7 @@ spark.sql("""
 This is a soft rollback — the bad snapshot is still in metadata
 until `expire_snapshots` cleans it up. You can verify rollback by:
 ```python
-spark.sql("SELECT count(*) FROM lake.polygon_adjusted").show()
+spark.sql("SELECT count(*) FROM lake.equities.polygon_adjusted").show()
 ```
 
 ## Monitoring
@@ -283,8 +283,8 @@ spark.sql("SELECT count(*) FROM lake.polygon_adjusted").show()
 
 | Check | Command | Healthy? |
 |---|---|---|
-| Iceberg file count | `aws s3 ls s3://stockalert-lake/data/polygon_adjusted/data/ --recursive \| wc -l` | < 10,000 (else schedule compaction) |
-| Iceberg metadata size | `aws s3 ls s3://stockalert-lake/data/polygon_adjusted/metadata/ --recursive --summarize` | < 1 GB |
+| Iceberg file count | `aws s3 ls s3://stockalert-lake/equities/polygon_adjusted/data/ --recursive \| wc -l` | < 10,000 (else schedule compaction) |
+| Iceberg metadata size | `aws s3 ls s3://stockalert-lake/equities/polygon_adjusted/metadata/ --recursive --summarize` | < 1 GB |
 | EMR Serverless cost MTD | CloudWatch metric | < $20 |
 | S3 storage MTD | S3 Storage Lens | < 1 TB |
 
@@ -324,7 +324,7 @@ canceling.
 | Script | What it does | When to run |
 |---|---|---|
 | `scripts/schwab_get_refresh_token.py` | OAuth flow to get new Schwab refresh token | Token expired or first setup |
-| `scripts/spark/polygon_adjustment_job.py` | Build `data.polygon_adjusted` | Weekly cron + on-demand |
+| `scripts/spark/polygon_adjustment_job.py` | Build `equities.polygon_adjusted` | Weekly cron + on-demand |
 | `scripts/spark/lake_archive_job.py` | Periodic CH → S3 Iceberg flush | Hourly cron |
 | `scripts/spark/compact_lake.py` | Iceberg file compaction | Weekly cron |
 | `scripts/restore_ch_from_lake.py` | Restore CH from S3 backup | Disaster recovery |

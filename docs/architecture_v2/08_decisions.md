@@ -1,242 +1,268 @@
-# 08 — Open Decisions (Approval Gates)
+# 08 — Decisions (Approved)
 
-These need operator sign-off before Phase 1 implementation starts.
-Each has a recommended default; amend if needed.
+All 14 gates approved 2026-05-20. This file is the durable record of
+**what was decided** + **why** + **what would force a revisit**.
 
-Gates 1-7 cover the lake/Spark infrastructure (Phase 1 prerequisites).
-Gates 8-12 cover the ML pipeline (Phase 2.5 — land after `data.polygon_adjusted`
-exists but before the first model trains); see [10_ml_pipeline.md](10_ml_pipeline.md).
+Cross-file references: when a downstream doc says "v2 namespace is
+`equities`" or "weekly compaction", the source of truth is here.
 
-## Gate 1 — Table naming
+## Gate 1 — Iceberg database name
 
-**Question:** What's the Iceberg **database** name inside the `lake`
-catalog? Tables are referenced as `lake.<database>.<table>`.
+**Decision:** `equities`. Tables are `lake.equities.<table>`.
 
-| Option | Database name | Table refs |
-|---|---|---|
-| **Recommended** | `data` | `lake.data.polygon_raw`, `lake.data.polygon_adjusted`, ... |
-| `lake` | `lake.lake.polygon_raw` (redundant) |
-| `equities` | `lake.equities.polygon_raw` |
-| `prod` | `lake.prod.polygon_raw` |
+**Rationale:** Leaves room for `lake.crypto.*`, `lake.fx.*`, etc.
+without renaming or carving sub-prefixes inside `data`. The Spark
+catalog stays fixed at `lake` (configured in `get_spark()`).
 
-The Spark catalog is fixed at `lake` (configured in `get_spark()` via
-`spark.sql.catalog.lake`). Only the database-name level is in scope here.
-
-**My pick:** `data` — short, neutral, matches the "data lake" mental model.
-
-**Status:** ☐ Pending
+**Revisit trigger:** If we ever decide one database per
+asset-class is too granular and want a single `data` catalog,
+Iceberg lets us rename a database without rewriting files.
 
 ## Gate 2 — `adj_factor` column on adjusted tables
 
-**Question:** Include `adj_factor DOUBLE NOT NULL DEFAULT 1.0` in
-`data.polygon_adjusted` and `data.schwab_universe`?
+**Decision:** YES. Include `adj_factor DOUBLE NOT NULL DEFAULT 1.0`
+on `lake.equities.polygon_adjusted` and `lake.equities.schwab_universe`.
 
-**Why include:**
-- ML feature engineering can back-compute raw prices when needed:
-  `raw = adjusted * adj_factor`.
-- Audit trail — you can see "this bar was adjusted by factor 4.0"
-  (i.e. there's a 4-for-1 split somewhere after this bar).
-- Schwab's pass-through gets `1.0` (no info loss vs adding it later).
+**Rationale:** ML features that depend on price level need the factor
+to back-compute raw prices (`raw = adjusted * adj_factor`). Schwab's
+pass-through gets `1.0` (no info loss). Storage cost is trivial
+(~5 GB zstd-compressed over the full 5y whole-market).
 
-**Cost:** One DOUBLE column = ~8 bytes per row. Whole-market 5y
-= ~40 GB extra. With zstd compression: ~5 GB extra. Trivial.
-
-**My pick:** YES, include.
-
-**Status:** ☐ Pending
+**Revisit trigger:** Never — this is a permanent schema commitment.
 
 ## Gate 3 — Partition strategy
 
-**Question:** Confirm `bucket(N, symbol), month(timestamp)` on the
-adjusted/raw tables.
+**Decision:**
 
-- `data.polygon_raw`: `bucket(32, symbol), month(timestamp)`
-- `data.polygon_adjusted`: same
-- `data.schwab_universe`: `bucket(16, symbol), month(timestamp)`
-  (smaller N because the universe is smaller)
-- `data.market_corp_actions`: `month(ex_date)` only — no symbol bucket
+| Table | Partition spec |
+|---|---|
+| `lake.equities.polygon_raw` | `bucket(32, symbol), month(timestamp)` |
+| `lake.equities.polygon_adjusted` | `bucket(32, symbol), month(timestamp)` |
+| `lake.equities.schwab_universe` | `bucket(16, symbol), month(timestamp)` |
+| `lake.equities.market_corp_actions` | `month(ex_date)` only |
 
-**Tradeoffs:**
-- Larger N → more files per month → finer single-symbol skipping but
-  Iceberg metadata overhead grows. 32 is the sweet spot for 12k symbols.
-- Smaller N → fewer, larger files → faster whole-market scans but
-  slower per-symbol. 16 is fine for the ~108-symbol universe.
+**Rationale:** Target ~5-10 symbols per bucket so per-bucket files
+hit Iceberg's ~128 MB sweet spot. 32 for ~12k Polygon symbols, 16
+for the smaller ~108-symbol Schwab universe.
 
-**My pick:** YES, as specified.
-
-**Status:** ☐ Pending
+**Revisit trigger:** If symbol count exceeds 50k (e.g. expand into
+small-caps), partition evolution to `bucket(64, symbol)` without
+data migration.
 
 ## Gate 4 — Compaction cadence
 
-**Question:** How often do we run Iceberg file compaction?
+**Decision:**
 
-| Schedule | Cost | When |
+| Table | Cadence | Reason |
 |---|---|---|
-| Daily | ~$1/day = $30/month | If lake_archive_job runs hourly and creates many small files |
-| **Weekly** (recommended) | ~$1/week = $4/month | Sunday morning, before Monday's reads |
-| Monthly | ~$1/month | Slow growth datasets |
+| `lake.equities.schwab_universe` | Weekly | Hourly archive job → small files |
+| `lake.equities.polygon_adjusted` | Monthly | Only rewrites on corp-action churn |
+| `lake.equities.polygon_raw` | Monthly | Mostly static |
+| `lake.equities.market_corp_actions` | On-demand | Tiny table |
 
-For:
-- `data.schwab_universe`: **weekly** (grows hourly, lots of small files)
-- `data.polygon_adjusted`: **monthly** (mostly static, only corp-action rewrites)
-- `data.polygon_raw`: **monthly** (frozen + occasional nightly)
-- `data.market_corp_actions`: **on-demand only** (small)
+**Rationale:** Schwab archive writes ~24 small Parquet files/day; if
+left uncompacted, single-symbol scans degrade within ~6 weeks. Polygon
+tables don't churn enough to justify weekly.
 
-**My pick:** Mixed cadence as above; run via EMR Serverless cron.
+**Revisit trigger:** If `aws s3 ls --recursive | wc -l` for any single
+table exceeds 10,000 files, bump that table's cadence one step.
 
-**Status:** ☐ Pending
+## Gate 5 — Spark compute platform
 
-## Gate 5 — Compute platform
+**Decision:** Local PySpark for everything routine. EMR Serverless as
+the on-demand AWS escape hatch — launcher scripts ship in Phase 1 (CV4)
+so they're ready, but jobs run local by default.
 
-**Question:** Where do batch Spark jobs run?
+**Rationale:** EMR Serverless is pay-per-job ($0 idle), which exactly
+matches "use AWS when I need it." Tree-model training and per-symbol
+adjustments fit in a 16 GB dev box; the EMR option exists for the
+weekly whole-market `polygon_adjustment_job` if local can't keep up.
 
-| Option | Setup | Cost | When |
-|---|---|---|---|
-| **EMR Serverless** (recommended) | One-time `create-application` | Pay-per-job, ~$0.30/hr DBU | Production batch (weekly cron) |
-| Local Spark | `pip install pyspark` | $0 | Dev / one-shot operator runs |
-| EMR on EC2 | Manual cluster lifecycle | EC2 hourly | Heavy ongoing ETL (not needed at our scale) |
-| Databricks | Subscription | Per-DBU | If team already has Databricks |
+**Revisit trigger:** If a local Spark job exceeds 30-min wall-clock on
+a 16 GB box, switch that job's runner to EMR Serverless. No code
+change — just submit the same `scripts/spark/*.py` entry point via
+`aws emr-serverless start-job-run`.
 
-**My pick:** Local Spark for dev + EMR Serverless for production
-cron. No standing infrastructure, no DBA work.
+## Gate 6 — Migration plan + risk tolerance
 
-**Status:** ☐ Pending
+**Decision:** 5-phase plan as written in [`06_migration.md`](06_migration.md),
+**but compress Phase 5 quarantine from 30 days to 7 days.** Legacy
+`lake.bronze.*` and `lake.silver.*` tables drop one week after the
+Phase 3 cutover.
 
-## Gate 6 — Migration risk tolerance
+**Rationale:** Faster cleanup; recovers ~$5/mo dual-storage cost
+sooner; reduces operator cognitive load (two source-of-truth tables
+for the same data is confusing).
 
-**Question:** Are you comfortable with the 5-phase migration plan as
-written?
+**Watch-out (accepted):** A latent v2 bug that surfaces past day 7
+forces a re-bulk-load from Polygon flat-files (~6h, ~$15). Acceptable
+because (a) Phase 3 is the only behavior change and is testable in
+under an hour, (b) flat-files in `s3://stockalert-lake/raw/polygon/`
+are immutable so the re-load is mechanical.
 
-- Phase 1 (additive Iceberg tables): zero risk to live tier.
-- Phase 2 (lake writers redirect): zero risk to live tier; lake is
-  dual-written during transition.
-- **Phase 3 (live tier cuts over)**: the only point of behavior
-  change. One-line revert if the latency gate fails.
-- Phase 4 (lake-read endpoint): additive only.
-- Phase 5 (drop legacy tables): destructive. **30-day quarantine**
-  after Phase 3 before this runs.
+**Revisit trigger:** If Phase 3 cutover shows ANY regression in the
+first 48 hours, hold legacy tables until the regression is root-caused
+and fixed. The 7-day clock restarts.
 
-Total active engineering: ~8 hours of code; ~3 hours of Spark
-wall-clock during Phase 1; 30 days of observation before Phase 5.
+## Gate 7 — `/api/v1/lake/bars` endpoint + MCP tool surface
 
-**My pick:** YES — this is the right risk profile. Each phase
-independently reversible; the only destructive phase is gated by a
-month of clean v2 operation.
+**Decision:** Build the FastAPI endpoint in Phase 4 (CV11+CV12).
+**Additionally**, ship MCP tool wrappers in CV12b so the assistant
+agent can query deep history via the same code path.
 
-**Status:** ☐ Pending
+**Rationale:** Two consumers of the same SQL: cockpit chart zoom-out
+and agent research workflows. One implementation, both surfaces.
 
-## Gate 7 — `/api/v1/lake/bars` endpoint
+**MCP tools shipped (`app/mcp/tools.py`):**
+- `lake_bars(symbol, start, end, timeframe)` — single-symbol UNION across
+  `polygon_adjusted` + `schwab_universe`
+- `lake_cross_provider_diff(symbol, start, end)` — provider-quality probe
+  (Pattern 6 from [`04_spark.md`](04_spark.md))
+- `lake_snapshot_list(table)` — exposes snapshot IDs for time-travel queries
 
-**Question:** Build the lake-read FastAPI endpoint in Phase 4, or
-keep deep-history queries operator-only via DuckDB CLI?
-
-**Build it (Phase 4):**
-- Pro: cockpit's chart can zoom out beyond CH retention seamlessly
-- Pro: agents / MCP tools can query deep history via HTTP
-- Con: ~2 hours of code; DuckDB-on-S3 has cold-start latency
-
-**Keep operator-only:**
-- Pro: zero code; just `duckdb` from a shell
-- Con: chart can't show 5y of 1-min for new symbols (today's design has this gap anyway)
-
-**My pick:** Build it (Phase 4). The cockpit will need it for chart
-zoom-out beyond CH retention as soon as anyone scrolls back >1 year
-at 1-min resolution.
-
-**Status:** ☐ Pending
+**Revisit trigger:** If the MCP tools become a security concern (S3
+read costs from agent-driven workloads exceeding $10/mo), add a
+per-tool rate limit. Endpoint stays.
 
 ## Gate 8 — ML training compute
 
-**Question:** Where do training jobs run?
+**Decision:** SageMaker for production retraining; local Python for
+experiments. Artifacts always land at `s3://stockalert-models/<name>/<ver>/`.
 
-| Option | Setup | Cost | Notes |
-|---|---|---|---|
-| **SageMaker training jobs** (recommended) | IAM role + S3 bucket | ~$5/run on ml.m5.4xlarge | Managed, queue-able, logged; ad-hoc experiments still work locally |
-| Local Python | Dev box | $0 | No artifact persistence beyond manual S3 upload |
-| EMR Serverless | Existing app | ~$2-3 | Spark is the wrong tool for tree-model training (single-box is faster) |
+**Rationale:** SageMaker training jobs are managed, queue-able, and
+their stdout/stderr persists by default — useful for the weekly cron.
+Local Python stays viable for ad-hoc experiments. Spark is the wrong
+tool for tree-model training (single-box is faster).
 
-**My pick:** SageMaker for production retraining; local for experiments.
-
-**Status:** ☐ Pending
+**Revisit trigger:** If model wall-clock on `ml.m5.4xlarge` exceeds
+2 hours, move to `ml.m5.12xlarge` or larger. If we ever train deep
+sequence models (LSTM/Transformer on bars), switch to a GPU instance
+(`ml.g5.xlarge`).
 
 ## Gate 9 — Universe history source
 
-**Question:** Where does `data.point_in_time_universe` come from?
+**Decision:** Polygon `/v3/reference/tickers` historical endpoint.
+Daily snapshot writes one row per (date, symbol) to
+`lake.equities.point_in_time_universe`.
 
-| Option | Cost | Coverage |
-|---|---|---|
-| **Polygon historical tickers endpoint** (recommended) | included in current Polygon sub | full delistings + reasons |
-| Manually-curated CSV | $0 | becomes stale; bias risk |
-| Alpha Vantage / IEX | $$ | uncertain coverage of delisted names |
+**Rationale:** Already on the Polygon subscription. Includes
+delistings + reasons (`merged`, `bankrupt`, `acquired`). Eliminates
+survivorship bias from every backtest. Daily ingest is ~5 MB.
 
-**My pick:** Polygon — already on subscription; daily refresh.
-
-**Status:** ☐ Pending
+**Revisit trigger:** If Polygon subscription ends, fall back to
+Alpha Vantage (free tier covers ~20y of historical tickers) or
+hand-maintained CSV.
 
 ## Gate 10 — Model artifact format
 
-**Question:** How are model artifacts persisted in `s3://stockalert-models/`?
+**Decision:** Library-native binary. Specifics by library:
 
-| Option | Portability | Fragility |
+| Library | Format | Loader |
 |---|---|---|
-| **Library-native binary** (XGBoost `.json`/`.ubj`, LightGBM `.txt`) (recommended) | high (within library version range) | low |
-| Pickle | Python-only | high — breaks across library/Python versions |
-| ONNX | high (cross-framework) | tree models lose performance; conversion bugs |
+| XGBoost | `.ubj` (UBJSON) | `model.save_model()` / `model.load_model()` |
+| LightGBM | `.txt` | `lgb.Booster.save_model()` / `lgb.Booster(model_file=...)` |
+| sklearn estimators | joblib + library version pin | `joblib.dump` / `joblib.load` |
 
-**My pick:** Library-native binary; document the library version in `model_registry.hyperparams_json`.
+`model_registry.hyperparams_json` records the **exact library version**
+used at save time. Loaders check version compatibility on read.
 
-**Status:** ☐ Pending
+**Rationale:** Native formats are stable within a library's
+compatibility range, fast to load (~50ms), and don't have ONNX
+conversion bugs. Pickle is explicitly ruled out — fragile across
+Python minor versions.
+
+**Revisit trigger:** If we ever serve from a non-Python runtime
+(Rust/C++ for sub-ms inference), revisit ONNX conversion for the
+production model only.
 
 ## Gate 11 — Canary traffic split
 
-**Question:** How does a `canary` model take live traffic?
+**Decision:** Fixed 10% of live inferences for 14 days. Manual
+promotion review at day 14.
 
-| Option | Pro | Con |
-|---|---|---|
-| **Fixed 10% for 14 days** (recommended) | Simple; clear evaluation window | Slow rollout if confidence is high |
-| Gradual ramp (10% → 25% → 50% → 100%) | Faster rollout when behaving | More state to manage; harder to attribute regressions |
-| Shadow (100% predictions, 0% trades) | Risk-free | No PnL signal — defeats the canary point |
+**Promotion criteria (all three must hold):**
+1. Canary live-PnL ≥ challenger backtest expectation
+2. No PnL regressions vs prod on the same symbols
+3. Drift monitors stay `severity ∈ {ok, warn}` (no `alert`)
 
-**My pick:** Fixed 10% for 14 days, manual promotion after PnL gate.
+**Rationale:** Simple state machine, clear evaluation window, manual
+review keeps the human in the loop for the highest-risk decision.
+Gradual ramp adds state complexity for marginal benefit.
 
-**Status:** ☐ Pending
+**Revisit trigger:** If we run >10 challenger evaluations and >9 pass
+the gate on the first try, switch to gradual ramp with auto-promote.
 
-## Gate 12 — Drift alert thresholds
+## Gate 12 — Initial backfill scope
 
-**Question:** What KS-statistic triggers `drift_severity = 'alert'`?
+**Decision:** Full 5-year Polygon bulk-load for the entire IEX
+universe (~11k symbols) on day 1 of Phase 2. Populates both
+`lake.equities.polygon_raw` (re-bucketed from existing v1
+`bronze.polygon_minute`) and `lake.equities.polygon_adjusted` (via the
+one-time `polygon_adjustment_job` whole-market run).
 
-| Option | Sensitivity | False-alarm rate |
-|---|---|---|
-| `> 0.10` | High | High — every regime shift trips it |
-| **`> 0.15` with 3-consecutive-day smoothing** (recommended) | Medium | Low — survives one-day noise |
-| `> 0.20` | Low | Very low — may miss real drift |
-| Per-feature thresholds | Tuned | Maintenance burden |
+**Cost:** ~$15 CodeBuild + ~$8 S3 PUT + ~$5 S3 Standard / month
+ongoing. Wall-clock ~6 hours.
 
-**My pick:** 0.15 + 3-day smoothing; per-feature overrides as needed later.
+**Rationale:** Models training in Phase 2.5 need max history available
+immediately; lazy backfill delays ML cold-start by 3-6 weeks.
 
-**Status:** ☐ Pending
+**Revisit trigger:** If the operator wants to constrain to a
+sub-universe later (e.g. only S&P 1500), Iceberg's `DELETE FROM`
+on a symbol predicate removes data cleanly without touching the
+schema or other symbols.
 
-## How to approve
+## Gate 13 — Schwab universe seed
 
-Reply with one of:
+**Decision:** Top-250 by 30-day average dollar volume from Polygon.
+Weekly rebalance writes to `stream_universe`. Includes major ETFs
+naturally (SPY, QQQ, etc. are among the highest-volume tickers).
 
-- **"All defaults"** — accepts all 12 recommendations as written.
-- **"Approved with changes: [gate N: change Y]"** — selectively
-  amend.
-- **"More questions on [gate N]"** — pause for discussion.
+**Rationale:** Automated, transparent, no operator maintenance.
+Selects most liquid names → lowest slippage in sim and live. Beats
+S&P 500 (no ETFs) and manual curation (drift-prone).
 
-Once approved, Phase 1 commit (`CV1`) lands in the next session.
+**Revisit trigger:** If a non-ADV-ranked symbol becomes critical
+(e.g. specific sector ETF for hedging research), operator manual
+override via `POST /api/v1/stream`. Rebalance respects manual adds.
 
-## Decision log (post-approval)
+## Gate 14 — ClickHouse `bars_silver` schema
 
-| Date | Gate | Decision | Approver |
+**Decision:** Adjusted-only (unchanged from v1). Cockpit charts
+read adjusted bars; raw bars stay lake-only.
+
+**Rationale:** Cockpit has no need for raw bars today; adding
+`bars_silver_raw` doubles CH storage for a feature nobody's
+asking for. If a future UI feature needs split-aware historical
+display (e.g. "show me the actual pre-split prices on the chart"),
+add the second table then.
+
+**Revisit trigger:** New UI feature explicitly requires pre-split
+prices in the chart, or a regulatory requirement to display raw
+prices alongside adjusted.
+
+## Watch-out items (non-default decisions)
+
+Three decisions diverge from the original recommendations. Flagged
+here so future operators know the rationale wasn't accidental:
+
+| Gate | Default was | Decision was | Why it matters |
 |---|---|---|---|
-| (pending) | 1-7 | (pending) | (pending) |
+| 1 | `data` | `equities` | All FQNs are `lake.equities.*`; namespace exists per asset class |
+| 6 | 30-day quarantine | 7-day quarantine | Faster cleanup; latent-bug fallback is re-bulk-load not partial revert |
+| 7 | Endpoint only | Endpoint + MCP tools | Adds CV12b commit; agent surface needs auth boundary check before merge |
 
-This table gets updated as decisions land so the audit trail is
-clear if anything is revisited in 6 months.
+## Decision log
+
+| Date | Gates | Decision | Approver |
+|---|---|---|---|
+| 2026-05-20 | 1-14 | All approved (see per-gate sections above). Defaults except 1, 6, 7. | operator |
+
+This table is append-only. Any future revisit (e.g. revisit-trigger
+fires) adds a new row with the revised decision + reasoning, keeping
+the original row intact for audit.
 
 ## See also
 
-- [01_architecture.md](01_architecture.md) — what these gates affect
-- [06_migration.md](06_migration.md) — the phases blocked by approval
+- [01_architecture.md](01_architecture.md) — system layout these gates configure
+- [06_migration.md](06_migration.md) — the phases these gates unblock
+- [10_ml_pipeline.md](10_ml_pipeline.md) — ML pipeline gates 8-11 configure

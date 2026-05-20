@@ -13,8 +13,7 @@ Verify state before starting:
 - [ ] `STOCK_LAKE_BUCKET=s3://stockalert-lake` is set in env
 - [ ] AWS credentials work (`aws s3 ls s3://stockalert-lake/`)
 - [ ] Glue catalog accessible (`aws glue get-databases`)
-- [ ] Gates 1-7 in [08_decisions.md](08_decisions.md) (lake/Spark infra) have operator sign-off — required before Phase 1
-- [ ] Gates 8-12 in [08_decisions.md](08_decisions.md) (ML pipeline) — required before first model trains, not Phase 1
+- [x] All 14 gates in [08_decisions.md](08_decisions.md) approved 2026-05-20 (lake/Spark infra: 1-7, ML pipeline: 8-11, scope: 12-14). Phase 1 unblocked.
 
 ## Phase 1 — Additive: create v2 lake tables (no risk to live tier)
 
@@ -23,11 +22,11 @@ the live tier still on v1.
 
 | Commit | What | Verify by |
 |---|---|---|
-| **CV1** | `feat(lake): create v2 Iceberg tables with bucket partitioning` — DDL for `data.polygon_raw`, `data.polygon_adjusted`, `data.schwab_universe`, `data.market_corp_actions` | `aws glue get-tables --database-name data` shows all 4 |
-| **CV2** | `feat(lake): one-time copy bronze.polygon_minute → data.polygon_raw` — Spark script that re-buckets the existing data | `SELECT count(*) FROM lake.polygon_raw` matches `bronze.polygon_minute` |
-| **CV3** | `feat(lake): one-time copy bronze.polygon_corp_actions → data.market_corp_actions` | row-count parity |
+| **CV1** | `feat(lake): create v2 Iceberg tables with bucket partitioning` — DDL for `equities.polygon_raw`, `equities.polygon_adjusted`, `equities.schwab_universe`, `equities.market_corp_actions` | `aws glue get-tables --database-name equities` shows all 4 |
+| **CV2** | `feat(lake): one-time copy bronze.polygon_minute → equities.polygon_raw` — Spark script that re-buckets the existing data | `SELECT count(*) FROM lake.equities.polygon_raw` matches `bronze.polygon_minute` |
+| **CV3** | `feat(lake): one-time copy bronze.polygon_corp_actions → equities.market_corp_actions` | row-count parity |
 | **CV4** | `feat(lake): polygon_adjustment_job + Spark scripts dir` — `scripts/spark/__init__.py`, `polygon_adjustment_job.py` | local Spark run on AAPL completes; row counts sane |
-| **CV5** | One-time invocation of CV4 for full whole-market history → populates `data.polygon_adjusted` | `SELECT count(*) FROM lake.polygon_adjusted` ≈ count in raw |
+| **CV5** | One-time invocation of CV4 for full whole-market history → populates `equities.polygon_adjusted` | `SELECT count(*) FROM lake.equities.polygon_adjusted` ≈ count in raw |
 
 After Phase 1: lake side is fully v2; live side is still v1.
 
@@ -43,7 +42,7 @@ spark = get_spark("migration_copy_polygon_raw")
 raw = spark.sql("SELECT * FROM lake.bronze.polygon_minute")
 
 # Write to v2 layout (bucket(32, symbol), month(timestamp))
-(raw.writeTo("lake.data.polygon_raw")
+(raw.writeTo("lake.equities.polygon_raw")
     .using("iceberg")
     .partitionedBy("bucket(32, symbol)", "month(timestamp)")
     .createOrReplace())
@@ -56,10 +55,10 @@ Wall-clock: ~1-2 hours on EMR Serverless for 120 GB.
 If anything goes wrong:
 
 ```sql
-DROP TABLE lake.data.polygon_raw;
-DROP TABLE lake.data.polygon_adjusted;
-DROP TABLE lake.data.schwab_universe;
-DROP TABLE lake.data.market_corp_actions;
+DROP TABLE lake.equities.polygon_raw;
+DROP TABLE lake.equities.polygon_adjusted;
+DROP TABLE lake.equities.schwab_universe;
+DROP TABLE lake.equities.market_corp_actions;
 ```
 
 The v1 bronze/silver tables are untouched. Zero impact on live tier.
@@ -67,11 +66,11 @@ The v1 bronze/silver tables are untouched. Zero impact on live tier.
 ## Phase 2 — Redirect lake writers (still no risk to live tier)
 
 **Goal**: `lake_archive_job` (was `live_lake_writer`) writes to
-`data.schwab_universe` instead of `bronze.schwab_minute`.
+`equities.schwab_universe` instead of `bronze.schwab_minute`.
 
 | Commit | What | Verify by |
 |---|---|---|
-| **CV6** | `refactor(ingest): rename live_lake_writer → lake_archive_job; target data.schwab_universe` | After 1 hour of live stream, `SELECT count(*) FROM lake.schwab_universe WHERE source='schwab-live'` > 0 |
+| **CV6** | `refactor(ingest): rename live_lake_writer → lake_archive_job; target equities.schwab_universe` | After 1 hour of live stream, `SELECT count(*) FROM lake.equities.schwab_universe WHERE source='schwab-live'` > 0 |
 | **CV7** | Disable `nightly_schwab_refresh` job — Schwab WS + on-add tip-fill cover universe needs | `/api/v1/jobs` no longer shows `nightly_schwab_refresh` in active jobs |
 
 ### Rollback for Phase 2
@@ -121,25 +120,28 @@ read deep-history bars when zooming past CH's window.
 
 | Commit | What | Verify by |
 |---|---|---|
-| **CV11** | `feat(api): /api/v1/lake/bars via DuckDB` — reads `data.polygon_adjusted` + `data.schwab_universe` UNION | curl returns rows for AAPL 2020 |
+| **CV11** | `feat(api): /api/v1/lake/bars via DuckDB` — reads `equities.polygon_adjusted` + `equities.schwab_universe` UNION | curl returns rows for AAPL 2020 |
 | **CV12** | `feat(cockpit): chart endpoint falls back to /lake/bars for zoom-out windows >CH retention` | Chart 10-year view of AAPL loads (was empty before) |
+| **CV12b** | `feat(mcp): lake_bars + lake_cross_provider_diff + lake_snapshot_list tools` — MCP wrappers over the Phase 4 endpoint so the assistant agent can query deep history (Gate 7 decision) | `mcp` session lists the three tools; `lake_bars` returns rows for AAPL 2020 |
 
 ### Rollback for Phase 4
 
 The lake-read endpoint is purely additive. If buggy, revert CV11 +
-CV12 — chart loses the deep-zoom feature but everything else works.
+CV12 + CV12b — chart loses the deep-zoom feature and the agent loses
+the `lake_*` MCP tools, but everything else works.
 
 ## Phase 5 — Decommission v1
 
-**Goal**: drop legacy bronze/silver tables. **Wait 30 days after
-Phase 3 cutover with zero regressions before doing this.**
+**Goal**: drop legacy bronze/silver tables. **Wait 7 days after
+Phase 3 cutover with zero regressions before doing this** (Gate 6
+decision — compressed from the original 30-day default).
 
 | Commit | What | Verify by |
 |---|---|---|
-| **CV13** | `chore(lake): DROP TABLE bronze.polygon_minute` (data lives in data.polygon_raw) | Confirm via `aws glue get-tables --database-name bronze` |
-| **CV14** | `chore(lake): DROP TABLE bronze.schwab_minute` (data lives in data.schwab_universe) | Confirm |
+| **CV13** | `chore(lake): DROP TABLE bronze.polygon_minute` (data lives in equities.polygon_raw) | Confirm via `aws glue get-tables --database-name bronze` |
+| **CV14** | `chore(lake): DROP TABLE bronze.schwab_minute` (data lives in equities.schwab_universe) | Confirm |
 | **CV15** | `chore(lake): DROP TABLE silver.ohlcv_1m` (not needed in v2 architecture) | Confirm |
-| **CV16** | `chore(lake): DROP TABLE bronze.polygon_corp_actions` (data lives in data.market_corp_actions) | Confirm |
+| **CV16** | `chore(lake): DROP TABLE bronze.polygon_corp_actions` (data lives in equities.market_corp_actions) | Confirm |
 | **CV17** | `chore(tests): delete v1 latency gate test_add_new_symbol_latency.py (v2 gate has owned latency since Phase 3)` | File removed; CI green |
 | **CV18** | `docs: archive v1 docs; symbol_lifecycle.md points to architecture_v2/` | Doc cross-refs updated |
 
@@ -150,7 +152,15 @@ Dropping Iceberg tables is **destructive**. To recover:
 2. Re-run the migration scripts from Phase 1 (which copy from v2 back
    to v1 if reversed).
 
-This is why Phase 5 has a 30-day quarantine.
+This is why Phase 5 has a 7-day smoke window before destructive drops.
+
+**Watch-out (Gate 6 accepted risk):** a latent v2 bug that surfaces
+past day 7 means rebuilding from the immutable `s3://stockalert-lake/raw/polygon/`
+flat-files via `polygon_adjustment_job` whole-market (~6h, ~$15) — not
+a partial revert. Mechanical, but not free. Mitigation: the 48-hour
+window after Phase 3 cutover is the high-attention window — if any
+regression appears in those 48 hours, hold legacy tables until
+root-caused; the 7-day clock restarts.
 
 ## Phase ordering rationale
 
@@ -159,8 +169,8 @@ Why this order:
 - **Phase 2 changes lake-side writes only** — live API unaffected.
 - **Phase 3 changes live behavior** — risky, but the only risky phase.
 - **Phase 4 is additive again** — adds a new endpoint.
-- **Phase 5 is destructive but quarantined** — 30 days to catch any
-  bug we missed before deletes are irreversible.
+- **Phase 5 is destructive but smoke-windowed** — 7 days to catch any
+  bug we missed before deletes are irreversible (Gate 6).
 
 ## Total effort
 
@@ -170,9 +180,9 @@ Why this order:
 | Phase 2 | ~1 hour of code | live (no batch) |
 | Phase 3 | ~30 min of code | live + 30s for gate test |
 | Phase 4 | ~2 hours of code | n/a |
-| Phase 5 | ~30 min of code (30 day quarantine) | seconds (drops) |
+| Phase 5 | ~30 min of code (7-day smoke window) | seconds (drops) |
 
-**Total active engineering: ~8 hours.** Plus 30 days observation
+**Total active engineering: ~8 hours.** Plus 7 days observation
 window before Phase 5.
 
 ## Migration gotchas
@@ -182,16 +192,16 @@ window before Phase 5.
 | Glue catalog quota | Default is 1000 partitions/table — well under our 32 buckets × 60 months = 1920. **Action**: request a quota bump to 10,000 before Phase 1. |
 | Iceberg writer Java heap | Spark writes with many partitions need 4-8 GB driver memory. **Action**: configure EMR Serverless driver workerConfig to `8 vCPU / 32 GB` if OOM. |
 | Schwab token expires during cutover | OAuth refresh tokens expire after ~7 days. **Action**: refresh token + restart uvicorn 24h before Phase 3 cutover. |
-| Live ticks during Phase 2 transition | live_lake_writer writes to BOTH bronze.schwab_minute AND data.schwab_universe during the transition window. Double-storage temporary. **Action**: after CV7 verified, delete bronze.schwab_minute writes (Phase 5). |
+| Live ticks during Phase 2 transition | live_lake_writer writes to BOTH bronze.schwab_minute AND equities.schwab_universe during the transition window. Double-storage temporary. **Action**: after CV7 verified, delete bronze.schwab_minute writes (Phase 5). |
 | Phase 3 gate fail | If the latency gate fails at <5s after cutover, the rollback is one git revert. **Action**: have CV8 ready to revert; don't push CV9-10 until gate passes. |
 
 ## Pre-Phase 1 checklist
 
-- [ ] [08_decisions.md](08_decisions.md) gates 1-7 approved
+- [x] [08_decisions.md](08_decisions.md) all 14 gates approved 2026-05-20
 - [ ] `STOCK_LAKE_BUCKET` env set in production
 - [ ] EMR Serverless app created (one-time `aws emr-serverless create-application`)
 - [ ] `scripts/spark/__init__.py` + `polygon_adjustment_job.py` files reviewed for production-readiness
-- [ ] Disaster recovery test: can we restore CH from `data.schwab_universe` snapshot? (dry-run script)
+- [ ] Disaster recovery test: can we restore CH from `equities.schwab_universe` snapshot? (dry-run script)
 
 ## See also
 
