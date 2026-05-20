@@ -652,12 +652,112 @@ class StreamService:
             )
 
     async def _silver_derived_warmup_one(self, symbol: str) -> None:
-        """silver→CH backfill + Schwab REST tip-fill for one symbol.
+        """Hot-path warmup chain for a brand-new symbol.
 
-        Errors are logged but never raised — the symbol is already
-        subscribed; failed warmup just means the chart shows live-only
-        until the next nightly silver chain catches up.
+        Per docs/standards/data/symbol_lifecycle.md, two phases:
+
+          PHASE 1 (parallel):
+            a. on-demand silver_ohlcv_build([symbol], days=5y)
+               — reads bronze.polygon_minute (5y, whole-market) +
+                 bronze.schwab_minute + corp_actions → writes
+                 silver.ohlcv_1m for this one symbol.
+            b. schwab_rest_tip_fill(symbol)
+               — covers the 1-2 day gap between yesterday's Polygon
+                 flat-file and now, dual-write bronze + CH.
+
+          PHASE 2 (after phase 1's silver build returns):
+            c. silver_to_ch_backfill(symbol)
+               — bulk-insert silver.ohlcv_1m → CH.ohlcv_1m so the
+                 chart can serve 5y immediately.
+
+        Errors are logged but never raised: the symbol is already
+        subscribed to Schwab WS, and the chart's worst-case fallback
+        is "live-only until the next nightly silver chain catches up".
+
+        Wall-clock target (per the locked latency gate): ≤30 seconds.
+        Typical: ~10-20s on a warm Iceberg cache.
         """
+        # ── PHASE 1: silver_build || tip-fill ────────────────────────
+        silver_task = asyncio.create_task(
+            self._warmup_silver_build_one(symbol),
+            name=f"stream_warmup_silver_build_{symbol}",
+        )
+        tip_task = asyncio.create_task(
+            self._warmup_tip_fill_one(symbol),
+            name=f"stream_warmup_tip_fill_{symbol}",
+        )
+        silver_build_ok, _tip_fill_ok = await asyncio.gather(
+            silver_task, tip_task, return_exceptions=False,
+        )
+
+        # ── PHASE 2: silver→CH (depends on phase 1's silver build) ──
+        # Only copy from silver if the build wrote something; otherwise
+        # the CH state from tip-fill + live stream is the best we have
+        # for now, and the nightly silver_to_ch_refresh will catch up.
+        if silver_build_ok:
+            await self._warmup_silver_to_ch_one(symbol)
+        else:
+            logger.info(
+                "Stream warmup: %s skipping silver→CH (silver build "
+                "had 0 rows or failed; chart relies on tip-fill + live)",
+                symbol,
+            )
+
+    async def _warmup_silver_build_one(self, symbol: str) -> bool:
+        """Phase 1a — on-demand silver build for one symbol.
+
+        Returns True iff the build wrote at least one row to silver.
+        Failures are logged + return False; never raises.
+        """
+        try:
+            from app.services.silver.ohlcv.on_demand import build_one_symbol
+
+            result = await build_one_symbol(symbol)
+            wrote_any = result.total_silver_rows > 0
+            logger.info(
+                "Stream warmup silver_build: %s slices_ok=%d/%d rows=%d duration=%.1fs",
+                symbol,
+                result.slices_succeeded,
+                len(result.slices),
+                result.total_silver_rows,
+                result.duration_seconds,
+            )
+            return wrote_any
+        except Exception as e:  # noqa: BLE001 — boundary
+            logger.exception(
+                "Stream warmup silver_build for %s raised: %s "
+                "(continuing — tip-fill + live stream still active)",
+                symbol, e,
+            )
+            return False
+
+    async def _warmup_tip_fill_one(self, symbol: str) -> bool:
+        """Phase 1b — Schwab REST tip-fill for the 48-day window."""
+        try:
+            from app.services.ingest.schwab_tip_fill import SchwabTipFill
+
+            tip = SchwabTipFill.from_settings()
+            tf = await tip.tip_fill(symbol)
+            logger.info(
+                "Stream warmup tip-fill: %s fetched=%d bronze=%d ch=%d",
+                symbol, tf.bars_fetched,
+                tf.bars_written_bronze, tf.bars_written_ch,
+            )
+            if not tf.succeeded:
+                logger.warning(
+                    "Stream warmup tip-fill for %s failed: %s",
+                    symbol, tf.error,
+                )
+            return tf.succeeded
+        except Exception as e:  # noqa: BLE001 — boundary
+            logger.exception(
+                "Stream warmup tip-fill for %s raised: %s", symbol, e,
+            )
+            return False
+
+    async def _warmup_silver_to_ch_one(self, symbol: str) -> bool:
+        """Phase 2 — bulk-copy silver.ohlcv_1m → CH.ohlcv_1m so the
+        chart can serve 5y immediately."""
         try:
             from app.services.ingest.silver_to_ch_backfill import (
                 DEFAULT_BACKFILL_DAYS,
@@ -670,36 +770,20 @@ class StreamService:
                 symbol, days=DEFAULT_BACKFILL_DAYS,
             )
             logger.info(
-                "Stream silver→CH warmup: %s read=%d written=%d snapshot=%s",
+                "Stream warmup silver→CH: %s read=%d written=%d snapshot=%s",
                 symbol, s2c.bars_read, s2c.bars_written, s2c.snapshot_id,
             )
             if not s2c.succeeded:
                 logger.warning(
-                    "Stream silver→CH warmup for %s failed: %s "
-                    "(continuing to tip-fill)", symbol, s2c.error,
+                    "Stream warmup silver→CH for %s failed: %s",
+                    symbol, s2c.error,
                 )
+            return s2c.succeeded
         except Exception as e:  # noqa: BLE001 — boundary
             logger.exception(
-                "Stream silver→CH warmup for %s raised: %s "
-                "(continuing to tip-fill)", symbol, e,
+                "Stream warmup silver→CH for %s raised: %s", symbol, e,
             )
-
-        try:
-            from app.services.ingest.schwab_tip_fill import SchwabTipFill
-
-            tip = SchwabTipFill.from_settings()
-            tf = await tip.tip_fill(symbol)
-            logger.info(
-                "Stream tip-fill: %s fetched=%d bronze=%d ch=%d",
-                symbol, tf.bars_fetched,
-                tf.bars_written_bronze, tf.bars_written_ch,
-            )
-            if not tf.succeeded:
-                logger.warning(
-                    "Stream tip-fill for %s failed: %s", symbol, tf.error,
-                )
-        except Exception as e:  # noqa: BLE001 — boundary
-            logger.exception("Stream tip-fill for %s raised: %s", symbol, e)
+            return False
 
 
 # Module-level singleton — production callers go through this.
