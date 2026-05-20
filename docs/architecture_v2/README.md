@@ -5,8 +5,9 @@
 This folder is the **complete reference** for the v2 architecture
 refactor. Each file is one topic, self-contained, readable in any
 order. Read [`01_architecture.md`](01_architecture.md) first if you
-want the big picture, then drill into the file for the area you're
-working on.
+want the big picture — it opens with a comprehensive Mermaid flow
+diagram covering every source, tier, compute job, and read surface —
+then drill into the file for the area you're working on.
 
 The earlier single-file `docs/standards/data/architecture_v2.md`
 (commit `9c3fbc9`) is now a high-level summary; this folder is the

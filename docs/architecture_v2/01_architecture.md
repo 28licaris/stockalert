@@ -27,6 +27,223 @@ over time.
 **Spark + Iceberg first-class** for production batch ML jobs.
 DuckDB for ad-hoc single-user queries.
 
+## Comprehensive flow diagram
+
+End-to-end view of v2 — every external source, every tier, every
+compute job, every read surface. Colour-coded by layer; solid arrows
+are writes / data flow; dotted arrows are read-only / cache loads.
+
+```mermaid
+flowchart TB
+
+  %% =========================================================
+  %% EXTERNAL DATA SOURCES
+  %% =========================================================
+  subgraph EXT["External data sources"]
+    direction TB
+    SchwabWS["Schwab WS<br/>CHART_EQUITY"]
+    SchwabRest["Schwab REST<br/>/pricehistory<br/>/instruments"]
+    PolygonFF["Polygon flat-files<br/>(S3 csv.gz)"]
+    PolygonCA["Polygon REST<br/>/corp-actions"]
+    PolygonTickers["Polygon REST<br/>/reference/tickers<br/>(daily snapshot)"]
+  end
+
+  %% =========================================================
+  %% COMPUTE LAYER (jobs + workers)
+  %% =========================================================
+  BB["bar_batcher<br/>5s / 500 rows"]
+  LAJ["lake_archive_job<br/>hourly"]
+  PAJ["polygon_adjustment_job<br/>weekly · Spark"]
+  FB["feature_build_v1<br/>weekly · Spark"]
+  LBJ["label_build_v1_fwd5m<br/>weekly · Spark"]
+  PITJ["universe_history_ingest<br/>daily"]
+  TR["train_v1<br/>SageMaker"]
+  BTJ["backtest runner<br/>app/services/sim/"]
+  DRIFT["drift_monitor<br/>daily · Spark"]
+  SW["signal_worker<br/>continuous · &lt;500ms"]
+
+  %% =========================================================
+  %% LIVE TIER (ClickHouse)
+  %% =========================================================
+  subgraph LIVE["LIVE TIER — ClickHouse (target &lt;200ms reads)"]
+    direction LR
+    OHLCV1M[("ohlcv_1m")]
+    OHLCVD[("ohlcv_daily")]
+    STREAMUNIV[("stream_universe")]
+    SIG[("signals")]
+    AGRUN[("agent_runs")]
+  end
+
+  %% =========================================================
+  %% LAKE TIER (Iceberg / Glue / S3)
+  %% =========================================================
+  subgraph LAKE["LAKE TIER — S3 + Iceberg @ lake.equities.*"]
+    direction TB
+    subgraph BARSGRP["Bar datasets (canonical OHLCV schema)"]
+      direction LR
+      PR[("polygon_raw")]
+      PA[("polygon_adjusted")]
+      SU[("schwab_universe")]
+      CA[("market_corp_actions")]
+    end
+    subgraph MLGRP["ML pipeline tables"]
+      direction LR
+      FT[("features_1m_v1")]
+      LBL[("labels_v1_fwd5m")]
+      PIT[("point_in_time_universe")]
+      MR[("model_registry")]
+      BTBL[("backtest_runs<br/>backtest_trades")]
+      FDM[("feature_drift_metrics")]
+    end
+  end
+
+  M3[("s3://stockalert-models/<br/>artifact binaries")]
+
+  %% =========================================================
+  %% READ SURFACES
+  %% =========================================================
+  subgraph CONS["Read surfaces"]
+    direction TB
+    COCK["Cockpit UI<br/>/app/* pages"]
+    LB_API["FastAPI<br/>/api/v1/lake/bars<br/>(DuckDB UNION)"]
+    MCP_T["MCP tools<br/>lake_bars<br/>lake_cross_provider_diff<br/>lake_snapshot_list"]
+    DUCK["DuckDB ad-hoc<br/>(operator)"]
+    SPRK["Spark queries<br/>(local · EMR Serverless<br/>on-demand)"]
+  end
+
+  %% =========================================================
+  %% INGEST EDGES
+  %% =========================================================
+  SchwabWS -->|live ticks| BB
+  BB --> OHLCV1M
+  SchwabRest -->|on-add 48d × 1m| OHLCV1M
+  SchwabRest -->|on-add 20y × 1d| OHLCVD
+  OHLCV1M -.->|read mirror| LAJ
+  LAJ --> SU
+  PolygonFF -->|one-time bulk<br/>+ optional nightly| PR
+  PolygonCA -->|weekly cron| CA
+  PolygonTickers --> PITJ
+  PITJ --> PIT
+
+  %% =========================================================
+  %% ADJUSTMENT ETL
+  %% =========================================================
+  PR --> PAJ
+  CA --> PAJ
+  PAJ --> PA
+
+  %% =========================================================
+  %% ML PIPELINE
+  %% =========================================================
+  PA --> FB
+  SU --> FB
+  FB --> FT
+  PA --> LBJ
+  LBJ --> LBL
+  FT --> TR
+  LBL --> TR
+  PIT --> TR
+  TR --> M3
+  TR --> MR
+  FT --> BTJ
+  LBL --> BTJ
+  MR -.-> BTJ
+  BTJ --> BTBL
+  FT --> DRIFT
+  OHLCV1M -.->|live distribution| DRIFT
+  DRIFT --> FDM
+
+  %% =========================================================
+  %% LIVE INFERENCE
+  %% =========================================================
+  OHLCV1M -->|recent bars| SW
+  MR -.->|prod version select| SW
+  M3 -.->|cached artifact| SW
+  SW --> SIG
+  SW --> AGRUN
+
+  %% =========================================================
+  %% READ EDGES
+  %% =========================================================
+  OHLCV1M --> COCK
+  OHLCVD --> COCK
+  SIG --> COCK
+  STREAMUNIV --> COCK
+  AGRUN --> COCK
+
+  PA --> LB_API
+  SU --> LB_API
+  LB_API --> COCK
+  LB_API --> MCP_T
+
+  PA --> DUCK
+  SU --> DUCK
+  FT --> DUCK
+
+  PA --> SPRK
+  SU --> SPRK
+  FT --> SPRK
+  LBL --> SPRK
+  PIT --> SPRK
+  FDM --> COCK
+
+  %% =========================================================
+  %% STYLING
+  %% =========================================================
+  classDef ext     fill:#fef3c7,stroke:#92400e,color:#111
+  classDef live    fill:#fee2e2,stroke:#991b1b,color:#111
+  classDef lake    fill:#dbeafe,stroke:#1e40af,color:#111
+  classDef compute fill:#d1fae5,stroke:#065f46,color:#111
+  classDef cons    fill:#f3e8ff,stroke:#6b21a8,color:#111
+  classDef model   fill:#fce7f3,stroke:#9f1239,color:#111
+
+  class SchwabWS,SchwabRest,PolygonFF,PolygonCA,PolygonTickers ext
+  class OHLCV1M,OHLCVD,STREAMUNIV,SIG,AGRUN live
+  class PR,PA,SU,CA,FT,LBL,PIT,MR,BTBL,FDM lake
+  class BB,LAJ,PAJ,FB,LBJ,PITJ,TR,BTJ,DRIFT,SW compute
+  class COCK,LB_API,MCP_T,DUCK,SPRK cons
+  class M3 model
+```
+
+### Legend
+
+| Colour | Layer |
+|---|---|
+| Amber | External data sources (Schwab, Polygon) |
+| Red | Live tier — ClickHouse tables (powering cockpit + inference) |
+| Blue | Lake tier — Iceberg tables at `lake.equities.*` |
+| Green | Compute — batch jobs (Spark / SageMaker / cron) + the signal worker |
+| Purple | Read surfaces — cockpit, HTTP endpoint, MCP tools, ad-hoc engines |
+| Pink | Model artifact storage (`s3://stockalert-models/`) |
+
+### Three flow narratives to read off the diagram
+
+1. **Live charting path** — `Schwab WS → bar_batcher → ohlcv_1m → Cockpit`.
+   Sub-200ms; zero Iceberg dependency on the request path. The dotted
+   edge `ohlcv_1m → lake_archive_job` is the side-effect that builds
+   `schwab_universe` for ML.
+
+2. **Polygon adjustment path** — `Polygon flat-files → polygon_raw`
+   (one-time) + `Polygon /corp-actions → market_corp_actions` (weekly)
+   → `polygon_adjustment_job` → `polygon_adjusted`. This is the
+   computed adjusted history that feeds both deep-history chart
+   queries (via `/api/v1/lake/bars`) and ML feature engineering.
+
+3. **ML loop** — `polygon_adjusted` + `schwab_universe` → feature/
+   label builds → `train_v1` (SageMaker) → `model_registry` +
+   `s3://stockalert-models/`. The signal worker on the live tier
+   loads the prod-status model and writes `signals`. Train/serve
+   parity is enforced by importing the **same** `app/ml/features/v1.py`
+   in both the Spark feature build and the signal worker.
+
+### What's not shown
+
+- Schema details — see [02_schema.md](02_schema.md).
+- Partition layout / file sizing — see [03_s3_layout.md](03_s3_layout.md).
+- Spark session config + EMR Serverless escape hatch — see [04_spark.md](04_spark.md).
+- Failure-isolation matrix (which paths break under each outage) — see the [Failure isolation](#failure-isolation) section below.
+- Migration phase ordering — see [06_migration.md](06_migration.md).
+
 ## The two tiers
 
 ### Tier 1 — Live (ClickHouse)
