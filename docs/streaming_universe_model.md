@@ -1,5 +1,16 @@
 # Streaming Universe Model — Concise
 
+> **SUPERSEDED** by [`docs/standards/data/symbol_lifecycle.md`](standards/data/symbol_lifecycle.md)
+> as of FE-CONTRACTS-4-final (2026-05-19). The locked architecture is
+> documented there; this file is kept for historical context.
+>
+> Key differences from this doc:
+>   - `stream_universe` (CH table) is canonical, not `SEED_SYMBOLS ∪ watchlists`.
+>   - Polygon nightly = whole-market; Schwab nightly = stream_universe.
+>   - Quick-path on add: on-demand silver build → silver→CH → Schwab tip-fill.
+>   - Chart resamples 5m / daily from `ohlcv_1m` at query time (single
+>     canonical resolution in silver).
+
 The operational model for what data sources cover which symbols
 and how a new "streamed" symbol enters the system. Written as a
 quick-reference; full architecture in

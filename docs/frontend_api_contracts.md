@@ -1175,6 +1175,13 @@ sub-phases don't re-litigate.
 
 ### 10.1 Watchlists ≠ streaming subset? — **LOCKED: sticky-universe model**
 
+> **End-to-end implementation locked in
+> [`docs/standards/data/symbol_lifecycle.md`](standards/data/symbol_lifecycle.md).**
+> That document is the canonical "what happens when a symbol enters
+> the system" reference: medallion layering, quick-path warmup,
+> standard-path nightlies, latency gate. Read it before touching any
+> ingest / universe / backfill code.
+
 **Locked model (the "sticky universe"):**
 
 ```
