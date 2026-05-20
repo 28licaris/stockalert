@@ -86,6 +86,16 @@ class Settings(BaseModel):
     iceberg_glue_database: str = os.getenv("ICEBERG_GLUE_DATABASE", "stock_lake")
     iceberg_warehouse_prefix: str = os.getenv("ICEBERG_WAREHOUSE_PREFIX", "iceberg").strip("/")
 
+    # Architecture v2 — separate Glue database for the equities namespace.
+    # Tables: polygon_raw, polygon_adjusted, schwab_universe,
+    # market_corp_actions. Fully-qualified as `lake.equities.<table>` when
+    # read via Spark/DuckDB; via PyIceberg as `<this_db>.<table>`.
+    # Created by `app/services/equities/tables.py::ensure_*`.
+    # Spec: docs/architecture_v2/ (Gate 1 — equities database name).
+    iceberg_equities_glue_database: str = os.getenv(
+        "ICEBERG_EQUITIES_GLUE_DATABASE", "equities"
+    )
+
     # Silver provider precedence for the merge step. Comma-separated
     # list, highest priority first. Used by silver_corp_actions_build
     # (and the planned silver OHLCV build) to resolve conflicts when

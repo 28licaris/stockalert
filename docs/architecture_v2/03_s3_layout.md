@@ -5,50 +5,53 @@
 ```
 s3://stockalert-lake/
 │
-├── data/                                  ← Iceberg warehouse root
+├── iceberg/                               ← Iceberg warehouse root
+│   │                                       (ICEBERG_WAREHOUSE_PREFIX in .env)
 │   │
-│   ├── polygon_raw/                       ← Whole-market 5y, RAW unadjusted
-│   │   ├── metadata/
-│   │   │   ├── v1.metadata.json           ← snapshot 1 (initial bulk load)
-│   │   │   ├── v2.metadata.json           ← snapshot 2 (Polygon Jan 2025 nightly)
-│   │   │   ├── ... (one per write commit)
-│   │   │   ├── snap-{snapshot_id}.avro    ← manifest list per snapshot
-│   │   │   └── {manifest_id}.avro         ← manifests (point to data files)
-│   │   │
-│   │   └── data/
-│   │       ├── timestamp_month=2020-01/
-│   │       │   ├── symbol_bucket=0/       ← 32 buckets (whole-market)
-│   │       │   │   ├── 00000-0-abc...parquet      (~150 MB)
-│   │       │   │   └── 00001-0-def...parquet
-│   │       │   ├── symbol_bucket=1/
-│   │       │   │   └── ...
-│   │       │   ... (32 buckets per month)
-│   │       │
-│   │       ├── timestamp_month=2020-02/
-│   │       │   └── ...
-│   │       │
-│   │       ... (60 months × 32 buckets ≈ 1920 dirs, ~4000 Parquet files)
-│   │
-│   ├── polygon_adjusted/                  ← Same layout, with adj_factor column
-│   │   ├── metadata/
-│   │   └── data/
-│   │       └── timestamp_month=YYYY-MM/symbol_bucket=N/...parquet
-│   │
-│   ├── schwab_universe/                   ← Universe live, ALREADY adjusted
-│   │   ├── metadata/
-│   │   └── data/
-│   │       ├── timestamp_month=2025-05/
-│   │       │   ├── symbol_bucket=0/       ← 16 buckets (smaller universe)
-│   │       │   │   └── ...parquet
-│   │       │   ... (16 buckets per month)
-│   │       └── ... (one timestamp_month per current month + retention window)
-│   │
-│   └── market_corp_actions/               ← Splits + dividends, whole-market
-│       ├── metadata/
-│       └── data/
-│           ├── ex_date_month=2024-12/
-│           │   └── 00000-0-...parquet     (~5 MB per month)
-│           └── ...
+│   └── equities/                          ← Glue database (Gate 1)
+│       │
+│       ├── polygon_raw/                   ← Whole-market 5y, RAW unadjusted
+│       │   ├── metadata/
+│       │   │   ├── v1.metadata.json       ← snapshot 1 (initial bulk load)
+│       │   │   ├── v2.metadata.json       ← snapshot 2 (Polygon Jan 2025 nightly)
+│       │   │   ├── ... (one per write commit)
+│       │   │   ├── snap-{snapshot_id}.avro ← manifest list per snapshot
+│       │   │   └── {manifest_id}.avro     ← manifests (point to data files)
+│       │   │
+│       │   └── data/
+│       │       ├── ts_month=2020-01/
+│       │       │   ├── symbol_bucket=0/   ← 32 buckets (whole-market)
+│       │       │   │   ├── 00000-0-abc...parquet      (~150 MB)
+│       │       │   │   └── 00001-0-def...parquet
+│       │       │   ├── symbol_bucket=1/
+│       │       │   │   └── ...
+│       │       │   ... (32 buckets per month)
+│       │       │
+│       │       ├── ts_month=2020-02/
+│       │       │   └── ...
+│       │       │
+│       │       ... (60 months × 32 buckets ≈ 1920 dirs, ~4000 Parquet files)
+│       │
+│       ├── polygon_adjusted/              ← Same layout + adj_factor column
+│       │   ├── metadata/
+│       │   └── data/
+│       │       └── ts_month=YYYY-MM/symbol_bucket=N/...parquet
+│       │
+│       ├── schwab_universe/               ← Universe live, ALREADY adjusted
+│       │   ├── metadata/
+│       │   └── data/
+│       │       ├── ts_month=2025-05/
+│       │       │   ├── symbol_bucket=0/   ← 16 buckets (smaller universe)
+│       │       │   │   └── ...parquet
+│       │       │   ... (16 buckets per month)
+│       │       └── ... (one ts_month per current month + retention window)
+│       │
+│       └── market_corp_actions/           ← Splits + dividends, whole-market
+│           ├── metadata/
+│           └── data/
+│               ├── ex_month=2024-12/
+│               │   └── 00000-0-...parquet (~5 MB per month)
+│               └── ...
 │
 ├── raw/                                   ← Original provider files (DR backup)
 │   └── polygon/
@@ -62,6 +65,14 @@ s3://stockalert-lake/
     └── polygon/
         └── ...
 ```
+
+Concrete table location format:
+`s3://{STOCK_LAKE_BUCKET}/{ICEBERG_WAREHOUSE_PREFIX}/{ICEBERG_EQUITIES_GLUE_DATABASE}/{table_name}/`
+— defaults: `s3://stockalert-lake/iceberg/equities/<table>/`.
+Partition directory names (`symbol_bucket=N`, `ts_month=YYYY-MM`,
+`ex_month=YYYY-MM`) are what PyIceberg's `BucketTransform` /
+`MonthTransform` emit — verified by the CV1 unit tests in
+`tests/test_equities_schemas.py`.
 
 ### Bucket naming convention
 
@@ -219,7 +230,7 @@ the underlying Parquet files directly:
 ```python
 duckdb.sql("""
     SELECT * FROM read_parquet(
-        's3://stockalert-lake/equities/polygon_raw/data/**/*.parquet',
+        's3://stockalert-lake/iceberg/equities/polygon_raw/data/**/*.parquet',
         hive_partitioning = 1
     )
     WHERE symbol = 'AAPL'
