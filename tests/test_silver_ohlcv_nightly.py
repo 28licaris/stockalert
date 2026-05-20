@@ -42,12 +42,21 @@ class TestSecondsUntilNextRun:
 
 
 class TestResolveSymbols:
-    def test_seed_keyword(self) -> None:
+    def test_seed_keyword_returns_legacy_seed(self) -> None:
+        """`seed` spec routes to the static SEED_SYMBOLS list for legacy
+        operator scripts. Empty/None route to `active` (stream_universe)."""
         from app.data.seed_universe import SEED_SYMBOLS
 
         assert set(nightly_mod._resolve_symbols("seed")) == set(SEED_SYMBOLS)
         assert set(nightly_mod._resolve_symbols("SEED")) == set(SEED_SYMBOLS)
-        assert set(nightly_mod._resolve_symbols("")) == set(SEED_SYMBOLS)
+
+    def test_empty_defaults_to_active_universe(self) -> None:
+        from unittest.mock import patch
+        with patch(
+            "app.services.stream.stream_service.list_active_symbols",
+            return_value={"PG"},
+        ):
+            assert nightly_mod._resolve_symbols("") == ["PG"]
 
     def test_csv_list(self) -> None:
         assert nightly_mod._resolve_symbols("AAPL,NVDA,msft") == ["AAPL", "NVDA", "MSFT"]

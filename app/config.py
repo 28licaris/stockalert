@@ -60,14 +60,21 @@ class Settings(BaseModel):
     # 07:00 UTC = midnight Arizona; after Polygon's daily flat file is ready.
     polygon_nightly_enabled: bool = os.getenv("POLYGON_NIGHTLY_ENABLED", "false").lower() == "true"
     polygon_nightly_run_hour_utc: int = int(os.getenv("POLYGON_NIGHTLY_RUN_HOUR_UTC", "7"))
-    polygon_nightly_symbols: str = os.getenv("POLYGON_NIGHTLY_SYMBOLS", "seed")
+    # Per docs/standards/data/symbol_lifecycle.md (LOCKED): Polygon is
+    # the whole-market historical archive. "all" = no universe filter
+    # (Polygon flat-files contain every symbol). Override to "seed"
+    # only for low-storage dev environments.
+    polygon_nightly_symbols: str = os.getenv("POLYGON_NIGHTLY_SYMBOLS", "all")
     polygon_nightly_kind: str = os.getenv("POLYGON_NIGHTLY_KIND", "minute").strip().lower()
 
     # Schwab REST pricehistory → bronze.schwab_minute (see nightly_schwab_refresh).
     # 22:00 UTC = 3 PM Arizona; ~30 min after NYSE close.
     schwab_nightly_enabled: bool = os.getenv("SCHWAB_NIGHTLY_ENABLED", "false").lower() == "true"
     schwab_nightly_run_hour_utc: int = int(os.getenv("SCHWAB_NIGHTLY_RUN_HOUR_UTC", "22"))
-    schwab_nightly_symbols: str = os.getenv("SCHWAB_NIGHTLY_SYMBOLS", "seed")
+    # Per docs/standards/data/symbol_lifecycle.md (LOCKED): Schwab is
+    # the universe-bounded provider. "active" reads from stream_universe
+    # (the canonical "what's our hot universe" table).
+    schwab_nightly_symbols: str = os.getenv("SCHWAB_NIGHTLY_SYMBOLS", "active")
 
     # ─────────────────────────────────────────────────────────
     # Iceberg catalog (AWS Glue) — see docs/data_platform_plan.md.
@@ -120,8 +127,11 @@ class Settings(BaseModel):
     # Symbols spec: "seed" (= SEED_SYMBOLS, default) or comma-separated
     # explicit list. Future G1 will flip the default to "active" =
     # dynamic universe (get_active_universe()).
+    # Per docs/standards/data/symbol_lifecycle.md (LOCKED): silver is
+    # universe-bounded (stream_universe). bronze stays whole-market for
+    # Polygon, but silver is only built for symbols we actually serve.
     silver_ohlcv_build_symbols: str = os.getenv(
-        "SILVER_OHLCV_BUILD_SYMBOLS", "seed"
+        "SILVER_OHLCV_BUILD_SYMBOLS", "active"
     )
 
     # Live-lake-writer config (TA-5.7 — closes the 8-24h Schwab live →

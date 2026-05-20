@@ -64,33 +64,42 @@ class TestBuildCliResolveSymbols:
         syms = build_cli._resolve_symbols("seed")
         assert set(syms) == set(SEED_SYMBOLS)
 
-    def test_active_unions_seed_and_watchlists(self, build_cli) -> None:
-        """'active' = SEED ∪ active-watchlist symbols. Critically, NOT
-        a literal single symbol 'ACTIVE'."""
-        from app.data.seed_universe import SEED_SYMBOLS
+    def test_active_reads_stream_universe(self, build_cli) -> None:
+        """`active` resolves to the canonical `stream_universe` table.
+        Critically, NOT a literal single symbol 'ACTIVE'. Per
+        docs/standards/data/symbol_lifecycle.md, watchlists no longer
+        contribute to the universe — stream_universe is the source."""
         from unittest.mock import patch
 
         with patch(
-            "app.db.watchlist_repo.list_all_active_symbols",
-            return_value={"NEW_WATCHLIST_SYM"},
+            "app.services.stream.stream_service.list_active_symbols",
+            return_value={"NEW_STREAM_SYM"},
         ):
             syms = build_cli._resolve_symbols("active")
-        # Must contain SEED + the watchlist symbol; must NOT be ["ACTIVE"].
-        assert "NEW_WATCHLIST_SYM" in syms
-        assert set(SEED_SYMBOLS).issubset(set(syms))
+        assert syms == ["NEW_STREAM_SYM"]
+        # Critically not parsed as a literal symbol.
         assert syms != ["ACTIVE"]
 
-    def test_empty_string_returns_seed(self, build_cli) -> None:
-        from app.data.seed_universe import SEED_SYMBOLS
+    def test_empty_string_defaults_to_active(self, build_cli) -> None:
+        """Empty/None now default to `active` (stream_universe), not seed.
+        Pre-FE-CONTRACTS-4-final, empty meant SEED_SYMBOLS; the new
+        canonical default is stream_universe."""
+        from unittest.mock import patch
 
-        syms = build_cli._resolve_symbols("")
-        assert set(syms) == set(SEED_SYMBOLS)
+        with patch(
+            "app.services.stream.stream_service.list_active_symbols",
+            return_value={"PG"},
+        ):
+            assert build_cli._resolve_symbols("") == ["PG"]
 
-    def test_none_returns_seed(self, build_cli) -> None:
-        from app.data.seed_universe import SEED_SYMBOLS
+    def test_none_defaults_to_active(self, build_cli) -> None:
+        from unittest.mock import patch
 
-        syms = build_cli._resolve_symbols(None)
-        assert set(syms) == set(SEED_SYMBOLS)
+        with patch(
+            "app.services.stream.stream_service.list_active_symbols",
+            return_value={"PG"},
+        ):
+            assert build_cli._resolve_symbols(None) == ["PG"]
 
     def test_csv_uppercased(self, build_cli) -> None:
         syms = build_cli._resolve_symbols("aapl,nvda,MSFT")

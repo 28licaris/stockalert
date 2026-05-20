@@ -369,6 +369,24 @@ class StreamService:
     def list_universe(self, *, owner_id: Optional[str] = None) -> list[dict]:
         return self._read_universe(owner_id=owner_id)
 
+    def list_active_symbols(
+        self, *, owner_id: Optional[str] = None,
+    ) -> set[str]:
+        """Lightweight: just the active symbols, no metadata.
+
+        Used by `get_active_universe()` and the nightly job universe
+        filters. Returns a set so callers can union with seed fallbacks
+        cheaply. Tolerates CH outages by returning an empty set (the
+        caller decides the fallback).
+        """
+        try:
+            return {row["symbol"] for row in self._read_universe(owner_id=owner_id)}
+        except Exception as exc:  # noqa: BLE001 — boundary
+            logger.warning(
+                "Stream: list_active_symbols read failed: %s", exc,
+            )
+            return set()
+
     def is_streaming(self, symbol: str) -> bool:
         sym = _normalize_symbol(symbol)
         with self._lock:

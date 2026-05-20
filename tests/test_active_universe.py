@@ -1,19 +1,23 @@
 """
-Tests for `app.services.universe.active_universe` — the G1 dynamic
-universe resolver.
+Tests for `app.services.universe.active_universe` post-FE-CONTRACTS-4-final.
 
-Verifies:
-  - SEED_SYMBOLS is the floor (always included when include_seed=True)
-  - Watchlist symbols are unioned in
-  - Output is sorted + deduplicated
-  - CH outage → graceful fallback to seed-only
-  - resolve_universe_spec routes "seed" / "active" / CSV correctly
-  - Each nightly's symbol resolver delegates through resolve_universe_spec
-    (so adding "active" to env config works system-wide)
+Per the LOCKED architecture in
+docs/standards/data/symbol_lifecycle.md:
+
+  - The active universe is read from the canonical `stream_universe`
+    CH table (via `stream_service.list_active_symbols()`), NOT from
+    `SEED_SYMBOLS ∪ watchlists` anymore.
+  - SEED_SYMBOLS is the cold-start fallback only.
+  - `resolve_universe_spec` routes:
+      "seed" / ""   → SEED_SYMBOLS
+      "active"      → stream_universe
+      "all" / "*"   → empty list (whole-market signal for Polygon flat-files)
+      "AAPL,NVDA"   → explicit CSV
+  - Nightly Schwab + silver build delegate through resolve_universe_spec.
+  - Nightly Polygon defaults to "all" (whole market).
 """
 from __future__ import annotations
 
-from typing import Iterable, Optional
 from unittest.mock import patch
 
 import pytest
@@ -28,94 +32,126 @@ from app.services.universe import (
 
 
 # ─────────────────────────────────────────────────────────────────────
-# get_active_universe — happy path + degradation
+# get_active_universe — reads from stream_universe
 # ─────────────────────────────────────────────────────────────────────
 
 
 class TestGetActiveUniverse:
-    def test_includes_seed_when_no_watchlist(self) -> None:
-        # Patch the late-bound watchlist_repo import inside the function.
+    def test_reads_from_stream_universe(self) -> None:
+        """Canonical case: stream_universe has rows → return them."""
         with patch(
-            "app.db.watchlist_repo.list_all_active_symbols",
+            "app.services.stream.stream_service.list_active_symbols",
+            return_value={"AAPL", "NVDA", "PG"},
+        ):
+            symbols = get_active_universe()
+        assert symbols == ["AAPL", "NVDA", "PG"]
+
+    def test_empty_stream_universe_returns_empty(self) -> None:
+        """Empty stream_universe = empty universe. No SEED_SYMBOLS
+        fallback (it was removed when stream_universe became canonical
+        — if no one has added a symbol, no symbol should be processed)."""
+        with patch(
+            "app.services.stream.stream_service.list_active_symbols",
             return_value=set(),
         ):
             symbols = get_active_universe()
-        assert set(symbols) == set(SEED_SYMBOLS)
-        # Sorted output.
-        assert symbols == sorted(symbols)
+        assert symbols == []
 
-    def test_unions_seed_with_watchlists(self) -> None:
-        wl_only = {"BRK.B", "PYPL", "NVDA"}  # NVDA also in seed → dedup
+    def test_ch_outage_returns_empty(self) -> None:
+        """If stream_service.list_active_symbols raises, we degrade
+        gracefully to empty (never propagate the exception). Nightlies
+        no-op on empty universe — same as cold-start."""
         with patch(
-            "app.db.watchlist_repo.list_all_active_symbols",
-            return_value=wl_only,
+            "app.services.stream.stream_service.list_active_symbols",
+            side_effect=RuntimeError("CH down"),
         ):
             symbols = get_active_universe()
-        # All seed members present + all watchlist members present.
-        assert set(SEED_SYMBOLS).issubset(set(symbols))
-        assert "BRK.B" in symbols
-        assert "PYPL" in symbols
-        # No duplicates (NVDA appears once).
-        assert symbols.count("NVDA") == 1
+        assert symbols == []
 
-    def test_exclude_seed_returns_watchlist_only(self) -> None:
-        wl_only = {"BRK.B", "PYPL"}
+    def test_does_NOT_union_with_seed(self) -> None:
+        """REGRESSION: pre-FE-CONTRACTS-4-final the function returned
+        SEED ∪ <stream>. Post-final it returns ONLY stream_universe.
+        Adding a symbol via stream completely replaces what nightlies see."""
+        only_pg = {"PG"}
         with patch(
-            "app.db.watchlist_repo.list_all_active_symbols",
-            return_value=wl_only,
-        ):
-            symbols = get_active_universe(include_seed=False)
-        assert set(symbols) == wl_only
-
-    def test_kinds_filter_passes_through(self) -> None:
-        captured: dict = {}
-
-        def _spy(kinds: Optional[Iterable[str]] = None) -> set[str]:
-            captured["kinds"] = kinds
-            return {"AAPL"}
-
-        with patch("app.db.watchlist_repo.list_all_active_symbols", _spy):
-            get_active_universe(watchlist_kinds=["user", "baseline"])
-        assert captured["kinds"] == ["user", "baseline"]
-
-    def test_ch_outage_falls_back_to_seed_only(self) -> None:
-        # If watchlist_repo raises (CH down), we degrade — never raise.
-        with patch(
-            "app.db.watchlist_repo.list_all_active_symbols",
-            side_effect=RuntimeError("CH connection refused"),
+            "app.services.stream.stream_service.list_active_symbols",
+            return_value=only_pg,
         ):
             symbols = get_active_universe()
-        assert set(symbols) == set(SEED_SYMBOLS)
+        assert symbols == ["PG"]
+        # SEED constants are NOT silently included anymore.
+        assert "AAPL" not in symbols  # AAPL is in SEED but not in stream
+
+    def test_deprecated_include_seed_fallback_kwarg_is_ignored(self) -> None:
+        """Back-compat: legacy callers may pass `include_seed_fallback=True`
+        — it's accepted but does nothing now."""
+        with patch(
+            "app.services.stream.stream_service.list_active_symbols",
+            return_value=set(),
+        ):
+            # No crash; still returns empty since stream_universe is empty.
+            assert get_active_universe(include_seed_fallback=True) == []
+
+    def test_deprecated_watchlist_kinds_arg_is_ignored(self) -> None:
+        """Back-compat: the `watchlist_kinds` keyword is preserved for
+        legacy callers that haven't migrated, but it has no effect.
+        Watchlists no longer drive the universe."""
+        with patch(
+            "app.services.stream.stream_service.list_active_symbols",
+            return_value={"AAPL"},
+        ):
+            # No crash, returns the stream-derived set regardless.
+            symbols = get_active_universe(watchlist_kinds=["user", "baseline"])
+        assert symbols == ["AAPL"]
 
 
 # ─────────────────────────────────────────────────────────────────────
-# resolve_universe_spec — config-spec routing
+# resolve_universe_spec — config-string routing
 # ─────────────────────────────────────────────────────────────────────
 
 
 class TestResolveUniverseSpec:
-    def test_seed_keyword_returns_seed(self) -> None:
+    def test_seed_keyword_returns_legacy_seed(self) -> None:
+        """`seed` spec is kept for legacy operator scripts that explicitly
+        request the static SEED_SYMBOLS list. New code paths route
+        through `active` (stream_universe)."""
         assert set(resolve_universe_spec("seed")) == set(SEED_SYMBOLS)
         assert set(resolve_universe_spec("SEED")) == set(SEED_SYMBOLS)
-        assert set(resolve_universe_spec("")) == set(SEED_SYMBOLS)
-        assert set(resolve_universe_spec(None)) == set(SEED_SYMBOLS)  # type: ignore[arg-type]
 
-    def test_active_keyword_calls_get_active_universe(self) -> None:
+    def test_empty_or_none_defaults_to_active(self) -> None:
+        """Empty spec defaults to active (stream_universe), NOT seed.
+        Pre-FE-CONTRACTS-4-final empty defaulted to SEED_SYMBOLS; the
+        new default is canonical stream_universe."""
         with patch(
-            "app.db.watchlist_repo.list_all_active_symbols",
-            return_value={"NVDA", "PYPL"},
+            "app.services.stream.stream_service.list_active_symbols",
+            return_value={"PG"},
+        ):
+            assert resolve_universe_spec("") == ["PG"]
+            assert resolve_universe_spec(None) == ["PG"]  # type: ignore[arg-type]
+
+    def test_active_keyword_reads_stream_universe(self) -> None:
+        with patch(
+            "app.services.stream.stream_service.list_active_symbols",
+            return_value={"NVDA", "PG"},
         ):
             symbols = resolve_universe_spec("active")
-        assert "PYPL" in symbols
-        assert set(SEED_SYMBOLS).issubset(set(symbols))
+        assert symbols == ["NVDA", "PG"]
 
     def test_active_aliases(self) -> None:
+        """`active`, `universe`, `dynamic` all route to stream_universe."""
         with patch(
-            "app.db.watchlist_repo.list_all_active_symbols",
-            return_value=set(),
+            "app.services.stream.stream_service.list_active_symbols",
+            return_value={"AAPL"},
         ):
             for alias in ("active", "Active", "ACTIVE", "universe", "dynamic"):
-                assert set(resolve_universe_spec(alias)) == set(SEED_SYMBOLS)
+                assert resolve_universe_spec(alias) == ["AAPL"]
+
+    def test_all_keyword_returns_empty_whole_market_signal(self) -> None:
+        """`all` / `*` → empty list, the convention that Polygon flat-files
+        interpret as 'no filter, import everything'."""
+        assert resolve_universe_spec("all") == []
+        assert resolve_universe_spec("*") == []
+        assert resolve_universe_spec("ALL") == []
 
     def test_csv_list_uppercased(self) -> None:
         assert resolve_universe_spec("aapl,nvda,MSFT") == ["AAPL", "NVDA", "MSFT"]
@@ -124,28 +160,24 @@ class TestResolveUniverseSpec:
         assert resolve_universe_spec(" AAPL ,  NVDA ,") == ["AAPL", "NVDA"]
 
     def test_canonical_constants(self) -> None:
-        # Public constants match the literals callers should expect.
         assert UNIVERSE_SPEC_SEED == "seed"
         assert UNIVERSE_SPEC_ACTIVE == "active"
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Each nightly's _resolve_symbols delegates to resolve_universe_spec
-# (so "active" works system-wide, not just in the universe module).
+# Nightly delegations still work after the rewire
 # ─────────────────────────────────────────────────────────────────────
 
 
 class TestSchwabNightlyDelegation:
-    def test_active_keyword_routes_through_universe(self) -> None:
+    def test_active_keyword_reads_stream_universe(self) -> None:
         from app.services.ingest.nightly_schwab_refresh import _resolve_symbols
 
         with patch(
-            "app.db.watchlist_repo.list_all_active_symbols",
-            return_value={"NEW_SYMBOL"},
+            "app.services.stream.stream_service.list_active_symbols",
+            return_value={"PG"},
         ):
-            symbols = _resolve_symbols("active")
-        assert "NEW_SYMBOL" in symbols
-        assert set(SEED_SYMBOLS).issubset(set(symbols))
+            assert _resolve_symbols("active") == ["PG"]
 
     def test_seed_keyword_still_returns_seed(self) -> None:
         from app.services.ingest.nightly_schwab_refresh import _resolve_symbols
@@ -154,36 +186,19 @@ class TestSchwabNightlyDelegation:
 
 
 class TestSilverNightlyDelegation:
-    def test_active_keyword_routes_through_universe(self) -> None:
+    def test_active_keyword_reads_stream_universe(self) -> None:
         from app.services.silver.ohlcv.nightly import _resolve_symbols
 
         with patch(
-            "app.db.watchlist_repo.list_all_active_symbols",
-            return_value={"NEW_SYMBOL"},
+            "app.services.stream.stream_service.list_active_symbols",
+            return_value={"PG"},
         ):
-            symbols = _resolve_symbols("active")
-        assert "NEW_SYMBOL" in symbols
+            assert _resolve_symbols("active") == ["PG"]
 
 
 class TestPolygonNightlyDelegation:
-    def test_active_keyword_unions_seed_and_watchlists(self) -> None:
-        from app.services.ingest.nightly_polygon_refresh import (
-            resolve_nightly_lake_symbols,
-        )
-
-        with patch(
-            "app.db.watchlist_repo.list_all_active_symbols",
-            return_value={"NEW_SYMBOL"},
-        ):
-            symbols = resolve_nightly_lake_symbols("active")
-        assert "NEW_SYMBOL" in symbols
-        assert set(SEED_SYMBOLS).issubset(set(symbols))
-
-    def test_all_keyword_still_returns_empty_for_whole_market(self) -> None:
-        """Polygon flat-files special case: 'all'/'*'/'' → empty list,
-        which the FlatFilesBackfillService interprets as 'import every
-        symbol in the flat file' (free since flat-files are whole-market
-        anyway)."""
+    def test_all_keyword_returns_empty_for_whole_market(self) -> None:
+        """Polygon flat-files: 'all' / '*' / '' → empty list = whole-market."""
         from app.services.ingest.nightly_polygon_refresh import (
             resolve_nightly_lake_symbols,
         )
@@ -191,6 +206,19 @@ class TestPolygonNightlyDelegation:
         assert resolve_nightly_lake_symbols("all") == []
         assert resolve_nightly_lake_symbols("*") == []
         assert resolve_nightly_lake_symbols("") == []
+
+    def test_active_keyword_reads_stream_universe(self) -> None:
+        """Even though the production default is 'all', 'active' should
+        still route through stream_universe for callers that override it."""
+        from app.services.ingest.nightly_polygon_refresh import (
+            resolve_nightly_lake_symbols,
+        )
+
+        with patch(
+            "app.services.stream.stream_service.list_active_symbols",
+            return_value={"PG"},
+        ):
+            assert resolve_nightly_lake_symbols("active") == ["PG"]
 
     def test_seed_keyword_still_returns_seed(self) -> None:
         from app.services.ingest.nightly_polygon_refresh import (
@@ -201,7 +229,7 @@ class TestPolygonNightlyDelegation:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# SilverOhlcvBuild.run_nightly default now uses get_active_universe
+# SilverOhlcvBuild.run_nightly default
 # ─────────────────────────────────────────────────────────────────────
 
 
@@ -209,9 +237,8 @@ class TestSilverBuildDefaultUniverse:
     def test_run_nightly_default_pulls_active_universe(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """When `run_nightly()` is called with symbols=None, it should
-        resolve to get_active_universe() = SEED ∪ watchlist symbols.
-        Verify by spying on what gets passed to build_window."""
+        """`run_nightly()` with symbols=None resolves to stream_universe
+        (via get_active_universe). Verified by spying on build_window."""
         from app.services.silver.ohlcv.build import SilverOhlcvBuild
 
         build = SilverOhlcvBuild(
@@ -230,13 +257,9 @@ class TestSilverBuildDefaultUniverse:
 
         monkeypatch.setattr(build, "build_window", _spy)
         with patch(
-            "app.db.watchlist_repo.list_all_active_symbols",
+            "app.services.stream.stream_service.list_active_symbols",
             return_value={"NEW_DYNAMIC_SYM"},
         ):
-            # scan_corp_action_dirty=False so the test stays focused on
-            # the universe-default path and doesn't touch the TA-5.1.9
-            # corp_actions scan (which needs a real catalog).
             build.run_nightly(scan_corp_action_dirty=False)
 
-        assert "NEW_DYNAMIC_SYM" in captured["symbols"]
-        assert set(SEED_SYMBOLS).issubset(set(captured["symbols"]))
+        assert captured["symbols"] == ["NEW_DYNAMIC_SYM"]
