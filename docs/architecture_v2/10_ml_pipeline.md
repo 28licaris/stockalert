@@ -206,7 +206,67 @@ CREATE TABLE lake.data.model_registry (
     retired_at                 TIMESTAMP
 )
 PARTITIONED BY (name)
-TBLPROPERTIES ('format-version' = '2', 'write.upsert.mode' = 'merge-on-read');
+TBLPROPERTIES (
+    'format-version' = '2',
+    'write.merge.mode' = 'merge-on-read',
+    'write.update.mode' = 'merge-on-read',
+    'write.delete.mode' = 'merge-on-read'
+);
+```
+
+### `data.backtest_runs` & `data.backtest_trades`
+
+Snapshot-pinned backtest history for ML model evaluation. These are
+**lake-only**; the existing CH `agent_runs` continues to hold live
+paper-trading state for the cockpit.
+
+```sql
+CREATE TABLE lake.data.backtest_runs (
+    run_id                STRING NOT NULL,           -- UUID
+    model_name            STRING NOT NULL,
+    model_version         STRING NOT NULL,
+    strategy_name         STRING NOT NULL,
+    config_json           STRING NOT NULL,            -- entry/exit thresholds, position sizing
+    universe_tag          STRING NOT NULL,
+    holdout_start         DATE NOT NULL,
+    holdout_end           DATE NOT NULL,
+
+    -- Snapshot lineage (joins to model_registry on the same snapshot_ids)
+    features_snapshot_id  BIGINT NOT NULL,
+    labels_snapshot_id    BIGINT NOT NULL,
+
+    -- Aggregate metrics
+    sharpe_ratio          DOUBLE,
+    sortino_ratio         DOUBLE,
+    max_drawdown          DOUBLE,
+    total_return          DOUBLE,
+    win_rate              DOUBLE,
+    n_trades              INT,
+    final_equity          DOUBLE,
+
+    started_at            TIMESTAMP NOT NULL,
+    finished_at           TIMESTAMP NOT NULL,
+    git_sha               STRING
+)
+PARTITIONED BY (model_name)
+TBLPROPERTIES ('format-version' = '2');
+
+CREATE TABLE lake.data.backtest_trades (
+    run_id                STRING NOT NULL,            -- FK → backtest_runs.run_id
+    symbol                STRING NOT NULL,
+    entry_timestamp       TIMESTAMP NOT NULL,
+    exit_timestamp        TIMESTAMP,                  -- NULL = still open at run end
+    side                  STRING NOT NULL,            -- 'long' | 'short'
+    entry_price           DOUBLE NOT NULL,
+    exit_price            DOUBLE,
+    qty                   DOUBLE NOT NULL,
+    pnl                   DOUBLE,
+    pnl_pct               DOUBLE,
+    entry_score           DOUBLE,                     -- model score at entry
+    exit_reason           STRING                      -- 'target' | 'stop' | 'timeout' | 'signal_flip'
+)
+PARTITIONED BY (bucket(16, run_id), month(entry_timestamp))
+TBLPROPERTIES ('format-version' = '2');
 ```
 
 ### `data.feature_drift_metrics`
@@ -363,11 +423,39 @@ single beefy box with the dataset in RAM. Use Spark to **materialize
 the training set as Parquet**, then load it into pandas/numpy and
 train locally or on SageMaker.
 
+The training script below shows the end-to-end shape; the helpers
+it imports (`app/ml/snapshots.py`, `app/ml/cv.py`, `app/ml/registry.py`,
+`app/ml/training_set.py`) are **part of the Phase-2.5 implementation**
+and don't exist yet — their signatures are listed inline as TBD
+contracts. Implement them in the same commit batch as `train_v1.py`.
+
 ```python
 # scripts/ml/train_v1.py
 import xgboost as xgb
 from app.ml.snapshots import pin_current_snapshots, write_registry_row
 from app.ml.cv import walk_forward_splits
+# TBD helper contracts:
+#   pin_current_snapshots(table_fqns: list[str]) -> dict[str, int]
+#       — Calls SELECT max(snapshot_id) FROM <t>.snapshots for each table;
+#         returns {fqn: snapshot_id}. Also creates a 5-year-retention tag
+#         on each (see "Reproducibility" section).
+#   walk_forward_splits(timestamps: pd.Series, n_splits: int, embargo: str)
+#       -> list[tuple[np.ndarray, np.ndarray]]
+#       — Chronological train/test fold indices with an embargo gap
+#         between train_end and test_start (Lopez de Prado §7).
+#   build_training_set(snaps: dict, *, universe_tag, train_start, train_end)
+#       -> str  # s3 uri
+#       — Spark job: join features × labels × universe @ snapshots,
+#         materialize as Parquet, return URI. Idempotent on (universe_tag,
+#         train_start, train_end, snaps-hash).
+#   save_model(name: str, model, *, s3_uri_base, snapshots, cv_metrics,
+#              train_start, train_end) -> str  # version
+#       — Serializes via the library-native format (Gate 10), writes
+#         snapshot_ids.json alongside, returns the version string.
+#   write_registry_row(name: str, version: str, status: str, ...)
+#       — Insert into lake.data.model_registry.
+#   sharpe_scorer  — sklearn-compatible scorer wrapping
+#                    sqrt(252*390) * mean(ret) / std(ret).
 
 # 1. Pin Iceberg snapshots so this run is reproducible
 snaps = pin_current_snapshots([
@@ -416,7 +504,7 @@ write_registry_row(name="swing_5m_xgb", version=version, status="training", ...)
 |---|---|
 | **Code** | `app/services/sim/` (existing module, ported to v2) |
 | **Reads** | Pinned snapshots from `model_registry`, plus `polygon_adjusted` + `schwab_universe` UNION for the hold-out window |
-| **Writes** | `lake.data.sim_runs`, `lake.data.sim_trades` (Iceberg) |
+| **Writes** | `lake.data.backtest_runs`, `lake.data.backtest_trades` (Iceberg — see DDL below). The CH `agent_runs` table continues to hold live paper-trading run records; the lake tables are for snapshot-pinned reproducible backtests. |
 | **Where** | Local Python or EMR Serverless, depending on scope |
 
 Walk-forward backtest IS the truth signal. Cross-validation is
@@ -439,7 +527,7 @@ max drawdown < 15%, trades-per-day in [0.5, 5].
 | **Code** | `app/services/live/signal_worker.py` |
 | **Reads** | `CH.ohlcv_1m` (recent bars), in-memory cached model |
 | **Writes** | `CH.signals`, `CH.agent_runs` |
-| **Where** | Standalone process (see [09_scalability.md](09_scalability.md) — decoupled from uvicorn) |
+| **Where** | Standalone process, decoupled from uvicorn so a slow inference doesn't block the API event loop. Runs under the same supervisor (`systemd` / `docker compose`) as the live tier; restarts independently. A dedicated scalability doc (`09_scalability.md`) is reserved for when this becomes multi-process — until then this single-line spec is the contract. |
 | **Latency budget** | <500ms from bar arrival to signal write |
 
 ```python
@@ -601,27 +689,9 @@ on a 5k-symbol universe with weekly retraining.
 
 ## Open decisions
 
-These belong as new gates in [`08_decisions.md`](08_decisions.md):
-
-1. **Training compute** — SageMaker training jobs (managed, ~$5/run)
-   vs local Python on a dev box ($0 but no persistence/queueing).
-   Recommend: SageMaker for prod retraining; local for experiments.
-
-2. **Universe history source** — Polygon historical tickers endpoint
-   (~$0/month at our tier) vs manually-curated CSV (free but stale).
-   Recommend: Polygon, refreshed daily.
-
-3. **Model artifact format** — pickle (Python-only, fragile across
-   library versions) vs ONNX (portable, slower for tree models) vs
-   XGBoost native binary format. Recommend: native format per model
-   library (XGBoost binary, LightGBM binary); avoid pickle.
-
-4. **Canary traffic split** — fixed 10% vs gradual ramp (10% → 25% →
-   50% → 100%). Recommend: fixed 10% for 14 days; manual promotion.
-
-5. **Drift alert thresholds** — KS-statistic > 0.1 vs > 0.2 vs
-   feature-specific. Recommend: 0.15 with 3-consecutive-day
-   smoothing to avoid flapping.
+Lifted into [`08_decisions.md`](08_decisions.md) as Gates 8-12 (training
+compute, universe-history source, model artifact format, canary traffic
+split, drift alert thresholds). See that file for full options + picks.
 
 ## See also
 

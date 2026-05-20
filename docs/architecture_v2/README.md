@@ -48,7 +48,9 @@ v2 fixes both by **splitting the live tier from the ML tier**:
 | [05_providers.md](05_providers.md) | DataProvider interface, Schwab vs Polygon vs Alpaca split, swap-in strategy |
 | [06_migration.md](06_migration.md) | The 5-phase migration plan, commit-by-commit checklist, rollback procedures |
 | [07_runbook.md](07_runbook.md) | Operator procedures: running adjustments, restoring CH from lake, monitoring, cost watching |
-| [08_decisions.md](08_decisions.md) | Open decisions awaiting approval (naming, partition strategy, compute platform, etc.) |
+| [08_decisions.md](08_decisions.md) | Open decisions awaiting approval (gates 1-7 lake; gates 8-12 ML) |
+| 09 — *(reserved for future scalability doc; see note in `10_ml_pipeline.md`)* | |
+| [10_ml_pipeline.md](10_ml_pipeline.md) | ML pipeline: features, labels, training, inference, monitoring, snapshot pinning |
 
 ## Status
 
@@ -62,9 +64,11 @@ v2 fixes both by **splitting the live tier from the ML tier**:
 
 ## Approval gates (block Phase 1)
 
-The 7 gates from [`08_decisions.md`](08_decisions.md) need operator
-sign-off before any v2 code changes land. Phases are each independently
-reversible; this folder + sign-off → implementation can resume.
+12 gates in [`08_decisions.md`](08_decisions.md) need operator sign-off
+before v2 code changes land. Gates 1-7 cover lake/Spark infra (block
+Phase 1); gates 8-12 cover the ML pipeline (block first model training,
+not the lake build itself). Phases are each independently reversible;
+this folder + sign-off → implementation can resume.
 
 ## How to use this folder
 

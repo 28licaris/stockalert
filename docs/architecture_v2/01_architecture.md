@@ -40,7 +40,7 @@ across any zoom level.
 | `ohlcv_daily` | Daily bars | Schwab REST on-add (20y) | yes |
 | `stream_universe` | Canonical "what's actively streamed" | Cockpit Stream Service page | n/a |
 | `watchlists`, `watchlist_members` | User-organizing labels | Cockpit | n/a |
-| `signals`, `agent_runs`, `sim_trades` | App state | App | n/a |
+| `signals`, `agent_runs` | App state (signals + sim/backtest run records) | App | n/a |
 
 The chart endpoint reads ONLY from ClickHouse. No Iceberg dependency
 on the live request path. Resamples to 5m/15m/30m/1h/4h via

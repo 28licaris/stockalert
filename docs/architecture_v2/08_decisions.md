@@ -3,20 +3,26 @@
 These need operator sign-off before Phase 1 implementation starts.
 Each has a recommended default; amend if needed.
 
+Gates 1-7 cover the lake/Spark infrastructure (Phase 1 prerequisites).
+Gates 8-12 cover the ML pipeline (Phase 2.5 — land after `data.polygon_adjusted`
+exists but before the first model trains); see [10_ml_pipeline.md](10_ml_pipeline.md).
+
 ## Gate 1 — Table naming
 
-**Question:** What's the Iceberg catalog/database prefix?
+**Question:** What's the Iceberg **database** name inside the `lake`
+catalog? Tables are referenced as `lake.<database>.<table>`.
 
-| Option | Catalog name | Table refs |
+| Option | Database name | Table refs |
 |---|---|---|
 | **Recommended** | `data` | `lake.data.polygon_raw`, `lake.data.polygon_adjusted`, ... |
 | `lake` | `lake.lake.polygon_raw` (redundant) |
 | `equities` | `lake.equities.polygon_raw` |
 | `prod` | `lake.prod.polygon_raw` |
 
-**My pick:** `data` — short, neutral, matches the
-"data lake" mental model. Spark refers to tables as
-`lake.data.<table_name>` (catalog.database.table).
+The Spark catalog is fixed at `lake` (configured in `get_spark()` via
+`spark.sql.catalog.lake`). Only the database-name level is in scope here.
+
+**My pick:** `data` — short, neutral, matches the "data lake" mental model.
 
 **Status:** ☐ Pending
 
@@ -139,11 +145,82 @@ at 1-min resolution.
 
 **Status:** ☐ Pending
 
+## Gate 8 — ML training compute
+
+**Question:** Where do training jobs run?
+
+| Option | Setup | Cost | Notes |
+|---|---|---|---|
+| **SageMaker training jobs** (recommended) | IAM role + S3 bucket | ~$5/run on ml.m5.4xlarge | Managed, queue-able, logged; ad-hoc experiments still work locally |
+| Local Python | Dev box | $0 | No artifact persistence beyond manual S3 upload |
+| EMR Serverless | Existing app | ~$2-3 | Spark is the wrong tool for tree-model training (single-box is faster) |
+
+**My pick:** SageMaker for production retraining; local for experiments.
+
+**Status:** ☐ Pending
+
+## Gate 9 — Universe history source
+
+**Question:** Where does `data.point_in_time_universe` come from?
+
+| Option | Cost | Coverage |
+|---|---|---|
+| **Polygon historical tickers endpoint** (recommended) | included in current Polygon sub | full delistings + reasons |
+| Manually-curated CSV | $0 | becomes stale; bias risk |
+| Alpha Vantage / IEX | $$ | uncertain coverage of delisted names |
+
+**My pick:** Polygon — already on subscription; daily refresh.
+
+**Status:** ☐ Pending
+
+## Gate 10 — Model artifact format
+
+**Question:** How are model artifacts persisted in `s3://stockalert-models/`?
+
+| Option | Portability | Fragility |
+|---|---|---|
+| **Library-native binary** (XGBoost `.json`/`.ubj`, LightGBM `.txt`) (recommended) | high (within library version range) | low |
+| Pickle | Python-only | high — breaks across library/Python versions |
+| ONNX | high (cross-framework) | tree models lose performance; conversion bugs |
+
+**My pick:** Library-native binary; document the library version in `model_registry.hyperparams_json`.
+
+**Status:** ☐ Pending
+
+## Gate 11 — Canary traffic split
+
+**Question:** How does a `canary` model take live traffic?
+
+| Option | Pro | Con |
+|---|---|---|
+| **Fixed 10% for 14 days** (recommended) | Simple; clear evaluation window | Slow rollout if confidence is high |
+| Gradual ramp (10% → 25% → 50% → 100%) | Faster rollout when behaving | More state to manage; harder to attribute regressions |
+| Shadow (100% predictions, 0% trades) | Risk-free | No PnL signal — defeats the canary point |
+
+**My pick:** Fixed 10% for 14 days, manual promotion after PnL gate.
+
+**Status:** ☐ Pending
+
+## Gate 12 — Drift alert thresholds
+
+**Question:** What KS-statistic triggers `drift_severity = 'alert'`?
+
+| Option | Sensitivity | False-alarm rate |
+|---|---|---|
+| `> 0.10` | High | High — every regime shift trips it |
+| **`> 0.15` with 3-consecutive-day smoothing** (recommended) | Medium | Low — survives one-day noise |
+| `> 0.20` | Low | Very low — may miss real drift |
+| Per-feature thresholds | Tuned | Maintenance burden |
+
+**My pick:** 0.15 + 3-day smoothing; per-feature overrides as needed later.
+
+**Status:** ☐ Pending
+
 ## How to approve
 
 Reply with one of:
 
-- **"All defaults"** — accepts all 7 recommendations as written.
+- **"All defaults"** — accepts all 12 recommendations as written.
 - **"Approved with changes: [gate N: change Y]"** — selectively
   amend.
 - **"More questions on [gate N]"** — pause for discussion.

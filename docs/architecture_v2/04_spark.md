@@ -253,21 +253,28 @@ def adjust(symbols: list[str] | None, since: date | None) -> tuple[int, int]:
         WHERE action_type = 'split' AND split_ratio != 1.0
     """)
 
-    # 2) Compute cumulative-future-splits factor per symbol per date.
-    #    F(t) = product of all split_ratios where ex_date > t.
-    desc = Window.partitionBy("symbol").orderBy(F.desc("ex_date"))
-    cumulative = splits.withColumn(
-        "cum_factor",
-        F.exp(F.sum(F.log("split_ratio")).over(desc))
-    )
-
-    # 3) For each bar, find the smallest cum_factor whose ex_date > timestamp.
+    # 2) Per-bar cumulative future-splits factor.
+    #    F(t) = ∏ split_ratio_i over splits with ex_date_i > t.
+    #
+    #    Implementation: left-join raw × splits on symbol, conditionally
+    #    include each split's log(ratio) only when ex_date > bar.timestamp,
+    #    aggregate via sum-of-logs then exponentiate. Bars with no future
+    #    splits get sum=NULL → exp=NULL → coalesce → 1.0. This handles bars
+    #    before, between, and after splits in one expression, and correctly
+    #    accumulates multiple future splits (the previous MIN-on-cum_factor
+    #    approach picked only the latest split's contribution).
     adjusted = (
-        raw.join(cumulative, on="symbol", how="left")
-        .where((cumulative.ex_date > raw.timestamp) | cumulative.ex_date.isNull())
+        raw.join(splits, on="symbol", how="left")
         .groupBy(raw.symbol, raw.timestamp, raw.open, raw.high, raw.low,
                  raw.close, raw.volume, raw.vwap, raw.trade_count)
-        .agg(F.coalesce(F.min("cum_factor"), F.lit(1.0)).alias("adj_factor"))
+        .agg(
+            F.coalesce(
+                F.exp(F.sum(
+                    F.when(F.col("ex_date") > raw.timestamp, F.log("split_ratio"))
+                )),
+                F.lit(1.0),
+            ).alias("adj_factor")
+        )
         .select(
             F.col("symbol"),
             F.col("timestamp"),
@@ -283,7 +290,7 @@ def adjust(symbols: list[str] | None, since: date | None) -> tuple[int, int]:
         )
     )
 
-    # 4) Idempotent upsert via Iceberg merge-on-read
+    # 3) Idempotent upsert via Iceberg merge-on-read
     adjusted.writeTo("lake.polygon_adjusted").using("iceberg").overwritePartitions()
 
     return adjusted.select("symbol").distinct().count(), adjusted.count()

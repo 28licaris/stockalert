@@ -16,7 +16,7 @@ s3://stockalert-lake/
 │   │   │   └── {manifest_id}.avro         ← manifests (point to data files)
 │   │   │
 │   │   └── data/
-│   │       ├── ts_month=2020-01/
+│   │       ├── timestamp_month=2020-01/
 │   │       │   ├── symbol_bucket=0/       ← 32 buckets (whole-market)
 │   │       │   │   ├── 00000-0-abc...parquet      (~150 MB)
 │   │       │   │   └── 00001-0-def...parquet
@@ -24,7 +24,7 @@ s3://stockalert-lake/
 │   │       │   │   └── ...
 │   │       │   ... (32 buckets per month)
 │   │       │
-│   │       ├── ts_month=2020-02/
+│   │       ├── timestamp_month=2020-02/
 │   │       │   └── ...
 │   │       │
 │   │       ... (60 months × 32 buckets ≈ 1920 dirs, ~4000 Parquet files)
@@ -32,21 +32,21 @@ s3://stockalert-lake/
 │   ├── polygon_adjusted/                  ← Same layout, with adj_factor column
 │   │   ├── metadata/
 │   │   └── data/
-│   │       └── ts_month=YYYY-MM/symbol_bucket=N/...parquet
+│   │       └── timestamp_month=YYYY-MM/symbol_bucket=N/...parquet
 │   │
 │   ├── schwab_universe/                   ← Universe live, ALREADY adjusted
 │   │   ├── metadata/
 │   │   └── data/
-│   │       ├── ts_month=2025-05/
+│   │       ├── timestamp_month=2025-05/
 │   │       │   ├── symbol_bucket=0/       ← 16 buckets (smaller universe)
 │   │       │   │   └── ...parquet
 │   │       │   ... (16 buckets per month)
-│   │       └── ... (one ts_month per current month + retention window)
+│   │       └── ... (one timestamp_month per current month + retention window)
 │   │
 │   └── market_corp_actions/               ← Splits + dividends, whole-market
 │       ├── metadata/
 │       └── data/
-│           ├── ex_month=2024-12/
+│           ├── ex_date_month=2024-12/
 │           │   └── 00000-0-...parquet     (~5 MB per month)
 │           └── ...
 │

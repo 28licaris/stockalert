@@ -106,9 +106,10 @@ TBLPROPERTIES (
     'write.distribution-mode' = 'hash',
     'write.target-file-size-bytes' = '134217728',
     'write.parquet.row-group-size-bytes' = '16777216',
-    -- Upsert semantics for incremental corp-action rebuilds
-    'write.upsert.mode' = 'merge-on-read',
-    'write.merge.mode' = 'merge-on-read'
+    -- Merge-on-read for incremental corp-action rebuilds (UPDATE/DELETE/MERGE)
+    'write.merge.mode' = 'merge-on-read',
+    'write.update.mode' = 'merge-on-read',
+    'write.delete.mode' = 'merge-on-read'
 );
 ```
 
@@ -135,7 +136,9 @@ PARTITIONED BY (
 TBLPROPERTIES (
     'format-version' = '2',
     'write.parquet.compression-codec' = 'zstd',
-    'write.upsert.mode' = 'merge-on-read'
+    'write.merge.mode' = 'merge-on-read',
+    'write.update.mode' = 'merge-on-read',
+    'write.delete.mode' = 'merge-on-read'
 );
 ```
 

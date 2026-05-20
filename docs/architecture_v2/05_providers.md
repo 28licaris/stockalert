@@ -8,17 +8,25 @@ something not invented yet.
 
 ```python
 # app/providers/base.py — already exists in v1; unchanged for v2.
-class DataProvider(Protocol):
+from abc import ABC, abstractmethod
+
+class DataProvider(ABC):
     """Live + REST historical interface used by the ingest hot path."""
 
+    @abstractmethod
     def start_stream(self) -> None: ...
+
+    @abstractmethod
     def stop_stream(self) -> None: ...
 
+    @abstractmethod
     def subscribe_bars(self, callback: Callable, tickers: list[str]) -> None:
         """Register a callback for new bars + subscribe to tickers."""
 
+    @abstractmethod
     def unsubscribe_bars(self, tickers: list[str]) -> None: ...
 
+    @abstractmethod
     async def historical_df(
         self,
         symbol: str,
@@ -29,7 +37,8 @@ class DataProvider(Protocol):
         """Return bars in [start, end) at the requested timeframe."""
 
     async def search_instruments(self, query: str, *, limit: int = 10) -> list[dict]:
-        """Optional — for symbol autocomplete."""
+        """Optional — default returns []. Override for symbol autocomplete."""
+        return []
 ```
 
 The `StreamService` uses this interface; concrete providers implement

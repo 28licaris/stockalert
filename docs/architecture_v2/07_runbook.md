@@ -157,7 +157,7 @@ After new corp_actions land (Polygon weekly cron):
 ```bash
 # Find affected symbols
 SYMBOLS_DIRTY=$(poetry run python -c "
-from app.services.silver.corp_actions.build import find_corp_action_dirty_symbols
+from app.services.silver.ohlcv.build import find_corp_action_dirty_symbols
 print(','.join(find_corp_action_dirty_symbols(since='2025-05-13')))
 ")
 
@@ -220,22 +220,26 @@ If ClickHouse is wiped or corrupted:
 # scripts/restore_ch_from_lake.py
 import duckdb
 from app.db.client import get_client
+from app.db.universe_repo import list_active_stream_universe
 
 ch = get_client()
 
-# Read all universe symbols' history from the lake
-df = duckdb.sql("""
+# stream_universe is a CH-only table (canonical "what we hot-cache").
+# After CH restore, this row set is what we want filled in ohlcv_1m. If CH
+# is totally wiped (universe gone too), re-create stream_universe from the
+# operator-curated CSV at data/stream_universe_seed.csv before running this.
+syms = [r["symbol"] for r in list_active_stream_universe(ch)]
+syms_csv = ",".join(f"'{s}'" for s in syms)
+
+df = duckdb.sql(f"""
     SELECT symbol, timestamp, open, high, low, close, volume, vwap, trade_count, source
     FROM iceberg_scan('s3://stockalert-lake/data/schwab_universe/')
-    WHERE symbol IN (
-      SELECT symbol FROM iceberg_scan('s3://stockalert-lake/data/stream_universe/')
-      WHERE is_active = 1
-    )
+    WHERE symbol IN ({syms_csv})
 """).arrow()
 
 # Bulk insert
 ch.insert_arrow("ohlcv_1m", df)
-print(f"restored {df.num_rows:,} rows")
+print(f"restored {df.num_rows:,} rows across {len(syms)} symbols")
 ```
 
 Wall-clock: ~5-15 min for the universe.

@@ -13,7 +13,8 @@ Verify state before starting:
 - [ ] `STOCK_LAKE_BUCKET=s3://stockalert-lake` is set in env
 - [ ] AWS credentials work (`aws s3 ls s3://stockalert-lake/`)
 - [ ] Glue catalog accessible (`aws glue get-databases`)
-- [ ] 7 approval gates in [08_decisions.md](08_decisions.md) have operator sign-off
+- [ ] Gates 1-7 in [08_decisions.md](08_decisions.md) (lake/Spark infra) have operator sign-off — required before Phase 1
+- [ ] Gates 8-12 in [08_decisions.md](08_decisions.md) (ML pipeline) — required before first model trains, not Phase 1
 
 ## Phase 1 — Additive: create v2 lake tables (no risk to live tier)
 
@@ -93,7 +94,7 @@ build). Latency gate <5s for new symbols.
 | Commit | What | Verify by |
 |---|---|---|
 | **CV8** | `refactor(stream): on-add warmup direct Schwab REST → CH; bypass silver_build` | Add fresh symbol via `/api/v1/stream`; CH has 48d × 1-min + 20y × daily in <5s |
-| **CV9** | `test(integration): tighten latency gate to <5s` | `tests/integration/test_add_new_symbol_latency.py` passes with the lower threshold |
+| **CV9** | `test(integration): v2 latency gate <5s — new file, alongside the v1 30s gate during the transition window` | `tests/integration/test_add_new_symbol_latency_v2.py` passes; the v1 `test_add_new_symbol_latency.py` is deleted in Phase 5 |
 | **CV10** | Mark `silver_ohlcv_build` nightly job DISABLED in config; `silver.ohlcv_1m` becomes READ-ONLY | `/api/v1/jobs` no longer shows silver_ohlcv_build |
 
 ### Cutover procedure (run during low-traffic window)
@@ -139,7 +140,8 @@ Phase 3 cutover with zero regressions before doing this.**
 | **CV14** | `chore(lake): DROP TABLE bronze.schwab_minute` (data lives in data.schwab_universe) | Confirm |
 | **CV15** | `chore(lake): DROP TABLE silver.ohlcv_1m` (not needed in v2 architecture) | Confirm |
 | **CV16** | `chore(lake): DROP TABLE bronze.polygon_corp_actions` (data lives in data.market_corp_actions) | Confirm |
-| **CV17** | `docs: archive v1 docs; symbol_lifecycle.md points to architecture_v2/` | Doc cross-refs updated |
+| **CV17** | `chore(tests): delete v1 latency gate test_add_new_symbol_latency.py (v2 gate has owned latency since Phase 3)` | File removed; CI green |
+| **CV18** | `docs: archive v1 docs; symbol_lifecycle.md points to architecture_v2/` | Doc cross-refs updated |
 
 ### Rollback for Phase 5
 
