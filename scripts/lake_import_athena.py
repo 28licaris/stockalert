@@ -1,28 +1,48 @@
 """
-Phase 1 — server-side import of 5y Polygon flat-file Parquets into
-`bronze.polygon_minute` via AWS Athena.
+CV10' — server-side import of 5y Polygon flat-file Parquets into
+`equities.polygon_raw` via AWS Athena.
 
-Why Athena: doing this from a laptop bottlenecks on home internet (~30 MB/s
-round-trip). Athena reads + writes entirely inside AWS — no laptop egress.
-Wall time goes from ~8 hours to a few minutes; cost is ~$0.20 in scan fees.
+The v2 replacement for the v1 `bronze_import_athena.py`. Same path,
+same speed, same cost — just retargeted at the v2 equities namespace.
+
+Why Athena: doing this from a laptop bottlenecks on home internet
+(~30 MB/s round-trip). Athena reads + writes entirely inside AWS — no
+laptop egress. Wall time goes from ~8 hours to a few minutes; cost is
+~$0.20 in scan fees. We DO NOT re-query Polygon — the flat-file
+Parquets at `s3://{STOCK_LAKE_BUCKET}/raw/provider=polygon-flatfiles/
+kind=minute/year=YYYY/date=YYYY-MM-DD.parquet` are the source of truth
+(already paid for, already in our S3).
 
 Steps:
-  1. (PyIceberg) Recreate the empty `bronze.polygon_minute` table with the
-     target schema, partition spec, sort order, identifier fields.
-  2. (Athena DDL) Register the raw polygon-flatfiles Parquets as an
-     external table `raw_polygon_minute_ext` with partition projection.
-  3. (Athena DML) `INSERT INTO bronze.polygon_minute` from the external
-     table, projecting only the columns we want (drops `__index_level_0__`)
-     and `ORDER BY symbol, timestamp` for sort-clustered output.
-  4. (Verify) Row count, file count, sample query.
+  1. (PyIceberg) Recreate the empty `equities.polygon_raw` table with
+     the target schema, partition spec, sort order, identifier fields.
+  2. (Athena DDL) Register the raw Polygon Parquets as an external
+     table `equities.raw_polygon_minute_ext` with partition projection
+     on `year`.
+  3. (Athena DML) `INSERT INTO equities.polygon_raw` from the external
+     table, projecting only the columns we want (drops the source
+     Parquet's `__index_level_0__` if present), dropping garbage rows
+     with NULL symbol or NULL timestamp.
+  4. (Athena DML) `OPTIMIZE … REWRITE DATA USING BIN_PACK` — Iceberg's
+     BIN_PACK respects the table's defined sort order
+     (symbol ASC, timestamp ASC, per CV1), so the final compacted
+     files are sorted per-file.
+  5. (Verify) Row-count parity between external + Iceberg, plus the
+     final Iceberg data-file count.
 
-Idempotent-ish: drops + recreates bronze; re-creates external table.
+ONE-TIME OPERATION. Drops + recreates the target. If `equities.
+polygon_raw` already has live-tier rows (post-CV7 nightly writes),
+the script refuses without `--force` to avoid wiping production
+data. Operational sequencing per docs/architecture_v2/07_runbook.md:
+this script runs ONCE, in the cutover window, BEFORE CV7 deploys to
+production.
 
 Run:
-    poetry run python scripts/bronze_import_athena.py
+    poetry run python scripts/lake_import_athena.py
 """
 from __future__ import annotations
 
+import argparse
 import logging
 import sys
 import time
@@ -33,7 +53,8 @@ from botocore.exceptions import ClientError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.config import settings  # noqa: E402
-from app.services.bronze import bronze_table_id, ensure_bronze_polygon_minute  # noqa: E402
+from app.services.equities.schemas import equities_table_id  # noqa: E402
+from app.services.equities.tables import ensure_polygon_raw  # noqa: E402
 from app.services.iceberg_catalog import get_catalog  # noqa: E402
 
 logging.basicConfig(
@@ -41,9 +62,10 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
     datefmt="%H:%M:%S",
 )
-log = logging.getLogger("athena-import")
+log = logging.getLogger("lake-import-athena")
 
-DB = settings.iceberg_glue_database
+DB = settings.iceberg_equities_glue_database
+TARGET_TABLE = "polygon_raw"
 BUCKET = settings.stock_lake_bucket
 RAW_LOC = f"s3://{BUCKET}/raw/provider=polygon-flatfiles/kind=minute/"
 ATHENA_OUTPUT = f"s3://{BUCKET}/athena-results/"
@@ -111,18 +133,65 @@ def _fmt_bytes(n: int) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Step 1 — PyIceberg recreates the empty bronze table
+# Step 0 — pre-flight safety check
 # ─────────────────────────────────────────────────────────────────────
-def step1_recreate_bronze() -> None:
+def step0_preflight(athena: "AthenaClient", *, force: bool) -> None:
+    """Refuse to drop `equities.polygon_raw` if it has live-tier rows.
+
+    The script's step1 drops + recreates the target. Doing that on a
+    table the CV7 nightly cron has been writing to wipes the live
+    data. Run THIS script BEFORE CV7 deploys to production; if
+    you're re-importing after CV7 already started writing, pass
+    --force and accept that the post-CV7 rows are about to die.
+    """
+    try:
+        rs = athena.run(
+            f'SELECT count(*) AS n FROM {DB}.{TARGET_TABLE}',
+            expect_rows=True,
+        )
+        n = int(rs["ResultSet"]["Rows"][1]["Data"][0]["VarCharValue"])
+    except Exception as e:
+        # Most likely "table does not exist yet" — that's the happy
+        # path for a first-time import. Anything else, surface so the
+        # operator can decide.
+        log.info("preflight: target row-count probe failed (%s) — "
+                 "assuming empty/missing target, proceeding", e)
+        return
+
+    if n == 0:
+        log.info("preflight: equities.polygon_raw is empty — ok to proceed")
+        return
+
+    if force:
+        log.warning(
+            "preflight: equities.polygon_raw has %d row(s); --force "
+            "set, will WIPE and re-import", n,
+        )
+        return
+
+    log.error(
+        "preflight: equities.polygon_raw already has %d row(s). "
+        "Re-running this import would DROP the table and lose those "
+        "rows. If you're sure (e.g. CV7 hasn't deployed yet, or this "
+        "is a recovery), pass --force. Aborting.",
+        n,
+    )
+    sys.exit(2)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Step 1 — PyIceberg recreates the empty equities target table
+# ─────────────────────────────────────────────────────────────────────
+def step1_recreate_target() -> None:
     cat = get_catalog()
-    tid = bronze_table_id("polygon_minute")
+    tid = equities_table_id(TARGET_TABLE)
     try:
         cat.drop_table(tid)
         log.info("Dropped existing %s", tid)
     except Exception:
         log.info("No existing %s to drop (ok)", tid)
 
-    table = ensure_bronze_polygon_minute(cat)
+    table = ensure_polygon_raw(cat)
     log.info("Created empty %s at %s", tid, table.location())
 
 
@@ -137,7 +206,7 @@ def step2_register_external(athena: AthenaClient) -> None:
     #   raw/provider=polygon-flatfiles/kind=minute/year=YYYY/date=YYYY-MM-DD.parquet
     # Use Athena's partition projection so we don't need MSCK REPAIR.
     # Year is treated as part of the path; "date" is the actual filename.
-    # Source schema (verified during inspection):
+    # Source schema (verified during v1 inspection — unchanged for v2):
     #   symbol large_string, timestamp ns-tz=UTC, open/high/low/close/volume/vwap double,
     #   trade_count int64, source large_string, __index_level_0__ int64 (ignored by projection).
     #
@@ -174,7 +243,7 @@ def step2_register_external(athena: AthenaClient) -> None:
         )
     """
     athena.run(ddl)
-    log.info("Registered external table %s", EXTERNAL_TABLE)
+    log.info("Registered external table %s.%s", DB, EXTERNAL_TABLE)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -188,14 +257,16 @@ def step3_insert(athena: AthenaClient) -> None:
     #
     # NOTE: no ORDER BY here. A global sort across ~2B rows pushes us past
     # Athena's 30-min query timeout. Instead, we run OPTIMIZE … BIN_PACK
-    # in step 4 — Iceberg's BIN_PACK respects the table's defined sort
-    # order (symbol, timestamp), so the final compacted files are sorted
-    # per-file.
+    # in step 3b — Iceberg's BIN_PACK respects the table's defined sort
+    # order (symbol ASC, timestamp ASC, per CV1's POLYGON_RAW_SORT), so
+    # the final compacted files are sorted per-file.
+    #
     # Source has ~80k rows (0.0038% of 2.1B) with NULL symbol — unusable
-    # garbage from Polygon ingestion. Drop them at the boundary; bronze
-    # only accepts well-identified bars (symbol + timestamp required).
+    # garbage from Polygon ingestion. Drop them at the boundary; the
+    # v2 polygon_raw identifier is (symbol, timestamp) and both are NOT
+    # NULL in CV1's schema.
     sql = f"""
-        INSERT INTO {DB}.polygon_minute
+        INSERT INTO {DB}.{TARGET_TABLE}
         SELECT
             symbol,
             "timestamp",
@@ -217,15 +288,15 @@ def step3_insert(athena: AthenaClient) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Step 3.5 — compact + sort within each file
+# Step 3b — compact + sort within each file
 # ─────────────────────────────────────────────────────────────────────
 def step3b_optimize(athena: AthenaClient) -> None:
     # OPTIMIZE rewrites files to the table's write.target-file-size-bytes
-    # and, when a sort order is set on the table, sorts rows within each
-    # written file by that order. For bronze.polygon_minute, that's
-    # (symbol ASC, timestamp ASC) — exactly what fast per-symbol queries
-    # depend on.
-    sql = f"OPTIMIZE {DB}.polygon_minute REWRITE DATA USING BIN_PACK"
+    # (128 MB for polygon_raw per CV1's _BASE_PROPERTIES) and, when a
+    # sort order is set on the table, sorts rows within each written
+    # file by that order. For equities.polygon_raw that's
+    # (symbol ASC, timestamp ASC) per CV1's POLYGON_RAW_SORT.
+    sql = f"OPTIMIZE {DB}.{TARGET_TABLE} REWRITE DATA USING BIN_PACK"
     athena.run(sql)
 
 
@@ -233,26 +304,34 @@ def step3b_optimize(athena: AthenaClient) -> None:
 # Step 4 — verify
 # ─────────────────────────────────────────────────────────────────────
 def step4_verify(athena: AthenaClient) -> dict:
-    # Row counts
+    # Row counts — minus the NULL-symbol / NULL-timestamp garbage rows
+    # that step 3's WHERE drops at the boundary. The expected parity
+    # is therefore (external WHERE filter) == polygon_raw rows.
     src = athena.run(
-        f"SELECT count(*) AS n FROM {DB}.{EXTERNAL_TABLE}",
+        f'SELECT count(*) AS n FROM {DB}.{EXTERNAL_TABLE} '
+        f'WHERE symbol IS NOT NULL AND "timestamp" IS NOT NULL',
         expect_rows=True,
     )
     src_n = int(src["ResultSet"]["Rows"][1]["Data"][0]["VarCharValue"])
 
     dst = athena.run(
-        f"SELECT count(*) AS n FROM {DB}.polygon_minute",
+        f"SELECT count(*) AS n FROM {DB}.{TARGET_TABLE}",
         expect_rows=True,
     )
     dst_n = int(dst["ResultSet"]["Rows"][1]["Data"][0]["VarCharValue"])
 
-    log.info("source rows (raw external): %s", f"{src_n:,}")
-    log.info("bronze rows (Iceberg):     %s", f"{dst_n:,}")
-    log.info("parity:                    %s", "✓ match" if src_n == dst_n else "✗ MISMATCH")
+    log.info("source rows (raw external, post-filter): %s", f"{src_n:,}")
+    log.info("equities.polygon_raw rows (Iceberg):    %s", f"{dst_n:,}")
+    log.info("parity: %s", "OK match" if src_n == dst_n else "MISMATCH")
 
-    # File count (data files only; Iceberg metadata files excluded)
+    # File count (data files only; Iceberg metadata files excluded).
+    # Post-CV1 the v2 warehouse layout is
+    #   {warehouse_prefix}/{equities_db}/{table_name}/data/...
+    # so the prefix is e.g. iceberg/equities/polygon_raw/data/
     s3 = boto3.client("s3", region_name=settings.stock_lake_region)
-    prefix = f"{settings.iceberg_warehouse_prefix}/bronze/polygon_minute/data/"
+    prefix = (
+        f"{settings.iceberg_warehouse_prefix}/{DB}/{TARGET_TABLE}/data/"
+    )
     file_count = 0
     total_bytes = 0
     paginator = s3.get_paginator("list_objects_v2")
@@ -265,7 +344,7 @@ def step4_verify(athena: AthenaClient) -> dict:
 
     return {
         "source_rows": src_n,
-        "bronze_rows": dst_n,
+        "polygon_raw_rows": dst_n,
         "parity": src_n == dst_n,
         "file_count": file_count,
         "total_bytes": total_bytes,
@@ -274,16 +353,30 @@ def step4_verify(athena: AthenaClient) -> dict:
 
 # ─────────────────────────────────────────────────────────────────────
 def main():
-    log.info("DB=%s  bucket=%s", DB, BUCKET)
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument(
+        "--force", action="store_true",
+        help="Skip the preflight refusal when equities.polygon_raw "
+             "already has rows. Use ONLY if you know the existing rows "
+             "are about to be replaced by this import (recovery scenario).",
+    )
+    args = p.parse_args()
 
-    log.info("─── Step 1: recreate empty bronze table ───")
-    step1_recreate_bronze()
+    log.info("DB=%s  target=%s  bucket=%s", DB, TARGET_TABLE, BUCKET)
+
+    athena = AthenaClient()
+
+    log.info("─── Step 0: preflight ───")
+    step0_preflight(athena, force=args.force)
+
+    log.info("─── Step 1: recreate empty equities.polygon_raw ───")
+    step1_recreate_target()
 
     log.info("─── Step 2: register raw flat-files as external table ───")
-    athena = AthenaClient()
     step2_register_external(athena)
 
-    log.info("─── Step 3: INSERT INTO bronze SELECT … FROM external ───")
+    log.info("─── Step 3: INSERT INTO equities.polygon_raw SELECT … FROM external ───")
     step3_insert(athena)
 
     log.info("─── Step 3b: OPTIMIZE (BIN_PACK + sort-within-file) ───")
@@ -293,7 +386,7 @@ def main():
     summary = step4_verify(athena)
 
     print()
-    print("=== Phase 1 import complete ===")
+    print("=== CV10' Athena import complete ===")
     for k, v in summary.items():
         print(f"  {k}: {v if not isinstance(v, int) or v < 10000 else f'{v:,}'}")
 

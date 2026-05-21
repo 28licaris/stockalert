@@ -111,31 +111,48 @@ from `source = "schwab-live"`.
 
 ## Lake tier — Polygon history pulls
 
-### Initial bulk-load (Phase 1A — CV4 one-time op)
+### Initial bulk-load (Phase 1A — CV4 one-time op, via Athena)
 
-After CV1-CV3 ship and `equities.polygon_raw` exists but is empty,
-populate it with the historical Polygon flat-files. This is the
-operational counterpart to CV4 in the migration table — no code, one
-command:
+After CV1-CV5 + CV10' ship and `equities.polygon_raw` exists but is
+empty, populate it from the **existing 5y of Polygon flat-file
+Parquets already in our S3** at
+`s3://stockalert-lake/raw/provider=polygon-flatfiles/kind=minute/`.
+
+We do NOT re-query Polygon — the data is already in our bucket from
+the original v1 ingest, paid for once. The Athena server-side import
+reads + writes entirely inside AWS:
 
 ```bash
 cd /path/to/stockalert
 export AWS_PROFILE=stockalert-prod
-poetry run python scripts/polygon_history_backfill.py \
-  --since 2021-01-04 \
-  --until "$(date -d 'yesterday' '+%Y-%m-%d')" \
-  --concurrency 4
+poetry run python scripts/lake_import_athena.py
 ```
 
-Wall-clock: ~6-12 hours depending on Polygon throughput (whole-market,
-~1300 trading days × ~150 MB per day = ~200 GB downloaded). Memory
-peak ~600 MB (`concurrency=4` × peak-day-frame). Interruptible —
-re-run the same command and the pre-scan will skip already-loaded
-days.
+Wall-clock: ~5 minutes (whole-market 5y, ~2.1B rows). Cost: ~$0.20 in
+Athena scan fees. The script drops + recreates `equities.polygon_raw`
+then runs a single Athena `INSERT INTO … SELECT … WHERE symbol IS NOT
+NULL AND timestamp IS NOT NULL` from the partition-projected external
+table, followed by `OPTIMIZE … BIN_PACK` for sort-clustered output.
+
+Preflight guard: if `equities.polygon_raw` already has rows (e.g. the
+CV7 nightly cron is live), the script refuses without `--force`. Run
+THIS step BEFORE deploying CV7 to production. Operational sequencing
+in the cutover window:
+
+1. Land CV1-CV5 + CV10' (this script's code). Production unaffected.
+2. Run `lake_import_athena.py` — populates `equities.polygon_raw`.
+3. Run corp-actions full backfill (`scripts/run_corp_actions_backfill.py --full`).
+4. Run `polygon_adjustment_job` whole-market (recipe below) —
+   populates `equities.polygon_adjusted`.
+5. Deploy CV7-CV9 + restart uvicorn. From the next nightly run,
+   diffs land in equities.*.
+
+If you need to pull MORE history later (e.g. Polygon plan upgrade
+covering 2016-2020), see "Extending history" below — that path DOES
+query Polygon because the new years aren't in our S3 cache yet.
 
 Verify post-run:
 ```bash
-# Row count should match bronze.polygon_minute ± expected drift
 poetry run python -c "
 from app.services.iceberg_catalog import get_catalog
 from app.services.equities.tables import ensure_polygon_raw
