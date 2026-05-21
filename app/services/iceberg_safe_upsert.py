@@ -10,16 +10,15 @@ PyIceberg 0.11.1's `upsert_util.create_match_filter()` builds an
 per source row** for multi-column identifiers (i.e. tables whose
 ``identifier-field-ids`` reference 2+ columns). For our schemas:
 
-============================  ==================  ==================
-table                         identifier          predicate factor
-============================  ==================  ==================
-silver.ohlcv_1m               (symbol, ts)        3 nodes/row
-silver.bar_quality            (symbol, date)      3 nodes/row
-silver.corp_actions           (symbol, ex_date,   5 nodes/row
-                               action_type)
-bronze.polygon_corp_actions   (symbol, ex_date,   5 nodes/row
-                               action_type)
-============================  ==================  ==================
+================================  ==================  =================
+table                             identifier          predicate factor
+================================  ==================  =================
+equities.polygon_raw              (symbol, ts)        3 nodes/row
+equities.polygon_adjusted         (symbol, ts)        3 nodes/row
+equities.schwab_universe          (symbol, ts)        3 nodes/row
+equities.market_corp_actions      (symbol, ex_date,   5 nodes/row
+                                   action_type)
+================================  ==================  =================
 
 PyIceberg then calls ``bind()`` + ``expression_to_pyarrow()`` which
 walk this tree **recursively**. On macOS arm64 + Python 3.13 +

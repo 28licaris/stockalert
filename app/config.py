@@ -52,11 +52,11 @@ class Settings(BaseModel):
     aws_secret_access_key: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
     aws_session_token: str = os.getenv("AWS_SESSION_TOKEN", "")
     # ─────────────────────────────────────────────────────────
-    # Nightly bronze ingest jobs (per-provider, identical shape).
+    # Nightly per-provider ingest jobs (CV7/CV8 — v2 lake writers).
     # Both schedules run as asyncio background tasks from main_api.py
     # startup. Gated by their *_NIGHTLY_ENABLED flag + valid credentials.
     # ─────────────────────────────────────────────────────────
-    # Polygon flat-files → bronze.polygon_minute (see nightly_lake_refresh).
+    # Polygon flat-files → equities.polygon_raw (see nightly_polygon_refresh).
     # 07:00 UTC = midnight Arizona; after Polygon's daily flat file is ready.
     polygon_nightly_enabled: bool = os.getenv("POLYGON_NIGHTLY_ENABLED", "false").lower() == "true"
     polygon_nightly_run_hour_utc: int = int(os.getenv("POLYGON_NIGHTLY_RUN_HOUR_UTC", "7"))
@@ -67,7 +67,7 @@ class Settings(BaseModel):
     polygon_nightly_symbols: str = os.getenv("POLYGON_NIGHTLY_SYMBOLS", "all")
     polygon_nightly_kind: str = os.getenv("POLYGON_NIGHTLY_KIND", "minute").strip().lower()
 
-    # Schwab REST pricehistory → bronze.schwab_minute (see nightly_schwab_refresh).
+    # Schwab REST pricehistory → equities.schwab_universe (see nightly_schwab_refresh).
     # 22:00 UTC = 3 PM Arizona; ~30 min after NYSE close.
     schwab_nightly_enabled: bool = os.getenv("SCHWAB_NIGHTLY_ENABLED", "false").lower() == "true"
     schwab_nightly_run_hour_utc: int = int(os.getenv("SCHWAB_NIGHTLY_RUN_HOUR_UTC", "22"))
