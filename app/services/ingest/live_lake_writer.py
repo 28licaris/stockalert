@@ -1,11 +1,17 @@
 """
-Live-stream → bronze lake writer.
+Live-stream → v2 equities lake writer.
 
 Periodically reads recent CH `ohlcv_1m` rows from the live stream and
-upserts them into the corresponding `bronze.{provider}_minute` Iceberg
-table. Closes the freshness gap between live ticks landing in CH
-(seconds) and silver build seeing them (was 8-24h via nightly REST
-backfill; now ~5-10 min via this writer).
+upserts them into `equities.schwab_universe` (and future per-provider
+equivalents). Closes the freshness gap between live ticks landing in
+CH (seconds) and the deep-history reader seeing them (~5-10 min via
+this writer).
+
+**v2 cutover (CV8):** writes upsert against `equities.schwab_universe`
+(was `bronze.schwab_minute`). The schema is identical except for the
+extra `adj_factor` column (REQUIRED, Gate 2). Schwab returns
+pre-adjusted prices, so every row this writer produces carries
+`adj_factor = 1.0` literally.
 
 **Per [data_platform_plan §8 Path A](../../../docs/data_platform_plan.md):**
 
@@ -14,17 +20,17 @@ backfill; now ~5-10 min via this writer).
     2. live_lake_writer job runs every 5 minutes:
        - Reads CH ohlcv_1m for the last 15 minutes
        - Groups by provider
-       - MERGE INTO bronze.{provider}_minute per group
+       - upsert into equities.{schwab_universe | ...} per group
        - Records run in ingestion_runs
 
 **Provider tagging.** Live stream rows in CH carry `source = "{provider}-stream"`
 (e.g. `"schwab-stream"`). The writer filters on this suffix to avoid
-double-writing rows already in bronze via the nightly REST backfill.
+double-writing rows already in equities via the nightly REST backfill.
 Each provider's live stream uses a distinct tag → adding a new live
 provider is purely a config + tagging change; this writer needs no
 modification.
 
-**Idempotency.** Bronze tables use identifier `(symbol, timestamp)`,
+**Idempotency.** Equities tables use identifier `(symbol, timestamp)`,
 so PyIceberg's `upsert` is naturally idempotent: re-running the cycle
 or running with an overlapping window is safe. Watermark in
 `ingestion_runs` lets the cycle resume cleanly after crashes.
@@ -51,33 +57,38 @@ logger = logging.getLogger(__name__)
 
 # Per-provider mapping. Each entry:
 #   live source tag (what the bar_batcher writes for live rows)  →
-#   ensure-table function + arrow-schema importer
+#   target equities table name
 #
 # Adding a new live-streaming provider:
-#   1. Add a new bronze.{provider}_minute table to app/services/bronze/.
+#   1. Define the equities.{provider}_universe (or equivalent) table
+#      in app/services/equities/schemas.py + tables.py.
 #   2. Make sure the live stream tags rows with f"{provider}-stream".
 #   3. Add one entry to _PROVIDER_CONFIG below. ZERO writer changes.
 @dataclass(frozen=True)
 class _ProviderConfig:
     """Per-provider routing config for the live writer."""
     live_source_tag: str         # CH `source` value the live stream writes
-    bronze_table_short_name: str # short name (e.g. "schwab_minute")
+    equities_table_name: str     # short name (e.g. "schwab_universe")
 
 
 _PROVIDER_CONFIG: dict[str, _ProviderConfig] = {
     "schwab": _ProviderConfig(
         live_source_tag="schwab-stream",
-        bronze_table_short_name="schwab_minute",
+        equities_table_name="schwab_universe",
     ),
     # Future: a polygon live stream would add an entry here, e.g.
-    # "polygon": _ProviderConfig("polygon-stream", "polygon_minute"),
+    # "polygon": _ProviderConfig("polygon-stream", "polygon_live_or_similar"),
+    # (polygon's whole-market batch lands in equities.polygon_raw via
+    # the flat-files nightly, not via this writer.)
 }
 
 
-# Arrow schema for bronze.{provider}_minute. Must match the declared
-# Iceberg schema in app/services/bronze/schemas.py exactly. Identifier
-# fields (symbol, timestamp) drive the PyIceberg upsert join.
-_BRONZE_MINUTE_ARROW = pa.schema(
+# Arrow schema for equities.schwab_universe. Must match the declared
+# Iceberg schema in app/services/equities/schemas.py exactly:
+#   12 canonical OHLCV columns + ingestion_ts + ingestion_run_id +
+#   adj_factor (REQUIRED, Gate 2).
+# Identifier fields (symbol, timestamp) drive the PyIceberg upsert join.
+_EQUITIES_SCHWAB_ARROW = pa.schema(
     [
         pa.field("symbol", pa.string(), nullable=False),
         pa.field("timestamp", pa.timestamp("us", tz="UTC"), nullable=False),
@@ -91,6 +102,7 @@ _BRONZE_MINUTE_ARROW = pa.schema(
         pa.field("source", pa.string(), nullable=True),
         pa.field("ingestion_ts", pa.timestamp("us", tz="UTC"), nullable=True),
         pa.field("ingestion_run_id", pa.string(), nullable=True),
+        pa.field("adj_factor", pa.float64(), nullable=False),
     ]
 )
 
@@ -121,7 +133,7 @@ class CycleResult:
 
 class LiveLakeWriter:
     """Reads CH ohlcv_1m for the last N minutes and upserts into
-    bronze.{provider}_minute Iceberg tables.
+    equities.{table_name} Iceberg tables (currently schwab_universe).
 
     Construct via `from_settings()` for production. Pass explicit
     `cycle_minutes` / `lookback_minutes` for tests.
@@ -161,7 +173,7 @@ class LiveLakeWriter:
 
     async def run_cycle(self, *, as_of: Optional[datetime] = None) -> CycleResult:
         """Execute one cycle: read CH for the lookback window, upsert
-        into bronze per provider.
+        into the equities target per provider.
 
         Pass `as_of` for tests (deterministic time); production uses
         now-UTC. The actual window cuts off 1 minute before `as_of`
@@ -194,11 +206,11 @@ class LiveLakeWriter:
                     continue
 
                 arrow = self._rows_to_arrow(rows, run_id=run_id)
-                self._upsert_bronze(cfg.bronze_table_short_name, arrow)
+                self._upsert_equities(cfg.equities_table_name, arrow)
                 result.per_provider_rows_written[provider_name] = arrow.num_rows
                 logger.info(
-                    "live_lake_writer: provider=%s upserted %d rows into bronze.%s",
-                    provider_name, arrow.num_rows, cfg.bronze_table_short_name,
+                    "live_lake_writer: provider=%s upserted %d rows into equities.%s",
+                    provider_name, arrow.num_rows, cfg.equities_table_name,
                 )
             except Exception as e:
                 logger.exception(
@@ -292,15 +304,18 @@ class LiveLakeWriter:
         return list(rows)
 
     # ─────────────────────────────────────────────────────────────────
-    # Bronze upsert
+    # Equities upsert
     # ─────────────────────────────────────────────────────────────────
 
     @staticmethod
     def _rows_to_arrow(rows: list[dict], *, run_id: str) -> pa.Table:
-        """Convert CH rows → PyArrow Table matching the bronze schema.
+        """Convert CH rows → PyArrow Table matching the
+        equities.schwab_universe schema.
 
-        Stamps `ingestion_ts` (now) and `ingestion_run_id` (this cycle's
-        UUID) on every row so the audit trail is intact.
+        Stamps `ingestion_ts` (now), `ingestion_run_id` (this cycle's
+        UUID), and `adj_factor = 1.0` on every row. Schwab returns
+        pre-adjusted prices so 1.0 is the literal truth (Gate 2 in
+        docs/architecture_v2/08_decisions.md).
         """
         ingestion_ts = datetime.now(timezone.utc)
         arrays = {
@@ -324,12 +339,13 @@ class LiveLakeWriter:
             "source": [r.get("source") for r in rows],
             "ingestion_ts": [ingestion_ts for _ in rows],
             "ingestion_run_id": [run_id for _ in rows],
+            "adj_factor": [1.0 for _ in rows],
         }
-        return pa.Table.from_pydict(arrays, schema=_BRONZE_MINUTE_ARROW)
+        return pa.Table.from_pydict(arrays, schema=_EQUITIES_SCHWAB_ARROW)
 
     @staticmethod
-    def _upsert_bronze(table_short_name: str, arrow: pa.Table) -> None:
-        """Upsert into bronze.{table_short_name} via PyIceberg.
+    def _upsert_equities(table_short_name: str, arrow: pa.Table) -> None:
+        """Upsert into equities.{table_short_name} via PyIceberg.
 
         Identifier `(symbol, timestamp)` drives the join. When matched,
         Iceberg updates non-key columns (handles late-arriving correction
@@ -343,12 +359,12 @@ class LiveLakeWriter:
         """
         from app.services.iceberg_catalog import get_catalog
         from app.services.iceberg_safe_upsert import chunked_upsert
-        from app.services.bronze.schemas import bronze_table_id
+        from app.services.equities.schemas import equities_table_id
 
         catalog = get_catalog()
-        table = catalog.load_table(bronze_table_id(table_short_name))
+        table = catalog.load_table(equities_table_id(table_short_name))
         chunked_upsert(
-            table, arrow, log_label=f"bronze.{table_short_name}",
+            table, arrow, log_label=f"equities.{table_short_name}",
         )
 
     # ─────────────────────────────────────────────────────────────────

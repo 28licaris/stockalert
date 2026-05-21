@@ -95,7 +95,7 @@ class _FakeSinkResult:
         self.bars_written = bars_written
 
 
-class _FakeBronzeSink:
+class _FakeEquitiesSink:
     def __init__(self, raises: Optional[Exception] = None) -> None:
         self._raises = raises
         self.writes: list[dict] = []
@@ -133,9 +133,9 @@ def _make_tip_fill(
     silver_timestamps: Optional[list[datetime]] = None,
     schwab_df: Optional[pd.DataFrame] = None,
     schwab_raises: Optional[Exception] = None,
-    bronze_raises: Optional[Exception] = None,
+    equities_raises: Optional[Exception] = None,
     ch_raises: Optional[Exception] = None,
-) -> tuple[SchwabTipFill, _FakeBronzeSink, list]:
+) -> tuple[SchwabTipFill, _FakeEquitiesSink, list]:
     """Wire a SchwabTipFill with all fakes injected."""
     catalog = _FakeCatalog(
         ohlcv_table=(
@@ -147,7 +147,7 @@ def _make_tip_fill(
         df=schwab_df if schwab_df is not None else pd.DataFrame(),
         raises=schwab_raises,
     )
-    bronze_sink = _FakeBronzeSink(raises=bronze_raises)
+    equities_sink = _FakeEquitiesSink(raises=equities_raises)
     ch_rows: list[dict] = []
 
     def _ch_insert(rows):
@@ -157,11 +157,11 @@ def _make_tip_fill(
 
     tf = SchwabTipFill(
         schwab_provider=schwab,
-        bronze_sink=bronze_sink,
+        equities_sink=equities_sink,
         ch_insert=_ch_insert,
         catalog=catalog,
     )
-    return tf, bronze_sink, ch_rows
+    return tf, equities_sink, ch_rows
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -248,7 +248,7 @@ class TestTipFillHappyPath:
         wm = now - timedelta(days=10)
         # 5 bars covering ~5 minutes around the gap start.
         df = _schwab_df(wm + timedelta(minutes=1), 5)
-        tf, bronze_sink, ch_rows = _make_tip_fill(
+        tf, equities_sink, ch_rows = _make_tip_fill(
             silver_timestamps=[wm], schwab_df=df,
         )
         result = await tf.tip_fill("NVDA", now=now)
@@ -259,8 +259,8 @@ class TestTipFillHappyPath:
         assert result.bars_written_ch == 5
         assert result.silver_watermark == wm
         # All bronze rows tagged with the tip-fill source.
-        assert len(bronze_sink.writes) >= 1
-        for w in bronze_sink.writes:
+        assert len(equities_sink.writes) >= 1
+        for w in equities_sink.writes:
             assert TIP_FILL_SOURCE_TAG in w["source_values"]
         # All CH rows tagged the same.
         for r in ch_rows:
@@ -276,12 +276,12 @@ class TestTipFillHappyPath:
         wm = datetime(2026, 6, 1, 23, 50, tzinfo=timezone.utc)
         # 30 bars from 23:51..00:20 (crosses UTC midnight).
         df = _schwab_df(wm + timedelta(minutes=1), 30)
-        tf, bronze_sink, _ = _make_tip_fill(
+        tf, equities_sink, _ = _make_tip_fill(
             silver_timestamps=[wm], schwab_df=df,
         )
         await tf.tip_fill("NVDA", now=now)
         # Group by date: rows on 2026-06-01 and 2026-06-02.
-        dates = {w["file_date"] for w in bronze_sink.writes}
+        dates = {w["file_date"] for w in equities_sink.writes}
         assert len(dates) == 2
 
     @pytest.mark.asyncio
@@ -289,7 +289,7 @@ class TestTipFillHappyPath:
         """Schwab returns nothing → 0 bars written, no error."""
         now = datetime(2026, 6, 5, tzinfo=timezone.utc)
         wm = datetime(2026, 6, 1, tzinfo=timezone.utc)
-        tf, bronze_sink, ch_rows = _make_tip_fill(
+        tf, equities_sink, ch_rows = _make_tip_fill(
             silver_timestamps=[wm], schwab_df=pd.DataFrame(),
         )
         result = await tf.tip_fill("NVDA", now=now)
@@ -297,7 +297,7 @@ class TestTipFillHappyPath:
         assert result.bars_fetched == 0
         assert result.bars_written_bronze == 0
         assert result.bars_written_ch == 0
-        assert bronze_sink.writes == []
+        assert equities_sink.writes == []
         assert ch_rows == []
 
     @pytest.mark.asyncio
@@ -307,14 +307,14 @@ class TestTipFillHappyPath:
         # Watermark equals gap_end (= now - 1m) → gap_start = wm + 1m
         # = now, so gap_start > gap_end → empty gap.
         wm = datetime(2026, 6, 1, 14, 29, tzinfo=timezone.utc)
-        tf, bronze_sink, ch_rows = _make_tip_fill(
+        tf, equities_sink, ch_rows = _make_tip_fill(
             silver_timestamps=[wm], schwab_df=_schwab_df(now, 1),
         )
         result = await tf.tip_fill("NVDA", now=now)
         assert result.succeeded
         # bars_fetched stays 0 because we never called Schwab.
         assert result.bars_fetched == 0
-        assert bronze_sink.writes == []
+        assert equities_sink.writes == []
         assert ch_rows == []
 
 
@@ -328,7 +328,7 @@ class TestTipFillErrors:
     async def test_schwab_error_captured(self) -> None:
         now = datetime(2026, 6, 5, tzinfo=timezone.utc)
         wm = datetime(2026, 6, 1, tzinfo=timezone.utc)
-        tf, bronze_sink, ch_rows = _make_tip_fill(
+        tf, equities_sink, ch_rows = _make_tip_fill(
             silver_timestamps=[wm],
             schwab_raises=RuntimeError("schwab 502"),
         )
@@ -336,7 +336,7 @@ class TestTipFillErrors:
         assert not result.succeeded
         assert "RuntimeError" in (result.error or "")
         # No writes attempted.
-        assert bronze_sink.writes == []
+        assert equities_sink.writes == []
         assert ch_rows == []
 
     @pytest.mark.asyncio
@@ -349,7 +349,7 @@ class TestTipFillErrors:
         tf, _, ch_rows = _make_tip_fill(
             silver_timestamps=[wm],
             schwab_df=df,
-            bronze_raises=RuntimeError("S3 access denied"),
+            equities_raises=RuntimeError("S3 access denied"),
         )
         result = await tf.tip_fill("NVDA", now=now)
         assert not result.succeeded
@@ -366,7 +366,7 @@ class TestTipFillErrors:
         now = datetime(2026, 6, 5, tzinfo=timezone.utc)
         wm = datetime(2026, 6, 1, tzinfo=timezone.utc)
         df = _schwab_df(wm + timedelta(minutes=1), 3)
-        tf, bronze_sink, _ = _make_tip_fill(
+        tf, equities_sink, _ = _make_tip_fill(
             silver_timestamps=[wm],
             schwab_df=df,
             ch_raises=RuntimeError("CH connection refused"),

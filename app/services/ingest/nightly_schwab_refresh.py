@@ -1,10 +1,10 @@
 """
-Nightly Schwab REST → bronze.schwab_minute refresh.
+Nightly Schwab REST → ``equities.schwab_universe`` refresh.
 
 Background asyncio loop: sleep until ``SCHWAB_NIGHTLY_RUN_HOUR_UTC``,
 then pull **yesterday's** 1-minute bars from Schwab pricehistory for
 ``SCHWAB_NIGHTLY_SYMBOLS`` (default: seed 100) and append them to
-``bronze.schwab_minute``.
+``equities.schwab_universe``.
 
 Gating: ``SCHWAB_NIGHTLY_ENABLED``, non-empty ``STOCK_LAKE_BUCKET``, and
 working Schwab API credentials (CLIENT_ID/SECRET + refresh token).
@@ -13,8 +13,9 @@ Default run hour is 22 UTC (= 3 PM Arizona, ~30 min after NYSE close
 even on DST days) so the prior trading day's bars are complete.
 
 The actual per-symbol pull logic lives in
-``scripts/schwab_bronze_backfill.run_backfill`` — this module is a
-thin async wrapper that calls it once per day on a schedule.
+``scripts/schwab_history_backfill.run_backfill`` (renamed from
+schwab_bronze_backfill in CV8) — this module is a thin async wrapper
+that calls it once per day on a schedule.
 """
 from __future__ import annotations
 
@@ -74,18 +75,21 @@ async def refresh_schwab_bronze_yesterday(
     target: date | None = None,
 ) -> dict:
     """
-    Schwab pricehistory → bronze.schwab_minute.
+    Schwab pricehistory → equities.schwab_universe.
+
+    Function name kept as `refresh_schwab_bronze_yesterday` for caller
+    compatibility (main_api.py + jobs/service.py); the body targets v2.
 
     Behavior:
       - ``target`` set    → process exactly that date (CLI / tests).
       - ``target`` None   → AUTO-CATCHUP. Find the most recent date
-                            already in bronze.schwab_minute and fill
-                            every weekday from then through yesterday.
-                            If bronze is empty in the last 14 days,
-                            processes yesterday only (cold-start
-                            fallback to avoid runaway backfills).
+                            already in equities.schwab_universe and
+                            fill every weekday from then through
+                            yesterday. If the table is empty in the
+                            last 14 days, processes yesterday only
+                            (cold-start fallback).
 
-    Each day delegates to ``scripts.schwab_bronze_backfill.run_backfill``
+    Each day delegates to ``scripts.schwab_history_backfill.run_backfill``
     which is idempotent; reruns are safe.
     """
     gated, why = _schwab_nightly_gated()
@@ -101,38 +105,29 @@ async def refresh_schwab_bronze_yesterday(
         dates_to_process: list[date] = [target]
     else:
         try:
-            from app.services.bronze import (
-                ensure_bronze_schwab_minute,
-                latest_bronze_date,
+            from app.services.equities.gaps import (
                 missing_weekdays,
+                yesterday_et,
             )
-            bronze_table = ensure_bronze_schwab_minute()
-            latest = latest_bronze_date(bronze_table)
-            if latest is None:
-                # Empty table or no data in lookback — cold-start seed.
-                yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
-                dates_to_process = [yesterday] if yesterday.weekday() < 5 else []
-                logger.info(
-                    "nightly_schwab_refresh: bronze empty in lookback window — "
-                    "cold-start with yesterday only"
-                )
-            else:
-                dates_to_process = missing_weekdays(bronze_table)
+            from app.services.equities.tables import ensure_schwab_universe
+            equities_table = ensure_schwab_universe()
+            dates_to_process = missing_weekdays(equities_table)
         except Exception as e:
             logger.warning(
                 "nightly_schwab_refresh: gap detection failed (%s); "
                 "falling back to yesterday-only",
                 e,
             )
-            from app.services.bronze import yesterday_et
+            from app.services.equities.gaps import yesterday_et
             yesterday = yesterday_et()
             dates_to_process = [yesterday] if yesterday.weekday() < 5 else []
 
         if not dates_to_process:
             logger.info(
-                "nightly_schwab_refresh: no gaps to fill — bronze is up to date"
+                "nightly_schwab_refresh: no gaps to fill — "
+                "equities.schwab_universe is up to date"
             )
-            return {"skipped": True, "reason": "no gaps; bronze up to date"}
+            return {"skipped": True, "reason": "no gaps; equities.schwab_universe up to date"}
         logger.info(
             "nightly_schwab_refresh: catch-up covers %d day(s): %s",
             len(dates_to_process),
@@ -140,7 +135,7 @@ async def refresh_schwab_bronze_yesterday(
         )
 
     # Lazy import — keeps top-level import side-effect-free.
-    from scripts.schwab_bronze_backfill import run_backfill
+    from scripts.schwab_history_backfill import run_backfill
 
     per_day: list[dict] = []
     for d in dates_to_process:

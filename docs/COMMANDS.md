@@ -123,7 +123,7 @@ poetry run python scripts/check_polygon_flatfiles.py
 
 # Lake backfills (v2 — write to equities.* tables)
 poetry run python scripts/polygon_history_backfill.py --help
-poetry run python scripts/schwab_bronze_backfill.py --help
+poetry run python scripts/schwab_history_backfill.py --help
 
 # Compaction (manual; refuses months >90d without --force)
 poetry run python scripts/compact_bronze_monthly.py --month 2026-05

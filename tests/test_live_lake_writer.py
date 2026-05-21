@@ -18,7 +18,7 @@ from app.services.bronze.audit.live_freshness import _is_rth
 from app.services.ingest.live_lake_writer import (
     CycleResult,
     LiveLakeWriter,
-    _BRONZE_MINUTE_ARROW,
+    _EQUITIES_SCHWAB_ARROW,
     _ProviderConfig,
 )
 
@@ -70,14 +70,14 @@ class TestProviderConfig:
         w = LiveLakeWriter()
         cfg = w._provider_config["schwab"]
         assert cfg.live_source_tag == "schwab-stream"
-        assert cfg.bronze_table_short_name == "schwab_minute"
+        assert cfg.equities_table_name == "schwab_universe"
 
     def test_custom_provider_config_accepted(self) -> None:
         """The class is provider-agnostic — you can pass any config."""
         custom = {
             "alpaca": _ProviderConfig(
                 live_source_tag="alpaca-stream",
-                bronze_table_short_name="alpaca_minute",
+                equities_table_name="alpaca_universe",
             ),
         }
         w = LiveLakeWriter(provider_config=custom)
@@ -110,7 +110,7 @@ class TestRowsToArrow:
 
     def test_schema_matches_bronze(self) -> None:
         arrow = LiveLakeWriter._rows_to_arrow([self._row()], run_id="r1")
-        assert arrow.schema.equals(_BRONZE_MINUTE_ARROW)
+        assert arrow.schema.equals(_EQUITIES_SCHWAB_ARROW)
 
     def test_audit_metadata_stamped(self) -> None:
         arrow = LiveLakeWriter._rows_to_arrow([self._row()], run_id="run-test-1")
@@ -138,7 +138,7 @@ class TestRowsToArrow:
     def test_empty_rows_produces_empty_arrow(self) -> None:
         arrow = LiveLakeWriter._rows_to_arrow([], run_id="r1")
         assert arrow.num_rows == 0
-        assert arrow.schema.equals(_BRONZE_MINUTE_ARROW)
+        assert arrow.schema.equals(_EQUITIES_SCHWAB_ARROW)
 
 
 # ─────────────────────────────────────────────────────────────────────

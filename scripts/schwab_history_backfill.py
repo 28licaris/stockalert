@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Phase 2 backfill — pull 1-minute bars from Schwab REST pricehistory and
-land them in `bronze.schwab_minute` (Iceberg). One Iceberg append per
-trading day, rows from N symbols merged into a single canonical frame.
+v2 Schwab history backfill — pull 1-minute bars from Schwab REST
+pricehistory and land them in `equities.schwab_universe` (Iceberg).
+One Iceberg append per trading day, rows from N symbols merged into
+a single canonical frame.
 
 Schwab's pricehistory has a practical ~48-day lookback for 1-minute
 bars, so this is typically run with `--days 48` to cover the maximum.
@@ -10,17 +11,19 @@ bars, so this is typically run with `--days 48` to cover the maximum.
 Idempotent-ish:
   - Iceberg `append` is fast and never fails on duplicates.
   - However, re-running for the same (day, symbol) set DOES create
-    duplicate rows. Silver-build will dedupe via provider precedence,
-    but if you want truly clean bronze, use the manual Athena DELETE
-    workflow before re-running. For Phase 2 we accept potential dupes
-    on re-runs since this is a one-time historical backfill.
+    duplicate rows in equities.schwab_universe. For clean re-runs,
+    delete the affected partitions manually before re-running (recipe
+    in docs/architecture_v2/07_runbook.md — "Recover a known-bad
+    partition"). For the nightly cron path, idempotency is enforced
+    upstream by the gap-detection pre-scan in
+    `app.services.ingest.nightly_schwab_refresh`.
 
 Run:
-    poetry run python scripts/schwab_bronze_backfill.py \\
+    poetry run python scripts/schwab_history_backfill.py \\
         --symbols seed --days 48
 
     # narrower scope:
-    poetry run python scripts/schwab_bronze_backfill.py \\
+    poetry run python scripts/schwab_history_backfill.py \\
         --symbols AAPL,MSFT --days 7
 """
 from __future__ import annotations
@@ -40,14 +43,14 @@ sys.path.insert(0, str(_HERE.parent))
 
 from app.config import settings  # noqa: E402
 from app.data.seed_universe import SEED_SYMBOLS  # noqa: E402
-from app.services.bronze import BronzeIcebergSink  # noqa: E402
+from app.services.equities.sink import EquitiesIcebergSink  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
     datefmt="%H:%M:%S",
 )
-logger = logging.getLogger("schwab-bronze-backfill")
+logger = logging.getLogger("schwab-history-backfill")
 
 SCHWAB_SOURCE_TAG = "schwab"
 US_EASTERN = ZoneInfo("America/New_York")
@@ -99,7 +102,7 @@ def _schwab_1m_to_canonical(
 ) -> pd.DataFrame:
     """
     Convert Schwab `historical_df()` output (DatetimeIndex'd OHLCV)
-    into the canonical bronze.*_minute frame.
+    into the canonical equities.*_universe / *_raw frame.
 
     Schwab's pricehistory does not return vwap or trade_count, so
     those columns are NaN — the sink converts NaN to NULL.
@@ -152,11 +155,11 @@ async def run_backfill(
     from app.config import get_provider
     provider = get_provider("schwab")
 
-    sink = BronzeIcebergSink.for_schwab_minute() if not dry_run else None
+    sink = EquitiesIcebergSink.for_schwab_universe() if not dry_run else None
 
     days = _iter_days(start, end)
     logger.info(
-        "Schwab → bronze.schwab_minute: %d symbol(s) × %d day(s) "
+        "Schwab → equities.schwab_universe: %d symbol(s) × %d day(s) "
         "(%s .. %s)  sleep=%.2fs",
         len(symbols), len(days), start, end, sleep_seconds,
     )

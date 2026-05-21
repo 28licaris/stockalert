@@ -4,8 +4,8 @@ Schwab REST tip-fill (TA-5.3.2).
 Fills the gap between silver's per-symbol watermark and "now-1min" by
 pulling 1-minute bars from Schwab's pricehistory endpoint and writing
 to BOTH:
-  - bronze.schwab_minute (idempotent; the immutable archive)
-  - ClickHouse ohlcv_1m  (idempotent; chart available immediately)
+  - equities.schwab_universe (idempotent; the immutable archive)
+  - ClickHouse ohlcv_1m      (idempotent; chart available immediately)
 
 **Why dual-write to CH directly.** Per [streaming_universe_model.md][1]
 + [silver_layer_plan §6][2], this is the ONE bounded exception to
@@ -94,10 +94,10 @@ class TipFillResult:
 
 
 class SchwabTipFill:
-    """Schwab REST → bronze.schwab_minute + CH ohlcv_1m tip-fill.
+    """Schwab REST → equities.schwab_universe + CH ohlcv_1m tip-fill.
 
     Construct via `from_settings()` for production; pass `schwab_provider`,
-    `bronze_sink`, `ch_insert` (defaults to the real CH inserter), and
+    `equities_sink`, `ch_insert` (defaults to the real CH inserter), and
     `catalog` explicitly for tests.
     """
 
@@ -105,12 +105,12 @@ class SchwabTipFill:
         self,
         *,
         schwab_provider: Any = None,
-        bronze_sink: Any = None,
+        equities_sink: Any = None,
         ch_insert: Any = None,
         catalog: Any = None,
     ) -> None:
         self._schwab = schwab_provider
-        self._bronze_sink = bronze_sink
+        self._equities_sink = equities_sink
         self._ch_insert = ch_insert
         self._catalog = catalog
 
@@ -128,11 +128,11 @@ class SchwabTipFill:
             self._schwab = get_provider("schwab")
         return self._schwab
 
-    def _get_bronze_sink(self):
-        if self._bronze_sink is None:
-            from app.services.bronze import BronzeIcebergSink
-            self._bronze_sink = BronzeIcebergSink.for_schwab_minute()
-        return self._bronze_sink
+    def _get_equities_sink(self):
+        if self._equities_sink is None:
+            from app.services.equities.sink import EquitiesIcebergSink
+            self._equities_sink = EquitiesIcebergSink.for_schwab_universe()
+        return self._equities_sink
 
     def _get_ch_insert(self):
         if self._ch_insert is None:
@@ -321,7 +321,7 @@ class SchwabTipFill:
 
             # 2. Bronze write (per-day) — preserves the archive.
             try:
-                bronze_written = await self._write_bronze(canonical)
+                bronze_written = await self._write_equities(canonical)
                 result.bars_written_bronze = bronze_written
             except Exception as e:
                 logger.exception(
@@ -370,7 +370,7 @@ class SchwabTipFill:
         """Convert Schwab `historical_df()` output → canonical bronze
         + CH frame with `source = "schwab-tipfill"`.
 
-        Mirrors `scripts/schwab_bronze_backfill._schwab_1m_to_canonical`
+        Mirrors `scripts/schwab_history_backfill._schwab_1m_to_canonical`
         but stamps a different source tag.
         """
         if df is None or df.empty:
@@ -406,9 +406,9 @@ class SchwabTipFill:
     # Writers
     # ─────────────────────────────────────────────────────────────────
 
-    async def _write_bronze(self, canonical: pd.DataFrame) -> int:
-        """Write the canonical frame to bronze.schwab_minute, per-day
-        (BronzeIcebergSink.write expects a `file_date`). Returns total
+    async def _write_equities(self, canonical: pd.DataFrame) -> int:
+        """Write the canonical frame to equities.schwab_universe, per-day
+        (EquitiesIcebergSink.write expects a `file_date`). Returns total
         rows written across days."""
         if canonical.empty:
             return 0
@@ -418,7 +418,7 @@ class SchwabTipFill:
             canonical["timestamp"].dt.date,
         )
         total = 0
-        sink = self._get_bronze_sink()
+        sink = self._get_equities_sink()
         for day, frame in per_day_groups:
             res = await sink.write(
                 frame.copy(),
