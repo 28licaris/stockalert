@@ -2,6 +2,172 @@
 
 Day-to-day procedures for running the v2 system.
 
+## Phase 1 → production cutover checklist
+
+Step-by-step deployment sequence after the Phase 1 code (`v2-architecture`
+branch, commits CV1-CV21) merges to `main`. Run these in order — each
+step depends on the previous one having completed.
+
+### 0. Pre-flight (no-op if already done)
+
+```bash
+# Confirm the existing flat-file Parquet cache is intact + covers
+# the expected window.
+aws s3 ls s3://stockalert-lake/raw/provider=polygon-flatfiles/kind=minute/
+# Expect: year=2021/, year=2022/, year=2023/, year=2024/, year=2025/
+aws s3 ls s3://stockalert-lake/raw/provider=polygon-flatfiles/kind=minute/year=2021/ | head -3
+aws s3 ls s3://stockalert-lake/raw/provider=polygon-flatfiles/kind=minute/year=2025/ | tail -3
+
+# Confirm AWS Glue databases exist (or will be created by ensure_*).
+aws glue get-databases --query 'DatabaseList[].Name'
+# Expect: stock_lake (v1, still has bronze.* + silver.*), equities (v2)
+# If `equities` is missing, ensure_polygon_raw() will create it on
+# first call.
+
+# Confirm EMR Serverless application exists (needed for CV6 step
+# below). One-time setup is in §"EMR Serverless setup" further down
+# this runbook.
+aws emr-serverless list-applications
+```
+
+### 1. Run the Athena bulk-import (~5 min, ~$0.20)
+
+Populates `equities.polygon_raw` from the existing S3 Parquet cache.
+No Polygon API calls; reads + writes entirely inside AWS.
+
+```bash
+cd /path/to/stockalert
+git fetch && git checkout v2-architecture
+poetry install
+export AWS_PROFILE=stockalert-prod
+poetry run python scripts/lake_import_athena.py
+```
+
+Verify post-run:
+
+```bash
+poetry run python -c "
+from app.services.iceberg_catalog import get_catalog
+from app.services.equities.tables import ensure_polygon_raw
+t = ensure_polygon_raw(get_catalog())
+print('rows:', t.scan().to_arrow().num_rows)
+"
+# Expect ~2.1B rows for whole-market 5y.
+```
+
+### 2. Run the corp-actions backfill (~45-60 min)
+
+Populates `equities.market_corp_actions` from Polygon REST. Splits
+are fast (~50K rows); dividends are slow (~3M rows across 23 years).
+
+```bash
+poetry run python scripts/run_corp_actions_backfill.py --full
+```
+
+Verify:
+
+```bash
+poetry run python -c "
+from app.services.iceberg_catalog import get_catalog
+from app.services.equities.tables import ensure_market_corp_actions
+t = ensure_market_corp_actions(get_catalog())
+print('rows:', t.scan().to_arrow().num_rows)
+"
+# Expect ~3M rows.
+```
+
+### 3. Run the Spark adjustment job whole-market (~1-2h, ~$2-3)
+
+Populates `equities.polygon_adjusted` (raw + corp_actions → adjusted
+prices with `adj_factor` on every row). Submit to EMR Serverless:
+
+```bash
+# (See "Run polygon_adjustment_job whole-market (production)" below
+# for the full aws emr-serverless start-job-run incantation.)
+```
+
+Verify:
+
+```bash
+poetry run python -c "
+from app.services.iceberg_catalog import get_catalog
+from app.services.equities.tables import ensure_polygon_adjusted
+t = ensure_polygon_adjusted(get_catalog())
+print('rows:', t.scan().to_arrow().num_rows)
+"
+# Expect ~2.1B rows (one per polygon_raw row).
+```
+
+### 4. Deploy v2 code
+
+```bash
+# Merge v2-architecture → main (your deployment process)
+# Restart uvicorn (see "Restart uvicorn" below).
+# From the next POLYGON_NIGHTLY_RUN_HOUR_UTC + SCHWAB_NIGHTLY_RUN_HOUR_UTC,
+# nightly diffs land in equities.*; live writers (Schwab WS + tip-fill)
+# already write to equities.schwab_universe.
+```
+
+### 5. Verify live behaviour
+
+```bash
+# Add a fresh symbol; confirm <10s end-to-end.
+curl -X POST http://localhost:8000/api/v1/stream \
+  -H "Content-Type: application/json" \
+  -d '{"symbol": "TEST_SYMBOL"}'
+# Watch uvicorn logs for "Stream warmup tip-fill" + "Stream warmup lake→CH"
+# both completing.
+
+# Tail the CH ohlcv_1m count for the symbol.
+docker exec -it stockalert-clickhouse clickhouse-client --query "
+  SELECT count(*) FROM ohlcv_1m WHERE symbol = 'TEST_SYMBOL'
+"
+```
+
+### 6. Flip the lake-warmup flag (optional)
+
+```bash
+# In your production .env:
+LAKE_WARMUP_ENABLED=true
+# Restart uvicorn. New add_members calls now use the lake chain
+# instead of provider-REST-direct-to-CH.
+```
+
+### 7. Drop the v1 Glue + CH tables (final cleanup)
+
+After 1-2 weeks of v2 stability (no surprises in production), drop
+the v1 tables:
+
+```bash
+# Athena DDL — drop v1 lake tables
+aws athena start-query-execution \
+  --query-string "DROP TABLE stock_lake.polygon_minute" \
+  --query-execution-context Database=stock_lake \
+  --result-configuration OutputLocation=s3://stockalert-lake/athena-results/
+aws athena start-query-execution \
+  --query-string "DROP TABLE stock_lake.schwab_minute" ...
+aws athena start-query-execution \
+  --query-string "DROP TABLE stock_lake.polygon_corp_actions" ...
+aws athena start-query-execution \
+  --query-string "DROP TABLE stock_lake.ohlcv_1m" ...
+aws athena start-query-execution \
+  --query-string "DROP TABLE stock_lake.corp_actions" ...
+aws athena start-query-execution \
+  --query-string "DROP TABLE stock_lake.bar_quality" ...
+
+# CH: drop the dead lake_archive_watermarks ledger (CV19 retired
+# the WatermarkRepo Python module; the CH table is now orphan).
+docker exec -it stockalert-clickhouse clickhouse-client --query "
+  DROP TABLE IF EXISTS lake_archive_watermarks
+"
+
+# Frontend: regen the OpenAPI types so /api/v1/silver/* type
+# references stop appearing in types.gen.ts.
+cd frontend && npm run codegen && npm run build
+```
+
+Phase 1 production cutover complete.
+
 ## Live tier — common operations
 
 ### Restart uvicorn (most common)
