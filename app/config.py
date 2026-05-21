@@ -96,22 +96,18 @@ class Settings(BaseModel):
         "ICEBERG_EQUITIES_GLUE_DATABASE", "equities"
     )
 
-    # Silver provider precedence for the merge step. Comma-separated
-    # list, highest priority first. Used by silver_corp_actions_build
-    # (and the planned silver OHLCV build) to resolve conflicts when
-    # multiple bronze.{provider}_* tables have a row for the same
-    # identifier. Default: polygon > schwab (per silver_layer_plan.md §14.1).
-    silver_provider_precedence: str = os.getenv(
-        "SILVER_PROVIDER_PRECEDENCE", "polygon,schwab"
+    # Earliest date for which we have OHLCV coverage. Operator scripts
+    # (Athena bulk-import, history backfill) use this as the lower
+    # bound. Override when you extend Polygon coverage further back
+    # (e.g. 20-year subscription upgrade: LAKE_HISTORY_START=2006-01-04).
+    # Env var name retained for backwards compat with operator .env
+    # files that haven't been migrated.
+    lake_history_start: str = os.getenv(
+        "LAKE_HISTORY_START",
+        os.getenv("BRONZE_HISTORY_START", "2021-01-04"),
     )
 
-    # Earliest date for which we have bronze OHLCV coverage.
-    # silver --full + silver corp-action rebuild use this as the
-    # lower bound. Override when you extend Polygon coverage further
-    # back (e.g. 20-year subscription upgrade: BRONZE_HISTORY_START=2006-01-04).
-    bronze_history_start: str = os.getenv("BRONZE_HISTORY_START", "2021-01-04")
-
-    # TA-5.3.3 — silver-derived add_members flow.
+    # Lake-warmup flow (was silver-derived add_members; CV15 rename).
     # When True, stream_service.add fires the lake-warmup chain on
     # newly-added symbols (CV12):
     #   1. tip_fill (Schwab REST → equities.schwab_universe + CH; 48d)
@@ -129,25 +125,14 @@ class Settings(BaseModel):
         ).lower() == "true"
     )
 
-    # Silver OHLCV build (TA-5.1.6 — nightly bronze→silver pipeline).
-    # Runs after both nightly_polygon_refresh (07:00 UTC) and
-    # nightly_schwab_refresh (22:00 UTC) have completed. Default
-    # 23:00 UTC gives Schwab nightly ~60 min headroom.
-    silver_ohlcv_build_enabled: bool = (
-        os.getenv("SILVER_OHLCV_BUILD_ENABLED", "false").lower() == "true"
-    )
-    silver_ohlcv_build_run_hour_utc: int = int(
-        os.getenv("SILVER_OHLCV_BUILD_RUN_HOUR_UTC", "23")
-    )
-    # Symbols spec: "seed" (= SEED_SYMBOLS, default) or comma-separated
-    # explicit list. Future G1 will flip the default to "active" =
-    # dynamic universe (get_active_universe()).
-    # Per docs/standards/data/symbol_lifecycle.md (LOCKED): silver is
-    # universe-bounded (stream_universe). bronze stays whole-market for
-    # Polygon, but silver is only built for symbols we actually serve.
-    silver_ohlcv_build_symbols: str = os.getenv(
-        "SILVER_OHLCV_BUILD_SYMBOLS", "active"
-    )
+    # CV13: silver_ohlcv_build_* settings removed.
+    # The v2 equivalent (polygon_adjustment_job) runs OUT-OF-PROCESS
+    # via EMR Serverless / CodeBuild / local Spark — it's not a
+    # uvicorn-scheduled job, so no enabled / run_hour / symbols
+    # settings on the Settings class.
+    # CV14: silver_provider_precedence + bronze_history_start removed
+    # (precedence merged into the deleted silver build; bronze
+    # replaced by lake_history_start above).
 
     # Live-lake-writer config (TA-5.7 — closes the 8-24h Schwab live →
     # bronze freshness gap). The writer reads CH ohlcv_1m every

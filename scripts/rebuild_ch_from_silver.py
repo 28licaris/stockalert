@@ -132,10 +132,10 @@ def _parse_date(s: str) -> date:
         )
 
 
-def _bronze_history_start() -> date:
+def _lake_history_start() -> date:
     """Lower bound of the silver window — pulled from BRONZE_HISTORY_START."""
     try:
-        return date.fromisoformat(settings.bronze_history_start)
+        return date.fromisoformat(settings.lake_history_start)
     except (TypeError, ValueError):
         return date(2021, 1, 4)
 
@@ -205,7 +205,7 @@ def _wipe_ch_ohlcv() -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
-    bronze_start = _bronze_history_start()
+    bronze_start = _lake_history_start()
 
     p = argparse.ArgumentParser(
         description=__doc__,
