@@ -121,8 +121,8 @@ bash scripts/provision_lake_infra.sh
 poetry run python scripts/check_s3_lake.py
 poetry run python scripts/check_polygon_flatfiles.py
 
-# Bronze backfills
-poetry run python scripts/polygon_bronze_backfill.py --help
+# Lake backfills (v2 — write to equities.* tables)
+poetry run python scripts/polygon_history_backfill.py --help
 poetry run python scripts/schwab_bronze_backfill.py --help
 
 # Compaction (manual; refuses months >90d without --force)

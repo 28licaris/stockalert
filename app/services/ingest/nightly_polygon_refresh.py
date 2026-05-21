@@ -1,13 +1,23 @@
 """
-Nightly Polygon flat-files → bronze.polygon_minute refresh.
+Nightly Polygon flat-files → `equities.polygon_raw` refresh.
 
 Background asyncio loop: sleep until ``POLYGON_NIGHTLY_RUN_HOUR_UTC``,
 then archive **yesterday's** Polygon aggregates for
 ``POLYGON_NIGHTLY_SYMBOLS`` (default: seed universe). ClickHouse OHLCV
-is not written by this loop — only the bronze Iceberg sink.
+is not written by this loop — only the v2 equities Iceberg sink.
 
 Gating: ``POLYGON_NIGHTLY_ENABLED``, non-empty ``STOCK_LAKE_BUCKET``,
 and working Polygon flat-files credentials.
+
+v2 cutover (CV7): writes to `equities.polygon_raw` via
+`EquitiesIcebergSink.for_polygon_raw()`. The v1 path
+(`bronze.polygon_minute` via `BronzeIcebergSink.for_polygon_minute`)
+is gone — the operator must have run the Phase 1A bulk-load
+(CV4 operational step, `scripts/polygon_history_backfill.py`) before
+this code path starts producing nightly diffs, otherwise
+`equities.polygon_raw` will be empty until the catch-up loop fills
+the lookback window. v1 branch retains the bronze-targeted code for
+rollback.
 """
 from __future__ import annotations
 
@@ -18,10 +28,9 @@ from typing import Any
 
 from app.config import settings
 from app.data.seed_universe import SEED_SYMBOLS
-from app.db.lake_watermarks import WatermarkRepo
 from app.providers.polygon_flatfiles import PolygonFlatFilesClient
+from app.services.equities.sink import EquitiesIcebergSink
 from app.services.ingest.flatfiles_backfill import FlatFilesBackfillService
-from app.services.bronze import BronzeIcebergSink
 
 logger = logging.getLogger(__name__)
 
@@ -94,18 +103,20 @@ async def refresh_polygon_lake_yesterday(
     kinds: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """
-    Polygon flat files → bronze.polygon_minute.
+    Polygon flat files → `equities.polygon_raw`.
 
     Behavior:
       - ``target`` set    → process exactly that calendar day (CLI / tests).
       - ``target`` None   → AUTO-CATCHUP. Find the most recent date already
-                            in bronze and fill every weekday from then
-                            through yesterday. If bronze is empty in the
-                            last 14 days, processes yesterday only (cold-
-                            start fallback to avoid runaway backfills).
+                            in equities.polygon_raw and fill every weekday
+                            from then through yesterday. If the table is
+                            empty in the last 14 days, processes yesterday
+                            only (cold-start fallback).
 
-    Each day is processed in sequence with watermark-based idempotency,
-    so re-runs are no-ops on already-archived dates.
+    Each day is processed in sequence. Idempotency is enforced by the
+    pre-scan against `equities.polygon_raw` (skip_dates) so re-runs are
+    no-ops on already-archived dates — single source of truth, no CH
+    watermark dependency.
     """
     if not _nightly_lake_gated():
         return {"skipped": True, "reason": "lake disabled or STOCK_LAKE_BUCKET empty"}
@@ -114,40 +125,29 @@ async def refresh_polygon_lake_yesterday(
     if target is not None:
         dates_to_process: list[date] = [target]
     else:
-        from app.services.bronze import (
-            ensure_bronze_polygon_minute,
-            latest_bronze_date,
+        from app.services.equities.gaps import (
             missing_weekdays,
+            yesterday_et,
         )
+        from app.services.equities.tables import ensure_polygon_raw
         try:
-            bronze_table = ensure_bronze_polygon_minute()
-            latest = latest_bronze_date(bronze_table)
-            if latest is None:
-                # Truly empty (or no data in lookback window) — cold-start.
-                # Seed with yesterday only; operator can run a deeper
-                # manual backfill if they want more history.
-                yesterday = date.today() - timedelta(days=1)
-                dates_to_process = [yesterday] if yesterday.weekday() < 5 else []
-                logger.info(
-                    "nightly_lake_refresh: bronze empty in lookback window — "
-                    "cold-start with yesterday only"
-                )
-            else:
-                # Normal catch-up path: fill (latest+1)..yesterday weekdays.
-                dates_to_process = missing_weekdays(bronze_table)
+            equities_table = ensure_polygon_raw()
+            dates_to_process = missing_weekdays(equities_table)
         except Exception as e:
             logger.warning(
                 "nightly_lake_refresh: gap detection failed (%s); "
                 "falling back to yesterday-only",
                 e,
             )
-            from app.services.bronze import yesterday_et
             yesterday = yesterday_et()
             dates_to_process = [yesterday] if yesterday.weekday() < 5 else []
 
         if not dates_to_process:
-            logger.info("nightly_lake_refresh: no gaps to fill — bronze is up to date")
-            return {"skipped": True, "reason": "no gaps; bronze up to date"}
+            logger.info(
+                "nightly_lake_refresh: no gaps to fill — "
+                "equities.polygon_raw is up to date"
+            )
+            return {"skipped": True, "reason": "no gaps; equities.polygon_raw up to date"}
         logger.info(
             "nightly_lake_refresh: catch-up covers %d day(s): %s",
             len(dates_to_process),
@@ -165,12 +165,10 @@ async def refresh_polygon_lake_yesterday(
         return {"skipped": True, "reason": f"polygon client: {e}"}
 
     source_tag = FlatFilesBackfillService.DEFAULT_SOURCE_TAG
-    # Bronze (Iceberg) is the canonical lake destination as of Phase 1.
-    # The legacy `LakeSink` (raw/provider=*/...parquet) is no longer
-    # written to — its watermark ledger is kept around for now as an
-    # audit trail; Phase 4 retires it entirely.
-    bronze_sink = BronzeIcebergSink.for_polygon_minute()
-    sinks = [bronze_sink]
+    # v2 (Phase 1B): single sink, equities.polygon_raw. Schwab and
+    # corp_actions land in CV8 / CV9 respectively.
+    equities_sink = EquitiesIcebergSink.for_polygon_raw()
+    sinks = [equities_sink]
     svc = FlatFilesBackfillService(
         flat_files=client,
         sinks=sinks,
@@ -181,20 +179,19 @@ async def refresh_polygon_lake_yesterday(
     for d in dates_to_process:
         out: dict[str, Any] = {"date": d.isoformat(), "kinds": list(kind_tuple)}
         for kind in kind_tuple:
-            table_name = "ohlcv_1m" if kind == "minute" else "ohlcv_daily"
+            # Per-day skip pre-scan against the actual target table.
+            # Same approach as scripts/polygon_history_backfill.py
+            # (CV3) — no CH watermark dependency.
             skip_dates: set[date] = set()
             try:
-                repo = WatermarkRepo.from_clickhouse()
-                skip_dates = await repo.get_ok_dates(
-                    source=source_tag,
-                    table_name=table_name,
-                    stage="raw",
-                    start=d,
-                    end=d,
+                from app.services.equities.gaps import loaded_dates_in_range
+                from app.services.equities.tables import ensure_polygon_raw
+                skip_dates = loaded_dates_in_range(
+                    ensure_polygon_raw(), start=d, end=d,
                 )
             except Exception as e:
                 logger.warning(
-                    "nightly_lake_refresh: watermark pre-scan failed (%s); "
+                    "nightly_lake_refresh: skip pre-scan failed (%s); "
                     "continuing without skip set",
                     e,
                 )
