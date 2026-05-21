@@ -1,33 +1,38 @@
 """
-Silver → ClickHouse backfill (TA-5.3.1).
+Lake → ClickHouse backfill (was silver→CH; CV11 retargeted at
+equities.polygon_adjusted).
 
-Reads `silver.ohlcv_1m` for a symbol+window and bulk-inserts into
-ClickHouse `ohlcv_1m`. This is the **canonical fast path** for
-populating CH from history — replaces the legacy provider-REST-direct-
-to-CH path (Path ②) when triggered.
+Reads adjusted 1-minute bars via `SilverOhlcvReader` (which post-CV11
+sources from `equities.polygon_adjusted`) and bulk-inserts into
+ClickHouse `ohlcv_1m`. The **canonical fast path** for populating CH
+from deep history — replaces the legacy provider-REST-direct-to-CH
+path when triggered.
 
-Per the consumer contract:
-  S3 silver = canonical (immutable, snapshot-pinned, corp-action-adj'd)
-  ClickHouse = derived hot cache (re-buildable from silver any time)
+Per the v2 consumer contract:
+  equities.polygon_adjusted = canonical (immutable, snapshot-pinned,
+                              corp-action-adj'd, ~5y deep history)
+  ClickHouse                = derived hot cache (re-buildable from
+                              the lake any time)
 
-Silver stores split-adjusted prices; that's what CH ohlcv_1m needs
-(the chart, indicators, screener, backtest all consume the
-adjusted view). Consumers needing raw prices recompute via the
-cumulative split factor — see SilverOhlcvReader's docstring.
+polygon_adjusted stores split-adjusted prices with adj_factor on
+every row. That's what CH ohlcv_1m needs (the chart, indicators,
+screener, backtest all consume the adjusted view). Consumers needing
+raw prices multiply by adj_factor — math is local, no extra read.
 
 Wall-clock notes:
-  - Cold-start NVDA × 730 days ≈ 200K bars → ~10 seconds end-to-end
-    on a warm Iceberg cache + local CH. The expensive cost is the
-    Iceberg metadata + S3 file-list (~3-5s for a 2-year scan); the
-    actual CH insert is sub-second for 200K rows.
+  - Cold-start NVDA × 730 days ≈ 200K bars → ~5-8 seconds end-to-end
+    on a warm Iceberg cache + local CH. polygon_adjusted's bucket(32,
+    symbol) partitioning means single-symbol scans read ~1/32 of each
+    month's data (v1 silver was month-only partitioning, read whole
+    month). Actual CH insert is sub-second for 200K rows.
   - Idempotent: CH `ohlcv_1m` is a `ReplacingMergeTree(version)` — re-
     running with the same data produces no duplicates after the next
     merge.
 
-Coexistence with the legacy path:
-  - This module ADDS the silver→CH option. It does NOT yet touch
-    `watchlist_service.add_members` (that wiring happens in TA-5.3.3,
-    behind a feature flag for safe rollback).
+The module + class name (`silver_to_ch_backfill`) is kept stable for
+caller compatibility — Phase 1C is the read-side cutover, not the
+big rename pass. The full rename to `lake_to_ch_backfill` happens in
+CV14 alongside silver-module deletion.
 """
 from __future__ import annotations
 

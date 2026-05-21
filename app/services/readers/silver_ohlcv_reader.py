@@ -1,28 +1,39 @@
 """
-SilverOhlcvReader — read service for `silver.ohlcv_1m` + `silver.bar_quality`.
+SilverOhlcvReader — read service for adjusted OHLCV history.
 
-Reads the canonical, provider-merged, corp-action-adjusted OHLCV table
-(produced by `app/services/silver/ohlcv/build.py`). Per the consumer
-contract ([silver_layer_plan §"The consumer contract"](../../../docs/silver_layer_plan.md)),
-every consumer (chart, screener, indicator, backtest, MCP tool) reads
-silver — **never bronze directly**.
+CV11 (Phase 1C): retargeted from `silver.ohlcv_1m` (built nightly by
+the legacy silver pipeline) to the v2 canonical store
+`equities.polygon_adjusted` (built weekly by the Spark adjustment job
+in CV5/CV6). Same adjusted-OHLCV semantics, different storage layer.
+
+The class name + module name are kept stable to avoid cascading
+caller rewrites; the rename pass happens in CV14 when the silver
+module is deleted. The public API (`get_bars`, `SilverBarsResponse`,
+`SilverBar`) is unchanged — every consumer (chart, screener,
+indicator, backtest, MCP tool, the CH cold-loader in
+silver_to_ch_backfill) keeps working with no change.
+
+`get_bar_quality()` returns an empty response post-CV11 — the v1
+bar_quality audit table has no v2 equivalent yet (data-integrity
+invariants in v2 are enforced by the Spark adjustment job + corp-
+actions ingest, not by a downstream audit table). When v2 needs a
+quality column it'll surface as a column on polygon_adjusted, not a
+separate table.
 
 This is the CH-independent path: agents and ML pipelines reading
 1-minute history go through this reader and never touch ClickHouse.
 Snapshot-pinnable for reproducibility.
 
-Two read methods:
-  - `get_bars(symbol, start, end, *, adjusted=True)` — windowed OHLCV
-  - `get_bar_quality(symbol, since, until)` — per-(symbol, date) audit
-
-Design contract (mirrors `CorpActionsReader`):
+Design contract (mirrors `CorpActionsReader` post-CV10):
   - Pure read; no writes; no global state beyond the catalog handle.
   - Pydantic shape is what HTTP routes + MCP tools both surface —
     single contract, two surfaces.
-  - Filters push down to Iceberg (month partition prune +
-    symbol-sorted file skip).
-  - Cold-start safe: returns empty result if the silver table doesn't
-    exist yet (initial system state before any silver_ohlcv_build run).
+  - Filters push down to Iceberg — CV1's POLYGON_ADJUSTED_PARTITION
+    uses bucket(32, symbol) + month(timestamp), so single-symbol
+    queries scan ~1/32 of each month's data.
+  - Cold-start safe: returns empty result if equities.polygon_adjusted
+    doesn't exist yet (initial system state before the first
+    polygon_adjustment_job run).
 """
 from __future__ import annotations
 
@@ -33,19 +44,19 @@ from typing import Optional
 from pyiceberg.expressions import And, EqualTo, GreaterThanOrEqual, LessThan, LessThanOrEqual
 from pyiceberg.table import Table
 
+from app.services.equities.schemas import equities_table_id
 from app.services.iceberg_catalog import get_catalog
 from app.services.readers.schemas import (
     BarQualityResponse,
     BarQualityRow,
     SilverBarsResponse,
 )
-from app.services.silver.schemas import SilverBar, silver_table_id
+from app.services.silver.schemas import SilverBar
 
 logger = logging.getLogger(__name__)
 
 
-_OHLCV_TABLE_NAME = "ohlcv_1m"
-_BAR_QUALITY_TABLE_NAME = "bar_quality"
+_OHLCV_TABLE_NAME = "polygon_adjusted"
 
 
 class SilverOhlcvReader:
@@ -78,14 +89,19 @@ class SilverOhlcvReader:
     def _get_ohlcv_table(self) -> Table:
         if self._ohlcv_table is None:
             self._ohlcv_table = self._get_catalog().load_table(
-                silver_table_id(_OHLCV_TABLE_NAME),
+                equities_table_id(_OHLCV_TABLE_NAME),
             )
         return self._ohlcv_table
 
     def _get_bar_quality_table(self) -> Table:
+        # No v2 equivalent of silver.bar_quality. Callers of
+        # get_bar_quality() get an empty BarQualityResponse via the
+        # short-circuit there; this method is kept for tests that
+        # construct the reader with an explicit table fixture.
         if self._bar_quality_table is None:
-            self._bar_quality_table = self._get_catalog().load_table(
-                silver_table_id(_BAR_QUALITY_TABLE_NAME),
+            raise FileNotFoundError(
+                "bar_quality table has no v2 equivalent; callers should "
+                "use get_bar_quality() which short-circuits to empty"
             )
         return self._bar_quality_table
 
@@ -99,26 +115,26 @@ class SilverOhlcvReader:
         start: datetime,
         end: datetime,
     ) -> SilverBarsResponse:
-        """Read 1-minute silver bars for `symbol` in `[start, end)`.
+        """Read 1-minute adjusted OHLCV bars for `symbol` in `[start, end)`.
 
-        `start`/`end` are tz-aware UTC datetimes (caller responsibility;
-        naive datetimes are upgraded to UTC defensively).
+        Source: `equities.polygon_adjusted` (CV1's table populated by
+        the Spark adjustment job in CV5/CV6). `start`/`end` are tz-aware
+        UTC datetimes (caller responsibility; naive datetimes upgraded
+        to UTC defensively).
 
         Each bar carries one set of OHLCV columns — split-adjusted
         canonical view. That's what chart, indicators, backtests,
         screener, and ML all consume.
 
         **Need raw prices** (trade-tape replay, fill reconciliation)?
-        Multiply silver values by F(symbol, bar_date), where F is the
-        cumulative split factor for ex_date > bar_date. Read
-        silver.corp_actions via CorpActionsReader and apply the math
-        client-side; see `app/services/silver/ohlcv/normalize.py` for
-        reference. Silver intentionally doesn't carry redundant raw
-        columns.
+        Multiply adjusted values by `adj_factor` (stored on every
+        polygon_adjusted row per CV1's POLYGON_ADJUSTED_SCHEMA).
+        adj_factor is the cumulative future-splits factor at the bar's
+        timestamp, so `raw_value = adj_value × adj_factor`.
 
         Edge cases:
           - Unknown / empty symbol → empty `bars`, count=0.
-          - silver.ohlcv_1m doesn't exist yet → empty `bars`.
+          - equities.polygon_adjusted doesn't exist yet → empty `bars`.
           - No bars in window → empty `bars`.
         """
         sym = (symbol or "").strip().upper()
@@ -139,8 +155,8 @@ class SilverOhlcvReader:
             table = self._get_ohlcv_table()
         except Exception as e:
             logger.warning(
-                "SilverOhlcvReader: silver.ohlcv_1m not loadable (%s); "
-                "returning empty result", e,
+                "SilverOhlcvReader: equities.polygon_adjusted not "
+                "loadable (%s); returning empty result", e,
             )
             return SilverBarsResponse(
                 symbol=sym, start=start_utc, end=end_utc,
@@ -187,12 +203,28 @@ class SilverOhlcvReader:
         since: Optional[date] = None,
         until: Optional[date] = None,
     ) -> BarQualityResponse:
-        """Read per-(symbol, date) quality rows from silver.bar_quality.
+        """Per-(symbol, date) quality rows from v1's silver.bar_quality.
 
-        Bounds are inclusive on `date`. Returns empty rows if the
-        silver.bar_quality table doesn't exist yet OR no rows match.
+        Post-CV11: NO V2 EQUIVALENT. Returns an empty response. v2 enforces
+        data-integrity invariants via the Spark adjustment job + corp-
+        actions ingest (CV5/CV9) rather than a downstream audit table.
+        If/when a v2 quality column is needed, it'll surface on
+        polygon_adjusted directly.
+
+        Callers (none today; reserved surface for future MCP tooling)
+        get a well-formed empty BarQualityResponse so they can switch
+        on `count == 0` if they need the absence signal.
         """
         sym = (symbol or "").strip().upper()
+        # No v2 table; tests / callers passing an explicit table fixture
+        # can still hit the legacy path below — but production code paths
+        # short-circuit here.
+        if self._bar_quality_table is None:
+            return BarQualityResponse(
+                symbol=sym or symbol or "", since=since, until=until,
+                snapshot_id=None, rows=[], count=0,
+            )
+
         if not sym:
             return BarQualityResponse(
                 symbol=symbol or "", since=since, until=until,
@@ -203,7 +235,7 @@ class SilverOhlcvReader:
             table = self._get_bar_quality_table()
         except Exception as e:
             logger.warning(
-                "SilverOhlcvReader: silver.bar_quality not loadable (%s); "
+                "SilverOhlcvReader: bar_quality table fixture failed (%s); "
                 "returning empty result", e,
             )
             return BarQualityResponse(
@@ -265,15 +297,25 @@ class SilverOhlcvReader:
             if ing_ts is not None and ing_ts.tzinfo is None:
                 ing_ts = ing_ts.replace(tzinfo=timezone.utc)
 
-            # sources_seen is stored as CSV string; promote back to list.
+            # Provider column rename: v1 silver had `source_provider`;
+            # v2 equities.polygon_adjusted has `source` (CV1 schema).
+            # Read whichever column is present so the reader survives
+            # the v1-test silver fixtures + the v2 production path.
+            source_provider = (
+                r.get("source_provider")
+                or r.get("source")
+                or "unknown"
+            )
+            # sources_seen is v1-silver-only (a multi-provider merge
+            # artifact). v2 equities.polygon_adjusted is single-provider
+            # by definition (polygon), so sources_seen is [].
             seen_raw = r.get("sources_seen") or ""
             sources_seen = [s for s in seen_raw.split(",") if s] if seen_raw else []
 
-            # The silver Arrow schema permits NULLs on price columns; the
+            # The Iceberg schema permits NULLs on price columns; the
             # Pydantic SilverBar declares them as non-Optional float for
-            # the canonical (post-merge) row. Skip rows missing any OHLC
-            # (would be an upstream bug worth surfacing rather than
-            # silently 0-filling).
+            # the canonical row. Skip rows missing any OHLC (upstream
+            # bug worth surfacing rather than silently 0-filling).
             if any(
                 r.get(c) is None for c in ("open", "high", "low", "close")
             ):
@@ -294,7 +336,7 @@ class SilverOhlcvReader:
                     volume=r.get("volume") or 0,
                     vwap=r.get("vwap"),
                     trade_count=r.get("trade_count"),
-                    source_provider=r.get("source_provider") or "unknown",
+                    source_provider=source_provider,
                     sources_seen=sources_seen,
                     ingestion_ts=ing_ts,
                     ingestion_run_id=r.get("ingestion_run_id"),

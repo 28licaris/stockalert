@@ -461,3 +461,77 @@ class TestMCPRegistration:
         # Both tools must be callables.
         assert callable(silver_ohlcv.get_silver_bars)
         assert callable(silver_ohlcv.get_silver_bar_quality)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# CV11 — v2 cutover regression tests
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestV2ReaderTargets:
+    """Symbolic checks that the reader resolves equities.polygon_adjusted
+    (v2) and not silver.ohlcv_1m (v1). Catch accidental rollback."""
+
+    def test_get_bars_loads_equities_polygon_adjusted(self) -> None:
+        from unittest.mock import MagicMock
+        from app.services.readers.silver_ohlcv_reader import SilverOhlcvReader
+
+        fake_cat = MagicMock()
+        fake_cat.load_table.return_value = MagicMock()
+        r = SilverOhlcvReader(catalog=fake_cat)
+        r._get_ohlcv_table()
+
+        args, _ = fake_cat.load_table.call_args
+        assert args[0].endswith(".polygon_adjusted"), (
+            f"reader must load equities.polygon_adjusted, got {args[0]!r}"
+        )
+
+    def test_get_bar_quality_short_circuits_to_empty_without_v2_table(
+        self,
+    ) -> None:
+        """No v2 equivalent for silver.bar_quality. Reader returns an
+        empty BarQualityResponse without trying to load anything."""
+        from unittest.mock import MagicMock
+        from app.services.readers.silver_ohlcv_reader import SilverOhlcvReader
+
+        fake_cat = MagicMock()
+        fake_cat.load_table.side_effect = AssertionError(
+            "must not attempt to load a v2 bar_quality — there is none"
+        )
+        r = SilverOhlcvReader(catalog=fake_cat)
+        resp = r.get_bar_quality("AAPL")
+        assert resp.count == 0
+        assert resp.rows == []
+        # The fake's side_effect would have fired if load_table was called.
+        fake_cat.load_table.assert_not_called()
+
+    def test_arrow_to_bars_accepts_v2_source_column(self) -> None:
+        """v2 polygon_adjusted has `source` (not `source_provider`).
+        Reader's conversion must read `source` so v2 rows produce
+        valid SilverBar objects."""
+        import pyarrow as pa
+        from app.services.readers.silver_ohlcv_reader import SilverOhlcvReader
+
+        arrow = pa.table({
+            "symbol": ["AAPL"],
+            "timestamp": pa.array(
+                [datetime(2024, 5, 15, 14, 30, tzinfo=timezone.utc)],
+                type=pa.timestamp("us", tz="UTC"),
+            ),
+            "open": [150.0],
+            "high": [151.0],
+            "low": [149.0],
+            "close": [150.5],
+            "volume": [1000],
+            "vwap": [150.25],
+            "trade_count": [10],
+            # NB: v2 schema uses `source`, not `source_provider`.
+            "source": ["polygon-adjusted"],
+            "ingestion_ts": pa.array([None], type=pa.timestamp("us", tz="UTC")),
+            "ingestion_run_id": pa.array([None], type=pa.string()),
+            "adj_factor": [1.0],
+        })
+        bars = SilverOhlcvReader._arrow_to_bars(arrow)
+        assert len(bars) == 1
+        assert bars[0].source_provider == "polygon-adjusted"
+        assert bars[0].sources_seen == []  # no v2 equivalent
