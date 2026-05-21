@@ -79,7 +79,6 @@ def _register_background_jobs(
     *,
     polygon_started: bool,
     schwab_started: bool,
-    silver_started: bool,
     live_lake_writer_started: bool,
     journal_started: bool,
 ) -> None:
@@ -160,22 +159,10 @@ def _register_background_jobs(
             run_now=_run_schwab_once,
         )
 
-    # Silver OHLCV build — run_silver_ohlcv_build_nightly self-audits.
-    if silver_started:
-        async def _run_silver_ohlcv_build_once() -> None:
-            from app.services.silver.ohlcv.nightly import (
-                run_silver_ohlcv_build_nightly,
-            )
-
-            await run_silver_ohlcv_build_nightly()
-
-        job_registry.register(
-            name="silver_ohlcv_build",
-            display_name="Silver OHLCV build",
-            schedule=f"daily at {int(_s.silver_ohlcv_build_run_hour_utc):02d}:00 UTC",
-            setting_key="SILVER_OHLCV_BUILD_RUN_HOUR_UTC",
-            run_now=_run_silver_ohlcv_build_once,
-        )
+    # CV13: silver_ohlcv_build job removed. polygon_adjustment_job runs
+    # OUT-OF-PROCESS via EMR Serverless (or the local-Spark recipe in
+    # docs/architecture_v2/07_runbook.md), so it doesn't register as
+    # a uvicorn job — no in-process JobRegistry entry to surface.
 
     # Journal sync — `sync_all` doesn't write ingestion_runs, wrap it.
     if journal_started:
@@ -375,33 +362,11 @@ async def lifespan(app: FastAPI):
                 exc,
             )
 
-    # Nightly silver OHLCV build (TA-5.1.6). Runs after both upstream
-    # nightlies (polygon 07:00 UTC, schwab 22:00 UTC) — default 23:00
-    # UTC gives Schwab nightly headroom. Idempotent + isolated-failure.
-    nightly_silver_ohlcv_task: asyncio.Task | None = None
-    if (
-        getattr(_settings, "silver_ohlcv_build_enabled", False)
-        and (_settings.stock_lake_bucket or "").strip()
-    ):
-        try:
-            from app.services.silver.ohlcv.nightly import run_silver_ohlcv_build_loop
-
-            nightly_silver_ohlcv_task = asyncio.create_task(
-                run_silver_ohlcv_build_loop(),
-                name="nightly_silver_ohlcv_build",
-            )
-            app.state.nightly_silver_ohlcv_task = nightly_silver_ohlcv_task
-            logger.info(
-                "nightly_silver_ohlcv_build: background loop started "
-                "(SILVER_OHLCV_BUILD_RUN_HOUR_UTC=%s, symbols=%s)",
-                _settings.silver_ohlcv_build_run_hour_utc,
-                _settings.silver_ohlcv_build_symbols,
-            )
-        except Exception as exc:
-            logger.exception(
-                "✗ nightly_silver_ohlcv_build failed to start: %s — continuing without it",
-                exc,
-            )
+    # CV13: nightly_silver_ohlcv_build loop removed.
+    # equities.polygon_adjusted is now built whole-market by the
+    # weekly polygon_adjustment_job (Spark, EMR Serverless / CodeBuild
+    # / local — see docs/architecture_v2/07_runbook.md). uvicorn no
+    # longer runs the silver compute in-process.
 
     async def broadcast_signal(signal_data: dict):
         logger.info(f"📡 Broadcasting signal: {signal_data}")
@@ -428,7 +393,6 @@ async def lifespan(app: FastAPI):
     _register_background_jobs(
         polygon_started=nightly_lake_task is not None,
         schwab_started=nightly_schwab_task is not None,
-        silver_started=nightly_silver_ohlcv_task is not None,
         live_lake_writer_started=_llw_settings.live_lake_writer_enabled,
         journal_started=_settings.journal_enabled and _journal_has_creds,
     )
@@ -459,15 +423,8 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("nightly_schwab_refresh task shutdown: %s", e)
 
-    sov = getattr(app.state, "nightly_silver_ohlcv_task", None)
-    if sov is not None and not sov.done():
-        sov.cancel()
-        try:
-            await sov
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.warning("nightly_silver_ohlcv_build task shutdown: %s", e)
+    # CV13: nightly_silver_ohlcv_task removed — no in-process silver
+    # build loop to shut down.
 
     # Live lake writer: stop BEFORE watchlist (so it can capture any
     # last-minute streamed bars; the stop call gives the in-flight cycle
