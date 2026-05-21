@@ -4,9 +4,9 @@ In-repo issue list for bugs, flaky tests, blockers, and follow-up
 cleanup. Lighter than GitHub Issues; lives in-repo so context goes
 with the code and PRs can cite IDs.
 
-For longer-running work (phases, multi-step initiatives) use
-[BUILD_JOURNAL.md](BUILD_JOURNAL.md) instead. This file is for the
-"things that are wrong" list.
+For longer-running work (phases, multi-step initiatives), use commit
+messages and the [`architecture_v2/`](architecture_v2/README.md)
+phase docs. This file is for the "things that are wrong" list.
 
 ## How to file an issue
 
@@ -25,8 +25,8 @@ For longer-running work (phases, multi-step initiatives) use
 
 If you're not sure whether something is an issue or a backlog item:
 issues are "this is broken / known wrong"; backlog items are "this is
-fine, we'd just like more of it." Backlog goes in
-[BUILD_JOURNAL.md](BUILD_JOURNAL.md).
+fine, we'd just like more of it." Backlog goes in commit messages
+or the relevant phase doc under `architecture_v2/`.
 
 ## Area tags
 

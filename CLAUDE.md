@@ -13,10 +13,8 @@ day/swing trading**.
 | Tests | [`testing.md`](docs/standards/testing.md) |
 | New service / arch change | [`doc_discipline.md`](docs/standards/doc_discipline.md) |
 | `sim/` / strategies / indicators | [`trading_subsystem.md`](docs/standards/trading_subsystem.md) |
-| Bronze sinks / maintenance | [`data/bronze_idempotency.md`](docs/standards/data/bronze_idempotency.md) |
-| Silver schema | [`data/lean_silver.md`](docs/standards/data/lean_silver.md) |
-| Adding a symbol / ingest paths | [`data/symbol_lifecycle.md`](docs/standards/data/symbol_lifecycle.md) (v1 locked) |
-| Lake / ML architecture (proposed v2) | [`docs/architecture_v2/`](docs/architecture_v2/README.md) (**read before lake/ingest refactors**) |
+| Lake / ML architecture (canonical v2) | [`docs/architecture_v2/`](docs/architecture_v2/README.md) (**source of truth for lake design**) |
+| Adding a symbol / ingest paths | [`data/symbol_lifecycle.md`](docs/standards/data/symbol_lifecycle.md) |
 | Trading-day math | [`data/timezone_et_vs_utc.md`](docs/standards/data/timezone_et_vs_utc.md) |
 | Athena SQL | [`data/athena_dialects.md`](docs/standards/data/athena_dialects.md) |
 
@@ -42,13 +40,18 @@ docker compose --profile ch up -d                 # local ClickHouse
 docker compose --profile full up --build          # full stack
 ```
 
-## Layer map
+## Layer map (v2 — post Phase 1 migration)
 
 ```
 app/api/             FastAPI routes (routes_*.py — one per domain)
 app/services/        Domain modules (see standards/service_modules.md)
-  bronze/  silver/  ingest/  readers/  live/
-  sim/                Backtest (see standards/trading_subsystem.md)
+  equities/          v2 lake: schemas + sink + tables + gaps + models
+  ingest/            Provider → lake writers (Polygon flat-files,
+                     Schwab REST/live, corp-actions)
+  readers/           Lake → consumer Pydantic shapes
+                     (AdjustedOhlcvReader, BronzeReader, CorpActionsReader)
+  live/              Live-tier orchestration (stream, watchlist)
+  sim/               Backtest (see standards/trading_subsystem.md)
   journal/  screener/  universe/  legacy/
 app/db/              ClickHouse client + schemas
 app/providers/       base.py + alpaca/polygon/schwab
@@ -56,30 +59,52 @@ app/indicators/      Pure math, registry pattern
 app/signals/         Pattern detectors (pure fns)
 app/mcp/             MCP server + tools (agent entry)
 app/config.py        Settings (Pydantic) — single env-var source
-scripts/             Ops (backfill, audit, verify, codebuild/)
+scripts/             Ops scripts:
+                       lake_import_athena.py — one-time bulk-load
+                         from existing S3 cache → equities.polygon_raw
+                       polygon_history_backfill.py — reusable Polygon
+                         flat-files puller into equities.polygon_raw
+                       schwab_history_backfill.py — Schwab REST →
+                         equities.schwab_universe
+                       run_corp_actions_backfill.py — Polygon REST →
+                         equities.market_corp_actions
+                       spark/polygon_adjustment_job.py — whole-market
+                         weekly Spark job → equities.polygon_adjusted
+                       rebuild_ch_from_silver.py — bulk lake → CH
+                         (legacy filename, sources from v2 lake)
 docs/                Plans, runbooks; docs/standards/ = rules
 tests/  tests/integration/
 ```
+
+Lake tables (v2 / `equities.*` Glue DB):
+
+| Table | Source | Notes |
+|---|---|---|
+| `equities.polygon_raw` | Polygon flat-files (CV7 nightly, CV3 history puller) | Raw unadjusted, bucket(32, symbol) + month(timestamp) |
+| `equities.polygon_adjusted` | Spark job (CV5) reads raw + corp_actions | Split-adjusted + `adj_factor` column; merge-on-read |
+| `equities.schwab_universe` | Schwab live + REST (CV8) | Pre-adjusted (adj_factor=1.0); bucket(16) |
+| `equities.market_corp_actions` | Polygon REST (CV9) | Splits + dividends; month(ex_date) partition |
 
 ## Docs
 
 | Doc | When |
 |-----|------|
 | [`docs/standards/`](docs/standards/README.md) | **Always — the rules** |
+| [`docs/architecture_v2/`](docs/architecture_v2/README.md) | v2 lake / ML design (canonical) |
 | `docs/ARCHITECTURE.md` | System overview, service map |
 | `docs/ISSUES.md` | Known issues, flaky tests |
 | `docs/COMMANDS.md` | Cheatsheet |
-| `docs/data_platform_plan.md` | Lake / Iceberg / medallion roadmap |
-| `docs/silver_layer_plan.md` | Silver build details |
+| `docs/architecture_v2/07_runbook.md` | Operator procedures |
 | `docs/trading_subsystem_design.md` | Trading subsystem contract |
-| `docs/runbook_*.md` | Operator procedures |
 
-Plan vs code conflict: code wins. (BUILD_JOURNAL retired 2026-05-18 —
-detailed commit messages are the journal.)
+Plan vs code conflict: code wins. The journal lives in detailed
+commit messages; BUILD_JOURNAL was retired 2026-05-18 and the file
+deleted 2026-05-21 (CV18).
 
 ## Infra
 
 AWS only. Glue + S3 (Iceberg warehouse), CodeBuild for long backfills
-(`scripts/codebuild/`). No CDK / Terraform. Self-hosted ClickHouse.
+(`scripts/codebuild/`), EMR Serverless for the weekly Spark adjustment
+job. No CDK / Terraform. Self-hosted ClickHouse.
 Secrets via `.env` (gitignored; template in `.env.example`, docs in
 `CONFIG.md`).

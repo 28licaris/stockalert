@@ -42,7 +42,7 @@ class Settings(BaseModel):
 
     # ─────────────────────────────────────────────────────────
     # Stock Lake (S3) — your own data lake, separate from Polygon Flat Files.
-    # See docs/data_platform_plan.md for layout. Empty AWS creds fall through
+    # See docs/architecture_v2/03_s3_layout.md for layout. Empty AWS creds fall through
     # to the default boto3 credential chain (env, ~/.aws/credentials, IAM
     # role, etc.), so deploys on EC2 / ECS need only set the bucket name.
     # ─────────────────────────────────────────────────────────
@@ -77,7 +77,7 @@ class Settings(BaseModel):
     schwab_nightly_symbols: str = os.getenv("SCHWAB_NIGHTLY_SYMBOLS", "active")
 
     # ─────────────────────────────────────────────────────────
-    # Iceberg catalog (AWS Glue) — see docs/data_platform_plan.md.
+    # Iceberg catalog (AWS Glue) — see docs/architecture_v2/.
     # Iceberg warehouse path: s3://${STOCK_LAKE_BUCKET}/${ICEBERG_WAREHOUSE_PREFIX}/
     # Glue database holding namespaces bronze/silver/gold (we use one Glue
     # database; Iceberg namespaces are the `bronze.*` etc. qualifiers).

@@ -37,8 +37,8 @@ in SaaS mode.
   See §3.2.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — service map; this plan adds
   a new bounded service `app/services/assistant/`.
-- [data_platform_plan.md](data_platform_plan.md) — the data the
-  assistant reads via MCP tools.
+- [architecture_v2/](architecture_v2/README.md) — the v2 lake the
+  assistant reads via MCP tools (equities.* tables).
 
 ---
 
@@ -1186,4 +1186,4 @@ AS-1 may now begin.
 **Cross-references:** [frontend_plan.md](frontend_plan.md),
 [trading-ai-build-plan.md](trading-ai-build-plan.md),
 [ARCHITECTURE.md](ARCHITECTURE.md),
-[data_platform_plan.md](data_platform_plan.md).
+[architecture_v2/](architecture_v2/README.md).

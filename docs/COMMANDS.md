@@ -4,8 +4,8 @@ Quick reference for the commands you actually run on this repo. Run
 everything from the repo root unless noted.
 
 For *why* the system is structured this way see
-[ARCHITECTURE.md](ARCHITECTURE.md). For *what's being built next* see
-[BUILD_JOURNAL.md](BUILD_JOURNAL.md).
+[ARCHITECTURE.md](ARCHITECTURE.md). For lake / ML design see
+[`architecture_v2/`](architecture_v2/README.md).
 
 ## First-time setup
 
@@ -142,8 +142,7 @@ aws athena start-query-execution --profile stock-lake \
 open "https://us-east-1.console.aws.amazon.com/athena/home?region=us-east-1#/query-editor"
 ```
 
-Dialect gotcha (also in
-[memory:athena-ddl-dml-dialect](../docs/BUILD_JOURNAL.md)):
+Dialect gotcha (see [`standards/data/athena_dialects.md`](standards/data/athena_dialects.md)):
 DDL uses Hive `` `backticks` ``, DML uses Trino `"double quotes"`. The
 same query can't use both.
 

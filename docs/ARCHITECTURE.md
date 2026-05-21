@@ -6,7 +6,7 @@
 
 This is the high-level architecture. Two companion docs go deeper:
 
-- [data_platform_plan.md](data_platform_plan.md) — storage + ingestion, Iceberg lake
+- [`architecture_v2/`](architecture_v2/README.md) — storage + ingestion, the v2 Iceberg lake (canonical post-2026-05 migration)
 - [trading-ai-build-plan.md](trading-ai-build-plan.md) — AI trading services on top
 
 ---
@@ -598,7 +598,7 @@ in-process monolith with ClickHouse as source of truth. The substantive
 shifts:
 
 1. **Lake is the source of truth.** ClickHouse demoted to serving cache.
-   (See [data_platform_plan.md](data_platform_plan.md).)
+   (See [`architecture_v2/`](architecture_v2/README.md).)
 2. **Iceberg, not raw Parquet.** ACID writes, schema evolution, time
    travel, MERGE INTO. Glue as the catalog.
 3. **Medallion layout.** bronze (per-provider, immutable) → silver
@@ -612,6 +612,7 @@ shifts:
    table; Iceberg `MERGE INTO` is the correctness guarantee.
 
 Migration plan for the lake side is in
-[data_platform_plan.md §13](data_platform_plan.md). Migration plan for
-the AI trading side is in
+[`architecture_v2/06_migration.md`](architecture_v2/06_migration.md)
+(Phase 1 shipped on `v2-architecture` branch — commits CV1-CV18).
+Migration plan for the AI trading side is in
 [trading-ai-build-plan.md](trading-ai-build-plan.md).
