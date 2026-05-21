@@ -109,13 +109,96 @@ curl "http://localhost:8123/?database=stocks" \
 Expected output during market hours: ~100+ symbols receiving bars
 from `source = "schwab-live"`.
 
+## Lake tier — Polygon history pulls
+
+### Initial bulk-load (Phase 1A — CV4 one-time op)
+
+After CV1-CV3 ship and `equities.polygon_raw` exists but is empty,
+populate it with the historical Polygon flat-files. This is the
+operational counterpart to CV4 in the migration table — no code, one
+command:
+
+```bash
+cd /path/to/stockalert
+export AWS_PROFILE=stockalert-prod
+poetry run python scripts/polygon_history_backfill.py \
+  --since 2021-01-04 \
+  --until "$(date -d 'yesterday' '+%Y-%m-%d')" \
+  --concurrency 4
+```
+
+Wall-clock: ~6-12 hours depending on Polygon throughput (whole-market,
+~1300 trading days × ~150 MB per day = ~200 GB downloaded). Memory
+peak ~600 MB (`concurrency=4` × peak-day-frame). Interruptible —
+re-run the same command and the pre-scan will skip already-loaded
+days.
+
+Verify post-run:
+```bash
+# Row count should match bronze.polygon_minute ± expected drift
+poetry run python -c "
+from app.services.iceberg_catalog import get_catalog
+from app.services.equities.tables import ensure_polygon_raw
+t = ensure_polygon_raw(get_catalog())
+print('rows:', t.scan().to_arrow().num_rows)
+"
+```
+
+### Extending history (future Polygon subscription upgrade)
+
+When the Polygon plan covers more years than `equities.polygon_raw`
+currently holds (e.g. 5y → 10y upgrade), pull the new window:
+
+```bash
+# Example: pull 2016-2020 after upgrading to 10y coverage
+poetry run python scripts/polygon_history_backfill.py \
+  --since 2016-01-04 \
+  --until 2020-12-31 \
+  --concurrency 4
+```
+
+Idempotent — the script pre-scans for already-loaded dates and only
+fetches the missing ones, so it's safe to broaden a window and re-run
+the same command. After the load:
+
+```bash
+# Recompute adj_factor for the new history range
+poetry run python scripts/spark/polygon_adjustment_job.py \
+  --symbols ALL --since 2016-01-04 --until 2020-12-31
+```
+
+### Recover a known-bad partition
+
+When a corp-action correction is published or a Polygon flat-file is
+republished after an error, the existing rows for the affected window
+are wrong. Recipe:
+
+```bash
+# 1. Drop the affected partitions via Spark SQL or DuckDB
+poetry run python -c "
+from app.services.iceberg_catalog import get_catalog
+from app.services.equities.tables import ensure_polygon_raw
+t = ensure_polygon_raw(get_catalog())
+t.delete(\"timestamp >= '2024-05-13' AND timestamp < '2024-05-15'\")
+"
+
+# 2. Re-pull with --force (bypass the pre-scan since the table
+#    technically has rows in this window — they're stale)
+poetry run python scripts/polygon_history_backfill.py \
+  --since 2024-05-13 --until 2024-05-14 --force
+
+# 3. Recompute adj_factor for the affected symbols
+poetry run python scripts/spark/polygon_adjustment_job.py \
+  --symbols AFFECTED1,AFFECTED2 --since 2024-05-13
+```
+
 ## Lake tier — Spark batch jobs
 
 ### Run `polygon_adjustment_job` for one symbol (dev)
 
 ```bash
 export STOCKALERT_SPARK_LOCAL_MODE=true
-export STOCK_LAKE_BUCKET_S3=s3://stockalert-lake/equities/
+export STOCK_LAKE_BUCKET_S3=s3://stockalert-lake/iceberg/
 export AWS_PROFILE=stockalert-dev
 
 cd /path/to/stockalert
@@ -124,7 +207,7 @@ poetry run python scripts/spark/polygon_adjustment_job.py \
 ```
 
 Expected: ~30s for one symbol, ~12 months. Output in
-`s3://stockalert-lake/equities/polygon_adjusted/`.
+`s3://stockalert-lake/iceberg/equities/polygon_adjusted/`.
 
 ### Run `polygon_adjustment_job` whole-market (production)
 
@@ -233,7 +316,7 @@ syms_csv = ",".join(f"'{s}'" for s in syms)
 
 df = duckdb.sql(f"""
     SELECT symbol, timestamp, open, high, low, close, volume, vwap, trade_count, source
-    FROM iceberg_scan('s3://stockalert-lake/equities/schwab_universe/')
+    FROM iceberg_scan('s3://stockalert-lake/iceberg/equities/schwab_universe/')
     WHERE symbol IN ({syms_csv})
 """).arrow()
 
@@ -283,8 +366,8 @@ spark.sql("SELECT count(*) FROM lake.equities.polygon_adjusted").show()
 
 | Check | Command | Healthy? |
 |---|---|---|
-| Iceberg file count | `aws s3 ls s3://stockalert-lake/equities/polygon_adjusted/data/ --recursive \| wc -l` | < 10,000 (else schedule compaction) |
-| Iceberg metadata size | `aws s3 ls s3://stockalert-lake/equities/polygon_adjusted/metadata/ --recursive --summarize` | < 1 GB |
+| Iceberg file count | `aws s3 ls s3://stockalert-lake/iceberg/equities/polygon_adjusted/data/ --recursive \| wc -l` | < 10,000 (else schedule compaction) |
+| Iceberg metadata size | `aws s3 ls s3://stockalert-lake/iceberg/equities/polygon_adjusted/metadata/ --recursive --summarize` | < 1 GB |
 | EMR Serverless cost MTD | CloudWatch metric | < $20 |
 | S3 storage MTD | S3 Storage Lens | < 1 TB |
 
