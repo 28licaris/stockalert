@@ -2,7 +2,7 @@
 Lake → ClickHouse backfill (was silver→CH; CV11 retargeted at
 equities.polygon_adjusted).
 
-Reads adjusted 1-minute bars via `SilverOhlcvReader` (which post-CV11
+Reads adjusted 1-minute bars via `AdjustedOhlcvReader` (which post-CV11
 sources from `equities.polygon_adjusted`) and bulk-inserts into
 ClickHouse `ohlcv_1m`. The **canonical fast path** for populating CH
 from deep history — replaces the legacy provider-REST-direct-to-CH
@@ -29,7 +29,8 @@ Wall-clock notes:
     running with the same data produces no duplicates after the next
     merge.
 
-The module + class name (`silver_to_ch_backfill`) is kept stable for
+CV15 rename pass: module + class renamed from silver_to_ch_backfill /
+SilverToChBackfill. The body is kept stable for
 caller compatibility — Phase 1C is the read-side cutover, not the
 big rename pass. The full rename to `lake_to_ch_backfill` happens in
 CV14 alongside silver-module deletion.
@@ -43,7 +44,7 @@ from typing import Optional
 
 from app.db.queries import insert_bars_batch
 from app.services.readers.schemas import SilverBarsResponse
-from app.services.readers.silver_ohlcv_reader import SilverOhlcvReader
+from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ DEFAULT_BACKFILL_DAYS = 730
 
 
 @dataclass
-class SilverToChBackfillResult:
+class LakeToChBackfillResult:
     """Per-symbol result from `backfill_symbol`."""
 
     symbol: str
@@ -77,7 +78,7 @@ class SilverToChBackfillResult:
         return (self.finished_at - self.started_at).total_seconds()
 
 
-class SilverToChBackfill:
+class LakeToChBackfill:
     """Silver `ohlcv_1m` → ClickHouse `ohlcv_1m` backfill service.
 
     Construct via `from_settings()` for production; pass `reader`
@@ -93,16 +94,16 @@ class SilverToChBackfill:
     `asyncio.to_thread` from async callers.
     """
 
-    def __init__(self, *, reader: Optional[SilverOhlcvReader] = None) -> None:
+    def __init__(self, *, reader: Optional[AdjustedOhlcvReader] = None) -> None:
         self._reader = reader
 
     @classmethod
-    def from_settings(cls) -> "SilverToChBackfill":
+    def from_settings(cls) -> "LakeToChBackfill":
         return cls()
 
-    def _get_reader(self) -> SilverOhlcvReader:
+    def _get_reader(self) -> AdjustedOhlcvReader:
         if self._reader is None:
-            self._reader = SilverOhlcvReader.from_settings()
+            self._reader = AdjustedOhlcvReader.from_settings()
         return self._reader
 
     # ─────────────────────────────────────────────────────────────────
@@ -114,7 +115,7 @@ class SilverToChBackfill:
         symbol: str,
         *,
         days: int = DEFAULT_BACKFILL_DAYS,
-    ) -> SilverToChBackfillResult:
+    ) -> LakeToChBackfillResult:
         """Backfill the last `days` calendar days of silver bars into CH.
 
         Args:
@@ -131,10 +132,10 @@ class SilverToChBackfill:
         symbol: str,
         start: datetime,
         end: datetime,
-    ) -> SilverToChBackfillResult:
+    ) -> LakeToChBackfillResult:
         """Backfill `[start, end)` of silver bars into CH for `symbol`."""
         sym = (symbol or "").strip().upper()
-        result = SilverToChBackfillResult(
+        result = LakeToChBackfillResult(
             symbol=sym, started_at=datetime.now(timezone.utc),
         )
         if not sym:
@@ -152,7 +153,7 @@ class SilverToChBackfill:
                 # the 48-day reach in the next step.
                 result.finished_at = datetime.now(timezone.utc)
                 logger.info(
-                    "SilverToChBackfill: %s — silver has 0 rows in "
+                    "LakeToChBackfill: %s — silver has 0 rows in "
                     "[%s..%s); skipping CH insert", sym, start, end,
                 )
                 return result
@@ -161,12 +162,12 @@ class SilverToChBackfill:
             insert_bars_batch(ch_rows)
             result.bars_written = len(ch_rows)
             logger.info(
-                "SilverToChBackfill: %s — wrote %d bars to CH (snapshot=%s)",
+                "LakeToChBackfill: %s — wrote %d bars to CH (snapshot=%s)",
                 sym, result.bars_written, result.snapshot_id,
             )
         except Exception as e:
             logger.exception(
-                "SilverToChBackfill: %s [%s..%s) failed: %s",
+                "LakeToChBackfill: %s [%s..%s) failed: %s",
                 sym, start, end, e,
             )
             result.error = f"{type(e).__name__}: {e}"

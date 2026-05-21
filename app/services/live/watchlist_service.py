@@ -104,7 +104,7 @@ class WatchlistService:
              + queues a silver-derived warmup).
           3. Backfill warmup: for any symbol already in the stream but
              new to this watchlist, fire the legacy backfill path if
-             `silver_derived_add_members_enabled` is off (otherwise
+             `lake_warmup_enabled` is off (otherwise
              stream_service.add already fired the silver path).
 
         Returns:
@@ -147,7 +147,7 @@ class WatchlistService:
                 from app.config import settings as _s
 
                 use_legacy = not getattr(
-                    _s, "silver_derived_add_members_enabled", False,
+                    _s, "lake_warmup_enabled", False,
                 )
             except Exception:  # noqa: BLE001 — boundary
                 use_legacy = True

@@ -4,7 +4,7 @@ StreamService.
 
 The TA-5.3 unified add-symbol flow per docs/streaming_universe_model.md
 replaces the legacy 3-call _enqueue_backfill path with:
-  1. SilverToChBackfill.backfill_symbol(days=730) — silver.ohlcv_1m → CH
+  1. LakeToChBackfill.backfill_symbol(days=730) — silver.ohlcv_1m → CH
   2. SchwabTipFill.tip_fill(symbol) — silver-watermark → live gap (≤48d)
 
 Post-FE-CONTRACTS-4-finalisation this lives on `StreamService`
@@ -32,7 +32,7 @@ import pandas as pd
 import pytest
 
 from app.providers.base import DataProvider
-from app.services.ingest.silver_to_ch_backfill import SilverToChBackfillResult
+from app.services.ingest.lake_to_ch_backfill import LakeToChBackfillResult
 from app.services.ingest.schwab_tip_fill import TipFillResult
 from app.services.live import watchlist_service as wls_module
 from app.services.live.watchlist_service import WatchlistService
@@ -234,7 +234,7 @@ class TestAddMembersFlagDispatch:
         self, wl_svc: WatchlistService, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from app.config import settings
-        monkeypatch.setattr(settings, "silver_derived_add_members_enabled", False)
+        monkeypatch.setattr(settings, "lake_warmup_enabled", False)
 
         legacy_calls: list[list[str]] = []
         monkeypatch.setattr(
@@ -250,7 +250,7 @@ class TestAddMembersFlagDispatch:
         self, wl_svc: WatchlistService, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from app.config import settings
-        monkeypatch.setattr(settings, "silver_derived_add_members_enabled", True)
+        monkeypatch.setattr(settings, "lake_warmup_enabled", True)
 
         legacy_calls: list[list[str]] = []
         monkeypatch.setattr(
@@ -269,7 +269,7 @@ class TestAddMembersFlagDispatch:
 
 
 class TestWarmupChain:
-    """The _silver_derived_warmup_one async method runs lake_to_ch
+    """The _lake_warmup_one async method runs lake_to_ch
     and tip_fill in PARALLEL (CV12). Pre-CV12 v1 ran silver_build
     || tip_fill then silver_to_ch sequentially; the v2 simplification
     drops the silver_build step (polygon_adjusted is whole-market
@@ -288,7 +288,7 @@ class TestWarmupChain:
 
             def backfill_symbol(self, symbol, *, days):
                 called.add(f"lake_to_ch:{symbol}:days={days}")
-                return SilverToChBackfillResult(
+                return LakeToChBackfillResult(
                     symbol=symbol, bars_read=100, bars_written=100,
                 )
 
@@ -302,7 +302,7 @@ class TestWarmupChain:
                 return TipFillResult(symbol=symbol, bars_fetched=10)
 
         monkeypatch.setattr(
-            "app.services.ingest.silver_to_ch_backfill.SilverToChBackfill",
+            "app.services.ingest.lake_to_ch_backfill.LakeToChBackfill",
             _FakeS2C,
         )
         monkeypatch.setattr(
@@ -310,7 +310,7 @@ class TestWarmupChain:
             _FakeTip,
         )
 
-        await stream_svc._silver_derived_warmup_one("NVDA")
+        await stream_svc._lake_warmup_one("NVDA")
 
         # Both ran. Order is non-deterministic (asyncio.gather) so we
         # only assert the set, not the sequence.
@@ -343,7 +343,7 @@ class TestWarmupChain:
                 return TipFillResult(symbol=symbol, bars_fetched=5)
 
         monkeypatch.setattr(
-            "app.services.ingest.silver_to_ch_backfill.SilverToChBackfill",
+            "app.services.ingest.lake_to_ch_backfill.LakeToChBackfill",
             _FailingS2C,
         )
         monkeypatch.setattr(
@@ -351,7 +351,7 @@ class TestWarmupChain:
             _FakeTip,
         )
 
-        await stream_svc._silver_derived_warmup_one("NVDA")
+        await stream_svc._lake_warmup_one("NVDA")
         assert tip_called["n"] == 1
 
     @pytest.mark.asyncio
@@ -364,7 +364,7 @@ class TestWarmupChain:
                 return cls()
 
             def backfill_symbol(self, symbol, *, days):
-                return SilverToChBackfillResult(symbol=symbol, bars_written=10)
+                return LakeToChBackfillResult(symbol=symbol, bars_written=10)
 
         class _FailingTip:
             @classmethod
@@ -375,7 +375,7 @@ class TestWarmupChain:
                 raise RuntimeError("schwab 503")
 
         monkeypatch.setattr(
-            "app.services.ingest.silver_to_ch_backfill.SilverToChBackfill",
+            "app.services.ingest.lake_to_ch_backfill.LakeToChBackfill",
             _OkS2C,
         )
         monkeypatch.setattr(
@@ -384,7 +384,7 @@ class TestWarmupChain:
         )
 
         # Fire-and-forget — must not raise.
-        await stream_svc._silver_derived_warmup_one("NVDA")
+        await stream_svc._lake_warmup_one("NVDA")
 
     @pytest.mark.asyncio
     async def test_s2c_returns_error_result_continues_to_tip_fill(
@@ -398,7 +398,7 @@ class TestWarmupChain:
                 return cls()
 
             def backfill_symbol(self, symbol, *, days):
-                return SilverToChBackfillResult(
+                return LakeToChBackfillResult(
                     symbol=symbol, error="some clean failure mode",
                 )
 
@@ -412,7 +412,7 @@ class TestWarmupChain:
                 return TipFillResult(symbol=symbol, bars_fetched=5)
 
         monkeypatch.setattr(
-            "app.services.ingest.silver_to_ch_backfill.SilverToChBackfill",
+            "app.services.ingest.lake_to_ch_backfill.LakeToChBackfill",
             _ErrorResultS2C,
         )
         monkeypatch.setattr(
@@ -420,7 +420,7 @@ class TestWarmupChain:
             _FakeTip,
         )
 
-        await stream_svc._silver_derived_warmup_one("NVDA")
+        await stream_svc._lake_warmup_one("NVDA")
         assert tip_called["n"] == 1
 
 
@@ -446,9 +446,9 @@ class TestEnqueueSemantics:
         async def _spy(sym):
             called["n"] += 1
 
-        monkeypatch.setattr(stream_svc, "_silver_derived_warmup_one", _spy)
+        monkeypatch.setattr(stream_svc, "_lake_warmup_one", _spy)
         from app.config import settings
-        monkeypatch.setattr(settings, "silver_derived_add_members_enabled", True)
+        monkeypatch.setattr(settings, "lake_warmup_enabled", True)
         stream_svc._enqueue_warmup([])
         await asyncio.sleep(0)
         assert called["n"] == 0
@@ -462,9 +462,9 @@ class TestEnqueueSemantics:
         async def _spy(sym):
             seen.append(sym)
 
-        monkeypatch.setattr(stream_svc, "_silver_derived_warmup_one", _spy)
+        monkeypatch.setattr(stream_svc, "_lake_warmup_one", _spy)
         from app.config import settings
-        monkeypatch.setattr(settings, "silver_derived_add_members_enabled", True)
+        monkeypatch.setattr(settings, "lake_warmup_enabled", True)
         stream_svc._enqueue_warmup(["NVDA", "AAPL", "MSFT"])
         for _ in range(5):
             await asyncio.sleep(0)
@@ -482,9 +482,9 @@ class TestEnqueueSemantics:
         async def _spy(sym):
             seen.append(sym)
 
-        monkeypatch.setattr(stream_svc, "_silver_derived_warmup_one", _spy)
+        monkeypatch.setattr(stream_svc, "_lake_warmup_one", _spy)
         from app.config import settings
-        monkeypatch.setattr(settings, "silver_derived_add_members_enabled", False)
+        monkeypatch.setattr(settings, "lake_warmup_enabled", False)
         stream_svc._enqueue_warmup(["NVDA"])
         await asyncio.sleep(0)
         assert seen == []

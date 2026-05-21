@@ -12,7 +12,7 @@ provider-merged, corp-action-adjusted consumer surfaces. Per the
 every reader (chart, screener, indicator, backtest, MCP tool) reads
 silver — never bronze directly.
 
-The same `SilverOhlcvReader` backs the MCP tools in
+The same `AdjustedOhlcvReader` backs the MCP tools in
 `app/mcp/tools/silver_ohlcv.py` — one service, two surfaces, identical
 Pydantic shapes.
 """
@@ -29,7 +29,7 @@ from app.services.readers.schemas import (
     BarQualityResponse,
     SilverBarsResponse,
 )
-from app.services.readers.silver_ohlcv_reader import SilverOhlcvReader
+from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +37,11 @@ router = APIRouter()
 
 
 @lru_cache(maxsize=1)
-def _build_reader() -> SilverOhlcvReader:
-    return SilverOhlcvReader.from_settings()
+def _build_reader() -> AdjustedOhlcvReader:
+    return AdjustedOhlcvReader.from_settings()
 
 
-def get_silver_ohlcv_reader() -> SilverOhlcvReader:
+def get_adjusted_ohlcv_reader() -> AdjustedOhlcvReader:
     """FastAPI dependency provider — override in tests."""
     return _build_reader()
 
@@ -66,7 +66,7 @@ def get_silver_bars(
             "[start, end) interval mirrors slicing semantics."
         ),
     ),
-    reader: SilverOhlcvReader = Depends(get_silver_ohlcv_reader),
+    reader: AdjustedOhlcvReader = Depends(get_adjusted_ohlcv_reader),
 ) -> SilverBarsResponse:
     """Return 1-minute silver bars for `symbol` in `[start, end)`.
 
@@ -106,7 +106,7 @@ def get_silver_bar_quality(
         None,
         description="Upper bound on `date` (inclusive). Omit for through-today.",
     ),
-    reader: SilverOhlcvReader = Depends(get_silver_ohlcv_reader),
+    reader: AdjustedOhlcvReader = Depends(get_adjusted_ohlcv_reader),
 ) -> BarQualityResponse:
     """Return per-(symbol, date) bar-quality audit rows.
 

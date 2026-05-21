@@ -1,5 +1,5 @@
 """
-Tests for SilverOhlcvReader + the `/api/silver/...` HTTP routes.
+Tests for AdjustedOhlcvReader + the `/api/silver/...` HTTP routes.
 
 Two surfaces, same Pydantic contract — assert both behave identically
 on happy path + cold-start + edge cases.
@@ -19,13 +19,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import routes_silver
-from app.api.routes_silver import get_silver_ohlcv_reader
+from app.api.routes_silver import get_adjusted_ohlcv_reader
 from app.services.readers.schemas import (
     BarQualityResponse,
     BarQualityRow,
     SilverBarsResponse,
 )
-from app.services.readers.silver_ohlcv_reader import SilverOhlcvReader
+from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -143,7 +143,7 @@ class TestGetBarsHappyPath:
         ]
         ohlcv_table = _FakeIcebergTable(pa.Table.from_pylist(rows))
         bq_table = _FakeIcebergTable(pa.Table.from_pylist([]))
-        reader = SilverOhlcvReader(
+        reader = AdjustedOhlcvReader(
             ohlcv_table=ohlcv_table, bar_quality_table=bq_table,
         )
 
@@ -173,7 +173,7 @@ class TestGetBarsHappyPath:
             source_provider="polygon",
             sources_seen="polygon,schwab",
         )]
-        reader = SilverOhlcvReader(
+        reader = AdjustedOhlcvReader(
             ohlcv_table=_FakeIcebergTable(pa.Table.from_pylist(rows)),
             bar_quality_table=_FakeIcebergTable(pa.Table.from_pylist([])),
         )
@@ -187,7 +187,7 @@ class TestGetBarsHappyPath:
 
 class TestGetBarsEdgeCases:
     def test_empty_symbol_returns_empty(self) -> None:
-        reader = SilverOhlcvReader(
+        reader = AdjustedOhlcvReader(
             ohlcv_table=_FakeIcebergTable(pa.Table.from_pylist([])),
             bar_quality_table=_FakeIcebergTable(pa.Table.from_pylist([])),
         )
@@ -200,7 +200,7 @@ class TestGetBarsEdgeCases:
         assert resp.count == 0
 
     def test_whitespace_symbol_returns_empty(self) -> None:
-        reader = SilverOhlcvReader(
+        reader = AdjustedOhlcvReader(
             ohlcv_table=_FakeIcebergTable(pa.Table.from_pylist([])),
             bar_quality_table=_FakeIcebergTable(pa.Table.from_pylist([])),
         )
@@ -217,7 +217,7 @@ class TestGetBarsEdgeCases:
             def load_table(self, _id: Any) -> Any:
                 raise RuntimeError("table not found")
 
-        reader = SilverOhlcvReader(catalog=_BoomCatalog())
+        reader = AdjustedOhlcvReader(catalog=_BoomCatalog())
         resp = reader.get_bars(
             "AAPL",
             datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -229,7 +229,7 @@ class TestGetBarsEdgeCases:
 
     def test_scan_failure_returns_empty_no_raise(self) -> None:
         """If a scan blows up mid-query, return empty rather than 500ing."""
-        reader = SilverOhlcvReader(
+        reader = AdjustedOhlcvReader(
             ohlcv_table=_FakeIcebergTable(
                 pa.Table.from_pylist([]),
                 scan_raises=RuntimeError("scan exploded"),
@@ -245,7 +245,7 @@ class TestGetBarsEdgeCases:
         assert resp.snapshot_id is None  # no snapshot when scan fails
 
     def test_naive_datetime_upgraded_to_utc(self) -> None:
-        reader = SilverOhlcvReader(
+        reader = AdjustedOhlcvReader(
             ohlcv_table=_FakeIcebergTable(pa.Table.from_pylist([])),
             bar_quality_table=_FakeIcebergTable(pa.Table.from_pylist([])),
         )
@@ -266,7 +266,7 @@ class TestGetBarsEdgeCases:
         )
         bad["close"] = None
         rows = [good, bad]
-        reader = SilverOhlcvReader(
+        reader = AdjustedOhlcvReader(
             ohlcv_table=_FakeIcebergTable(pa.Table.from_pylist(rows)),
             bar_quality_table=_FakeIcebergTable(pa.Table.from_pylist([])),
         )
@@ -289,7 +289,7 @@ class TestGetBarQuality:
             _bar_quality_row("AAPL", date(2024, 6, 11)),
             _bar_quality_row("AAPL", date(2024, 6, 10)),
         ]
-        reader = SilverOhlcvReader(
+        reader = AdjustedOhlcvReader(
             ohlcv_table=_FakeIcebergTable(pa.Table.from_pylist([])),
             bar_quality_table=_FakeIcebergTable(pa.Table.from_pylist(rows)),
         )
@@ -309,7 +309,7 @@ class TestGetBarQuality:
             def load_table(self, _id: Any) -> Any:
                 raise RuntimeError("not found")
 
-        reader = SilverOhlcvReader(catalog=_BoomCatalog())
+        reader = AdjustedOhlcvReader(catalog=_BoomCatalog())
         resp = reader.get_bar_quality("AAPL")
         assert resp.rows == []
         assert resp.snapshot_id is None
@@ -328,7 +328,7 @@ def _make_silver_app() -> FastAPI:
 
 
 class _StubReader:
-    """Stand-in for SilverOhlcvReader at the route layer."""
+    """Stand-in for AdjustedOhlcvReader at the route layer."""
 
     def __init__(
         self,
@@ -368,7 +368,7 @@ class TestRouteGetBars:
     def test_route_delegates_and_returns_response(self) -> None:
         app = _make_silver_app()
         stub = _StubReader()
-        app.dependency_overrides[get_silver_ohlcv_reader] = lambda: stub
+        app.dependency_overrides[get_adjusted_ohlcv_reader] = lambda: stub
 
         with TestClient(app) as client:
             resp = client.get(
@@ -388,7 +388,7 @@ class TestRouteGetBars:
 
     def test_start_after_end_returns_400(self) -> None:
         app = _make_silver_app()
-        app.dependency_overrides[get_silver_ohlcv_reader] = lambda: _StubReader()
+        app.dependency_overrides[get_adjusted_ohlcv_reader] = lambda: _StubReader()
 
         with TestClient(app) as client:
             resp = client.get(
@@ -418,7 +418,7 @@ class TestRouteGetBarQuality:
                 snapshot_id="abc", rows=[bq_row], count=1,
             ),
         )
-        app.dependency_overrides[get_silver_ohlcv_reader] = lambda: stub
+        app.dependency_overrides[get_adjusted_ohlcv_reader] = lambda: stub
 
         with TestClient(app) as client:
             resp = client.get(
@@ -437,7 +437,7 @@ class TestRouteGetBarQuality:
 
     def test_since_after_until_returns_400(self) -> None:
         app = _make_silver_app()
-        app.dependency_overrides[get_silver_ohlcv_reader] = lambda: _StubReader()
+        app.dependency_overrides[get_adjusted_ohlcv_reader] = lambda: _StubReader()
 
         with TestClient(app) as client:
             resp = client.get(
@@ -474,11 +474,11 @@ class TestV2ReaderTargets:
 
     def test_get_bars_loads_equities_polygon_adjusted(self) -> None:
         from unittest.mock import MagicMock
-        from app.services.readers.silver_ohlcv_reader import SilverOhlcvReader
+        from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 
         fake_cat = MagicMock()
         fake_cat.load_table.return_value = MagicMock()
-        r = SilverOhlcvReader(catalog=fake_cat)
+        r = AdjustedOhlcvReader(catalog=fake_cat)
         r._get_ohlcv_table()
 
         args, _ = fake_cat.load_table.call_args
@@ -492,13 +492,13 @@ class TestV2ReaderTargets:
         """No v2 equivalent for silver.bar_quality. Reader returns an
         empty BarQualityResponse without trying to load anything."""
         from unittest.mock import MagicMock
-        from app.services.readers.silver_ohlcv_reader import SilverOhlcvReader
+        from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 
         fake_cat = MagicMock()
         fake_cat.load_table.side_effect = AssertionError(
             "must not attempt to load a v2 bar_quality — there is none"
         )
-        r = SilverOhlcvReader(catalog=fake_cat)
+        r = AdjustedOhlcvReader(catalog=fake_cat)
         resp = r.get_bar_quality("AAPL")
         assert resp.count == 0
         assert resp.rows == []
@@ -510,7 +510,7 @@ class TestV2ReaderTargets:
         Reader's conversion must read `source` so v2 rows produce
         valid SilverBar objects."""
         import pyarrow as pa
-        from app.services.readers.silver_ohlcv_reader import SilverOhlcvReader
+        from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 
         arrow = pa.table({
             "symbol": ["AAPL"],
@@ -531,7 +531,7 @@ class TestV2ReaderTargets:
             "ingestion_run_id": pa.array([None], type=pa.string()),
             "adj_factor": [1.0],
         })
-        bars = SilverOhlcvReader._arrow_to_bars(arrow)
+        bars = AdjustedOhlcvReader._arrow_to_bars(arrow)
         assert len(bars) == 1
         assert bars[0].source_provider == "polygon-adjusted"
         assert bars[0].sources_seen == []  # no v2 equivalent

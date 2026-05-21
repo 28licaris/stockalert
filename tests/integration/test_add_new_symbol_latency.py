@@ -8,7 +8,7 @@ Per docs/standards/data/symbol_lifecycle.md the quick-path is:
   silver_ohlcv_build(sym)        # reads bronze.polygon_minute (5y) + corp_actions
   +  schwab_rest_tip_fill(sym)   # fills the 1-2 day gap from yesterday's
                                   # Polygon flat-file → now
-  +  silver_to_ch_backfill(sym)  # bulk-insert silver → CH.ohlcv_1m
+  +  lake_to_ch_backfill(sym)    # bulk-insert equities.polygon_adjusted → CH.ohlcv_1m
   +  Schwab WS subscribe         # live ticks forward
 
 End state at T+30s (hard ceiling, 15s expected): CH.ohlcv_1m has

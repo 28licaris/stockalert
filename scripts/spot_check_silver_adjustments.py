@@ -129,7 +129,7 @@ class CheckResult:
 def _check_one(spec: SpotCheck) -> CheckResult:
     """Query silver.ohlcv_1m for the last minute of the target day and
     compare close price against `expected_close`."""
-    from app.services.readers.silver_ohlcv_reader import SilverOhlcvReader
+    from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 
     result = CheckResult(
         symbol=spec.symbol,
@@ -144,7 +144,7 @@ def _check_one(spec: SpotCheck) -> CheckResult:
         day = datetime.fromisoformat(spec.iso_date).replace(tzinfo=timezone.utc)
         start = day.replace(hour=19, minute=0)
         end = day.replace(hour=21, minute=0)
-        reader = SilverOhlcvReader.from_settings()
+        reader = AdjustedOhlcvReader.from_settings()
         resp = reader.get_bars(spec.symbol, start, end)
 
         if resp.count == 0:

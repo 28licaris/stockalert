@@ -13,7 +13,7 @@ NOT carried forward — their v2 replacements live in
 `app/services/equities/schemas.py` (CV1).
 
 Why "SilverBar" still has the silver name: the class is consumed by
-the renamed-in-future-CV-not-CV14 `SilverOhlcvReader` and the v1
+the `AdjustedOhlcvReader` (renamed in CV15) and the v1
 public API contract (`/api/silver/bars/...`). Renaming the class +
 the routes + the MCP tool surfaces is a follow-up clean-up. The
 class today represents "an adjusted OHLCV bar from the lake" — call

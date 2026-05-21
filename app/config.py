@@ -112,16 +112,21 @@ class Settings(BaseModel):
     bronze_history_start: str = os.getenv("BRONZE_HISTORY_START", "2021-01-04")
 
     # TA-5.3.3 — silver-derived add_members flow.
-    # When True, watchlist_service.add_members uses the unified
-    # silver-derived flow per docs/streaming_universe_model.md:
-    #   1. silver_to_ch_backfill (silver.ohlcv_1m → CH ohlcv_1m, 730d)
-    #   2. schwab_rest_tip_fill (silver watermark → live, ≤48d)
+    # When True, stream_service.add fires the lake-warmup chain on
+    # newly-added symbols (CV12):
+    #   1. tip_fill (Schwab REST → equities.schwab_universe + CH; 48d)
+    #   2. lake_to_ch_backfill (equities.polygon_adjusted → CH; 730d)
+    # Both run in parallel — new-symbol latency target <10s end-to-end.
     # When False (default), uses the legacy _enqueue_backfill 3-call
-    # path (provider REST → CH direct = Path ②). The legacy path is
-    # scheduled for removal in TA-5.5. Flip this to True after
-    # TA-5.1.7 operator backfill is verified.
-    silver_derived_add_members_enabled: bool = (
-        os.getenv("SILVER_DERIVED_ADD_MEMBERS_ENABLED", "false").lower() == "true"
+    # path (provider REST → CH direct = Path ②). Flip to True once
+    # CV4 (Athena bulk-import) + CV6 (Spark adjustment) have run in
+    # production. Env var name retained for backwards compat with
+    # operator .env files; semantics replaced.
+    lake_warmup_enabled: bool = (
+        os.getenv(
+            "LAKE_WARMUP_ENABLED",
+            os.getenv("SILVER_DERIVED_ADD_MEMBERS_ENABLED", "false"),
+        ).lower() == "true"
     )
 
     # Silver OHLCV build (TA-5.1.6 — nightly bronze→silver pipeline).

@@ -612,7 +612,7 @@ class StreamService:
 
     # ─────────────────────────────────────────────────────────────────
     # Backfill warmup (lifted from watchlist_service; only fires when
-    # silver_derived_add_members_enabled is set)
+    # lake_warmup_enabled is set)
     # ─────────────────────────────────────────────────────────────────
 
     def _enqueue_warmup(self, symbols: list[str]) -> None:
@@ -620,7 +620,7 @@ class StreamService:
 
         if not symbols:
             return
-        if not getattr(_s, "silver_derived_add_members_enabled", False):
+        if not getattr(_s, "lake_warmup_enabled", False):
             return
 
         # Same dispatch story as _apply_subscription_diff: if we're in
@@ -631,7 +631,7 @@ class StreamService:
             loop = asyncio.get_running_loop()
             for sym in symbols:
                 loop.create_task(
-                    self._silver_derived_warmup_one(sym),
+                    self._lake_warmup_one(sym),
                     name=f"stream_warmup_{sym}",
                 )
             return
@@ -641,17 +641,17 @@ class StreamService:
         if self._main_loop is not None and not self._main_loop.is_closed():
             for sym in symbols:
                 asyncio.run_coroutine_threadsafe(
-                    self._silver_derived_warmup_one(sym),
+                    self._lake_warmup_one(sym),
                     self._main_loop,
                 )
         else:
             logger.warning(
                 "Stream: no event loop captured; warmup of %s skipped "
-                "(silver_derived_add_members_enabled is on but the "
+                "(lake_warmup_enabled is on but the "
                 "service was never started)", symbols,
             )
 
-    async def _silver_derived_warmup_one(self, symbol: str) -> None:
+    async def _lake_warmup_one(self, symbol: str) -> None:
         """Hot-path warmup chain for a brand-new symbol (CV12 / v2).
 
         Function + flag name kept stable through Phase 1C; rename
@@ -667,7 +667,7 @@ class StreamService:
                for the ~48-day lookback window. Dual-write so the
                chart's "today" is correct immediately.
 
-          b. lake_to_ch_backfill(symbol)  (was silver_to_ch_backfill)
+          b. lake_to_ch_backfill(symbol)
              — equities.polygon_adjusted → CH ohlcv_1m for 730 days
                (DEFAULT_BACKFILL_DAYS). polygon_adjusted is bucketed
                by symbol (CV1's bucket(32, symbol)), so single-symbol
@@ -728,19 +728,16 @@ class StreamService:
         """Bulk-copy equities.polygon_adjusted → CH.ohlcv_1m so the
         chart can serve 5y of deep history immediately.
 
-        Module + class name preserved through Phase 1C
-        (`silver_to_ch_backfill.SilverToChBackfill`); both target
-        `equities.polygon_adjusted` post-CV11 via the retargeted
-        SilverOhlcvReader. CV14 renames the call site to
-        `lake_to_ch_backfill.LakeToChBackfill`.
+        Sources from equities.polygon_adjusted via
+        AdjustedOhlcvReader → LakeToChBackfill (CV15 rename pass).
         """
         try:
-            from app.services.ingest.silver_to_ch_backfill import (
+            from app.services.ingest.lake_to_ch_backfill import (
                 DEFAULT_BACKFILL_DAYS,
-                SilverToChBackfill,
+                LakeToChBackfill,
             )
 
-            lake_to_ch = SilverToChBackfill.from_settings()
+            lake_to_ch = LakeToChBackfill.from_settings()
             s2c = await asyncio.to_thread(
                 lake_to_ch.backfill_symbol,
                 symbol, days=DEFAULT_BACKFILL_DAYS,

@@ -117,10 +117,10 @@ def gather_quality_metrics(
     max_gap_minutes: int,
     findings: VerificationFindings,
 ) -> None:
-    """Phase 1+2: per-symbol coverage + quality scan via SilverOhlcvReader."""
-    from app.services.readers.silver_ohlcv_reader import SilverOhlcvReader
+    """Phase 1+2: per-symbol coverage + quality scan via AdjustedOhlcvReader."""
+    from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 
-    reader = SilverOhlcvReader.from_settings()
+    reader = AdjustedOhlcvReader.from_settings()
     findings.symbols_checked = symbols
     findings.since = since
     findings.until = until
@@ -185,9 +185,9 @@ def cross_check_sample(
     (c) source_provider is in {polygon, schwab}; (d) OHLC columns are
     populated (silver stores split-adjusted directly, no _adj suffix
     after TA-5.1.8)."""
-    from app.services.readers.silver_ohlcv_reader import SilverOhlcvReader
+    from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 
-    reader = SilverOhlcvReader.from_settings()
+    reader = AdjustedOhlcvReader.from_settings()
 
     # Build the universe of (sym, day) candidates.
     days = []

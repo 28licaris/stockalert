@@ -1,7 +1,7 @@
 """
 MCP tools for silver OHLCV + bar-quality — agent-facing surface.
 
-Thin adapters over `SilverOhlcvReader`. Identical Pydantic shapes as
+Thin adapters over `AdjustedOhlcvReader`. Identical Pydantic shapes as
 the HTTP routes in `app/api/routes_silver.py`. Reads
 `silver.ohlcv_1m` + `silver.bar_quality` per the consumer contract.
 
@@ -24,14 +24,14 @@ from app.services.readers.schemas import (
     BarQualityResponse,
     SilverBarsResponse,
 )
-from app.services.readers.silver_ohlcv_reader import SilverOhlcvReader
+from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 
 logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
-def _reader() -> SilverOhlcvReader:
-    return SilverOhlcvReader.from_settings()
+def _reader() -> AdjustedOhlcvReader:
+    return AdjustedOhlcvReader.from_settings()
 
 
 @mcp.tool()

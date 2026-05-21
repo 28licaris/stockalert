@@ -1,5 +1,5 @@
 """
-SilverOhlcvReader — read service for adjusted OHLCV history.
+AdjustedOhlcvReader — read service for adjusted OHLCV history.
 
 CV11 (Phase 1C): retargeted from `silver.ohlcv_1m` (built nightly by
 the legacy silver pipeline) to the v2 canonical store
@@ -11,7 +11,7 @@ caller rewrites; the rename pass happens in CV14 when the silver
 module is deleted. The public API (`get_bars`, `SilverBarsResponse`,
 `SilverBar`) is unchanged — every consumer (chart, screener,
 indicator, backtest, MCP tool, the CH cold-loader in
-silver_to_ch_backfill) keeps working with no change.
+lake_to_ch_backfill) keeps working with no change.
 
 `get_bar_quality()` returns an empty response post-CV11 — the v1
 bar_quality audit table has no v2 equivalent yet (data-integrity
@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 _OHLCV_TABLE_NAME = "polygon_adjusted"
 
 
-class SilverOhlcvReader:
+class AdjustedOhlcvReader:
     """Read silver.ohlcv_1m + silver.bar_quality via PyIceberg.
 
     Construct via `from_settings()` for production; pass `catalog` /
@@ -78,7 +78,7 @@ class SilverOhlcvReader:
         self._bar_quality_table = bar_quality_table
 
     @classmethod
-    def from_settings(cls) -> "SilverOhlcvReader":
+    def from_settings(cls) -> "AdjustedOhlcvReader":
         return cls()
 
     def _get_catalog(self):
@@ -155,7 +155,7 @@ class SilverOhlcvReader:
             table = self._get_ohlcv_table()
         except Exception as e:
             logger.warning(
-                "SilverOhlcvReader: equities.polygon_adjusted not "
+                "AdjustedOhlcvReader: equities.polygon_adjusted not "
                 "loadable (%s); returning empty result", e,
             )
             return SilverBarsResponse(
@@ -174,7 +174,7 @@ class SilverOhlcvReader:
             arrow = scan.to_arrow()
         except Exception as e:
             logger.warning(
-                "SilverOhlcvReader: scan failed for %s [%s..%s]: %s",
+                "AdjustedOhlcvReader: scan failed for %s [%s..%s]: %s",
                 sym, start_utc, end_utc, e,
             )
             return SilverBarsResponse(
@@ -235,7 +235,7 @@ class SilverOhlcvReader:
             table = self._get_bar_quality_table()
         except Exception as e:
             logger.warning(
-                "SilverOhlcvReader: bar_quality table fixture failed (%s); "
+                "AdjustedOhlcvReader: bar_quality table fixture failed (%s); "
                 "returning empty result", e,
             )
             return BarQualityResponse(
@@ -255,7 +255,7 @@ class SilverOhlcvReader:
             arrow = scan.to_arrow()
         except Exception as e:
             logger.warning(
-                "SilverOhlcvReader: bar_quality scan failed for %s: %s",
+                "AdjustedOhlcvReader: bar_quality scan failed for %s: %s",
                 sym, e,
             )
             return BarQualityResponse(
@@ -320,7 +320,7 @@ class SilverOhlcvReader:
                 r.get(c) is None for c in ("open", "high", "low", "close")
             ):
                 logger.debug(
-                    "SilverOhlcvReader: skipping row with NULL OHLC for "
+                    "AdjustedOhlcvReader: skipping row with NULL OHLC for "
                     "%s @ %s", r.get("symbol"), ts,
                 )
                 continue

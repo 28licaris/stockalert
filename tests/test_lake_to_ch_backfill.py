@@ -1,5 +1,5 @@
 """
-Tests for SilverToChBackfill (TA-5.3.1) — silver → ClickHouse path.
+Tests for LakeToChBackfill (TA-5.3.1) — silver → ClickHouse path.
 
 Verifies the new canonical fast path: read silver.ohlcv_1m → translate
 to CH row dicts → bulk-insert into ClickHouse ohlcv_1m.
@@ -15,10 +15,10 @@ from typing import Any, Optional
 
 import pytest
 
-from app.services.ingest.silver_to_ch_backfill import (
+from app.services.ingest.lake_to_ch_backfill import (
     DEFAULT_BACKFILL_DAYS,
-    SilverToChBackfill,
-    SilverToChBackfillResult,
+    LakeToChBackfill,
+    LakeToChBackfillResult,
 )
 from app.services.readers.schemas import SilverBarsResponse
 from app.services.equities.models import SilverBar
@@ -92,15 +92,15 @@ class _StubReader:
 
 class TestBackfillResult:
     def test_succeeded_when_no_error(self) -> None:
-        r = SilverToChBackfillResult(symbol="AAPL")
+        r = LakeToChBackfillResult(symbol="AAPL")
         assert r.succeeded is True
 
     def test_failed_when_error(self) -> None:
-        r = SilverToChBackfillResult(symbol="AAPL", error="boom")
+        r = LakeToChBackfillResult(symbol="AAPL", error="boom")
         assert r.succeeded is False
 
     def test_duration_seconds(self) -> None:
-        r = SilverToChBackfillResult(
+        r = LakeToChBackfillResult(
             symbol="AAPL",
             started_at=datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
             finished_at=datetime(2024, 1, 1, 0, 0, 10, tzinfo=timezone.utc),
@@ -135,11 +135,11 @@ class TestBackfillHappyPath:
 
         captured: list = []
         monkeypatch.setattr(
-            "app.services.ingest.silver_to_ch_backfill.insert_bars_batch",
+            "app.services.ingest.lake_to_ch_backfill.insert_bars_batch",
             lambda rows: captured.extend(rows),
         )
 
-        bf = SilverToChBackfill(reader=reader)
+        bf = LakeToChBackfill(reader=reader)
         result = bf.backfill_symbol_window("aapl", resp.start, resp.end)
 
         assert result.succeeded
@@ -176,18 +176,18 @@ class TestBackfillHappyPath:
 
         captured: list = []
         monkeypatch.setattr(
-            "app.services.ingest.silver_to_ch_backfill.insert_bars_batch",
+            "app.services.ingest.lake_to_ch_backfill.insert_bars_batch",
             lambda rows: captured.extend(rows),
         )
 
-        bf = SilverToChBackfill(reader=_StubReader(response=resp))
+        bf = LakeToChBackfill(reader=_StubReader(response=resp))
         bf.backfill_symbol_window("AAPL", resp.start, resp.end)
         assert captured[0]["source"] == "silver-schwab"
 
 
 class TestBackfillEdgeCases:
     def test_empty_symbol_returns_clean_result(self) -> None:
-        bf = SilverToChBackfill(reader=_StubReader())
+        bf = LakeToChBackfill(reader=_StubReader())
         result = bf.backfill_symbol_window(
             "",
             datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -205,11 +205,11 @@ class TestBackfillEdgeCases:
         — Schwab REST tip-fill (TA-5.3.2) will cover the 48-day reach."""
         captured: list = []
         monkeypatch.setattr(
-            "app.services.ingest.silver_to_ch_backfill.insert_bars_batch",
+            "app.services.ingest.lake_to_ch_backfill.insert_bars_batch",
             lambda rows: captured.extend(rows),
         )
 
-        bf = SilverToChBackfill(reader=_StubReader())  # empty response
+        bf = LakeToChBackfill(reader=_StubReader())  # empty response
         result = bf.backfill_symbol_window(
             "NEW_SYMBOL",
             datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -228,10 +228,10 @@ class TestBackfillEdgeCases:
         """An exception during read is captured as result.error so
         callers can retry without a try/except themselves."""
         monkeypatch.setattr(
-            "app.services.ingest.silver_to_ch_backfill.insert_bars_batch",
+            "app.services.ingest.lake_to_ch_backfill.insert_bars_batch",
             lambda rows: None,
         )
-        bf = SilverToChBackfill(
+        bf = LakeToChBackfill(
             reader=_StubReader(raises=RuntimeError("snapshot expired")),
         )
         result = bf.backfill_symbol_window(
@@ -258,11 +258,11 @@ class TestBackfillEdgeCases:
             raise RuntimeError("CH connection refused")
 
         monkeypatch.setattr(
-            "app.services.ingest.silver_to_ch_backfill.insert_bars_batch",
+            "app.services.ingest.lake_to_ch_backfill.insert_bars_batch",
             _boom,
         )
 
-        bf = SilverToChBackfill(reader=_StubReader(response=resp))
+        bf = LakeToChBackfill(reader=_StubReader(response=resp))
         result = bf.backfill_symbol_window("AAPL", resp.start, resp.end)
         assert result.succeeded is False
         assert "RuntimeError" in (result.error or "")
@@ -283,10 +283,10 @@ class TestBackfillSymbolDaysWindow:
     ) -> None:
         reader = _StubReader()  # empty response
         monkeypatch.setattr(
-            "app.services.ingest.silver_to_ch_backfill.insert_bars_batch",
+            "app.services.ingest.lake_to_ch_backfill.insert_bars_batch",
             lambda rows: None,
         )
-        bf = SilverToChBackfill(reader=reader)
+        bf = LakeToChBackfill(reader=reader)
         bf.backfill_symbol("AAPL")
         assert reader.last_call["symbol"] == "AAPL"
         # Window should be roughly 730 days wide.
@@ -298,10 +298,10 @@ class TestBackfillSymbolDaysWindow:
     ) -> None:
         reader = _StubReader()
         monkeypatch.setattr(
-            "app.services.ingest.silver_to_ch_backfill.insert_bars_batch",
+            "app.services.ingest.lake_to_ch_backfill.insert_bars_batch",
             lambda rows: None,
         )
-        bf = SilverToChBackfill(reader=reader)
+        bf = LakeToChBackfill(reader=reader)
         bf.backfill_symbol("AAPL", days=30)
         span = reader.last_call["end"] - reader.last_call["start"]
         assert span.days == 30

@@ -3,9 +3,9 @@
 Rebuild ClickHouse `ohlcv_1m` from `silver.ohlcv_1m` (TA-5.5).
 
 This is the **operator-facing** counterpart to
-`app/services/ingest/silver_to_ch_backfill.py`:
+`app/services/ingest/lake_to_ch_backfill.py`:
 
-- `silver_to_ch_backfill` is the per-symbol path used by `add_members`
+- `lake_to_ch_backfill` is the per-symbol path used by `add_members`
   and the nightly tip-fill flow. Idempotent on (symbol, ts) via CH's
   ReplacingMergeTree.
 
@@ -73,8 +73,8 @@ sys.path.insert(0, str(_HERE.parent))
 
 from app.config import settings  # noqa: E402
 from app.db import get_client  # noqa: E402
-from app.services.ingest.silver_to_ch_backfill import (  # noqa: E402
-    SilverToChBackfill,
+from app.services.ingest.lake_to_ch_backfill import (  # noqa: E402
+    LakeToChBackfill,
 )
 
 logger = logging.getLogger(__name__)
@@ -264,7 +264,7 @@ def main() -> int:
 
     symbols = _resolve_symbols(args.symbols)
     start = datetime(args.since.year, args.since.month, args.since.day, tzinfo=timezone.utc)
-    # End is EXCLUSIVE in SilverOhlcvReader — add 1 day so --until is inclusive.
+    # End is EXCLUSIVE in AdjustedOhlcvReader — add 1 day so --until is inclusive.
     end_date_inclusive = args.until + timedelta(days=1)
     end = datetime(
         end_date_inclusive.year, end_date_inclusive.month, end_date_inclusive.day,
@@ -310,7 +310,7 @@ def main() -> int:
             return _finalize_and_print(args, report, started)
 
     # Per-symbol loop.
-    backfiller = SilverToChBackfill.from_settings()
+    backfiller = LakeToChBackfill.from_settings()
     for idx, sym in enumerate(symbols, start=1):
         sym_started = datetime.now(timezone.utc)
         sym_result = SymbolResult(symbol=sym)

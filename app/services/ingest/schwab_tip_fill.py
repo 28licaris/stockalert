@@ -13,13 +13,13 @@ the "no historical → CH directly" rule:
   - The window is ≤48 days (Schwab REST's 1-min reach)
   - Near-live, not bulk archive
   - Without it, a brand-new ad-hoc symbol's chart would be empty for
-    ~24h until the next nightly silver_build → silver_to_ch_backfill
+    ~24h until the next weekly polygon_adjustment_job → lake_to_ch_backfill
     chain caught up
 
 The bronze write is the long-term archive; the CH write makes the
 cockpit "warming up" UX instant. The next nightly silver_build picks
 up the new bronze rows and merges them into silver — at which point
-silver_to_ch_backfill (TA-5.3.1) re-syncs CH from silver canonical.
+lake_to_ch_backfill (CV15) re-syncs CH from equities.polygon_adjusted.
 
 [1]: ../../../docs/streaming_universe_model.md
 [2]: ../../../docs/silver_layer_plan.md
