@@ -18,17 +18,19 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from app.services.silver.schemas import CorpAction, SilverBar
+from app.services.equities.models import CorpAction, SilverBar
 
 
 class BronzeBar(BaseModel):
     """
-    One row from `stock_lake.{provider}_minute`.
+    One row from a v2 equities OHLCV table (post-CV14: polygon_raw
+    or schwab_universe; class name preserved through CV14 for caller
+    compatibility, will rename to LakeBar in a follow-up).
 
-    Mirrors the canonical bronze schema (see
-    `app/services/bronze/schemas.py`). `vwap` and `trade_count` are
-    optional because Schwab's pricehistory doesn't provide them — silver
-    is where providers get reconciled into a single canonical shape.
+    Mirrors the canonical column shape used by both v2 lake tables.
+    `vwap` and `trade_count` are optional because Schwab's
+    pricehistory doesn't provide them — the v2 schwab_universe rows
+    have NULL there; polygon_raw / polygon_adjusted populate them.
     """
 
     symbol: str

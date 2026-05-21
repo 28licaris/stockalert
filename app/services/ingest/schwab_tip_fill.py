@@ -53,7 +53,7 @@ import pyarrow as pa
 from pyiceberg.expressions import And, EqualTo, GreaterThanOrEqual, LessThan
 
 from app.services.iceberg_catalog import get_catalog
-from app.services.silver.schemas import silver_table_id
+from app.services.equities.schemas import equities_table_id
 
 logger = logging.getLogger(__name__)
 
@@ -190,27 +190,31 @@ class SchwabTipFill:
         return watermark, gap_start, gap_end
 
     def _read_silver_watermark(self, symbol: str) -> Optional[datetime]:
-        """Read max(timestamp) for `symbol` from silver.ohlcv_1m.
+        """Read max(timestamp) for `symbol` from equities.schwab_universe.
 
-        Returns None if silver.ohlcv_1m doesn't exist yet (cold start
-        before TA-5.1.7 operator backfill) or no rows exist for symbol.
+        Function name (`_read_silver_watermark`) kept stable to avoid a
+        rename cascade through the call sites + test fixtures; the
+        target table is the v2 lake equivalent of v1's silver.ohlcv_1m
+        for the Schwab-side watermark question. Returns None if the
+        table doesn't exist yet or no rows exist for the symbol.
         """
         from pyiceberg.exceptions import NoSuchTableError
 
         try:
             ohlcv_table = self._get_catalog().load_table(
-                silver_table_id("ohlcv_1m"),
+                equities_table_id("schwab_universe"),
             )
         except NoSuchTableError:
             logger.info(
-                "tip_fill: silver.ohlcv_1m absent; %s treated as brand-new "
-                "ad-hoc symbol (no silver history → 48-day fetch)", symbol,
+                "tip_fill: equities.schwab_universe absent; %s treated "
+                "as brand-new ad-hoc symbol (no history → 48-day fetch)",
+                symbol,
             )
             return None
         except Exception as e:
             logger.warning(
-                "tip_fill: failed to load silver.ohlcv_1m: %s; treating "
-                "%s as no-history (defensive)", e, symbol,
+                "tip_fill: failed to load equities.schwab_universe: %s; "
+                "treating %s as no-history (defensive)", e, symbol,
             )
             return None
 

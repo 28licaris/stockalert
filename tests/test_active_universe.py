@@ -185,17 +185,6 @@ class TestSchwabNightlyDelegation:
         assert set(_resolve_symbols("seed")) == set(SEED_SYMBOLS)
 
 
-class TestSilverNightlyDelegation:
-    def test_active_keyword_reads_stream_universe(self) -> None:
-        from app.services.silver.ohlcv.nightly import _resolve_symbols
-
-        with patch(
-            "app.services.stream.stream_service.list_active_symbols",
-            return_value={"PG"},
-        ):
-            assert _resolve_symbols("active") == ["PG"]
-
-
 class TestPolygonNightlyDelegation:
     def test_all_keyword_returns_empty_for_whole_market(self) -> None:
         """Polygon flat-files: 'all' / '*' / '' → empty list = whole-market."""
@@ -233,33 +222,7 @@ class TestPolygonNightlyDelegation:
 # ─────────────────────────────────────────────────────────────────────
 
 
-class TestSilverBuildDefaultUniverse:
-    def test_run_nightly_default_pulls_active_universe(
-        self, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """`run_nightly()` with symbols=None resolves to stream_universe
-        (via get_active_universe). Verified by spying on build_window."""
-        from app.services.silver.ohlcv.build import SilverOhlcvBuild
-
-        build = SilverOhlcvBuild(
-            catalog=object(), ohlcv_table=object(),
-            bar_quality_table=object(),
-            provider_precedence=["polygon", "schwab"],
-        )
-        captured: dict = {}
-
-        def _spy(symbols, start, end):
-            captured["symbols"] = list(symbols)
-            from app.services.silver.ohlcv.build import BuildResult
-            from datetime import datetime, timezone
-            t = datetime.now(timezone.utc)
-            return BuildResult(run_id="x", started_at=t, finished_at=t)
-
-        monkeypatch.setattr(build, "build_window", _spy)
-        with patch(
-            "app.services.stream.stream_service.list_active_symbols",
-            return_value={"NEW_DYNAMIC_SYM"},
-        ):
-            build.run_nightly(scan_corp_action_dirty=False)
-
-        assert captured["symbols"] == ["NEW_DYNAMIC_SYM"]
+# CV14: TestSilverBuildDefaultUniverse removed — exercised the deleted
+# SilverOhlcvBuild class. Active-universe resolution is now covered by
+# TestResolveUniverseSpec above + the live nightly_polygon_refresh /
+# nightly_schwab_refresh test paths.

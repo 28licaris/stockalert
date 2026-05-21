@@ -1,15 +1,29 @@
 """
-BronzeReader — read service for `bronze.{provider}_minute` Iceberg tables.
+BronzeReader — read service for the v2 equities lake (CV14: retargeted).
+
+Despite the legacy name, this is now the canonical reader for the v2
+equities tables:
+  - provider="polygon" → equities.polygon_raw (raw, unadjusted bars —
+    matches v1 bronze.polygon_minute semantics)
+  - provider="schwab"  → equities.schwab_universe (pre-adjusted bars,
+    Schwab's native format; matches v1 bronze.schwab_minute semantics)
+
+The class name is preserved to avoid cascading caller rewrites
+(backtester, screener, indicator_reader); the rename to LakeReader
+happens in a follow-up cleanup CV. Consumers see no behaviour change
+beyond the per-symbol scan speedup that CV1's bucket(32, symbol)
+partitioning delivers (~32x less data scanned per single-symbol query
+vs v1 silver's month-only partitioning).
 
 This is the **CH-independent path**: agents and ML pipelines reading
 historical data go through this service and never touch ClickHouse.
-Reproducibility-critical training runs depend on bronze being readable
-from S3 + Glue alone.
+Reproducibility-critical training runs depend on the lake being
+readable from S3 + Glue alone.
 
 The reader is a thin wrapper around PyIceberg `Table.scan(...)` plus a
-Pydantic conversion. Filters push down to Iceberg (partition pruning by
-month + row-group min/max skip by symbol/timestamp), so a per-symbol
-month-bounded query scans tens of MB out of ~36 GB.
+Pydantic conversion. Filters push down to Iceberg (bucket+month
+partition pruning + row-group min/max skip), so a per-symbol
+month-bounded query scans single-digit MB out of ~120 GB.
 
 Design intent (see `docs/standards/platform_design.md`):
 
@@ -18,9 +32,9 @@ Design intent (see `docs/standards/platform_design.md`):
     tools and HTTP routes will both surface.
   - Pure read path. No writes, no side effects, no global state beyond
     the catalog handle. Safe to call from any process, any thread.
-  - Provider-agnostic. Bronze tables are per-provider, but the API isn't —
-    a caller asks for `provider="polygon"` or `"schwab"` and the reader
-    picks the table.
+  - Provider-agnostic. v2 lake tables are per-provider, but the API
+    isn't — a caller asks for `provider="polygon"` or `"schwab"` and
+    the reader picks the table.
 """
 from __future__ import annotations
 
@@ -46,13 +60,14 @@ _DEFAULT_SYMBOLS_LOOKBACK = timedelta(days=30)
 logger = logging.getLogger(__name__)
 
 
-# Provider → bronze table-name mapping. Adding a provider = one line here
-# plus the table existing in Glue. The provider name a caller passes is the
-# **logical** provider ("polygon"), not the source tag ("polygon-flatfiles" /
-# "polygon-rest"); the source column stays in the row for granular consumers.
+# Provider → v2 equities table-name mapping. Adding a provider = one
+# line here plus the table existing in Glue. The provider name a
+# caller passes is the **logical** provider ("polygon"), not the
+# source tag ("polygon-flatfiles" / "polygon-rest"); the source
+# column stays in the row for granular consumers.
 _PROVIDER_TABLE = {
-    "polygon": "polygon_minute",
-    "schwab": "schwab_minute",
+    "polygon": "polygon_raw",
+    "schwab": "schwab_universe",
 }
 
 
@@ -63,7 +78,7 @@ def _table_id(provider: str) -> str:
         raise ValueError(
             f"Unknown provider {provider!r}. Supported: {supported}."
         )
-    return f"{settings.iceberg_glue_database}.{name}"
+    return f"{settings.iceberg_equities_glue_database}.{name}"
 
 
 def _ensure_utc(ts: datetime) -> datetime:
@@ -263,8 +278,8 @@ class BronzeReader:
         After-hours bars cross midnight UTC, so UTC date misclassifies
         them and would advance the counter early.
 
-        Delegates to `app.services.bronze.gaps.latest_bronze_date` so
-        gap-detection and read-service share one source of truth.
+        Delegates to `app.services.equities.gaps.latest_loaded_date`
+        (CV3) so the same trading-day helpers are used everywhere.
         Lazy import keeps this module light at top-level.
         """
         # Trigger `_PROVIDER_TABLE` validation for consistency.
@@ -273,6 +288,6 @@ class BronzeReader:
         if table is None:
             return None
 
-        from app.services.bronze.gaps import latest_bronze_date
+        from app.services.equities.gaps import latest_loaded_date
 
-        return latest_bronze_date(table, lookback_days=lookback_days)
+        return latest_loaded_date(table, lookback_days=lookback_days)

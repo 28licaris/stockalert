@@ -21,7 +21,7 @@ from app.services.ingest.silver_to_ch_backfill import (
     SilverToChBackfillResult,
 )
 from app.services.readers.schemas import SilverBarsResponse
-from app.services.silver.schemas import SilverBar
+from app.services.equities.models import SilverBar
 
 
 # ─────────────────────────────────────────────────────────────────────

@@ -46,7 +46,7 @@ import pyarrow as pa
 from app.providers.polygon_corp_actions import PolygonCorpActionsClient
 from app.services.equities.tables import ensure_market_corp_actions
 from app.services.iceberg_safe_upsert import chunked_upsert
-from app.services.silver.schemas import CorpAction
+from app.services.equities.models import CorpAction
 
 logger = logging.getLogger(__name__)
 

@@ -20,7 +20,7 @@ from typing import Optional
 from app.mcp.server import mcp
 from app.services.readers.corp_actions_reader import CorpActionsReader
 from app.services.readers.schemas import CorpActionsResponse
-from app.services.silver.schemas import CorpActionKind
+from app.services.equities.models import CorpActionKind
 
 logger = logging.getLogger(__name__)
 

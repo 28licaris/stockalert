@@ -1,20 +1,11 @@
 #!/usr/bin/env python3
 """
-Run Polygon corp-actions backfill — lake ingest + (legacy) silver build.
+Run Polygon corp-actions backfill — writes equities.market_corp_actions.
 
-Two phases per invocation:
-
-1. **Lake ingest** (Polygon REST → `equities.market_corp_actions`):
-   Pulls splits + dividends in the requested window via
-   `PolygonCorpActionsIngest` (CV9). Idempotent via Iceberg upsert
-   on (symbol, ex_date, action_type).
-
-2. **Silver build** (legacy — retired in Phase 1C):
-   `bronze.{provider}_corp_actions` → `silver.corp_actions`.
-   Still runs during the Phase 1B transition because silver readers
-   in app/services/readers/corp_actions_reader.py haven't cut over
-   to equities yet. Once those readers move (Phase 1C), this stage
-   becomes a no-op and is deleted.
+Single stage post-CV14: Polygon REST → `equities.market_corp_actions`.
+Pulls splits + dividends in the requested window via
+`PolygonCorpActionsIngest` (CV9). Idempotent via Iceberg upsert on
+(symbol, ex_date, action_type).
 
 **Modes:**
 
@@ -27,12 +18,6 @@ Two phases per invocation:
     # Custom window:
     poetry run python scripts/run_corp_actions_backfill.py \\
         --since 2020-01-01 --until 2020-12-31
-
-    # Skip silver build (bronze only — for parallel multi-provider ingest):
-    poetry run python scripts/run_corp_actions_backfill.py --nightly --bronze-only
-
-    # Skip bronze ingest (silver-only — useful after manual bronze fix):
-    poetry run python scripts/run_corp_actions_backfill.py --full --silver-only
 
 Exits non-zero on any phase failure. Prints a structured summary +
 optional JSON report for cron pipelines.
@@ -54,9 +39,10 @@ sys.path.insert(0, str(_HERE.parent))
 from app.services.ingest.corp_actions import (  # noqa: E402
     PolygonCorpActionsIngest,
 )
-from app.services.silver.corp_actions import (  # noqa: E402
-    SilverCorpActionsBuild,
-)
+
+# CV14: SilverCorpActionsBuild deleted — the v2 ingest writes directly
+# to equities.market_corp_actions, so the stage-2 silver build is gone.
+# This script now only runs stage-1 (Polygon REST → equities ingest).
 
 logger = logging.getLogger(__name__)
 
@@ -81,14 +67,14 @@ async def run_bronze(since: date, until: date) -> dict:
     matches what we tried to write). Without this assertion a
     silently-killed python process can "succeed" without writing.
     """
-    from app.services.bronze.schemas import bronze_table_id
+    from app.services.equities.schemas import equities_table_id
     from app.services.iceberg_catalog import get_catalog
 
-    logger.info("=== Stage 1/2: bronze ingest (Polygon REST → bronze) ===")
+    logger.info("=== Polygon REST → equities.market_corp_actions ===")
 
     # Pre-state — captured BEFORE the ingest so post-verify is a true delta.
     pre_cat = get_catalog()
-    pre_tbl = pre_cat.load_table(bronze_table_id("polygon_corp_actions"))
+    pre_tbl = pre_cat.load_table(equities_table_id("market_corp_actions"))
     pre_snap = pre_tbl.current_snapshot()
     pre_snap_id = str(pre_snap.snapshot_id) if pre_snap else None
     pre_rows = (
@@ -112,7 +98,7 @@ async def run_bronze(since: date, until: date) -> dict:
     # Post-state — fresh catalog instance to bypass any caching.
     expected_writes = result["splits_written"] + result["dividends_written"]
     post_cat = get_catalog()
-    post_tbl = post_cat.load_table(bronze_table_id("polygon_corp_actions"))
+    post_tbl = post_cat.load_table(equities_table_id("market_corp_actions"))
     post_snap = post_tbl.current_snapshot()
     post_snap_id = str(post_snap.snapshot_id) if post_snap else None
     post_rows = (
@@ -143,28 +129,9 @@ async def run_bronze(since: date, until: date) -> dict:
     return result
 
 
-def run_silver(since: Optional[date]) -> dict:
-    """Stage 2: bronze.{provider}_corp_actions → silver.corp_actions.
-
-    Pass since=None to merge the full bronze history (run_full);
-    pass a date for incremental (run_since).
-    """
-    logger.info("=== Stage 2/2: silver build (bronze → silver, precedence merge) ===")
-    build = SilverCorpActionsBuild.from_settings()
-    if since is None:
-        result = build.run_full()
-    else:
-        result = build.run_since(since)
-    logger.info(
-        "Silver build done: providers_read=%s rows_merged=%s "
-        "rows_updated=%s rows_inserted=%s duration=%.1fs",
-        result.get("providers_read"),
-        result.get("rows_merged"),
-        result.get("rows_updated"),
-        result.get("rows_inserted"),
-        result.get("duration_seconds"),
-    )
-    return result
+# CV14: run_silver() removed — SilverCorpActionsBuild is deleted with
+# the silver layer. The v2 ingest writes directly to
+# equities.market_corp_actions, so there's no stage-2 merge step.
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -202,20 +169,9 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Custom upper bound (ISO date). Defaults to yesterday.",
     )
-    # Phase toggles
-    p.add_argument(
-        "--bronze-only",
-        action="store_true",
-        help="Skip stage 2 (silver build). Useful for parallel multi-provider ingest.",
-    )
-    p.add_argument(
-        "--silver-only",
-        action="store_true",
-        help=(
-            "Skip stage 1 (bronze ingest). Run silver merge against whatever's "
-            "already in bronze. Useful after manual bronze corrections."
-        ),
-    )
+    # CV14: --bronze-only / --silver-only removed. v2 has one stage
+    # (ingest → equities.market_corp_actions); the toggles were
+    # meaningful only when stage-2 (silver merge) existed.
     p.add_argument(
         "--out-json",
         type=Path,
@@ -256,32 +212,20 @@ async def main() -> int:
 
     since, until = _resolve_window(args)
     logger.info(
-        "Corp-actions backfill: since=%s until=%s bronze_only=%s silver_only=%s",
-        since, until, args.bronze_only, args.silver_only,
+        "Corp-actions backfill: since=%s until=%s",
+        since, until,
     )
 
     summary: dict = {
         "since": since.isoformat(),
         "until": until.isoformat(),
-        "bronze_only": args.bronze_only,
-        "silver_only": args.silver_only,
         "started_at": datetime.now(timezone.utc).isoformat(),
-        "bronze": None,
-        "silver": None,
+        "ingest": None,
         "status": "in_progress",
     }
 
     try:
-        if not args.silver_only:
-            summary["bronze"] = await run_bronze(since, until)
-
-        if not args.bronze_only:
-            # Silver build uses the same `since` so it only re-merges the
-            # newly-touched window (incremental); full backfill uses
-            # since=date(2003,1,1) which is effectively "merge all".
-            silver_since = None if (args.full and not args.since) else since
-            summary["silver"] = run_silver(silver_since)
-
+        summary["ingest"] = await run_bronze(since, until)
         summary["status"] = "ok"
     except Exception as e:
         summary["status"] = "fail"

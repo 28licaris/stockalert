@@ -46,7 +46,7 @@ def main() -> int:
     from app.services.ingest.corp_actions import (
         PolygonCorpActionsIngest,
     )
-    from app.services.silver.schemas import CorpAction
+    from app.services.equities.models import CorpAction
     _print_step(0, "imports", "OK")
 
     _print_step(1, "load_table", "START")

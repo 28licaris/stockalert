@@ -51,7 +51,7 @@ from app.services.readers.schemas import (
     BarQualityRow,
     SilverBarsResponse,
 )
-from app.services.silver.schemas import SilverBar
+from app.services.equities.models import SilverBar
 
 logger = logging.getLogger(__name__)
 

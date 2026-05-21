@@ -32,7 +32,7 @@ from typing import Any, AsyncIterator, Iterable, Optional
 
 import aiohttp
 
-from app.services.silver.schemas import CorpAction, CorpActionKind
+from app.services.equities.models import CorpAction, CorpActionKind
 
 logger = logging.getLogger(__name__)
 

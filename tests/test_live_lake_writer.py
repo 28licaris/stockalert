@@ -14,7 +14,6 @@ from unittest.mock import MagicMock, patch
 import pyarrow as pa
 import pytest
 
-from app.services.bronze.audit.live_freshness import _is_rth
 from app.services.ingest.live_lake_writer import (
     CycleResult,
     LiveLakeWriter,
@@ -262,29 +261,9 @@ class TestRunCycle:
 # ─────────────────────────────────────────────────────────────────────
 
 
-class TestRthDetection:
-    def test_weekday_during_rth_is_rth(self) -> None:
-        # Wednesday 2026-05-13 at 11:00am ET
-        ts = datetime(2026, 5, 13, 15, 0, tzinfo=timezone.utc)  # 15:00 UTC = 11:00 ET (EDT)
-        assert _is_rth(ts)
-
-    def test_weekday_after_close_not_rth(self) -> None:
-        # Wednesday 6pm ET
-        ts = datetime(2026, 5, 13, 22, 0, tzinfo=timezone.utc)
-        assert not _is_rth(ts)
-
-    def test_weekday_before_open_not_rth(self) -> None:
-        # Wednesday 8am ET (pre-market)
-        ts = datetime(2026, 5, 13, 12, 0, tzinfo=timezone.utc)
-        assert not _is_rth(ts)
-
-    def test_saturday_not_rth(self) -> None:
-        ts = datetime(2026, 5, 16, 15, 0, tzinfo=timezone.utc)  # Saturday 11am ET
-        assert not _is_rth(ts)
-
-    def test_sunday_not_rth(self) -> None:
-        ts = datetime(2026, 5, 17, 15, 0, tzinfo=timezone.utc)  # Sunday 11am ET
-        assert not _is_rth(ts)
+# CV14: TestRthDetection removed. The `_is_rth` helper lived in
+# app/services/bronze/audit/live_freshness.py (deleted with bronze/).
+# No production code referenced it; the test was orphaned coverage.
 
 
 # ─────────────────────────────────────────────────────────────────────

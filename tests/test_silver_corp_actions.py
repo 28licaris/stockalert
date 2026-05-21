@@ -25,15 +25,11 @@ from app.providers.polygon_corp_actions import (
     PolygonCorpActionsClient,
     _DIVIDEND_TYPE_MAP,
 )
-from app.services.silver.corp_actions.build import (
-    SilverCorpActionsBuild,
-    _SILVER_CORP_ACTIONS_ARROW,
-)
 from app.services.ingest.corp_actions import (
     PolygonCorpActionsIngest,
     _CORP_ACTIONS_ARROW,
 )
-from app.services.silver.schemas import CorpAction
+from app.services.equities.models import CorpAction
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -337,171 +333,6 @@ class TestDedupeActions:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Silver build — merge with precedence
-# ─────────────────────────────────────────────────────────────────────
-
-
-def _make_silver_arrow(rows: list[dict]) -> pa.Table:
-    """Helper: build an Arrow Table matching the silver schema."""
-    arrays = {col: [r.get(col) for r in rows] for col in _SILVER_CORP_ACTIONS_ARROW.names}
-    return pa.Table.from_pydict(arrays, schema=_SILVER_CORP_ACTIONS_ARROW)
-
-
-class TestSilverMergePrecedence:
-    """`_merge_with_precedence` resolves conflicts via the first-with-row-wins rule."""
-
-    def test_polygon_wins_when_both_have_same_action(self) -> None:
-        polygon = _make_silver_arrow([{
-            "symbol": "AAPL",
-            "ex_date": date(2020, 8, 31),
-            "action_type": "split",
-            "factor": 4.0,
-            "cash_amount": None,
-            "announced_at": None,
-            "source_provider": "polygon",
-            "ingestion_ts": None,
-            "ingestion_run_id": None,
-        }])
-        schwab = _make_silver_arrow([{
-            "symbol": "AAPL",
-            "ex_date": date(2020, 8, 31),
-            "action_type": "split",
-            "factor": 3.999,
-            "cash_amount": None,
-            "announced_at": None,
-            "source_provider": "schwab",
-            "ingestion_ts": None,
-            "ingestion_run_id": None,
-        }])
-        merged = SilverCorpActionsBuild._merge_with_precedence([
-            ("polygon", polygon),
-            ("schwab", schwab),
-        ])
-        assert merged.num_rows == 1
-        row = merged.to_pylist()[0]
-        assert row["factor"] == 4.0
-        assert row["source_provider"] == "polygon"
-
-    def test_schwab_fills_when_polygon_missing(self) -> None:
-        polygon = _make_silver_arrow([])
-        schwab = _make_silver_arrow([{
-            "symbol": "GOOG",
-            "ex_date": date(2022, 7, 18),
-            "action_type": "split",
-            "factor": 20.0,
-            "cash_amount": None,
-            "announced_at": None,
-            "source_provider": "schwab",
-            "ingestion_ts": None,
-            "ingestion_run_id": None,
-        }])
-        merged = SilverCorpActionsBuild._merge_with_precedence([
-            ("polygon", polygon),
-            ("schwab", schwab),
-        ])
-        assert merged.num_rows == 1
-        assert merged.to_pylist()[0]["source_provider"] == "schwab"
-
-    def test_disjoint_inputs_combine(self) -> None:
-        """Different (symbol, ex_date) — both kept."""
-        polygon = _make_silver_arrow([{
-            "symbol": "AAPL", "ex_date": date(2020, 8, 31), "action_type": "split",
-            "factor": 4.0, "cash_amount": None, "announced_at": None,
-            "source_provider": "polygon", "ingestion_ts": None, "ingestion_run_id": None,
-        }])
-        schwab = _make_silver_arrow([{
-            "symbol": "MSFT", "ex_date": date(2020, 1, 1), "action_type": "cash_dividend",
-            "factor": None, "cash_amount": 0.51, "announced_at": None,
-            "source_provider": "schwab", "ingestion_ts": None, "ingestion_run_id": None,
-        }])
-        merged = SilverCorpActionsBuild._merge_with_precedence([
-            ("polygon", polygon), ("schwab", schwab),
-        ])
-        assert merged.num_rows == 2
-        symbols = sorted(r["symbol"] for r in merged.to_pylist())
-        assert symbols == ["AAPL", "MSFT"]
-
-    def test_empty_input_returns_empty_with_schema(self) -> None:
-        """No providers contributed → empty Arrow, but the schema is preserved."""
-        merged = SilverCorpActionsBuild._merge_with_precedence([])
-        assert merged.num_rows == 0
-        assert merged.schema.equals(_SILVER_CORP_ACTIONS_ARROW)
-
-    def test_same_action_type_different_dates_both_kept(self) -> None:
-        """Identifier is (symbol, ex_date, action_type). Different dates for
-        the same symbol+action both go through."""
-        polygon = _make_silver_arrow([
-            {"symbol": "AAPL", "ex_date": date(2020, 8, 7), "action_type": "cash_dividend",
-             "factor": None, "cash_amount": 0.82, "announced_at": None,
-             "source_provider": "polygon", "ingestion_ts": None, "ingestion_run_id": None},
-            {"symbol": "AAPL", "ex_date": date(2020, 11, 6), "action_type": "cash_dividend",
-             "factor": None, "cash_amount": 0.205, "announced_at": None,
-             "source_provider": "polygon", "ingestion_ts": None, "ingestion_run_id": None},
-        ])
-        merged = SilverCorpActionsBuild._merge_with_precedence([("polygon", polygon)])
-        assert merged.num_rows == 2
-
-
-class TestSilverBuildRestamp:
-    """`_restamp_ingestion` replaces bronze's audit metadata with silver's."""
-
-    def test_restamp_overrides_run_id(self) -> None:
-        bronze_like = _make_silver_arrow([{
-            "symbol": "AAPL", "ex_date": date(2020, 8, 31), "action_type": "split",
-            "factor": 4.0, "cash_amount": None, "announced_at": None,
-            "source_provider": "polygon",
-            "ingestion_ts": datetime(2026, 5, 16, tzinfo=timezone.utc),
-            "ingestion_run_id": "bronze-run-old",
-        }])
-        out = SilverCorpActionsBuild._restamp_ingestion(bronze_like, run_id="silver-run-new")
-        row = out.to_pylist()[0]
-        assert row["ingestion_run_id"] == "silver-run-new"
-        # ingestion_ts is now "this build's now" — sanity check it's recent.
-        assert row["ingestion_ts"] is not None
-        # Other columns untouched
-        assert row["symbol"] == "AAPL"
-        assert row["factor"] == 4.0
-
-    def test_restamp_on_empty_arrow_is_noop(self) -> None:
-        empty = _make_silver_arrow([])
-        out = SilverCorpActionsBuild._restamp_ingestion(empty, run_id="r1")
-        assert out.num_rows == 0
-        assert out.schema.equals(_SILVER_CORP_ACTIONS_ARROW)
-
-
-# ─────────────────────────────────────────────────────────────────────
-# Configuration parsing
-# ─────────────────────────────────────────────────────────────────────
-
-
-class TestSilverBuildSettingsParsing:
-    def test_explicit_precedence_list(self) -> None:
-        """When precedence is passed at construction, it's used as-is."""
-        b = SilverCorpActionsBuild(provider_precedence=["polygon", "schwab"])
-        assert b._get_provider_precedence() == ["polygon", "schwab"]
-
-    def test_from_settings_parses_csv(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """from_settings reads SILVER_PROVIDER_PRECEDENCE comma-list."""
-        from app.config import settings
-
-        # Direct attr-set since settings is a dataclass-like singleton
-        monkeypatch.setattr(
-            settings, "silver_provider_precedence", "polygon, schwab, custom",
-        )
-        b = SilverCorpActionsBuild.from_settings()
-        assert b._get_provider_precedence() == ["polygon", "schwab", "custom"]
-
-    def test_from_settings_empty_string_raises(
-        self, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        from app.config import settings
-
-        monkeypatch.setattr(settings, "silver_provider_precedence", "")
-        with pytest.raises(ValueError, match="silver_provider_precedence is empty"):
-            SilverCorpActionsBuild.from_settings()
-
-
-# ─────────────────────────────────────────────────────────────────────
 # CorpActionsReader — read service for equities.market_corp_actions (CV10)
 # ─────────────────────────────────────────────────────────────────────
 
@@ -556,18 +387,23 @@ class TestCorpActionsReader:
         """Output is sorted (ex_date, action_type) for deterministic
         downstream behavior."""
         from app.services.readers.corp_actions_reader import CorpActionsReader
+        from app.services.ingest.corp_actions import _CORP_ACTIONS_ARROW
         from datetime import date as _date
 
-        # Build an Arrow Table by hand to test the helper directly.
+        # Build an Arrow Table matching the v2 equities.market_corp_actions
+        # schema (includes raw_payload — null here).
         rows = [
             {"symbol": "AAPL", "ex_date": _date(2020, 8, 31), "action_type": "split",
              "factor": 4.0, "cash_amount": None, "announced_at": None,
-             "source_provider": "polygon", "ingestion_ts": None, "ingestion_run_id": None},
+             "source_provider": "polygon", "raw_payload": None,
+             "ingestion_ts": None, "ingestion_run_id": None},
             {"symbol": "AAPL", "ex_date": _date(2020, 8, 7), "action_type": "cash_dividend",
              "factor": None, "cash_amount": 0.82, "announced_at": None,
-             "source_provider": "polygon", "ingestion_ts": None, "ingestion_run_id": None},
+             "source_provider": "polygon", "raw_payload": None,
+             "ingestion_ts": None, "ingestion_run_id": None},
         ]
-        arrow = _make_silver_arrow(rows)
+        arrays = {col: [r.get(col) for r in rows] for col in _CORP_ACTIONS_ARROW.names}
+        arrow = pa.Table.from_pydict(arrays, schema=_CORP_ACTIONS_ARROW)
         actions = CorpActionsReader._arrow_to_actions(arrow)
         assert len(actions) == 2
         # Sorted: 2020-08-07 first, then 2020-08-31

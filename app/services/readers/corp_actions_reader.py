@@ -30,7 +30,7 @@ from pyiceberg.table import Table
 from app.services.equities.schemas import equities_table_id
 from app.services.iceberg_catalog import get_catalog
 from app.services.readers.schemas import CorpActionsResponse
-from app.services.silver.schemas import CorpAction, CorpActionKind
+from app.services.equities.models import CorpAction, CorpActionKind
 
 logger = logging.getLogger(__name__)
 

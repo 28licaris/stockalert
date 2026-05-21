@@ -394,15 +394,10 @@ class TestTipFillErrors:
 # ─────────────────────────────────────────────────────────────────────
 
 
-class TestSourceTagPropagation:
-    def test_schwab_tipfill_maps_to_schwab_provider(self) -> None:
-        """When the silver build normalizes a bronze row tagged
-        'schwab-tipfill', it should map source_provider → 'schwab'
-        (so the precedence merge treats it as schwab, not 'unknown')."""
-        from app.services.silver.ohlcv.normalize import _provider_from_source
-
-        assert _provider_from_source("schwab-tipfill") == "schwab"
-        # And the existing tags still map correctly.
-        assert _provider_from_source("schwab") == "schwab"
-        assert _provider_from_source("schwab-stream") == "schwab"
-        assert _provider_from_source("polygon-flatfiles") == "polygon"
+# CV14: TestSourceTagPropagation removed. _provider_from_source lived
+# in the silver normalize layer (deleted with silver/). v2 doesn't need
+# this mapping — equities.schwab_universe rows carry the literal Schwab
+# source tag (e.g. "schwab-rest", "schwab-live") and never go through a
+# multi-provider precedence merge. The source column is preserved as-is
+# in the EquitiesIcebergSink (CV2), and downstream consumers that care
+# about provider identity match on the literal string.
