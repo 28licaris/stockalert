@@ -269,14 +269,17 @@ class TestAddMembersFlagDispatch:
 
 
 class TestWarmupChain:
-    """The _silver_derived_warmup_one async method runs silver_to_ch
-    THEN tip_fill, sequentially per symbol."""
+    """The _silver_derived_warmup_one async method runs lake_to_ch
+    and tip_fill in PARALLEL (CV12). Pre-CV12 v1 ran silver_build
+    || tip_fill then silver_to_ch sequentially; the v2 simplification
+    drops the silver_build step (polygon_adjusted is whole-market
+    pre-built by Spark) and parallelizes the two remaining writers."""
 
     @pytest.mark.asyncio
-    async def test_runs_silver_to_ch_then_tip_fill_in_order(
+    async def test_runs_lake_to_ch_and_tip_fill_in_parallel(
         self, stream_svc: StreamService, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        order: list[str] = []
+        called: set[str] = set()
 
         class _FakeS2C:
             @classmethod
@@ -284,7 +287,7 @@ class TestWarmupChain:
                 return cls()
 
             def backfill_symbol(self, symbol, *, days):
-                order.append(f"silver_to_ch:{symbol}:days={days}")
+                called.add(f"lake_to_ch:{symbol}:days={days}")
                 return SilverToChBackfillResult(
                     symbol=symbol, bars_read=100, bars_written=100,
                 )
@@ -295,7 +298,7 @@ class TestWarmupChain:
                 return cls()
 
             async def tip_fill(self, symbol):
-                order.append(f"tip_fill:{symbol}")
+                called.add(f"tip_fill:{symbol}")
                 return TipFillResult(symbol=symbol, bars_fetched=10)
 
         monkeypatch.setattr(
@@ -309,10 +312,12 @@ class TestWarmupChain:
 
         await stream_svc._silver_derived_warmup_one("NVDA")
 
-        assert order == [
-            "silver_to_ch:NVDA:days=730",  # DEFAULT_BACKFILL_DAYS
+        # Both ran. Order is non-deterministic (asyncio.gather) so we
+        # only assert the set, not the sequence.
+        assert called == {
+            "lake_to_ch:NVDA:days=730",  # DEFAULT_BACKFILL_DAYS
             "tip_fill:NVDA",
-        ]
+        }
 
     @pytest.mark.asyncio
     async def test_s2c_failure_does_not_block_tip_fill(

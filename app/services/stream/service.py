@@ -652,94 +652,63 @@ class StreamService:
             )
 
     async def _silver_derived_warmup_one(self, symbol: str) -> None:
-        """Hot-path warmup chain for a brand-new symbol.
+        """Hot-path warmup chain for a brand-new symbol (CV12 / v2).
 
-        Per docs/standards/data/symbol_lifecycle.md, two phases:
+        Function + flag name kept stable through Phase 1C; rename
+        to `_lake_warmup_one` / `lake_warmup_enabled` happens in CV14.
 
-          PHASE 1 (parallel):
-            a. on-demand silver_ohlcv_build([symbol], days=5y)
-               — reads bronze.polygon_minute (5y, whole-market) +
-                 bronze.schwab_minute + corp_actions → writes
-                 silver.ohlcv_1m for this one symbol.
-            b. schwab_rest_tip_fill(symbol)
-               — covers the 1-2 day gap between yesterday's Polygon
-                 flat-file and now, dual-write bronze + CH.
+        Two PARALLEL phases (no on-demand silver_build step — v2's
+        equities.polygon_adjusted is populated whole-market weekly
+        by the Spark adjustment job, so per-symbol Python compute is
+        no longer needed):
 
-          PHASE 2 (after phase 1's silver build returns):
-            c. silver_to_ch_backfill(symbol)
-               — bulk-insert silver.ohlcv_1m → CH.ohlcv_1m so the
-                 chart can serve 5y immediately.
+          a. schwab_rest_tip_fill(symbol)
+             — Schwab REST → equities.schwab_universe + CH ohlcv_1m
+               for the ~48-day lookback window. Dual-write so the
+               chart's "today" is correct immediately.
+
+          b. lake_to_ch_backfill(symbol)  (was silver_to_ch_backfill)
+             — equities.polygon_adjusted → CH ohlcv_1m for 730 days
+               (DEFAULT_BACKFILL_DAYS). polygon_adjusted is bucketed
+               by symbol (CV1's bucket(32, symbol)), so single-symbol
+               scans read 1/32 of each month — typically ~3-5s for
+               2y, ~5-8s for 5y on a warm Iceberg cache.
+
+        Both writers target CH.ohlcv_1m (ReplacingMergeTree); they
+        don't compete because tip_fill writes the recent 48 days and
+        lake covers the deep history before that. Overlapping rows
+        merge cleanly.
 
         Errors are logged but never raised: the symbol is already
-        subscribed to Schwab WS, and the chart's worst-case fallback
-        is "live-only until the next nightly silver chain catches up".
+        subscribed to Schwab WS so live ticks land regardless, and
+        the chart's worst-case fallback is "live-only until the next
+        nightly Polygon refresh catches up".
 
-        Wall-clock target (per the locked latency gate): ≤30 seconds.
-        Typical: ~10-20s on a warm Iceberg cache.
+        Wall-clock target (the v2 spec's latency gate <5s for new
+        symbols): chart populated end-to-end in under 10 seconds
+        for actively-traded names. Brand-new IPOs without deep-
+        history coverage get the 48-day tip_fill window
+        immediately + the deep history on the next weekly Spark run.
         """
-        # ── PHASE 1: silver_build || tip-fill ────────────────────────
-        silver_task = asyncio.create_task(
-            self._warmup_silver_build_one(symbol),
-            name=f"stream_warmup_silver_build_{symbol}",
-        )
         tip_task = asyncio.create_task(
             self._warmup_tip_fill_one(symbol),
             name=f"stream_warmup_tip_fill_{symbol}",
         )
-        silver_build_ok, _tip_fill_ok = await asyncio.gather(
-            silver_task, tip_task, return_exceptions=False,
+        lake_task = asyncio.create_task(
+            self._warmup_lake_to_ch_one(symbol),
+            name=f"stream_warmup_lake_to_ch_{symbol}",
         )
-
-        # ── PHASE 2: silver→CH (depends on phase 1's silver build) ──
-        # Only copy from silver if the build wrote something; otherwise
-        # the CH state from tip-fill + live stream is the best we have
-        # for now, and the nightly silver_to_ch_refresh will catch up.
-        if silver_build_ok:
-            await self._warmup_silver_to_ch_one(symbol)
-        else:
-            logger.info(
-                "Stream warmup: %s skipping silver→CH (silver build "
-                "had 0 rows or failed; chart relies on tip-fill + live)",
-                symbol,
-            )
-
-    async def _warmup_silver_build_one(self, symbol: str) -> bool:
-        """Phase 1a — on-demand silver build for one symbol.
-
-        Returns True iff the build wrote at least one row to silver.
-        Failures are logged + return False; never raises.
-        """
-        try:
-            from app.services.silver.ohlcv.on_demand import build_one_symbol
-
-            result = await build_one_symbol(symbol)
-            wrote_any = result.total_silver_rows > 0
-            logger.info(
-                "Stream warmup silver_build: %s slices_ok=%d/%d rows=%d duration=%.1fs",
-                symbol,
-                result.slices_succeeded,
-                len(result.slices),
-                result.total_silver_rows,
-                result.duration_seconds,
-            )
-            return wrote_any
-        except Exception as e:  # noqa: BLE001 — boundary
-            logger.exception(
-                "Stream warmup silver_build for %s raised: %s "
-                "(continuing — tip-fill + live stream still active)",
-                symbol, e,
-            )
-            return False
+        await asyncio.gather(tip_task, lake_task, return_exceptions=False)
 
     async def _warmup_tip_fill_one(self, symbol: str) -> bool:
-        """Phase 1b — Schwab REST tip-fill for the 48-day window."""
+        """Schwab REST tip-fill for the 48-day window."""
         try:
             from app.services.ingest.schwab_tip_fill import SchwabTipFill
 
             tip = SchwabTipFill.from_settings()
             tf = await tip.tip_fill(symbol)
             logger.info(
-                "Stream warmup tip-fill: %s fetched=%d bronze=%d ch=%d",
+                "Stream warmup tip-fill: %s fetched=%d equities=%d ch=%d",
                 symbol, tf.bars_fetched,
                 tf.bars_written_bronze, tf.bars_written_ch,
             )
@@ -755,33 +724,40 @@ class StreamService:
             )
             return False
 
-    async def _warmup_silver_to_ch_one(self, symbol: str) -> bool:
-        """Phase 2 — bulk-copy silver.ohlcv_1m → CH.ohlcv_1m so the
-        chart can serve 5y immediately."""
+    async def _warmup_lake_to_ch_one(self, symbol: str) -> bool:
+        """Bulk-copy equities.polygon_adjusted → CH.ohlcv_1m so the
+        chart can serve 5y of deep history immediately.
+
+        Module + class name preserved through Phase 1C
+        (`silver_to_ch_backfill.SilverToChBackfill`); both target
+        `equities.polygon_adjusted` post-CV11 via the retargeted
+        SilverOhlcvReader. CV14 renames the call site to
+        `lake_to_ch_backfill.LakeToChBackfill`.
+        """
         try:
             from app.services.ingest.silver_to_ch_backfill import (
                 DEFAULT_BACKFILL_DAYS,
                 SilverToChBackfill,
             )
 
-            silver_to_ch = SilverToChBackfill.from_settings()
+            lake_to_ch = SilverToChBackfill.from_settings()
             s2c = await asyncio.to_thread(
-                silver_to_ch.backfill_symbol,
+                lake_to_ch.backfill_symbol,
                 symbol, days=DEFAULT_BACKFILL_DAYS,
             )
             logger.info(
-                "Stream warmup silver→CH: %s read=%d written=%d snapshot=%s",
+                "Stream warmup lake→CH: %s read=%d written=%d snapshot=%s",
                 symbol, s2c.bars_read, s2c.bars_written, s2c.snapshot_id,
             )
             if not s2c.succeeded:
                 logger.warning(
-                    "Stream warmup silver→CH for %s failed: %s",
+                    "Stream warmup lake→CH for %s failed: %s",
                     symbol, s2c.error,
                 )
             return s2c.succeeded
         except Exception as e:  # noqa: BLE001 — boundary
             logger.exception(
-                "Stream warmup silver→CH for %s raised: %s", symbol, e,
+                "Stream warmup lake→CH for %s raised: %s", symbol, e,
             )
             return False
 
