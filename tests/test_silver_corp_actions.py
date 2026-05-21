@@ -502,7 +502,7 @@ class TestSilverBuildSettingsParsing:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# CorpActionsReader — read service for silver.corp_actions
+# CorpActionsReader — read service for equities.market_corp_actions (CV10)
 # ─────────────────────────────────────────────────────────────────────
 
 
@@ -524,8 +524,9 @@ class TestCorpActionsReader:
         assert resp.count == 0
 
     def test_missing_table_returns_empty_gracefully(self) -> None:
-        """Reader handles 'silver.corp_actions doesn't exist yet' without
-        raising — important because silver may be unbuilt in fresh setups."""
+        """Reader handles 'equities.market_corp_actions doesn't exist
+        yet' without raising — important for fresh setups before the
+        first corp-actions ingest run."""
         from unittest.mock import patch
         from app.services.readers.corp_actions_reader import CorpActionsReader
 
@@ -536,6 +537,20 @@ class TestCorpActionsReader:
         assert resp.count == 0
         assert resp.actions == []
         assert resp.symbol == "AAPL"
+
+    def test_loads_equities_market_corp_actions_table(self) -> None:
+        """Symbolic check: the reader resolves the v2 table id, not the
+        v1 silver path. Catches accidental rollback to silver_table_id."""
+        from unittest.mock import MagicMock
+        from app.services.readers.corp_actions_reader import CorpActionsReader
+
+        fake_cat = MagicMock()
+        fake_cat.load_table.return_value = MagicMock()
+        r = CorpActionsReader(catalog=fake_cat)
+        r._get_table()
+        args, _ = fake_cat.load_table.call_args
+        assert args[0].endswith(".market_corp_actions"), \
+            f"reader must load equities.market_corp_actions, got {args[0]!r}"
 
     def test_arrow_to_actions_sorts_by_ex_date_then_kind(self) -> None:
         """Output is sorted (ex_date, action_type) for deterministic

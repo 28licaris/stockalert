@@ -1,22 +1,22 @@
 """
-CorpActionsReader — read service for `silver.corp_actions`.
+CorpActionsReader — read service for `equities.market_corp_actions`.
 
-Reads the canonical, provider-precedence-resolved corp-actions table
-(produced by `app/services/silver/corp_actions/build.py`). Per the
-consumer contract ([silver_layer_plan §"The consumer contract"](../../../docs/silver_layer_plan.md)),
-every consumer (chart, screener, indicator, backtest, MCP tool) reads
-silver — **never bronze directly**.
+CV10 (Phase 1C): retargeted from `silver.corp_actions` to the v2
+canonical store `equities.market_corp_actions` (CV1's schema; CV9
+made the ingest write directly to it instead of via the silver build
+step).
 
-This is the CH-independent path: agents and ML pipelines reading
-corp-action history go through this reader and never touch ClickHouse.
+Every consumer (chart, screener, indicator, backtest, MCP tool) reads
+through this reader, surfacing a single Pydantic contract
+(`CorpActionsResponse`) over both HTTP routes and MCP tools.
 Snapshot-pinnable for reproducibility.
 
 Design contract:
   - Pure read; no writes; no global state beyond the catalog handle.
   - Pydantic shape (`CorpActionsResponse`) is what HTTP routes + MCP
     tools both surface — single contract, two surfaces.
-  - Filters push down to Iceberg (year(ex_date) partition prune +
-    symbol-sorted file skip).
+  - Filters push down to Iceberg (month(ex_date) partition prune via
+    CV1's MARKET_CORP_ACTIONS_PARTITION + identifier-column skip).
 """
 from __future__ import annotations
 
@@ -27,14 +27,15 @@ from typing import Optional
 from pyiceberg.expressions import And, EqualTo, GreaterThanOrEqual, In, LessThanOrEqual
 from pyiceberg.table import Table
 
+from app.services.equities.schemas import equities_table_id
 from app.services.iceberg_catalog import get_catalog
 from app.services.readers.schemas import CorpActionsResponse
-from app.services.silver.schemas import CorpAction, CorpActionKind, silver_table_id
+from app.services.silver.schemas import CorpAction, CorpActionKind
 
 logger = logging.getLogger(__name__)
 
 
-_TABLE_NAME = "corp_actions"
+_TABLE_NAME = "market_corp_actions"
 
 
 class CorpActionsReader:
@@ -55,7 +56,7 @@ class CorpActionsReader:
     def _get_table(self) -> Table:
         if self._table is None:
             cat = self._catalog or get_catalog()
-            self._table = cat.load_table(silver_table_id(_TABLE_NAME))
+            self._table = cat.load_table(equities_table_id(_TABLE_NAME))
         return self._table
 
     # ─────────────────────────────────────────────────────────────────
@@ -96,13 +97,13 @@ class CorpActionsReader:
         try:
             table = self._get_table()
         except Exception as e:
-            # The table may not exist yet (initial system state before any
-            # silver_corp_actions_build run). Return empty result rather
-            # than raising — consumers shouldn't crash because corp-actions
-            # haven't been built yet.
+            # Table may not exist yet (initial system state before the
+            # first Polygon corp-actions ingest run). Return empty
+            # result rather than raising — consumers shouldn't crash
+            # because corp-actions haven't been ingested yet.
             logger.warning(
-                "CorpActionsReader: silver.corp_actions not loadable (%s); "
-                "returning empty result", e,
+                "CorpActionsReader: equities.market_corp_actions not "
+                "loadable (%s); returning empty result", e,
             )
             return CorpActionsResponse(
                 symbol=sym,
