@@ -11,7 +11,7 @@ That's it. This service does NOT:
 
   - Know how any individual sink stores its data (that lives in the
     sink itself: ``ClickHouseSink`` writes to ``ohlcv_1m`` /
-    ``ohlcv_daily``; ``LakeSink`` writes to S3 + watermark)
+    ``ohlcv_daily``; ``EquitiesIcebergSink`` writes to the v2 lake).
   - Detect gaps. Flat files are the gold-standard *bulk* source;
     surgical intraday gap fills stay on the REST path.
 
@@ -208,39 +208,22 @@ class FlatFilesBackfillService:
 
         Sink wiring:
           - ClickHouseSink is always configured (the hot cache is the
-            primary read path for the API and the alert engine)
-          - LakeSink is appended when ``POLYGON_NIGHTLY_ENABLED=true`` and
-            ``STOCK_LAKE_BUCKET`` is non-empty. Missing creds fall
-            through silently — operators see the warning in the log.
+            primary read path for the API and the alert engine).
+          - The v2 lake sinks (EquitiesIcebergSink for polygon_raw /
+            schwab_universe) are NOT added here; callers that want
+            lake writes construct the service explicitly with
+            `sinks=[EquitiesIcebergSink.for_polygon_raw(), …]` (see
+            scripts/polygon_history_backfill.py + CV7's
+            nightly_polygon_refresh.py). The legacy LakeSink fallback
+            was removed in CV19.
 
         Raises if the Polygon Flat Files credentials are missing — we'd
         rather fail fast than 403 the first download.
         """
-        from app.config import settings
-
         client = PolygonFlatFilesClient.from_settings()
         sinks: list[Sink] = [
             ClickHouseSink.from_settings(batch_size=cls.DEFAULT_BATCH_SIZE),
         ]
-        if settings.polygon_nightly_enabled:
-            if settings.stock_lake_bucket:
-                # Lazy import to avoid pulling boto3 into modules that
-                # never run a backfill.
-                from app.services.legacy.lake_sink import LakeSink
-                try:
-                    sinks.append(LakeSink.from_settings())
-                except Exception as e:
-                    # Misconfigured lake should never break a CH-only
-                    # backfill — warn and continue with what we have.
-                    logger.warning(
-                        "FlatFilesBackfillService: LakeSink disabled "
-                        "(failed to build from settings): %s", e,
-                    )
-            else:
-                logger.warning(
-                    "FlatFilesBackfillService: POLYGON_NIGHTLY_ENABLED=true "
-                    "but STOCK_LAKE_BUCKET is empty; LakeSink disabled."
-                )
         return cls(flat_files=client, sinks=sinks)
 
     # ---------- properties ----------

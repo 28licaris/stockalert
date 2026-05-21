@@ -7,16 +7,18 @@ Each sink is independent — it owns its own success criteria, its own
 failure semantics, and its own storage. Adding a new destination (e.g.
 DuckDB, Snowflake, Parquet-on-local-disk for dev) is "implement Sink".
 
-Two production-friendly sinks live here today:
+Two production-friendly sinks live today:
 
-  - ``ClickHouseSink``   — writes to the hot cache (``ohlcv_1m`` / ``ohlcv_daily``)
-  - ``BronzeIcebergSink`` — see ``app.services.bronze.sink`` (the canonical
-    cold-tier writer; lives in the bronze service so it can own its
-    schemas alongside)
+  - ``ClickHouseSink``      — writes to the hot cache
+                              (``ohlcv_1m`` / ``ohlcv_daily``).
+  - ``EquitiesIcebergSink`` — see ``app.services.equities.sink`` (the
+                              canonical v2 cold-tier writer for
+                              ``equities.polygon_raw`` /
+                              ``equities.schwab_universe``).
 
-A third, **legacy** sink (``LakeSink`` → ``raw/provider=*/...parquet``) lives
-in ``app.services.legacy.lake_sink``. Do not use it for new work; it is
-slated for removal in Phase 6.
+The legacy ``LakeSink`` (raw Parquet shards under
+``raw/provider=*/...``) was retired in CV19 alongside the rest of
+``app/services/legacy/``.
 
 Design rules:
 
