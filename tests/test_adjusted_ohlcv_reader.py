@@ -18,8 +18,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api import routes_silver
-from app.api.routes_silver import get_adjusted_ohlcv_reader
+from app.api import routes_adjusted
+from app.api.routes_adjusted import get_adjusted_ohlcv_reader
 from app.services.readers.schemas import (
     BarQualityResponse,
     BarQualityRow,
@@ -320,10 +320,10 @@ class TestGetBarQuality:
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _make_silver_app() -> FastAPI:
+def _make_adjusted_app() -> FastAPI:
     """Minimal FastAPI app with only the silver router mounted."""
     app = FastAPI()
-    app.include_router(routes_silver.router, prefix="/api", tags=["Silver"])
+    app.include_router(routes_adjusted.router, prefix="/api", tags=["Adjusted"])
     return app
 
 
@@ -366,13 +366,13 @@ class _StubReader:
 
 class TestRouteGetBars:
     def test_route_delegates_and_returns_response(self) -> None:
-        app = _make_silver_app()
+        app = _make_adjusted_app()
         stub = _StubReader()
         app.dependency_overrides[get_adjusted_ohlcv_reader] = lambda: stub
 
         with TestClient(app) as client:
             resp = client.get(
-                "/api/silver/bars/AAPL",
+                "/api/adjusted/bars/AAPL",
                 params={
                     "start": "2024-06-10T13:30:00Z",
                     "end": "2024-06-10T20:00:00Z",
@@ -387,12 +387,12 @@ class TestRouteGetBars:
         assert stub.last_get_bars["symbol"] == "AAPL"
 
     def test_start_after_end_returns_400(self) -> None:
-        app = _make_silver_app()
+        app = _make_adjusted_app()
         app.dependency_overrides[get_adjusted_ohlcv_reader] = lambda: _StubReader()
 
         with TestClient(app) as client:
             resp = client.get(
-                "/api/silver/bars/AAPL",
+                "/api/adjusted/bars/AAPL",
                 params={
                     "start": "2024-06-11T00:00:00Z",
                     "end": "2024-06-10T00:00:00Z",
@@ -401,50 +401,11 @@ class TestRouteGetBars:
         assert resp.status_code == 400
 
 
-class TestRouteGetBarQuality:
-    def test_route_delegates_to_reader(self) -> None:
-        app = _make_silver_app()
-        bq_row = BarQualityRow(
-            symbol="AAPL", date=date(2024, 6, 10),
-            expected_bars=390, actual_bars=388,
-            gap_count=1, max_gap_minutes=2,
-            providers_seen=["polygon", "schwab"],
-            disagreement_count=0, backfill_attempts=0,
-        )
-        stub = _StubReader(
-            bq_response=BarQualityResponse(
-                symbol="AAPL",
-                since=date(2024, 6, 1), until=date(2024, 6, 30),
-                snapshot_id="abc", rows=[bq_row], count=1,
-            ),
-        )
-        app.dependency_overrides[get_adjusted_ohlcv_reader] = lambda: stub
-
-        with TestClient(app) as client:
-            resp = client.get(
-                "/api/silver/bar-quality/AAPL",
-                params={"since": "2024-06-01", "until": "2024-06-30"},
-            )
-
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["count"] == 1
-        assert body["rows"][0]["actual_bars"] == 388
-        assert body["rows"][0]["providers_seen"] == ["polygon", "schwab"]
-        assert stub.last_get_quality is not None
-        assert stub.last_get_quality["since"] == date(2024, 6, 1)
-        assert stub.last_get_quality["until"] == date(2024, 6, 30)
-
-    def test_since_after_until_returns_400(self) -> None:
-        app = _make_silver_app()
-        app.dependency_overrides[get_adjusted_ohlcv_reader] = lambda: _StubReader()
-
-        with TestClient(app) as client:
-            resp = client.get(
-                "/api/silver/bar-quality/AAPL",
-                params={"since": "2024-07-01", "until": "2024-06-01"},
-            )
-        assert resp.status_code == 400
+# CV20: TestRouteGetBarQuality removed — the /api/silver/bar-quality
+# endpoint was deleted in this commit. The reader's get_bar_quality
+# method is kept (returns empty when no fixture is injected — covered
+# by TestV2ReaderTargets below) so future v2-quality additions have a
+# place to plug in.
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -455,12 +416,12 @@ class TestRouteGetBarQuality:
 class TestMCPRegistration:
     """Sanity that the new tool module imports cleanly + tools register."""
 
-    def test_silver_ohlcv_module_importable(self) -> None:
+    def test_adjusted_ohlcv_module_importable(self) -> None:
         # Import via the tool module (registers via @mcp.tool() side effect).
-        from app.mcp.tools import silver_ohlcv  # noqa: F401
-        # Both tools must be callables.
-        assert callable(silver_ohlcv.get_silver_bars)
-        assert callable(silver_ohlcv.get_silver_bar_quality)
+        from app.mcp.tools import adjusted_ohlcv  # noqa: F401
+        # The single v2 tool must be a callable.
+        assert callable(adjusted_ohlcv.get_adjusted_bars)
+        # CV20: get_silver_bar_quality deleted (no v2 backing table).
 
 
 # ─────────────────────────────────────────────────────────────────────

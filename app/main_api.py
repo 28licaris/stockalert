@@ -45,7 +45,7 @@ from app.api import (
     routes_movers,
     routes_screener,
     routes_seed,
-    routes_silver,
+    routes_adjusted,
     routes_stream,
     routes_watchlist,
 )
@@ -573,7 +573,7 @@ app.include_router(routes_lake.router, prefix=_V1, tags=["Lake"])
 app.include_router(routes_indicators.router, prefix=_V1, tags=["Indicators"])
 app.include_router(routes_screener.router, prefix=_V1, tags=["Screener"])
 app.include_router(routes_corp_actions.router, prefix=_V1, tags=["CorpActions"])
-app.include_router(routes_silver.router, prefix=_V1, tags=["Silver"])
+app.include_router(routes_adjusted.router, prefix=_V1, tags=["Adjusted"])
 app.include_router(routes_monitors.router, prefix=_V1, tags=["Monitors"])
 app.include_router(routes_watchlist.router, prefix=_V1, tags=["Watchlist"])
 app.include_router(routes_seed.router, prefix=_V1, tags=["Seed"])
