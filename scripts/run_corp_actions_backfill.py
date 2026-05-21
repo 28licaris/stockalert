@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """
-Run Polygon corp-actions backfill — bronze + silver in one shot.
+Run Polygon corp-actions backfill — lake ingest + (legacy) silver build.
 
 Two phases per invocation:
 
-1. **Bronze ingest** (Polygon REST → `bronze.polygon_corp_actions`):
+1. **Lake ingest** (Polygon REST → `equities.market_corp_actions`):
    Pulls splits + dividends in the requested window via
-   `PolygonCorpActionsBronzeIngest`. Idempotent via Iceberg upsert
+   `PolygonCorpActionsIngest` (CV9). Idempotent via Iceberg upsert
    on (symbol, ex_date, action_type).
 
-2. **Silver build** (`bronze.{provider}_corp_actions` →
-   `silver.corp_actions`): Merges all configured bronze provider
-   tables with precedence, upserts into silver. Same upsert
-   idempotency.
+2. **Silver build** (legacy — retired in Phase 1C):
+   `bronze.{provider}_corp_actions` → `silver.corp_actions`.
+   Still runs during the Phase 1B transition because silver readers
+   in app/services/readers/corp_actions_reader.py haven't cut over
+   to equities yet. Once those readers move (Phase 1C), this stage
+   becomes a no-op and is deleted.
 
 **Modes:**
 
@@ -49,8 +51,10 @@ from typing import Optional
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 
+from app.services.ingest.corp_actions import (  # noqa: E402
+    PolygonCorpActionsIngest,
+)
 from app.services.silver.corp_actions import (  # noqa: E402
-    PolygonCorpActionsBronzeIngest,
     SilverCorpActionsBuild,
 )
 
@@ -68,7 +72,7 @@ def _parse_date(s: str) -> date:
 
 
 async def run_bronze(since: date, until: date) -> dict:
-    """Stage 1: Polygon REST → bronze.polygon_corp_actions.
+    """Stage 1: Polygon REST → equities.market_corp_actions.
 
     **Verify-mutation contract (coding_standards.md rule 3):**
     After the upsert path completes, we reload the bronze table via
@@ -96,7 +100,7 @@ async def run_bronze(since: date, until: date) -> dict:
         pre_snap_id, pre_rows,
     )
 
-    ingest = PolygonCorpActionsBronzeIngest.from_settings()
+    ingest = PolygonCorpActionsIngest.from_settings()
     result = await ingest.backfill_full_history(since=since, until=until)
     logger.info(
         "Bronze ingest done: splits=%d dividends=%d duration=%.1fs",

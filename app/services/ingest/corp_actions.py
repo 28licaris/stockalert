@@ -1,16 +1,14 @@
 """
-Polygon corp-actions → bronze.polygon_corp_actions ingest.
+Polygon corp-actions → `equities.market_corp_actions` ingest.
 
-The bronze-side writer for Polygon's corp-actions REST API. Pulls
+The canonical v2 writer for Polygon's corp-actions REST API. Pulls
 splits + dividends from `PolygonCorpActionsClient` and upserts the
-raw rows into `bronze.polygon_corp_actions`.
+rows into `equities.market_corp_actions`.
 
-**Pattern note:** This is the bronze ingest job — analogous to
-`nightly_polygon_refresh.py` for OHLCV. It writes to bronze
-(raw per-provider archive), NEVER directly to silver. The
-silver layer's `build.py` then merges all
-`bronze.{provider}_corp_actions` tables into the canonical
-`silver.corp_actions`. See [silver_layer_plan §4](../../../../docs/silver_layer_plan.md).
+**Pattern note:** This is the corp-actions ingest job — analogous to
+`nightly_polygon_refresh.py` for OHLCV. It writes to the lake
+namespace directly; no silver build step (silver is being retired
+in Phase 1C, `equities.market_corp_actions` is the canonical store).
 
 **Two modes:**
 
@@ -23,13 +21,18 @@ silver layer's `build.py` then merges all
   identifier in Iceberg upsert.
 
 **Architectural guarantees:**
-- Writes to `bronze.polygon_corp_actions` only. Never touches silver.
+- Writes to `equities.market_corp_actions` only.
 - Idempotent: re-running with the same date window produces no
   duplicates (upsert join handles revisions cleanly).
 - Reproducibility: every row tagged with `ingestion_ts` +
   `ingestion_run_id` so the audit trail is complete.
 - Pure consumer of `PolygonCorpActionsClient` — swap the client
   for a stub in tests.
+
+CV1 schema parity: this writer leaves `raw_payload` NULL. The column
+exists in the Iceberg schema so a future enhancement to
+`PolygonCorpActionsClient` can capture the raw API JSON without a
+schema migration; the writer doesn't fabricate one today.
 """
 from __future__ import annotations
 
@@ -41,17 +44,18 @@ from typing import Iterable, Optional
 import pyarrow as pa
 
 from app.providers.polygon_corp_actions import PolygonCorpActionsClient
-from app.services.bronze.tables import ensure_bronze_polygon_corp_actions
+from app.services.equities.tables import ensure_market_corp_actions
 from app.services.iceberg_safe_upsert import chunked_upsert
 from app.services.silver.schemas import CorpAction
 
 logger = logging.getLogger(__name__)
 
 
-# Arrow schema for `bronze.polygon_corp_actions` — must exactly match
-# the Iceberg schema in `app/services/bronze/schemas.py`. Field order +
-# nullability are load-bearing; PyIceberg uses these for schema validation
-# on write.
+# Arrow schema for `equities.market_corp_actions` — must exactly
+# match the Iceberg schema in `app/services/equities/schemas.py`.
+# Field order + nullability are load-bearing; PyIceberg uses these
+# for schema validation on write. Includes `raw_payload` (nullable
+# string, populated NULL by this writer — see module docstring).
 _CORP_ACTIONS_ARROW = pa.schema(
     [
         pa.field("symbol", pa.string(), nullable=False),
@@ -61,14 +65,15 @@ _CORP_ACTIONS_ARROW = pa.schema(
         pa.field("cash_amount", pa.float64(), nullable=True),
         pa.field("announced_at", pa.timestamp("us", tz="UTC"), nullable=True),
         pa.field("source_provider", pa.string(), nullable=False),
+        pa.field("raw_payload", pa.string(), nullable=True),
         pa.field("ingestion_ts", pa.timestamp("us", tz="UTC"), nullable=True),
         pa.field("ingestion_run_id", pa.string(), nullable=True),
     ]
 )
 
 
-class PolygonCorpActionsBronzeIngest:
-    """Orchestrates Polygon REST → bronze.polygon_corp_actions.
+class PolygonCorpActionsIngest:
+    """Orchestrates Polygon REST → equities.market_corp_actions.
 
     Construct via `from_settings()` for production; pass explicit
     `client` for tests with a stubbed Polygon source.
@@ -84,7 +89,7 @@ class PolygonCorpActionsBronzeIngest:
         self._table = table
 
     @classmethod
-    def from_settings(cls) -> "PolygonCorpActionsBronzeIngest":
+    def from_settings(cls) -> "PolygonCorpActionsIngest":
         return cls(client=PolygonCorpActionsClient.from_settings())
 
     def _get_client(self) -> PolygonCorpActionsClient:
@@ -94,7 +99,7 @@ class PolygonCorpActionsBronzeIngest:
 
     def _get_table(self):
         if self._table is None:
-            self._table = ensure_bronze_polygon_corp_actions()
+            self._table = ensure_market_corp_actions()
         return self._table
 
     # ─────────────────────────────────────────────────────────────────
@@ -228,10 +233,11 @@ class PolygonCorpActionsBronzeIngest:
         ingestion_ts: Optional[datetime] = None,
     ) -> pa.Table:
         """Convert a list of CorpAction → PyArrow Table matching the
-        bronze.polygon_corp_actions schema.
+        equities.market_corp_actions schema.
 
         Stamps every row with `ingestion_ts` (defaults to now-UTC) and
-        `ingestion_run_id` so the audit trail is intact.
+        `ingestion_run_id` so the audit trail is intact. `raw_payload`
+        is populated NULL — see module docstring.
         """
         ingestion_ts = ingestion_ts or datetime.now(timezone.utc)
 
@@ -244,6 +250,7 @@ class PolygonCorpActionsBronzeIngest:
             "cash_amount": [a.cash_amount for a in rows],
             "announced_at": [a.announced_at for a in rows],
             "source_provider": [a.source_provider for a in rows],
+            "raw_payload": [None for _ in rows],
             "ingestion_ts": [ingestion_ts for _ in rows],
             "ingestion_run_id": [ingestion_run_id for _ in rows],
         }
@@ -341,7 +348,7 @@ class PolygonCorpActionsBronzeIngest:
             )
         arrow = cls._actions_to_arrow(deduped, ingestion_run_id=ingestion_run_id)
         result = chunked_upsert(
-            table, arrow, log_label="bronze.polygon_corp_actions",
+            table, arrow, log_label="equities.market_corp_actions",
         )
         logger.info(
             "polygon_corp_actions_ingest: upsert complete "

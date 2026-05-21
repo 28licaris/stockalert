@@ -29,8 +29,8 @@ from app.services.silver.corp_actions.build import (
     SilverCorpActionsBuild,
     _SILVER_CORP_ACTIONS_ARROW,
 )
-from app.services.silver.corp_actions.polygon_ingest import (
-    PolygonCorpActionsBronzeIngest,
+from app.services.ingest.corp_actions import (
+    PolygonCorpActionsIngest,
     _CORP_ACTIONS_ARROW,
 )
 from app.services.silver.schemas import CorpAction
@@ -209,7 +209,7 @@ class TestBronzeIngestArrowSerialization:
     the audit metadata."""
 
     def test_empty_list_produces_empty_arrow(self) -> None:
-        arrow = PolygonCorpActionsBronzeIngest._actions_to_arrow(
+        arrow = PolygonCorpActionsIngest._actions_to_arrow(
             [], ingestion_run_id="r1",
         )
         assert arrow.num_rows == 0
@@ -225,14 +225,16 @@ class TestBronzeIngestArrowSerialization:
                 source_provider="polygon",
             )
         ]
-        arrow = PolygonCorpActionsBronzeIngest._actions_to_arrow(
+        arrow = PolygonCorpActionsIngest._actions_to_arrow(
             actions,
             ingestion_run_id="r1",
             ingestion_ts=datetime(2026, 5, 17, 0, 0, tzinfo=timezone.utc),
         )
         assert arrow.num_rows == 1
-        # All 9 columns present
+        # All 10 columns present (CV1: includes raw_payload column)
         assert set(arrow.column_names) == set(_CORP_ACTIONS_ARROW.names)
+        assert "raw_payload" in arrow.column_names
+        assert arrow["raw_payload"][0].as_py() is None
         # Audit metadata stamped
         row = {col: arrow[col][0].as_py() for col in arrow.column_names}
         assert row["ingestion_run_id"] == "r1"
@@ -247,7 +249,7 @@ class TestBronzeIngestArrowSerialization:
             CorpAction(symbol="AAPL", ex_date=date(2020, 8, 31), action_type="split", factor=4.0),
             CorpAction(symbol="MSFT", ex_date=date(2020, 8, 19), action_type="cash_dividend", cash_amount=0.51),
         ]
-        arrow = PolygonCorpActionsBronzeIngest._actions_to_arrow(
+        arrow = PolygonCorpActionsIngest._actions_to_arrow(
             actions, ingestion_run_id="r1",
         )
         assert arrow.num_rows == 2
@@ -267,12 +269,12 @@ class TestDedupeActions:
             CorpAction(symbol="AAPL", ex_date=date(2020, 8, 31),
                        action_type="split", factor=4.0),
         ]
-        out, n = PolygonCorpActionsBronzeIngest._dedupe_actions(actions)
+        out, n = PolygonCorpActionsIngest._dedupe_actions(actions)
         assert len(out) == 1
         assert n == 0
 
     def test_empty_passthrough(self) -> None:
-        out, n = PolygonCorpActionsBronzeIngest._dedupe_actions([])
+        out, n = PolygonCorpActionsIngest._dedupe_actions([])
         assert out == [] and n == 0
 
     def test_duplicate_cash_dividends_summed(self) -> None:
@@ -284,7 +286,7 @@ class TestDedupeActions:
             CorpAction(symbol="CIVI", ex_date=date(2024, 6, 12),
                        action_type="cash_dividend", cash_amount=0.5),
         ]
-        out, n = PolygonCorpActionsBronzeIngest._dedupe_actions(actions)
+        out, n = PolygonCorpActionsIngest._dedupe_actions(actions)
         assert len(out) == 1
         assert n == 1
         assert out[0].cash_amount == 1.5
@@ -301,7 +303,7 @@ class TestDedupeActions:
                        action_type="cash_dividend", cash_amount=0.3,
                        announced_at=datetime(2024, 5, 20, tzinfo=timezone.utc)),
         ]
-        out, _ = PolygonCorpActionsBronzeIngest._dedupe_actions(actions)
+        out, _ = PolygonCorpActionsIngest._dedupe_actions(actions)
         assert out[0].announced_at == datetime(2024, 5, 20, tzinfo=timezone.utc)
 
     def test_different_action_types_not_collapsed(self) -> None:
@@ -314,7 +316,7 @@ class TestDedupeActions:
             CorpAction(symbol="FUND", ex_date=date(2024, 12, 30),
                        action_type="st_capital_gain", cash_amount=0.50),
         ]
-        out, n = PolygonCorpActionsBronzeIngest._dedupe_actions(actions)
+        out, n = PolygonCorpActionsIngest._dedupe_actions(actions)
         assert len(out) == 3
         assert n == 0
 
@@ -328,7 +330,7 @@ class TestDedupeActions:
             CorpAction(symbol="X", ex_date=date(2024, 1, 1),
                        action_type="cash_dividend", cash_amount=0.3),
         ]
-        out, n = PolygonCorpActionsBronzeIngest._dedupe_actions(actions)
+        out, n = PolygonCorpActionsIngest._dedupe_actions(actions)
         assert len(out) == 1
         assert n == 2
         assert abs(out[0].cash_amount - 0.6) < 1e-9
@@ -603,7 +605,7 @@ class TestBackfillFullHistoryYearChunking:
         # Fake table — never written to because there are no actions.
         fake_table = MagicMock()
 
-        ingest = PolygonCorpActionsBronzeIngest(client=client, table=fake_table)
+        ingest = PolygonCorpActionsIngest(client=client, table=fake_table)
         await ingest.backfill_full_history(
             since=_date(2021, 1, 4), until=_date(2024, 6, 30),
         )
@@ -642,7 +644,7 @@ class TestBackfillFullHistoryYearChunking:
         client.collect_splits = AsyncMock(return_value=[])
         client.collect_dividends = AsyncMock(return_value=[])
 
-        ingest = PolygonCorpActionsBronzeIngest(client=client, table=MagicMock())
+        ingest = PolygonCorpActionsIngest(client=client, table=MagicMock())
         await ingest.backfill_full_history(
             since=_date(2024, 3, 1), until=_date(2024, 11, 30),
         )
@@ -667,7 +669,7 @@ class TestBackfillFullHistoryYearChunking:
         client.collect_splits = AsyncMock(return_value=[])
         client.collect_dividends = AsyncMock(return_value=[])
 
-        ingest = PolygonCorpActionsBronzeIngest(client=client, table=MagicMock())
+        ingest = PolygonCorpActionsIngest(client=client, table=MagicMock())
         await ingest.backfill_full_history(
             since=_date(2023, 6, 15), until=_date(2025, 3, 10),
         )
@@ -697,8 +699,8 @@ class TestBackfillFullHistoryYearChunking:
         helper breaks loudly).
         """
         from unittest.mock import MagicMock, patch
-        from app.services.silver.corp_actions.polygon_ingest import (
-            PolygonCorpActionsBronzeIngest as _Cls,
+        from app.services.ingest.corp_actions import (
+            PolygonCorpActionsIngest as _Cls,
         )
 
         # Build a 1,500-row payload — enough to force chunking via the helper.
@@ -712,7 +714,7 @@ class TestBackfillFullHistoryYearChunking:
         fake_table = MagicMock()
 
         with patch(
-            "app.services.silver.corp_actions.polygon_ingest.chunked_upsert"
+            "app.services.ingest.corp_actions.chunked_upsert"
         ) as mock_chunked:
             mock_chunked.return_value = MagicMock(
                 rows_updated=0, rows_inserted=1500, chunks_committed=4,
@@ -753,7 +755,7 @@ class TestBackfillFullHistoryYearChunking:
         fake_table = MagicMock()
         fake_table.upsert.return_value = MagicMock(rows_updated=0, rows_inserted=110)
 
-        ingest = PolygonCorpActionsBronzeIngest(client=client, table=fake_table)
+        ingest = PolygonCorpActionsIngest(client=client, table=fake_table)
         result = await ingest.backfill_full_history(
             since=_date(2021, 1, 1), until=_date(2023, 12, 31),
         )

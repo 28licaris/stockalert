@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Minimal reproducer for the PyIceberg upsert SIGBUS on
-bronze.polygon_corp_actions.
+equities.market_corp_actions (was bronze.polygon_corp_actions
+pre-CV9; same upsert mechanics).
 
 We isolate each step of the write path so we can see EXACTLY which
 line crashes (vs the production code path which dies mid-function and
@@ -41,16 +42,16 @@ def _print_step(n: int, what: str, status: str = "START") -> None:
 def main() -> int:
     _print_step(0, "imports", "START")
     from app.services.iceberg_catalog import get_catalog
-    from app.services.bronze.schemas import bronze_table_id
-    from app.services.silver.corp_actions.polygon_ingest import (
-        PolygonCorpActionsBronzeIngest,
+    from app.services.equities.schemas import equities_table_id
+    from app.services.ingest.corp_actions import (
+        PolygonCorpActionsIngest,
     )
     from app.services.silver.schemas import CorpAction
     _print_step(0, "imports", "OK")
 
     _print_step(1, "load_table", "START")
     cat = get_catalog()
-    tbl = cat.load_table(bronze_table_id("polygon_corp_actions"))
+    tbl = cat.load_table(equities_table_id("market_corp_actions"))
     snap = tbl.current_snapshot()
     snap_id_pre = str(snap.snapshot_id) if snap else None
     rows_pre = int(snap.summary.additional_properties.get("total-records", 0)) if snap else 0
@@ -81,12 +82,12 @@ def main() -> int:
     _print_step(2, "build_2_synthetic_actions", "OK")
 
     _print_step(3, "dedupe_actions", "START")
-    deduped, n_collapsed = PolygonCorpActionsBronzeIngest._dedupe_actions(actions)
+    deduped, n_collapsed = PolygonCorpActionsIngest._dedupe_actions(actions)
     print(f"  deduped={len(deduped)} collapsed={n_collapsed}")
     _print_step(3, "dedupe_actions", "OK")
 
     _print_step(4, "actions_to_arrow", "START")
-    arrow = PolygonCorpActionsBronzeIngest._actions_to_arrow(
+    arrow = PolygonCorpActionsIngest._actions_to_arrow(
         deduped, ingestion_run_id="REPRO_TEST",
     )
     print(f"  arrow.num_rows={arrow.num_rows}")
@@ -106,7 +107,7 @@ def main() -> int:
         print(f"  append RAISED: {type(e).__name__}: {e}")
         raise
     # Reload to check
-    tbl2 = cat.load_table(bronze_table_id("polygon_corp_actions"))
+    tbl2 = cat.load_table(equities_table_id("market_corp_actions"))
     snap2 = tbl2.current_snapshot()
     print(f"  post-append snapshot_id={snap2.snapshot_id}")
     _print_step(5, "table_append_2_rows", "OK")
