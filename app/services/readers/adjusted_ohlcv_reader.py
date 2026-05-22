@@ -50,6 +50,8 @@ from app.services.readers.schemas import (
     BarQualityResponse,
     BarQualityRow,
     SilverBarsResponse,
+    SourceCoverage,
+    SymbolCoverageResponse,
 )
 from app.services.equities.models import SilverBar
 
@@ -340,6 +342,115 @@ class AdjustedOhlcvReader:
                 label, symbol, start_utc, end_utc, e,
             )
             return None
+
+    def get_symbol_coverage(self, symbol: str) -> SymbolCoverageResponse:
+        """Coverage stats for `symbol` across both v2 adjusted sources.
+
+        Returns a SymbolCoverageResponse with per-table SourceCoverage
+        for `equities.polygon_adjusted` and `equities.schwab_universe`.
+        Each side independently degrades to row_count=0 / Nones when
+        the table is cold-start empty or scan fails — never raises.
+
+        Cheap: two single-symbol bucket-pruned timestamp scans (each
+        ~1/32 of the table's metadata pages thanks to CV1's bucket
+        partitioning). Returns in under a second on warm cache; the
+        scan reads only the `timestamp` column, not the full row.
+
+        Used by:
+          - The cockpit "is this symbol ready to chart?" check
+          - The MCP `get_symbol_coverage` tool agents call before
+            queueing a long backtest
+          - Operator investigations: "does NVDA have data back to
+            2021? Is today's bar in there yet?"
+        """
+        sym = (symbol or "").strip().upper()
+        if not sym:
+            empty = SourceCoverage(
+                table_name="(empty symbol)", row_count=0,
+            )
+            return SymbolCoverageResponse(
+                symbol=symbol or "",
+                polygon_adjusted=empty.model_copy(
+                    update={"table_name": "equities.polygon_adjusted"}
+                ),
+                schwab_universe=empty.model_copy(
+                    update={"table_name": "equities.schwab_universe"}
+                ),
+            )
+
+        polygon = self._coverage_for(
+            self._get_ohlcv_table,
+            sym,
+            table_label="equities.polygon_adjusted",
+        )
+        schwab = self._coverage_for(
+            self._get_schwab_table,
+            sym,
+            table_label="equities.schwab_universe",
+        )
+        return SymbolCoverageResponse(
+            symbol=sym,
+            polygon_adjusted=polygon,
+            schwab_universe=schwab,
+        )
+
+    def _coverage_for(
+        self, table_getter, symbol: str, *, table_label: str,
+    ) -> SourceCoverage:
+        """Build a SourceCoverage for one (symbol, table) pair.
+
+        Cold-start safe: missing tables / scan failures degrade to
+        row_count=0 with None timestamps + a warning log. Never raises.
+        """
+        try:
+            table = table_getter()
+        except Exception as e:
+            logger.warning(
+                "AdjustedOhlcvReader.coverage: %s not loadable (%s); "
+                "reporting empty", table_label, e,
+            )
+            return SourceCoverage(table_name=table_label, row_count=0)
+
+        try:
+            arrow = table.scan(
+                row_filter=EqualTo("symbol", symbol),
+                selected_fields=("timestamp",),
+            ).to_arrow()
+        except Exception as e:
+            logger.warning(
+                "AdjustedOhlcvReader.coverage: %s scan failed for %s: %s",
+                table_label, symbol, e,
+            )
+            return SourceCoverage(table_name=table_label, row_count=0)
+
+        row_count = arrow.num_rows
+        if row_count == 0:
+            return SourceCoverage(table_name=table_label, row_count=0)
+
+        import pyarrow.compute as pc
+
+        earliest = pc.min(arrow["timestamp"]).as_py()
+        latest = pc.max(arrow["timestamp"]).as_py()
+        if earliest is not None and earliest.tzinfo is None:
+            earliest = earliest.replace(tzinfo=timezone.utc)
+        if latest is not None and latest.tzinfo is None:
+            latest = latest.replace(tzinfo=timezone.utc)
+
+        snap_id: Optional[str] = None
+        try:
+            snap = table.current_snapshot()
+            if snap is not None:
+                snap_id = str(snap.snapshot_id)
+        except Exception:
+            pass
+
+        return SourceCoverage(
+            table_name=table_label,
+            row_count=row_count,
+            earliest_timestamp=earliest,
+            latest_timestamp=latest,
+            snapshot_id=snap_id,
+        )
 
     def get_bar_quality(
         self,

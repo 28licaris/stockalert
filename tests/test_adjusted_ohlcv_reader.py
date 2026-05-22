@@ -24,6 +24,7 @@ from app.services.readers.schemas import (
     BarQualityResponse,
     BarQualityRow,
     SilverBarsResponse,
+    SymbolCoverageResponse,
 )
 from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 
@@ -762,3 +763,151 @@ class TestRouteIncludeLiveParam:
         assert resp.status_code == 200
         assert stub.last_get_bars is None
         assert stub.last_get_bars_union is not None
+
+
+# ─────────────────────────────────────────────────────────────────────
+# CV26 — get_symbol_coverage (per-symbol coverage across both sources)
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestGetSymbolCoverage:
+    def test_both_sources_populated(self) -> None:
+        ts_a = datetime(2021, 1, 4, 14, 30, tzinfo=timezone.utc)
+        ts_b = datetime(2024, 6, 1, 14, 30, tzinfo=timezone.utc)
+        ts_c = datetime(2024, 6, 3, 13, 30, tzinfo=timezone.utc)
+        polygon = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row("AAPL", ts_a, source="polygon-adjusted"),
+            _v2_row("AAPL", ts_b, source="polygon-adjusted"),
+        ]))
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row("AAPL", ts_c, source="schwab-live"),
+        ]))
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+
+        resp = reader.get_symbol_coverage("aapl")
+
+        assert resp.symbol == "AAPL"
+        assert resp.polygon_adjusted.table_name == "equities.polygon_adjusted"
+        assert resp.polygon_adjusted.row_count == 2
+        assert resp.polygon_adjusted.earliest_timestamp == ts_a
+        assert resp.polygon_adjusted.latest_timestamp == ts_b
+        assert resp.polygon_adjusted.snapshot_id == "12345"
+
+        assert resp.schwab_universe.table_name == "equities.schwab_universe"
+        assert resp.schwab_universe.row_count == 1
+        assert resp.schwab_universe.earliest_timestamp == ts_c
+        assert resp.schwab_universe.latest_timestamp == ts_c
+
+    def test_polygon_empty_schwab_populated(self) -> None:
+        """Brand-new symbol — schwab live writes started, polygon
+        hasn't been Spark-adjusted yet."""
+        ts = datetime(2024, 6, 3, 13, 30, tzinfo=timezone.utc)
+        polygon = _FakeIcebergTable(pa.Table.from_pylist([]))
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row("NEWSYM", ts, source="schwab-live"),
+        ]))
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+
+        resp = reader.get_symbol_coverage("NEWSYM")
+
+        assert resp.polygon_adjusted.row_count == 0
+        assert resp.polygon_adjusted.earliest_timestamp is None
+        assert resp.polygon_adjusted.latest_timestamp is None
+        assert resp.schwab_universe.row_count == 1
+
+    def test_both_sources_empty_returns_zeros(self) -> None:
+        """Unknown symbol — both tables return 0 rows. Caller can
+        switch on `polygon_adjusted.row_count == 0 AND
+        schwab_universe.row_count == 0` to say "we don't have this
+        symbol."""
+        polygon = _FakeIcebergTable(pa.Table.from_pylist([]))
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([]))
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+
+        resp = reader.get_symbol_coverage("UNKNOWN")
+        assert resp.polygon_adjusted.row_count == 0
+        assert resp.schwab_universe.row_count == 0
+
+    def test_polygon_scan_failure_degrades_to_empty(self) -> None:
+        """Single-source scan failure must not break the response —
+        the surviving source still flows through, the failed source
+        reports row_count=0."""
+        ts = datetime(2024, 6, 3, tzinfo=timezone.utc)
+        polygon = _FakeIcebergTable(
+            pa.Table.from_pylist([]),
+            scan_raises=RuntimeError("S3 timeout"),
+        )
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row("AAPL", ts, source="schwab-live"),
+        ]))
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+
+        resp = reader.get_symbol_coverage("AAPL")
+        assert resp.polygon_adjusted.row_count == 0
+        assert resp.schwab_universe.row_count == 1
+
+    def test_empty_symbol_short_circuits_both_scans(self) -> None:
+        polygon = _FakeIcebergTable(
+            pa.Table.from_pylist([]),
+            scan_raises=AssertionError("must not scan when symbol blank"),
+        )
+        schwab = _FakeIcebergTable(
+            pa.Table.from_pylist([]),
+            scan_raises=AssertionError("must not scan when symbol blank"),
+        )
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+
+        resp = reader.get_symbol_coverage("   ")
+        assert resp.polygon_adjusted.row_count == 0
+        assert resp.schwab_universe.row_count == 0
+
+
+class TestRouteCoverage:
+    def test_route_delegates_to_reader(self) -> None:
+        from fastapi.testclient import TestClient
+
+        app = _make_adjusted_app()
+
+        class _CovStub:
+            def __init__(self) -> None:
+                self.last_symbol: Optional[str] = None
+
+            def get_symbol_coverage(self, symbol):
+                self.last_symbol = symbol
+                from app.services.readers.schemas import SourceCoverage
+                return SymbolCoverageResponse(
+                    symbol=symbol.upper(),
+                    polygon_adjusted=SourceCoverage(
+                        table_name="equities.polygon_adjusted",
+                        row_count=42,
+                        snapshot_id="snap-poly",
+                    ),
+                    schwab_universe=SourceCoverage(
+                        table_name="equities.schwab_universe",
+                        row_count=7,
+                        snapshot_id="snap-schwab",
+                    ),
+                )
+
+        stub = _CovStub()
+        app.dependency_overrides[get_adjusted_ohlcv_reader] = lambda: stub
+
+        with TestClient(app) as client:
+            resp = client.get("/api/adjusted/symbols/AAPL/coverage")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "AAPL"
+        assert body["polygon_adjusted"]["row_count"] == 42
+        assert body["schwab_universe"]["row_count"] == 7
+        assert stub.last_symbol == "AAPL"

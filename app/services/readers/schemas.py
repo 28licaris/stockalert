@@ -608,3 +608,65 @@ class BarQualityResponse(BaseModel):
     )
     rows: list[BarQualityRow]
     count: int
+
+
+class SourceCoverage(BaseModel):
+    """Per-table coverage stats for one symbol (CV26).
+
+    Returned twice in a SymbolCoverageResponse — once for
+    `equities.polygon_adjusted` and once for `equities.schwab_universe`
+    — so consumers can see which source has which window.
+    """
+
+    table_name: str = Field(
+        ...,
+        description=(
+            "Fully-qualified Iceberg table id (e.g. "
+            "'equities.polygon_adjusted'). Echoed so consumers caching "
+            "this response don't have to guess where the numbers came "
+            "from."
+        ),
+    )
+    row_count: int = Field(
+        ..., description="Total rows for this (symbol, table). 0 = symbol absent.",
+    )
+    earliest_timestamp: Optional[datetime] = Field(
+        None,
+        description=(
+            "Min(timestamp) UTC over all rows for this symbol in the "
+            "table. None when row_count=0."
+        ),
+    )
+    latest_timestamp: Optional[datetime] = Field(
+        None,
+        description=(
+            "Max(timestamp) UTC. None when row_count=0. The lag between "
+            "this and 'now' is the staleness gauge for this source — "
+            "polygon_adjusted lags by up to one weekly Spark run; "
+            "schwab_universe is live-cadence."
+        ),
+    )
+    snapshot_id: Optional[str] = Field(
+        None,
+        description=(
+            "Iceberg snapshot pinned by the scan. Lets a follow-up "
+            "call replay against the exact lake state. None when the "
+            "table doesn't exist yet (cold-start)."
+        ),
+    )
+
+
+class SymbolCoverageResponse(BaseModel):
+    """What the v2 lake knows about `symbol` (CV26).
+
+    Operator + agent surface for the most common investigation
+    question: "do we have data for AAPL, how far back, and how
+    current?" Returns coverage for both v2 adjusted-OHLCV sources;
+    the consumer decides which one matters for their use case
+    (deep history → polygon_adjusted; live + tip-fill →
+    schwab_universe).
+    """
+
+    symbol: str
+    polygon_adjusted: SourceCoverage
+    schwab_universe: SourceCoverage

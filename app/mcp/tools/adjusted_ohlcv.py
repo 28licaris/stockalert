@@ -26,7 +26,7 @@ from functools import lru_cache
 
 from app.mcp.server import mcp
 from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
-from app.services.readers.schemas import SilverBarsResponse
+from app.services.readers.schemas import SilverBarsResponse, SymbolCoverageResponse
 
 logger = logging.getLogger(__name__)
 
@@ -93,3 +93,42 @@ def get_adjusted_bars(
     if include_live:
         return _reader().get_bars_union(symbol, start, end)
     return _reader().get_bars(symbol, start, end)
+
+
+@mcp.tool()
+def get_symbol_coverage(symbol: str) -> SymbolCoverageResponse:
+    """Coverage stats for `symbol` across the v2 adjusted sources.
+
+    USE WHEN: an agent is about to queue a long-running backtest or
+    deep-history query and wants to verify the lake actually has the
+    data first. Cheaper than failing-and-retrying a multi-minute
+    query.
+
+    Returns per-table row counts, earliest/latest timestamps, and
+    snapshot IDs for:
+      - equities.polygon_adjusted — deep adjusted history (weekly Spark)
+      - equities.schwab_universe  — live + tip-fill (continuous)
+
+    Common interpretations:
+      - polygon_adjusted.row_count == 0 → cold-start; the first
+        polygon_adjustment_job hasn't run yet. Suggest the operator
+        run it before backtesting.
+      - polygon_adjusted.latest_timestamp older than ~7 days → the
+        weekly Spark adjustment job is lagging or hasn't run since
+        the symbol was last in the universe.
+      - schwab_universe.latest_timestamp older than ~5 min during
+        market hours → live writer is stalled or the symbol isn't
+        subscribed to Schwab WS.
+      - schwab_universe.row_count > 0 AND polygon_adjusted.row_count
+        == 0 → brand-new symbol; deep history will arrive on the
+        next weekly Spark run.
+
+    Args:
+        symbol: Ticker (case-insensitive; "nvda" → "NVDA").
+
+    Returns: `SymbolCoverageResponse` with separate SourceCoverage
+    blocks for polygon_adjusted and schwab_universe. Either side
+    independently degrades to row_count=0 with None timestamps on
+    cold-start / scan failure — never raises.
+    """
+    return _reader().get_symbol_coverage(symbol)

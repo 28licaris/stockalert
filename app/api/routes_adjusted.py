@@ -26,7 +26,7 @@ from functools import lru_cache
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
-from app.services.readers.schemas import SilverBarsResponse
+from app.services.readers.schemas import SilverBarsResponse, SymbolCoverageResponse
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +112,37 @@ def get_adjusted_bars(
     if include_live:
         return reader.get_bars_union(symbol, start_utc, end_utc)
     return reader.get_bars(symbol, start_utc, end_utc)
+
+
+@router.get(
+    "/adjusted/symbols/{symbol}/coverage",
+    response_model=SymbolCoverageResponse,
+)
+def get_symbol_coverage(
+    symbol: str = Path(..., min_length=1, description="Ticker (case-insensitive)."),
+    reader: AdjustedOhlcvReader = Depends(get_adjusted_ohlcv_reader),
+) -> SymbolCoverageResponse:
+    """Coverage stats for `symbol` across both v2 adjusted sources.
+
+    Returns per-table row counts, earliest/latest timestamps, and
+    pinned snapshot IDs for:
+      - `equities.polygon_adjusted` — deep adjusted history (weekly Spark)
+      - `equities.schwab_universe`  — live + tip-fill (continuous)
+
+    Use this to answer:
+      - "Is NVDA ready to chart? How far back?" → polygon_adjusted.earliest_timestamp
+      - "How current is the data?" → schwab_universe.latest_timestamp
+      - "Cold-start before first Spark run?" → polygon_adjusted.row_count == 0
+
+    Either source independently degrades to row_count=0 / None
+    timestamps when its table is cold-start empty or its scan fails
+    — the endpoint never 500s on transient lake issues; it surfaces
+    them as empty coverage so the consumer can decide what to do.
+
+    Cheap: two metadata-only scans (timestamp column projection +
+    bucket pruning on symbol). Sub-second on warm cache.
+    """
+    return reader.get_symbol_coverage(symbol)
 
 
 def _coerce_utc(dt: datetime) -> datetime:
