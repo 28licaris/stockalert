@@ -60,10 +60,20 @@ _OHLCV_TABLE_NAME = "polygon_adjusted"
 
 
 class AdjustedOhlcvReader:
-    """Read silver.ohlcv_1m + silver.bar_quality via PyIceberg.
+    """Read split-adjusted OHLCV bars from the v2 lake.
+
+    Two read paths:
+
+      - `get_bars(symbol, start, end)` — polygon_adjusted only.
+        Deep history; lags real-time by up to one weekly Spark run.
+      - `get_bars_union(symbol, start, end)` — polygon_adjusted +
+        equities.schwab_universe stitched on (symbol, timestamp).
+        Use when the window includes "today" and you need both deep
+        history AND today's live bars in one response.
 
     Construct via `from_settings()` for production; pass `catalog` /
-    `ohlcv_table` / `bar_quality_table` explicitly for tests.
+    `ohlcv_table` / `bar_quality_table` / `schwab_table` explicitly
+    for tests.
     """
 
     def __init__(
@@ -72,10 +82,12 @@ class AdjustedOhlcvReader:
         catalog=None,
         ohlcv_table: Optional[Table] = None,
         bar_quality_table: Optional[Table] = None,
+        schwab_table: Optional[Table] = None,
     ) -> None:
         self._catalog = catalog
         self._ohlcv_table = ohlcv_table
         self._bar_quality_table = bar_quality_table
+        self._schwab_table = schwab_table
 
     @classmethod
     def from_settings(cls) -> "AdjustedOhlcvReader":
@@ -92,6 +104,13 @@ class AdjustedOhlcvReader:
                 equities_table_id(_OHLCV_TABLE_NAME),
             )
         return self._ohlcv_table
+
+    def _get_schwab_table(self) -> Table:
+        if self._schwab_table is None:
+            self._schwab_table = self._get_catalog().load_table(
+                equities_table_id("schwab_universe"),
+            )
+        return self._schwab_table
 
     def _get_bar_quality_table(self) -> Table:
         # No v2 equivalent of silver.bar_quality. Callers of
@@ -195,6 +214,132 @@ class AdjustedOhlcvReader:
             bars=bars,
             count=len(bars),
         )
+
+    def get_bars_union(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+    ) -> SilverBarsResponse:
+        """Adjusted bars for `[start, end)` UNIONing the two v2 sources.
+
+        Reads BOTH `equities.polygon_adjusted` (canonical adjusted deep
+        history) AND `equities.schwab_universe` (live + tip-fill, also
+        pre-adjusted with `adj_factor=1.0`) and stitches them on
+        `(symbol, timestamp)` with polygon winning duplicates.
+
+        Why polygon wins: the Spark adjustment job (CV5) is the source
+        of truth for adj_factor across history. Schwab rows in the
+        overlap window are accurate but redundant; choosing polygon
+        keeps adj_factor consistent for downstream consumers (chart,
+        backtest math).
+
+        Use when:
+          - Chart "deep zoom that includes today" — polygon_adjusted
+            lags real-time by up to one weekly Spark run; schwab_universe
+            fills the trailing window.
+          - ML training set whose last day is today's date.
+          - Cross-provider continuity validation.
+
+        Cost: two single-symbol bucket-pruned scans (each ~1/32 of the
+        relevant months). Wall-clock typically <1s for a 5y window on
+        warm cache; the union + sort happens in Python over the
+        combined Arrow tables.
+
+        Same return contract as `get_bars()` — `SilverBarsResponse`
+        with bars sorted ascending by timestamp.
+        """
+        sym = (symbol or "").strip().upper()
+        start_utc = _coerce_utc(start)
+        end_utc = _coerce_utc(end)
+        if not sym:
+            return SilverBarsResponse(
+                symbol=symbol or "",
+                start=start_utc, end=end_utc,
+                snapshot_id=None, bars=[], count=0,
+            )
+
+        # Pull both tables independently — either may be cold-start
+        # empty without failing the union.
+        polygon_arrow = self._scan_window(
+            self._get_ohlcv_table, sym, start_utc, end_utc,
+            label="equities.polygon_adjusted",
+        )
+        schwab_arrow = self._scan_window(
+            self._get_schwab_table, sym, start_utc, end_utc,
+            label="equities.schwab_universe",
+        )
+
+        polygon_bars = self._arrow_to_bars(polygon_arrow) if polygon_arrow is not None else []
+        schwab_bars = self._arrow_to_bars(schwab_arrow) if schwab_arrow is not None else []
+
+        # Dedupe on (symbol, timestamp); polygon wins.
+        merged: dict[tuple, SilverBar] = {}
+        for b in schwab_bars:
+            merged[(b.symbol, b.timestamp)] = b
+        for b in polygon_bars:
+            merged[(b.symbol, b.timestamp)] = b
+
+        bars = sorted(merged.values(), key=lambda b: b.timestamp)
+
+        # Snapshot id reflects the polygon side — that's the canonical
+        # adjusted source, and reproducibility-critical consumers care
+        # about its pinning. Schwab's snapshot is reported in the
+        # `snapshot_id_schwab` metadata if either consumer needs both.
+        snap_id: Optional[str] = None
+        try:
+            snap = self._get_ohlcv_table().current_snapshot()
+            snap_id = str(snap.snapshot_id) if snap else None
+        except Exception:
+            pass
+
+        return SilverBarsResponse(
+            symbol=sym,
+            start=start_utc,
+            end=end_utc,
+            snapshot_id=snap_id,
+            bars=bars,
+            count=len(bars),
+        )
+
+    def _scan_window(
+        self,
+        table_getter,
+        symbol: str,
+        start_utc: datetime,
+        end_utc: datetime,
+        *,
+        label: str,
+    ):
+        """Window-scan helper shared by get_bars + get_bars_union.
+
+        Returns the Arrow Table, or None on table-not-loadable /
+        scan-failed (caller treats both as "this source contributed
+        nothing to the union" — single-source failure must not break
+        the other).
+        """
+        try:
+            table = table_getter()
+        except Exception as e:
+            logger.warning(
+                "AdjustedOhlcvReader: %s not loadable (%s); "
+                "treating as empty for this read", label, e,
+            )
+            return None
+
+        row_filter = And(
+            EqualTo("symbol", symbol),
+            GreaterThanOrEqual("timestamp", start_utc),
+            LessThan("timestamp", end_utc),
+        )
+        try:
+            return table.scan(row_filter=row_filter).to_arrow()
+        except Exception as e:
+            logger.warning(
+                "AdjustedOhlcvReader: %s scan failed for %s [%s..%s]: %s",
+                label, symbol, start_utc, end_utc, e,
+            )
+            return None
 
     def get_bar_quality(
         self,

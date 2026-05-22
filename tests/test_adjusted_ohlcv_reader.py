@@ -341,10 +341,20 @@ class _StubReader:
         self._bq = bq_response
         self._raises = raises
         self.last_get_bars: Optional[dict] = None
+        self.last_get_bars_union: Optional[dict] = None
         self.last_get_quality: Optional[dict] = None
 
     def get_bars(self, symbol, start, end):
         self.last_get_bars = {"symbol": symbol, "start": start, "end": end}
+        if self._raises:
+            raise self._raises
+        return self._bars or SilverBarsResponse(
+            symbol=symbol.upper(), start=start, end=end,
+            snapshot_id=None, bars=[], count=0,
+        )
+
+    def get_bars_union(self, symbol, start, end):
+        self.last_get_bars_union = {"symbol": symbol, "start": start, "end": end}
         if self._raises:
             raise self._raises
         return self._bars or SilverBarsResponse(
@@ -496,3 +506,218 @@ class TestV2ReaderTargets:
         assert len(bars) == 1
         assert bars[0].source_provider == "polygon-adjusted"
         assert bars[0].sources_seen == []  # no v2 equivalent
+
+
+# ─────────────────────────────────────────────────────────────────────
+# CV24 — get_bars_union (polygon_adjusted ∪ schwab_universe)
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _v2_row(symbol: str, ts: datetime, *, source: str, close: float = 100.0) -> dict:
+    """v2 polygon_adjusted / schwab_universe row shape."""
+    return {
+        "symbol": symbol,
+        "timestamp": ts,
+        "open": close, "high": close, "low": close, "close": close,
+        "volume": 1000.0, "vwap": close, "trade_count": 5,
+        "source": source,
+        "ingestion_ts": datetime(2024, 6, 1, tzinfo=timezone.utc),
+        "ingestion_run_id": "run-x",
+    }
+
+
+class TestGetBarsUnion:
+    def test_polygon_only_when_schwab_window_empty(self) -> None:
+        """If schwab_universe has no rows in window, response is just
+        the polygon_adjusted bars."""
+        ts1 = datetime(2024, 6, 1, 14, 30, tzinfo=timezone.utc)
+        ts2 = datetime(2024, 6, 1, 14, 31, tzinfo=timezone.utc)
+        polygon = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row("AAPL", ts1, source="polygon-adjusted"),
+            _v2_row("AAPL", ts2, source="polygon-adjusted"),
+        ]))
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([]))
+
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+        resp = reader.get_bars_union(
+            "AAPL",
+            datetime(2024, 6, 1, tzinfo=timezone.utc),
+            datetime(2024, 6, 2, tzinfo=timezone.utc),
+        )
+        assert resp.count == 2
+        assert [b.timestamp for b in resp.bars] == [ts1, ts2]
+        assert all(b.source_provider == "polygon-adjusted" for b in resp.bars)
+
+    def test_schwab_only_when_polygon_window_empty(self) -> None:
+        """If polygon_adjusted is empty (cold-start before first Spark
+        run), schwab fills the response."""
+        ts = datetime(2024, 6, 1, 14, 30, tzinfo=timezone.utc)
+        polygon = _FakeIcebergTable(pa.Table.from_pylist([]))
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row("AAPL", ts, source="schwab-live"),
+        ]))
+
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+        resp = reader.get_bars_union(
+            "AAPL",
+            datetime(2024, 6, 1, tzinfo=timezone.utc),
+            datetime(2024, 6, 2, tzinfo=timezone.utc),
+        )
+        assert resp.count == 1
+        assert resp.bars[0].source_provider == "schwab-live"
+
+    def test_polygon_wins_overlapping_timestamp(self) -> None:
+        """When both tables have a row at the same (symbol, ts),
+        polygon's row appears in the response. This pins the
+        canonical-source rule from the v2 spec."""
+        ts = datetime(2024, 6, 1, 14, 30, tzinfo=timezone.utc)
+        polygon = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row("AAPL", ts, source="polygon-adjusted", close=150.50),
+        ]))
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row("AAPL", ts, source="schwab-live", close=150.51),
+        ]))
+
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+        resp = reader.get_bars_union(
+            "AAPL",
+            datetime(2024, 6, 1, tzinfo=timezone.utc),
+            datetime(2024, 6, 2, tzinfo=timezone.utc),
+        )
+        assert resp.count == 1
+        assert resp.bars[0].source_provider == "polygon-adjusted"
+        assert resp.bars[0].close == 150.50
+
+    def test_disjoint_windows_concatenate_sorted(self) -> None:
+        """polygon covers history; schwab covers today. The merged
+        response is one continuous timestamp-sorted series."""
+        ts_history = datetime(2024, 5, 27, 14, 30, tzinfo=timezone.utc)
+        ts_today_a = datetime(2024, 6, 3, 13, 30, tzinfo=timezone.utc)
+        ts_today_b = datetime(2024, 6, 3, 13, 31, tzinfo=timezone.utc)
+        polygon = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row("AAPL", ts_history, source="polygon-adjusted"),
+        ]))
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row("AAPL", ts_today_b, source="schwab-live"),
+            _v2_row("AAPL", ts_today_a, source="schwab-live"),
+        ]))
+
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+        resp = reader.get_bars_union(
+            "AAPL",
+            datetime(2024, 5, 25, tzinfo=timezone.utc),
+            datetime(2024, 6, 4, tzinfo=timezone.utc),
+        )
+        assert resp.count == 3
+        timestamps = [b.timestamp for b in resp.bars]
+        assert timestamps == sorted(timestamps), "must be ascending"
+        assert timestamps[0] == ts_history
+        assert timestamps[1] == ts_today_a
+        assert timestamps[2] == ts_today_b
+
+    def test_empty_symbol_short_circuits(self) -> None:
+        polygon = _FakeIcebergTable(
+            pa.Table.from_pylist([]),
+            scan_raises=AssertionError("must not scan when symbol blank"),
+        )
+        schwab = _FakeIcebergTable(
+            pa.Table.from_pylist([]),
+            scan_raises=AssertionError("must not scan when symbol blank"),
+        )
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+        resp = reader.get_bars_union(
+            "",
+            datetime(2024, 6, 1, tzinfo=timezone.utc),
+            datetime(2024, 6, 2, tzinfo=timezone.utc),
+        )
+        assert resp.count == 0
+        assert resp.bars == []
+
+    def test_polygon_scan_failure_falls_back_to_schwab_only(self) -> None:
+        """Single-source failure must not break the union — the surviving
+        source still flows through. Logs the failure but returns rows."""
+        ts = datetime(2024, 6, 1, 14, 30, tzinfo=timezone.utc)
+        polygon = _FakeIcebergTable(
+            pa.Table.from_pylist([]),
+            scan_raises=RuntimeError("S3 timeout"),
+        )
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row("AAPL", ts, source="schwab-live"),
+        ]))
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+        resp = reader.get_bars_union(
+            "AAPL",
+            datetime(2024, 6, 1, tzinfo=timezone.utc),
+            datetime(2024, 6, 2, tzinfo=timezone.utc),
+        )
+        assert resp.count == 1
+        assert resp.bars[0].source_provider == "schwab-live"
+
+
+class TestRouteIncludeLiveParam:
+    """The /api/v1/adjusted/bars/{symbol}?include_live=... routing
+    correctly chooses get_bars vs get_bars_union."""
+
+    def test_default_uses_get_bars(self) -> None:
+        from fastapi.testclient import TestClient
+
+        app = _make_adjusted_app()
+        stub = _StubReader(
+            bars_response=SilverBarsResponse(
+                symbol="AAPL",
+                start=datetime(2024, 6, 1, tzinfo=timezone.utc),
+                end=datetime(2024, 6, 2, tzinfo=timezone.utc),
+                snapshot_id="s1", bars=[], count=0,
+            ),
+        )
+        app.dependency_overrides[get_adjusted_ohlcv_reader] = lambda: stub
+
+        with TestClient(app) as client:
+            resp = client.get(
+                "/api/adjusted/bars/AAPL",
+                params={"start": "2024-06-01T00:00:00Z", "end": "2024-06-02T00:00:00Z"},
+            )
+
+        assert resp.status_code == 200
+        assert stub.last_get_bars is not None
+        assert stub.last_get_bars_union is None
+
+    def test_include_live_true_uses_get_bars_union(self) -> None:
+        from fastapi.testclient import TestClient
+
+        app = _make_adjusted_app()
+        stub = _StubReader(
+            bars_response=SilverBarsResponse(
+                symbol="AAPL",
+                start=datetime(2024, 6, 1, tzinfo=timezone.utc),
+                end=datetime(2024, 6, 2, tzinfo=timezone.utc),
+                snapshot_id="s1", bars=[], count=0,
+            ),
+        )
+        app.dependency_overrides[get_adjusted_ohlcv_reader] = lambda: stub
+
+        with TestClient(app) as client:
+            resp = client.get(
+                "/api/adjusted/bars/AAPL",
+                params={
+                    "start": "2024-06-01T00:00:00Z",
+                    "end": "2024-06-02T00:00:00Z",
+                    "include_live": "true",
+                },
+            )
+
+        assert resp.status_code == 200
+        assert stub.last_get_bars is None
+        assert stub.last_get_bars_union is not None

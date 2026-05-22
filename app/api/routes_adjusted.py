@@ -63,20 +63,42 @@ def get_adjusted_bars(
             "[start, end) interval mirrors slicing semantics."
         ),
     ),
+    include_live: bool = Query(
+        False,
+        description=(
+            "When true, UNION equities.polygon_adjusted with "
+            "equities.schwab_universe (the live + tip-fill source) so "
+            "the response covers polygon's adjusted history AND today's "
+            "live bars in one call. Use this for charts/queries whose "
+            "window extends past polygon_adjusted's latest weekly "
+            "Spark snapshot (typically <7 days stale). Polygon wins "
+            "duplicates on (symbol, timestamp)."
+        ),
+    ),
     reader: AdjustedOhlcvReader = Depends(get_adjusted_ohlcv_reader),
 ) -> SilverBarsResponse:
     """Return 1-minute split-adjusted bars for `symbol` in `[start, end)`.
 
-    Reads `equities.polygon_adjusted` — built whole-market weekly by
+    Default (`include_live=false`) reads `equities.polygon_adjusted`
+    only — the canonical adjusted store, built whole-market weekly by
     the Spark `polygon_adjustment_job`. Each row carries the cumulative
     future-splits factor as `adj_factor`; multiply back to recover raw.
 
+    With `include_live=true` the response also includes rows from
+    `equities.schwab_universe` (live + tip-fill, also pre-adjusted with
+    `adj_factor=1.0`). Polygon rows win duplicates on
+    (symbol, timestamp); the result is the smooth deep-history-to-today
+    series charts and ML training sets actually want.
+
     Snapshot-pinned: the `snapshot_id` in the response lets callers
-    replay against the same lake state for deterministic results.
+    replay against the same lake state for deterministic results. When
+    `include_live=true`, snapshot_id reflects the polygon side (the
+    canonical adjusted source).
 
     Returns empty `bars` if:
       - equities.polygon_adjusted hasn't been populated yet (cold
-        start before the first whole-market Spark run), or
+        start before the first whole-market Spark run) AND
+        `include_live=false`, or
       - no bars match the window.
     """
     start_utc = _coerce_utc(start)
@@ -87,6 +109,8 @@ def get_adjusted_bars(
             detail=f"start ({start_utc}) must be < end ({end_utc}).",
         )
 
+    if include_live:
+        return reader.get_bars_union(symbol, start_utc, end_utc)
     return reader.get_bars(symbol, start_utc, end_utc)
 
 
