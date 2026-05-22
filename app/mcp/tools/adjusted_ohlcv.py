@@ -5,9 +5,12 @@ Thin adapter over `AdjustedOhlcvReader`. Identical Pydantic shape
 as the HTTP route in `app/api/routes_adjusted.py` — one service,
 two surfaces.
 
-USE CASE:
-  An LLM agent backtesting a strategy fetches 6 months of NVDA
-  1-minute bars via `get_adjusted_bars` and runs an indicator pass.
+USE CASES:
+  - An LLM agent backtesting a strategy fetches 6 months of NVDA
+    1-minute bars via `get_adjusted_bars` and runs an indicator pass.
+  - An agent rendering a chart that includes today's session uses
+    `include_live=True` to stitch polygon_adjusted's deep history
+    with equities.schwab_universe's live data in one call.
 
 The v1 `get_silver_bar_quality` tool was retired in CV20 — the
 underlying `silver.bar_quality` table is deleted; v2 enforces data-
@@ -38,35 +41,55 @@ def get_adjusted_bars(
     symbol: str,
     start: datetime,
     end: datetime,
+    include_live: bool = False,
 ) -> SilverBarsResponse:
     """Return 1-minute split-adjusted OHLCV bars from the v2 lake.
 
     USE WHEN: an agent needs canonical 1-minute history for analysis,
-    backtesting, ML training, or chart annotation. This is the
-    **canonical consumer surface** — equities.polygon_adjusted rows
-    are corp-action-adjusted and carry the cumulative future-splits
+    backtesting, ML training, or chart annotation. equities.polygon_adjusted
+    rows are corp-action-adjusted and carry the cumulative future-splits
     factor as `adj_factor` so consumers can recover raw if needed
     (raw = adj × adj_factor).
 
+    USE include_live=True WHEN: the window includes today's session and
+    you need both deep history AND today's live bars in one response.
+    UNIONs equities.polygon_adjusted (lags real-time by up to one
+    weekly Spark run) with equities.schwab_universe (live + tip-fill,
+    pre-adjusted with adj_factor=1.0). Polygon wins duplicates on
+    (symbol, timestamp). Costs ~2x the I/O of the default mode but
+    closes the polygon-staleness gap that's otherwise visible at the
+    right edge of charts and end of ML training windows.
+
     Snapshot-pinned: the response's `snapshot_id` lets a follow-up
-    call replay against the exact lake state.
+    call replay against the exact lake state. When include_live=True,
+    snapshot_id reflects the polygon side (the canonical adjusted
+    source); schwab snapshots are not exposed since they shift
+    constantly with live writes.
 
     Args:
         symbol: Ticker (case-insensitive; "nvda" → "NVDA").
         start: Lower bound on bar timestamp (inclusive), UTC.
         end: Upper bound on bar timestamp (exclusive), UTC. Half-open
             [start, end) interval mirrors Python slicing.
+        include_live: Default False. Set True to UNION schwab_universe
+            (closes the polygon-staleness gap for windows that include
+            today).
 
     Returns: `SilverBarsResponse` with the matching bars, sorted by
     timestamp ASC, plus the snapshot_id and the request echo. The
     class name retains the v1 `SilverBarsResponse` for Pydantic-shape
     compatibility; the data inside is sourced from
-    equities.polygon_adjusted.
+    equities.polygon_adjusted (default) or polygon_adjusted ∪
+    schwab_universe (include_live=True).
 
     Edge cases:
         - Unknown / empty symbol → empty `bars`, count=0.
         - equities.polygon_adjusted doesn't exist yet (cold start
-          before the first Spark adjustment run) → empty `bars`.
+          before the first Spark adjustment run) AND include_live=False
+          → empty `bars`. With include_live=True, schwab_universe
+          alone fills the response.
         - No bars in window → empty `bars`, count=0.
     """
+    if include_live:
+        return _reader().get_bars_union(symbol, start, end)
     return _reader().get_bars(symbol, start, end)

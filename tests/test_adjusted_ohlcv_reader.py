@@ -433,6 +433,47 @@ class TestMCPRegistration:
         assert callable(adjusted_ohlcv.get_adjusted_bars)
         # CV20: get_silver_bar_quality deleted (no v2 backing table).
 
+    def test_adjusted_ohlcv_tool_routes_include_live_to_union(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """CV25: the MCP tool's include_live param must reach the
+        reader's get_bars_union path. Default False stays on get_bars."""
+        from app.mcp.tools import adjusted_ohlcv
+
+        calls: dict[str, int] = {"get_bars": 0, "get_bars_union": 0}
+
+        class _Stub:
+            def get_bars(self, symbol, start, end):
+                calls["get_bars"] += 1
+                return SilverBarsResponse(
+                    symbol=symbol.upper(), start=start, end=end,
+                    snapshot_id=None, bars=[], count=0,
+                )
+
+            def get_bars_union(self, symbol, start, end):
+                calls["get_bars_union"] += 1
+                return SilverBarsResponse(
+                    symbol=symbol.upper(), start=start, end=end,
+                    snapshot_id=None, bars=[], count=0,
+                )
+
+        # Clear the lru_cache so the next _reader() call picks up the stub.
+        adjusted_ohlcv._reader.cache_clear()
+        monkeypatch.setattr(adjusted_ohlcv, "_reader", lambda: _Stub())
+
+        start = datetime(2024, 6, 1, tzinfo=timezone.utc)
+        end = datetime(2024, 6, 2, tzinfo=timezone.utc)
+
+        # Default — no include_live → get_bars
+        adjusted_ohlcv.get_adjusted_bars("AAPL", start, end)
+        assert calls == {"get_bars": 1, "get_bars_union": 0}
+
+        # include_live=True → get_bars_union
+        adjusted_ohlcv.get_adjusted_bars(
+            "AAPL", start, end, include_live=True,
+        )
+        assert calls == {"get_bars": 1, "get_bars_union": 1}
+
 
 # ─────────────────────────────────────────────────────────────────────
 # CV11 — v2 cutover regression tests
