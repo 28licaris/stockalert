@@ -26,7 +26,11 @@ from functools import lru_cache
 
 from app.mcp.server import mcp
 from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
-from app.services.readers.schemas import SilverBarsResponse, SymbolCoverageResponse
+from app.services.readers.schemas import (
+    CrossProviderDiffResponse,
+    SilverBarsResponse,
+    SymbolCoverageResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -132,3 +136,47 @@ def get_symbol_coverage(symbol: str) -> SymbolCoverageResponse:
     cold-start / scan failure — never raises.
     """
     return _reader().get_symbol_coverage(symbol)
+
+
+@mcp.tool()
+def get_cross_provider_diff(
+    symbol: str,
+    start: datetime,
+    end: datetime,
+    tolerance: float = 0.005,
+) -> CrossProviderDiffResponse:
+    """Surface close-price disagreements between polygon_adjusted and
+    schwab_universe for `symbol` in `[start, end)`.
+
+    USE WHEN: an agent or operator suspects a data problem — a
+    strategy's bad day might be a real signal, a data bug, or a
+    corp-action correction that hit polygon before schwab. This tool
+    gives the evidence either way.
+
+    Inner-joins on (symbol, timestamp); single-sided rows are NOT
+    surfaced. Use get_symbol_coverage for coverage-gap questions.
+
+    `pct_diff = (polygon - schwab) / polygon`. Sign convention is
+    polygon-minus-schwab; polygon is the canonical adjusted source.
+
+    Args:
+        symbol: Ticker.
+        start: Window start (inclusive), UTC.
+        end: Window end (exclusive), UTC.
+        tolerance: Default 0.005 (50bps). Surface rows where
+            abs(pct_diff) > tolerance. Lower this (e.g. 0.001 for
+            10bps) to chase rounding-precision issues; raise it
+            (e.g. 0.02 for 200bps) to filter to only obvious
+            disagreements.
+
+    Returns: CrossProviderDiffResponse with:
+      - compared_count: how many (ts) pairs were comparable (the
+        denominator — useful to distinguish "no bugs" from "nothing
+        compared").
+      - disagreements: per-(ts) rows with both prices + the two
+        diff metrics. Sorted ascending by timestamp.
+      - count: len(disagreements). Convenience.
+    """
+    return _reader().get_cross_provider_diff(
+        symbol, start, end, tolerance=tolerance,
+    )

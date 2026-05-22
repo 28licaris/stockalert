@@ -26,7 +26,11 @@ from functools import lru_cache
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
-from app.services.readers.schemas import SilverBarsResponse, SymbolCoverageResponse
+from app.services.readers.schemas import (
+    CrossProviderDiffResponse,
+    SilverBarsResponse,
+    SymbolCoverageResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +147,62 @@ def get_symbol_coverage(
     bucket pruning on symbol). Sub-second on warm cache.
     """
     return reader.get_symbol_coverage(symbol)
+
+
+@router.get(
+    "/adjusted/symbols/{symbol}/diff",
+    response_model=CrossProviderDiffResponse,
+)
+def get_cross_provider_diff(
+    symbol: str = Path(..., min_length=1, description="Ticker (case-insensitive)."),
+    start: datetime = Query(
+        ...,
+        description="Window start (inclusive), UTC ISO-8601.",
+    ),
+    end: datetime = Query(
+        ...,
+        description="Window end (exclusive), UTC ISO-8601.",
+    ),
+    tolerance: float = Query(
+        0.005,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Surface rows where abs(pct_diff) > tolerance. "
+            "Default 0.005 (50bps) filters sub-cent rounding while "
+            "catching real corp-action / data-correction divergences."
+        ),
+    ),
+    reader: AdjustedOhlcvReader = Depends(get_adjusted_ohlcv_reader),
+) -> CrossProviderDiffResponse:
+    """Surface close-price disagreements between
+    `equities.polygon_adjusted` and `equities.schwab_universe` for
+    `symbol` in `[start, end)`.
+
+    Inner-joins on (symbol, timestamp); single-sided rows are NOT
+    surfaced (use /coverage for that question). `compared_count` is
+    the denominator — `count` is the disagreement numerator.
+
+    `pct_diff = (polygon.close - schwab.close) / polygon.close` —
+    polygon is the canonical adjusted source; sign convention is
+    polygon-minus-schwab so callers can compare against directional
+    tolerances.
+
+    Use this to answer:
+      - Did a corp-action correction land in polygon but not schwab?
+      - Is a strategy's bad day a data bug or a real signal?
+      - Should I trust today's close for this symbol?
+    """
+    start_utc = _coerce_utc(start)
+    end_utc = _coerce_utc(end)
+    if start_utc >= end_utc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"start ({start_utc}) must be < end ({end_utc}).",
+        )
+    return reader.get_cross_provider_diff(
+        symbol, start_utc, end_utc, tolerance=tolerance,
+    )
 
 
 def _coerce_utc(dt: datetime) -> datetime:

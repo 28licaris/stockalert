@@ -49,6 +49,8 @@ from app.services.iceberg_catalog import get_catalog
 from app.services.readers.schemas import (
     BarQualityResponse,
     BarQualityRow,
+    CrossProviderDiffResponse,
+    CrossProviderDiffRow,
     SilverBarsResponse,
     SourceCoverage,
     SymbolCoverageResponse,
@@ -451,6 +453,122 @@ class AdjustedOhlcvReader:
             latest_timestamp=latest,
             snapshot_id=snap_id,
         )
+
+    def get_cross_provider_diff(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+        *,
+        tolerance: float = 0.005,
+    ) -> CrossProviderDiffResponse:
+        """Surface (symbol, timestamp) close-price disagreements
+        between polygon_adjusted and schwab_universe in `[start, end)`
+        whose abs(pct_diff) > `tolerance` (CV27).
+
+        Algorithm:
+          1. Window-scan both tables (single-symbol, bucket-pruned).
+          2. Inner-join in Python on (symbol, timestamp) — only
+             rows present in BOTH sources can be compared.
+          3. Compute pct_diff = (polygon.close - schwab.close) / polygon.close.
+          4. Filter to abs(pct_diff) > tolerance.
+          5. Sort by timestamp ASC for deterministic output.
+
+        `compared_count` reports the size of the inner-join (the
+        denominator). `count` reports len(disagreements). If
+        `compared_count > 0 and count == 0`, the sources agree across
+        the whole window — that's a useful "no bugs here" signal.
+
+        Single-sided rows (only in polygon OR only in schwab) are NOT
+        surfaced; coverage gaps are a different question, answered by
+        `get_symbol_coverage()`.
+
+        Tolerance defaults to 0.005 (50bps) — picked to filter out
+        normal sub-cent rounding noise while surfacing the real
+        corp-action / data-correction divergences agents care about.
+
+        Cost: two single-symbol window scans (each ~1/32 of relevant
+        month metadata thanks to CV1's bucketing). For a 30-day
+        window on AAPL that's ~30K rows per source merged in Python —
+        sub-second on warm cache.
+        """
+        sym = (symbol or "").strip().upper()
+        start_utc = _coerce_utc(start)
+        end_utc = _coerce_utc(end)
+        if not sym:
+            return CrossProviderDiffResponse(
+                symbol=symbol or "",
+                start=start_utc, end=end_utc,
+                tolerance=tolerance,
+                compared_count=0,
+                disagreements=[],
+                count=0,
+            )
+
+        polygon_arrow = self._scan_window(
+            self._get_ohlcv_table, sym, start_utc, end_utc,
+            label="equities.polygon_adjusted",
+        )
+        schwab_arrow = self._scan_window(
+            self._get_schwab_table, sym, start_utc, end_utc,
+            label="equities.schwab_universe",
+        )
+
+        # Build {timestamp → close} maps for the inner-join.
+        polygon_closes: dict = {}
+        if polygon_arrow is not None and polygon_arrow.num_rows > 0:
+            polygon_closes = self._closes_by_ts(polygon_arrow)
+        schwab_closes: dict = {}
+        if schwab_arrow is not None and schwab_arrow.num_rows > 0:
+            schwab_closes = self._closes_by_ts(schwab_arrow)
+
+        common_ts = sorted(polygon_closes.keys() & schwab_closes.keys())
+
+        disagreements: list[CrossProviderDiffRow] = []
+        for ts in common_ts:
+            p = polygon_closes[ts]
+            s = schwab_closes[ts]
+            if p is None or s is None:
+                continue
+            abs_diff = abs(p - s)
+            pct_diff = (p - s) / p if p != 0 else 0.0
+            if abs(pct_diff) > tolerance:
+                disagreements.append(
+                    CrossProviderDiffRow(
+                        timestamp=ts,
+                        polygon_close=p,
+                        schwab_close=s,
+                        abs_diff=abs_diff,
+                        pct_diff=pct_diff,
+                    )
+                )
+
+        return CrossProviderDiffResponse(
+            symbol=sym,
+            start=start_utc,
+            end=end_utc,
+            tolerance=tolerance,
+            compared_count=len(common_ts),
+            disagreements=disagreements,
+            count=len(disagreements),
+        )
+
+    @staticmethod
+    def _closes_by_ts(arrow) -> dict:
+        """Build {tz-aware ts → close} from an Arrow Table. Drops
+        rows with NULL close (can't compare)."""
+        if arrow.num_rows == 0:
+            return {}
+        ts_col = arrow.column("timestamp").to_pylist()
+        close_col = arrow.column("close").to_pylist()
+        out: dict = {}
+        for ts, c in zip(ts_col, close_col):
+            if ts is None or c is None:
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            out[ts] = float(c)
+        return out
 
     def get_bar_quality(
         self,

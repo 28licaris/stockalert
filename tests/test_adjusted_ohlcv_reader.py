@@ -911,3 +911,252 @@ class TestRouteCoverage:
         assert body["polygon_adjusted"]["row_count"] == 42
         assert body["schwab_universe"]["row_count"] == 7
         assert stub.last_symbol == "AAPL"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# CV27 — get_cross_provider_diff (polygon vs schwab close disagreements)
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _v2_row_with_close(symbol: str, ts: datetime, close: float, source: str) -> dict:
+    return {
+        "symbol": symbol,
+        "timestamp": ts,
+        "open": close, "high": close, "low": close, "close": close,
+        "volume": 1000.0, "vwap": close, "trade_count": 5,
+        "source": source,
+        "ingestion_ts": datetime(2024, 6, 1, tzinfo=timezone.utc),
+        "ingestion_run_id": "run-x",
+    }
+
+
+class TestGetCrossProviderDiff:
+    def test_agreement_under_tolerance_returns_no_rows(self) -> None:
+        """Within-tolerance disagreements are NOT surfaced. Test the
+        denominator (compared_count) is still reported."""
+        ts1 = datetime(2024, 6, 1, 14, 30, tzinfo=timezone.utc)
+        ts2 = datetime(2024, 6, 1, 14, 31, tzinfo=timezone.utc)
+        polygon = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row_with_close("AAPL", ts1, 150.00, "polygon-adjusted"),
+            _v2_row_with_close("AAPL", ts2, 150.10, "polygon-adjusted"),
+        ]))
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row_with_close("AAPL", ts1, 150.001, "schwab-live"),  # ~0.0007% diff
+            _v2_row_with_close("AAPL", ts2, 150.099, "schwab-live"),  # ~0.0007% diff
+        ]))
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+
+        resp = reader.get_cross_provider_diff(
+            "AAPL",
+            datetime(2024, 6, 1, tzinfo=timezone.utc),
+            datetime(2024, 6, 2, tzinfo=timezone.utc),
+            tolerance=0.005,
+        )
+        assert resp.compared_count == 2
+        assert resp.count == 0
+        assert resp.disagreements == []
+
+    def test_above_tolerance_surfaces_with_metrics(self) -> None:
+        """When pct_diff exceeds tolerance the row appears with both
+        prices + the diff metrics."""
+        ts = datetime(2024, 6, 1, 14, 30, tzinfo=timezone.utc)
+        polygon = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row_with_close("NVDA", ts, 100.00, "polygon-adjusted"),
+        ]))
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row_with_close("NVDA", ts, 95.00, "schwab-live"),  # 5% diff
+        ]))
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+
+        resp = reader.get_cross_provider_diff(
+            "NVDA",
+            datetime(2024, 6, 1, tzinfo=timezone.utc),
+            datetime(2024, 6, 2, tzinfo=timezone.utc),
+            tolerance=0.005,
+        )
+        assert resp.compared_count == 1
+        assert resp.count == 1
+        row = resp.disagreements[0]
+        assert row.timestamp == ts
+        assert row.polygon_close == 100.00
+        assert row.schwab_close == 95.00
+        assert row.abs_diff == 5.0
+        # (100 - 95) / 100 = 0.05 ; polygon-higher sign positive.
+        assert row.pct_diff == pytest.approx(0.05)
+
+    def test_single_sided_rows_not_surfaced(self) -> None:
+        """Rows only in polygon OR only in schwab are NOT
+        disagreements — they're coverage gaps. Get coverage instead."""
+        ts_both = datetime(2024, 6, 1, 14, 30, tzinfo=timezone.utc)
+        ts_poly_only = datetime(2024, 6, 1, 14, 31, tzinfo=timezone.utc)
+        ts_schwab_only = datetime(2024, 6, 1, 14, 32, tzinfo=timezone.utc)
+        polygon = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row_with_close("AAPL", ts_both, 150.00, "polygon-adjusted"),
+            _v2_row_with_close("AAPL", ts_poly_only, 200.00, "polygon-adjusted"),
+        ]))
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row_with_close("AAPL", ts_both, 150.50, "schwab-live"),
+            _v2_row_with_close("AAPL", ts_schwab_only, 999.99, "schwab-live"),
+        ]))
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+
+        resp = reader.get_cross_provider_diff(
+            "AAPL",
+            datetime(2024, 6, 1, tzinfo=timezone.utc),
+            datetime(2024, 6, 2, tzinfo=timezone.utc),
+            tolerance=0.001,
+        )
+        assert resp.compared_count == 1  # only ts_both
+        assert resp.count == 1
+        assert resp.disagreements[0].timestamp == ts_both
+
+    def test_multiple_disagreements_sorted_by_timestamp(self) -> None:
+        ts1 = datetime(2024, 6, 1, 14, 30, tzinfo=timezone.utc)
+        ts2 = datetime(2024, 6, 1, 14, 32, tzinfo=timezone.utc)
+        ts3 = datetime(2024, 6, 1, 14, 31, tzinfo=timezone.utc)
+        polygon = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row_with_close("AAPL", ts1, 100.00, "polygon-adjusted"),
+            _v2_row_with_close("AAPL", ts2, 100.00, "polygon-adjusted"),
+            _v2_row_with_close("AAPL", ts3, 100.00, "polygon-adjusted"),
+        ]))
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row_with_close("AAPL", ts1, 105.00, "schwab-live"),
+            _v2_row_with_close("AAPL", ts2, 110.00, "schwab-live"),
+            _v2_row_with_close("AAPL", ts3, 90.00, "schwab-live"),
+        ]))
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+
+        resp = reader.get_cross_provider_diff(
+            "AAPL",
+            datetime(2024, 6, 1, tzinfo=timezone.utc),
+            datetime(2024, 6, 2, tzinfo=timezone.utc),
+            tolerance=0.01,
+        )
+        assert resp.count == 3
+        timestamps = [r.timestamp for r in resp.disagreements]
+        assert timestamps == sorted(timestamps), "must be ASC"
+
+    def test_empty_symbol_short_circuits(self) -> None:
+        polygon = _FakeIcebergTable(
+            pa.Table.from_pylist([]),
+            scan_raises=AssertionError("must not scan when symbol blank"),
+        )
+        schwab = _FakeIcebergTable(
+            pa.Table.from_pylist([]),
+            scan_raises=AssertionError("must not scan when symbol blank"),
+        )
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+        resp = reader.get_cross_provider_diff(
+            "",
+            datetime(2024, 6, 1, tzinfo=timezone.utc),
+            datetime(2024, 6, 2, tzinfo=timezone.utc),
+        )
+        assert resp.compared_count == 0
+        assert resp.count == 0
+
+    def test_scan_failure_one_side_degrades_to_no_compared(self) -> None:
+        """If one source can't be scanned, compared_count=0 — no
+        false-positive disagreements from one-sided data."""
+        polygon = _FakeIcebergTable(
+            pa.Table.from_pylist([]),
+            scan_raises=RuntimeError("S3 timeout"),
+        )
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row_with_close("AAPL", datetime(2024, 6, 1, 14, 30, tzinfo=timezone.utc),
+                               150.00, "schwab-live"),
+        ]))
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+        resp = reader.get_cross_provider_diff(
+            "AAPL",
+            datetime(2024, 6, 1, tzinfo=timezone.utc),
+            datetime(2024, 6, 2, tzinfo=timezone.utc),
+        )
+        assert resp.compared_count == 0
+        assert resp.count == 0
+
+
+class TestRouteCrossProviderDiff:
+    def test_route_delegates_to_reader(self) -> None:
+        from fastapi.testclient import TestClient
+        from app.services.readers.schemas import (
+            CrossProviderDiffResponse,
+            CrossProviderDiffRow,
+        )
+
+        app = _make_adjusted_app()
+
+        captured: dict = {}
+
+        class _DiffStub:
+            def get_cross_provider_diff(
+                self, symbol, start, end, *, tolerance,
+            ) -> CrossProviderDiffResponse:
+                captured.update({
+                    "symbol": symbol, "start": start,
+                    "end": end, "tolerance": tolerance,
+                })
+                return CrossProviderDiffResponse(
+                    symbol=symbol.upper(),
+                    start=start, end=end,
+                    tolerance=tolerance,
+                    compared_count=10,
+                    disagreements=[
+                        CrossProviderDiffRow(
+                            timestamp=start,
+                            polygon_close=100.0,
+                            schwab_close=95.0,
+                            abs_diff=5.0,
+                            pct_diff=0.05,
+                        )
+                    ],
+                    count=1,
+                )
+
+        app.dependency_overrides[get_adjusted_ohlcv_reader] = lambda: _DiffStub()
+
+        with TestClient(app) as client:
+            resp = client.get(
+                "/api/adjusted/symbols/AAPL/diff",
+                params={
+                    "start": "2024-06-01T13:30:00Z",
+                    "end": "2024-06-02T20:00:00Z",
+                    "tolerance": "0.01",
+                },
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "AAPL"
+        assert body["tolerance"] == 0.01
+        assert body["compared_count"] == 10
+        assert body["count"] == 1
+        assert body["disagreements"][0]["abs_diff"] == 5.0
+        assert captured["tolerance"] == 0.01
+
+    def test_invalid_window_returns_400(self) -> None:
+        from fastapi.testclient import TestClient
+
+        app = _make_adjusted_app()
+        app.dependency_overrides[get_adjusted_ohlcv_reader] = lambda: _StubReader()
+
+        with TestClient(app) as client:
+            resp = client.get(
+                "/api/adjusted/symbols/AAPL/diff",
+                params={
+                    "start": "2024-07-01T00:00:00Z",
+                    "end": "2024-06-01T00:00:00Z",
+                },
+            )
+        assert resp.status_code == 400

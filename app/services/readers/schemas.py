@@ -670,3 +670,68 @@ class SymbolCoverageResponse(BaseModel):
     symbol: str
     polygon_adjusted: SourceCoverage
     schwab_universe: SourceCoverage
+
+
+class CrossProviderDiffRow(BaseModel):
+    """One (symbol, timestamp) point where the two adjusted sources
+    disagree beyond the caller's tolerance (CV27)."""
+
+    timestamp: datetime
+    polygon_close: float
+    schwab_close: float
+    abs_diff: float = Field(
+        ...,
+        description="abs(polygon_close - schwab_close)",
+    )
+    pct_diff: float = Field(
+        ...,
+        description=(
+            "(polygon_close - schwab_close) / polygon_close. "
+            "Positive: polygon is higher. Caller compares against "
+            "their tolerance to decide whether to surface."
+        ),
+    )
+
+
+class CrossProviderDiffResponse(BaseModel):
+    """Per-(symbol, timestamp) close-price disagreements between
+    `equities.polygon_adjusted` and `equities.schwab_universe` in
+    `[start, end)`, filtered to rows whose abs_pct_diff exceeds
+    `tolerance` (CV27).
+
+    Use this to answer:
+      - "Did a corp-action correction land in polygon but not schwab yet?"
+      - "Is my strategy's bad day a data bug or a real signal?"
+      - "Should I trust today's close for this symbol?"
+
+    Only timestamps present in BOTH sources are compared — single-
+    sided rows are by construction not disagreements. The matched
+    timestamp count is reported via `compared_count` so the consumer
+    can tell "no disagreements vs nothing compared".
+
+    Polygon is the canonical adjusted source; sign convention on
+    `pct_diff` is polygon-minus-schwab so callers can compare
+    against directional tolerances.
+    """
+
+    symbol: str
+    start: datetime
+    end: datetime
+    tolerance: float = Field(
+        ...,
+        description=(
+            "Caller's threshold on |pct_diff|. Rows are surfaced only "
+            "when abs(pct_diff) > tolerance. Typical: 0.005 (50bps)."
+        ),
+    )
+    compared_count: int = Field(
+        ...,
+        description=(
+            "Number of (symbol, timestamp) pairs present in BOTH "
+            "sources. The denominator for any QA conclusion."
+        ),
+    )
+    disagreements: list[CrossProviderDiffRow]
+    count: int = Field(
+        ..., description="len(disagreements) — convenience.",
+    )
