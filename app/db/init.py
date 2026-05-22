@@ -290,24 +290,18 @@ def init_schema() -> None:
         """
     )
 
-    # ---------- Lake archive watermarks (Phase A / S3 lake) ----------
-    # Idempotency ledger for ``LakeArchiveService``. One row per
-    # (source, table, stage, period) describing which window of ClickHouse
-    # rows has been successfully serialized to ``s3://<stock-lake>/...``.
-    # The daily worker uses this table to skip windows already archived,
-    # and the monthly compactor uses it to discover staging partitions to
-    # roll up. Storing the ``s3_key`` makes "where did this bar end up?"
-    # trivially answerable from SQL.
-    #
-    # ReplacingMergeTree on `archived_at` so re-running an archive job
-    # (after a crash mid-write, say) cleanly overwrites the prior watermark
-    # without leaving zombie entries.
+    # CV23: lake_archive_watermarks table removed. Was the idempotency
+    # ledger for LakeArchiveService (v1 raw-Parquet writer); both the
+    # service and its WatermarkRepo consumer were deleted in CV19. The
+    # existing prod table is a no-op orphan — the cutover-completion
+    # checklist in docs/architecture_v2/07_runbook.md drops it.
+
     # Ingestion-run audit log (TA-5.7 + future ingest jobs).
     # One row per cycle / run of any ingest job (live_lake_writer,
-    # nightly_polygon_refresh, corp_actions_backfill, ...). The data
-    # platform plan §9 calls this out as the "operational layer" — Iceberg
-    # MERGE INTO is the correctness layer, this is "did the job actually
-    # run, when, with what scope, did it succeed."
+    # nightly_polygon_refresh, corp_actions_backfill, ...). The
+    # operational-layer ledger: Iceberg MERGE INTO is the correctness
+    # layer, this is "did the job actually run, when, with what scope,
+    # did it succeed."
     #
     # Schema is intentionally generic across job_name so a single table
     # serves every ingest job. JSON columns hold per-job-specific detail
@@ -334,28 +328,6 @@ def init_schema() -> None:
         ENGINE = ReplacingMergeTree(version)
         PARTITION BY toYYYYMM(started_at)
         ORDER BY (job_name, started_at, run_id)
-        SETTINGS index_granularity = 8192
-        """
-    )
-
-    client.command(
-        """
-        CREATE TABLE IF NOT EXISTS lake_archive_watermarks (
-            source        LowCardinality(String),
-            table_name    LowCardinality(String),
-            stage         LowCardinality(String),
-            period_start  DateTime64(3, 'UTC'),
-            period_end    DateTime64(3, 'UTC'),
-            bars_archived UInt64 DEFAULT 0,
-            s3_key        String DEFAULT '',
-            status        LowCardinality(String) DEFAULT 'ok',
-            error         String DEFAULT '',
-            archived_at   DateTime64(3, 'UTC') DEFAULT now64(3),
-            version       UInt64 DEFAULT 0
-        )
-        ENGINE = ReplacingMergeTree(version)
-        PARTITION BY toYYYYMM(period_start)
-        ORDER BY (source, table_name, stage, period_start)
         SETTINGS index_granularity = 8192
         """
     )
