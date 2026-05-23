@@ -22,9 +22,11 @@ from typing import Optional
 from app.mcp.middleware import tool_call
 from app.mcp.server import mcp
 from app.services.readers.bronze_reader import BronzeReader
+from app.services.readers.lake_metadata_reader import LakeMetadataReader
 from app.services.readers.schemas import (
     BronzeBarsResponse,
     LakeLatestDayResponse,
+    LakeSnapshotsResponse,
     LakeSymbolsResponse,
 )
 
@@ -162,4 +164,51 @@ def get_latest_trading_day(
         return LakeLatestDayResponse(
             provider=provider,
             latest_trading_day=latest,
+        )
+
+
+@lru_cache(maxsize=1)
+def _metadata_reader() -> LakeMetadataReader:
+    return LakeMetadataReader.from_settings()
+
+
+@mcp.tool()
+def list_lake_snapshots(
+    tables: Optional[list[str]] = None,
+    limit: int = 20,
+) -> LakeSnapshotsResponse:
+    """List recent Iceberg snapshots across the v2 equities tables.
+
+    USE WHEN:
+      - Verifying the nightly cron ran (most recent
+        polygon_raw / schwab_universe snapshot timestamp).
+      - Picking a snapshot_id for a deterministic backtest.
+      - Auditing what the last Spark adjustment run added
+        (polygon_adjusted's added_records).
+      - Walking back the commit chain after a bad-data incident
+        (parent_snapshot_id).
+
+    Args:
+        tables: Subset of ['polygon_raw', 'polygon_adjusted',
+            'schwab_universe', 'market_corp_actions']. Omit / None
+            for all four. Unknown names are logged + skipped.
+        limit: Per-table cap on returned snapshots (most recent
+            first). Default 20.
+
+    Returns: LakeSnapshotsResponse with snapshots sorted DESC by
+    committed_at across all requested tables. Each row has
+    snapshot_id, table_name, committed_at, operation, total_records,
+    added_records, parent_snapshot_id.
+
+    Cost: catalog.load_table + metadata-only snapshots() iteration
+    per table. Sub-second for the full default scope. Does NOT scan
+    data files.
+    """
+    with tool_call(
+        "list_lake_snapshots",
+        tables=",".join(tables) if tables else "all",
+        limit=limit,
+    ):
+        return _metadata_reader().list_snapshots(
+            tables=tables, limit=limit,
         )

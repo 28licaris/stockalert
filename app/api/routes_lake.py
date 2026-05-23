@@ -28,9 +28,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.services.readers.bronze_reader import BronzeReader
+from app.services.readers.lake_metadata_reader import LakeMetadataReader
 from app.services.readers.schemas import (
     BronzeBarsResponse,
     LakeLatestDayResponse,
+    LakeSnapshotsResponse,
     LakeSymbolsResponse,
 )
 
@@ -47,6 +49,16 @@ def _build_reader() -> BronzeReader:
     reader itself avoids re-running `from_settings()` on every request.
     """
     return BronzeReader.from_settings()
+
+
+@lru_cache(maxsize=1)
+def _build_metadata_reader() -> LakeMetadataReader:
+    return LakeMetadataReader.from_settings()
+
+
+def get_metadata_reader() -> LakeMetadataReader:
+    """FastAPI dependency provider — override in tests."""
+    return _build_metadata_reader()
 
 
 def get_bronze_reader() -> BronzeReader:
@@ -226,3 +238,48 @@ def get_lake_last_day(
         ) from exc
 
     return LakeLatestDayResponse(provider=provider, latest_trading_day=latest)
+
+
+@router.get("/lake/snapshots", response_model=LakeSnapshotsResponse)
+def list_lake_snapshots(
+    tables: Optional[str] = Query(
+        None,
+        description=(
+            "Comma-separated subset of "
+            "['polygon_raw', 'polygon_adjusted', 'schwab_universe', "
+            "'market_corp_actions']. Omit for all four."
+        ),
+    ),
+    limit: int = Query(
+        20, ge=1, le=500,
+        description=(
+            "Per-table cap on returned snapshots (most recent first). "
+            "Default 20 covers ~3 weeks of nightly commits or ~100 min "
+            "of the 5-min live writer."
+        ),
+    ),
+    reader: LakeMetadataReader = Depends(get_metadata_reader),
+) -> LakeSnapshotsResponse:
+    """Recent Iceberg snapshots across the v2 equities tables.
+
+    Use this to answer:
+      - When did the nightly cron last run? (most-recent snapshot's
+        committed_at on polygon_raw / schwab_universe)
+      - What did the last polygon_adjustment_job add? (most-recent
+        polygon_adjusted snapshot's `added_records`)
+      - I want a deterministic backtest — what snapshot_id should I
+        pin? (any snapshot_id from this list)
+      - Bad data in latest commit — what's the previous good snapshot?
+        (parent_snapshot_id, walked back)
+
+    Returns merged-and-sorted snapshots (DESC by committed_at) across
+    all requested tables. A table that fails to load is logged + its
+    snapshots excluded; the rest still flow through. Does NOT scan
+    data files — metadata-only read.
+    """
+    parsed: Optional[list[str]] = None
+    if tables is not None:
+        parsed = [t.strip() for t in tables.split(",") if t.strip()]
+        if not parsed:
+            parsed = None
+    return reader.list_snapshots(tables=parsed, limit=limit)

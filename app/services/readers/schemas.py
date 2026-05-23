@@ -737,6 +737,94 @@ class CrossProviderDiffResponse(BaseModel):
     )
 
 
+class LakeSnapshot(BaseModel):
+    """One Iceberg snapshot from one equities table (CV29).
+
+    Iceberg snapshots are commit points — each table-mutation
+    operation (append, overwrite, delete) creates a new snapshot
+    that captures the table state. Snapshots are pinnable for
+    deterministic reads via `table.scan(snapshot_id=X)`.
+    """
+
+    table_name: str = Field(
+        ...,
+        description=(
+            "Fully-qualified Iceberg table id "
+            "(e.g. 'equities.polygon_adjusted')."
+        ),
+    )
+    snapshot_id: int = Field(
+        ...,
+        description=(
+            "Iceberg snapshot id. Pass back to a reader's "
+            "scan(snapshot_id=...) call for time-travel queries."
+        ),
+    )
+    committed_at: datetime = Field(
+        ...,
+        description="When the snapshot was committed (UTC, from Iceberg metadata).",
+    )
+    operation: Optional[str] = Field(
+        None,
+        description=(
+            "Iceberg snapshot operation type: 'append', 'overwrite', "
+            "'delete', 'replace'. None when metadata-only commits "
+            "don't tag the operation."
+        ),
+    )
+    total_records: Optional[int] = Field(
+        None,
+        description=(
+            "Total rows in the table AT this snapshot (from Iceberg's "
+            "summary block). None when the writer didn't populate it."
+        ),
+    )
+    added_records: Optional[int] = Field(
+        None,
+        description=(
+            "Rows ADDED in this snapshot (delta vs the parent). None "
+            "when the writer didn't populate it. The audit trail for "
+            "'what did this commit do'."
+        ),
+    )
+    parent_snapshot_id: Optional[int] = Field(
+        None,
+        description=(
+            "The snapshot this one was committed against. None for "
+            "the table's first snapshot. Lets consumers walk back the "
+            "commit chain."
+        ),
+    )
+
+
+class LakeSnapshotsResponse(BaseModel):
+    """Recent Iceberg snapshots across the equities tables (CV29).
+
+    Used for:
+      - Time-travel queries: pick a snapshot_id, pass it back to a
+        reader's scan(snapshot_id=...) for reproducibility.
+      - Audit: "did the nightly cron run? what did it add?"
+      - DR: "how far back can I roll if the latest snapshot is bad?"
+    """
+
+    requested_tables: list[str] = Field(
+        ...,
+        description=(
+            "The fully-qualified table ids the caller asked about, "
+            "echoed for cache-keying. Default = all four equities "
+            "tables."
+        ),
+    )
+    snapshots: list[LakeSnapshot] = Field(
+        ...,
+        description=(
+            "Snapshots sorted by committed_at DESC (most recent "
+            "first). Truncated per-table by `limit`."
+        ),
+    )
+    count: int = Field(..., description="len(snapshots).")
+
+
 class AdjustedSymbolsResponse(BaseModel):
     """Universe discovery for v2 adjusted-OHLCV sources (CV28).
 
