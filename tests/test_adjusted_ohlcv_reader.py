@@ -10,7 +10,7 @@ handler with FastAPI TestClient + dependency_overrides for the route.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 import pyarrow as pa
@@ -1160,3 +1160,198 @@ class TestRouteCrossProviderDiff:
                 },
             )
         assert resp.status_code == 400
+
+
+# ─────────────────────────────────────────────────────────────────────
+# CV28 — list_symbols (universe discovery via UNION of v2 sources)
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestListSymbols:
+    def test_union_dedupes_overlapping_symbols(self) -> None:
+        """A symbol present in BOTH sources appears once in the
+        sorted union, not twice."""
+        ts = datetime(2024, 6, 1, 14, 30, tzinfo=timezone.utc)
+        polygon = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row("AAPL", ts, source="polygon-adjusted"),
+            _v2_row("NVDA", ts, source="polygon-adjusted"),
+            _v2_row("MSFT", ts, source="polygon-adjusted"),
+        ]))
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row("AAPL", ts, source="schwab-live"),
+            _v2_row("GOOG", ts, source="schwab-live"),
+        ]))
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+
+        resp = reader.list_symbols()
+
+        assert resp.symbols == ["AAPL", "GOOG", "MSFT", "NVDA"]
+        assert resp.count == 4
+        assert set(resp.sources_scanned) == {
+            "equities.polygon_adjusted",
+            "equities.schwab_universe",
+        }
+
+    def test_sources_filter_polygon_only(self) -> None:
+        ts = datetime(2024, 6, 1, 14, 30, tzinfo=timezone.utc)
+        polygon = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row("AAPL", ts, source="polygon-adjusted"),
+            _v2_row("NVDA", ts, source="polygon-adjusted"),
+        ]))
+        schwab = _FakeIcebergTable(
+            pa.Table.from_pylist([
+                _v2_row("GOOG", ts, source="schwab-live"),
+            ]),
+            scan_raises=AssertionError(
+                "must not scan when sources excludes schwab"
+            ),
+        )
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+
+        resp = reader.list_symbols(sources=["polygon_adjusted"])
+
+        assert resp.symbols == ["AAPL", "NVDA"]
+        assert resp.sources_scanned == ["equities.polygon_adjusted"]
+
+    def test_unknown_source_is_logged_not_raised(self) -> None:
+        polygon = _FakeIcebergTable(pa.Table.from_pylist([]))
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([]))
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+
+        resp = reader.list_symbols(
+            sources=["typo_table", "polygon_adjusted"],
+        )
+        assert resp.sources_scanned == ["equities.polygon_adjusted"]
+
+    def test_limit_truncates_after_sort(self) -> None:
+        ts = datetime(2024, 6, 1, 14, 30, tzinfo=timezone.utc)
+        polygon = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row("ZZZZ", ts, source="polygon-adjusted"),
+            _v2_row("AAPL", ts, source="polygon-adjusted"),
+            _v2_row("MMMM", ts, source="polygon-adjusted"),
+        ]))
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([]))
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+
+        resp = reader.list_symbols(limit=2)
+        assert resp.symbols == ["AAPL", "MMMM"]
+
+    def test_default_since_is_30d_back(self) -> None:
+        polygon = _FakeIcebergTable(pa.Table.from_pylist([]))
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([]))
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+
+        before = datetime.now(timezone.utc)
+        resp = reader.list_symbols()
+        after = datetime.now(timezone.utc)
+
+        expected_low = before - timedelta(days=30, seconds=2)
+        expected_high = after - timedelta(days=30) + timedelta(seconds=2)
+        assert expected_low <= resp.since <= expected_high
+
+    def test_scan_failure_includes_attempted_source(self) -> None:
+        ts = datetime(2024, 6, 1, 14, 30, tzinfo=timezone.utc)
+        polygon = _FakeIcebergTable(
+            pa.Table.from_pylist([]),
+            scan_raises=RuntimeError("S3 timeout"),
+        )
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([
+            _v2_row("AAPL", ts, source="schwab-live"),
+        ]))
+        reader = AdjustedOhlcvReader(
+            ohlcv_table=polygon, schwab_table=schwab,
+        )
+
+        resp = reader.list_symbols()
+        assert resp.symbols == ["AAPL"]
+        # sources_scanned reflects what was attempted (honesty);
+        # symbols reflects what came back.
+        assert "equities.polygon_adjusted" in resp.sources_scanned
+        assert "equities.schwab_universe" in resp.sources_scanned
+
+
+class TestRouteListAdjustedSymbols:
+    def test_default_route_calls_reader_with_defaults(self) -> None:
+        from fastapi.testclient import TestClient
+        from app.services.readers.schemas import AdjustedSymbolsResponse
+
+        app = _make_adjusted_app()
+        captured: dict = {}
+
+        class _Stub:
+            def list_symbols(self, *, since=None, sources=None, limit=None):
+                captured.update({
+                    "since": since, "sources": sources, "limit": limit,
+                })
+                return AdjustedSymbolsResponse(
+                    sources_scanned=[
+                        "equities.polygon_adjusted",
+                        "equities.schwab_universe",
+                    ],
+                    since=datetime(2024, 5, 1, tzinfo=timezone.utc),
+                    symbols=["AAPL", "NVDA"],
+                    count=2,
+                )
+
+        app.dependency_overrides[get_adjusted_ohlcv_reader] = lambda: _Stub()
+
+        with TestClient(app) as client:
+            resp = client.get("/api/adjusted/symbols")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbols"] == ["AAPL", "NVDA"]
+        assert body["count"] == 2
+        assert captured["since"] is None
+        assert captured["sources"] is None
+        assert captured["limit"] is None
+
+    def test_sources_param_parses_csv(self) -> None:
+        from fastapi.testclient import TestClient
+        from app.services.readers.schemas import AdjustedSymbolsResponse
+
+        app = _make_adjusted_app()
+        captured: dict = {}
+
+        class _Stub:
+            def list_symbols(self, *, since=None, sources=None, limit=None):
+                captured["sources"] = sources
+                return AdjustedSymbolsResponse(
+                    sources_scanned=[],
+                    since=datetime.now(timezone.utc),
+                    symbols=[], count=0,
+                )
+
+        app.dependency_overrides[get_adjusted_ohlcv_reader] = lambda: _Stub()
+
+        with TestClient(app) as client:
+            client.get(
+                "/api/adjusted/symbols",
+                params={"sources": "polygon_adjusted, schwab_universe ,"},
+            )
+
+        assert captured["sources"] == [
+            "polygon_adjusted", "schwab_universe",
+        ]
+
+    def test_limit_over_max_returns_422(self) -> None:
+        from fastapi.testclient import TestClient
+
+        app = _make_adjusted_app()
+        app.dependency_overrides[get_adjusted_ohlcv_reader] = lambda: _StubReader()
+
+        with TestClient(app) as client:
+            resp = client.get(
+                "/api/adjusted/symbols", params={"limit": "100000"},
+            )
+        assert resp.status_code == 422

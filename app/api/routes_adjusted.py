@@ -22,11 +22,13 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from functools import lru_cache
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 from app.services.readers.schemas import (
+    AdjustedSymbolsResponse,
     CrossProviderDiffResponse,
     SilverBarsResponse,
     SymbolCoverageResponse,
@@ -202,6 +204,65 @@ def get_cross_provider_diff(
         )
     return reader.get_cross_provider_diff(
         symbol, start_utc, end_utc, tolerance=tolerance,
+    )
+
+
+@router.get(
+    "/adjusted/symbols",
+    response_model=AdjustedSymbolsResponse,
+)
+def list_adjusted_symbols(
+    since: Optional[datetime] = Query(
+        None,
+        description=(
+            "Lower bound on bar timestamp (inclusive). UTC. Defaults "
+            "to 30 days back to keep the distinct-scan tractable "
+            "against 5y of polygon_adjusted metadata."
+        ),
+    ),
+    sources: Optional[str] = Query(
+        None,
+        description=(
+            "Comma-separated subset of "
+            "['polygon_adjusted','schwab_universe']. Omit for the "
+            "UNION (both). Tag mismatches are logged and ignored."
+        ),
+    ),
+    limit: Optional[int] = Query(
+        None, ge=1, le=20_000,
+        description=(
+            "Cap on number of symbols returned. Sorted alphabetically "
+            "before truncation so re-querying with a smaller limit "
+            "returns the same prefix."
+        ),
+    ),
+    reader: AdjustedOhlcvReader = Depends(get_adjusted_ohlcv_reader),
+) -> AdjustedSymbolsResponse:
+    """Distinct tickers present in the v2 adjusted-OHLCV sources.
+
+    UNION of `equities.polygon_adjusted` ∪ `equities.schwab_universe`
+    by default. Pass `?sources=polygon_adjusted` (or
+    `?sources=schwab_universe`) for source-specific scans.
+
+    Used for universe discovery — screeners walking the v2 universe,
+    cockpit "what can I chart?" picker, ops "what's actually in the
+    lake right now?"
+
+    Returns sorted (alphabetical), optionally truncated. Per-source
+    coverage details (date ranges, row counts) go through the
+    /adjusted/symbols/{symbol}/coverage endpoint.
+
+    Sources that fail to load or scan are logged and excluded from
+    `sources_scanned` — the partial result still flows through.
+    """
+    parsed_sources: Optional[list[str]] = None
+    if sources is not None:
+        parsed_sources = [s.strip() for s in sources.split(",") if s.strip()]
+        if not parsed_sources:
+            parsed_sources = None
+
+    return reader.list_symbols(
+        since=since, sources=parsed_sources, limit=limit,
     )
 
 

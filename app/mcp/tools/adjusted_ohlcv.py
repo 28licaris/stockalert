@@ -24,9 +24,12 @@ import logging
 from datetime import datetime
 from functools import lru_cache
 
+from typing import Optional
+
 from app.mcp.server import mcp
 from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 from app.services.readers.schemas import (
+    AdjustedSymbolsResponse,
     CrossProviderDiffResponse,
     SilverBarsResponse,
     SymbolCoverageResponse,
@@ -179,4 +182,41 @@ def get_cross_provider_diff(
     """
     return _reader().get_cross_provider_diff(
         symbol, start, end, tolerance=tolerance,
+    )
+
+
+@mcp.tool()
+def list_adjusted_symbols(
+    since: Optional[datetime] = None,
+    sources: Optional[list[str]] = None,
+    limit: Optional[int] = None,
+) -> AdjustedSymbolsResponse:
+    """List distinct tickers present in the v2 adjusted-OHLCV sources.
+
+    USE WHEN: an agent needs to know what symbols are queryable
+    before kicking off a screener pass, a multi-symbol comparison, or
+    a universe-wide analysis. Returns the UNION of polygon_adjusted
+    and schwab_universe by default.
+
+    Args:
+        since: Lower bound on bar timestamp (inclusive), UTC. Defaults
+            to 30 days back. The scan reads only the symbol column,
+            but the more days you scan, the more partition metadata
+            it walks — keep this tight for fast queries.
+        sources: Subset of ['polygon_adjusted', 'schwab_universe'].
+            Omit (None) for the UNION. Pass one source to ask
+            "what's only in this source?"
+        limit: Cap on number of symbols returned. Sorted alphabetically
+            before truncation so a smaller limit returns the same
+            prefix. None = no cap.
+
+    Returns: AdjustedSymbolsResponse with:
+      - sources_scanned: which v2 tables actually contributed (a
+        source that fails to load is logged + excluded).
+      - since: the effective lower bound (echoed).
+      - symbols: sorted alphabetical list.
+      - count: len(symbols).
+    """
+    return _reader().list_symbols(
+        since=since, sources=sources, limit=limit,
     )

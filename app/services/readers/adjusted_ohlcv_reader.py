@@ -38,7 +38,7 @@ Design contract (mirrors `CorpActionsReader` post-CV10):
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from pyiceberg.expressions import And, EqualTo, GreaterThanOrEqual, LessThan, LessThanOrEqual
@@ -47,6 +47,7 @@ from pyiceberg.table import Table
 from app.services.equities.schemas import equities_table_id
 from app.services.iceberg_catalog import get_catalog
 from app.services.readers.schemas import (
+    AdjustedSymbolsResponse,
     BarQualityResponse,
     BarQualityRow,
     CrossProviderDiffResponse,
@@ -452,6 +453,97 @@ class AdjustedOhlcvReader:
             earliest_timestamp=earliest,
             latest_timestamp=latest,
             snapshot_id=snap_id,
+        )
+
+    def list_symbols(
+        self,
+        *,
+        since: Optional[datetime] = None,
+        limit: Optional[int] = None,
+        sources: Optional[list[str]] = None,
+    ) -> AdjustedSymbolsResponse:
+        """Distinct tickers present in the v2 adjusted-OHLCV sources
+        within the time window (CV28).
+
+        `sources` (default both) accepts a subset of
+        ['polygon_adjusted', 'schwab_universe']; pass one for "what's
+        in this source only", omit for the UNION.
+
+        `since` defaults to 30 days back if None — same convention as
+        the v1 /lake/symbols endpoint. Bounded scan is required;
+        unbounded distinct over polygon_adjusted reads ~5y × 32
+        buckets × 60 months of partition metadata.
+
+        `limit` truncates the SORTED (alphabetical) list. None = no
+        cap. The sort happens BEFORE truncation so re-querying with
+        a smaller limit returns the same prefix.
+
+        Cost: one distinct-symbol scan per requested source. Symbol
+        column-only projection + timestamp-window filter. Sub-second
+        on warm cache for a 30d window.
+        """
+        if since is None:
+            since = datetime.now(timezone.utc) - timedelta(days=30)
+        since_utc = _coerce_utc(since)
+
+        wanted = list(sources) if sources else [
+            "polygon_adjusted", "schwab_universe",
+        ]
+        sources_scanned: list[str] = []
+        symbol_set: set[str] = set()
+
+        for name in wanted:
+            if name == "polygon_adjusted":
+                getter = self._get_ohlcv_table
+                fq = "equities.polygon_adjusted"
+            elif name == "schwab_universe":
+                getter = self._get_schwab_table
+                fq = "equities.schwab_universe"
+            else:
+                logger.warning(
+                    "AdjustedOhlcvReader.list_symbols: unknown source "
+                    "%r; skipping", name,
+                )
+                continue
+            sources_scanned.append(fq)
+
+            try:
+                table = getter()
+            except Exception as e:
+                logger.warning(
+                    "AdjustedOhlcvReader.list_symbols: %s not loadable "
+                    "(%s); skipping this source", fq, e,
+                )
+                continue
+
+            try:
+                arrow = table.scan(
+                    row_filter=GreaterThanOrEqual("timestamp", since_utc),
+                    selected_fields=("symbol",),
+                ).to_arrow()
+            except Exception as e:
+                logger.warning(
+                    "AdjustedOhlcvReader.list_symbols: %s scan failed "
+                    "(%s); skipping this source", fq, e,
+                )
+                continue
+
+            if arrow.num_rows == 0:
+                continue
+            for s in arrow.column("symbol").to_pylist():
+                if s is None:
+                    continue
+                symbol_set.add(str(s))
+
+        symbols = sorted(symbol_set)
+        if limit is not None and limit > 0:
+            symbols = symbols[:limit]
+
+        return AdjustedSymbolsResponse(
+            sources_scanned=sources_scanned,
+            since=since_utc,
+            symbols=symbols,
+            count=len(symbols),
         )
 
     def get_cross_provider_diff(

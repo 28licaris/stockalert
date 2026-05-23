@@ -735,3 +735,42 @@ class CrossProviderDiffResponse(BaseModel):
     count: int = Field(
         ..., description="len(disagreements) — convenience.",
     )
+
+
+class AdjustedSymbolsResponse(BaseModel):
+    """Universe discovery for v2 adjusted-OHLCV sources (CV28).
+
+    Returns the UNION of distinct tickers seen in
+    `equities.polygon_adjusted` AND/OR `equities.schwab_universe`
+    within the time window. Sorted alphabetically.
+
+    Used by:
+      - Screeners walking the v2 universe.
+      - Cockpit "what symbols can I chart?" picker.
+      - Ops asking "what's actually in the lake right now?"
+
+    The scan is bounded by `since` (default 30d back) because
+    polygon_adjusted holds 5y × 12K symbols × 60 months of partition
+    metadata — an unbounded distinct-scan would read too much. Tune
+    `since` lower for "what's been live recently?", higher for "what
+    do we have at all?" — but the deeper you go the slower it gets.
+    """
+
+    sources_scanned: list[str] = Field(
+        ...,
+        description=(
+            "Which v2 tables contributed to the response. Echoed so "
+            "consumers caching this list don't have to guess. Default "
+            "request scans both: ['equities.polygon_adjusted', "
+            "'equities.schwab_universe']."
+        ),
+    )
+    since: datetime = Field(
+        ...,
+        description=(
+            "Lower bound on `timestamp` for the underlying scan. Default "
+            "is 30 days back if the caller doesn't specify."
+        ),
+    )
+    symbols: list[str]
+    count: int = Field(..., description="len(symbols).")
