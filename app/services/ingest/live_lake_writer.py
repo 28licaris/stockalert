@@ -357,12 +357,15 @@ class LiveLakeWriter:
         per symbol × universe ≤ ~3,000 rows), but on a recovery cycle
         catching a long backlog the chunking matters.
         """
+        from app.services.equities.tables import ensure_equities_table
         from app.services.iceberg_catalog import get_catalog
         from app.services.iceberg_safe_upsert import chunked_upsert
-        from app.services.equities.schemas import equities_table_id
 
         catalog = get_catalog()
-        table = catalog.load_table(equities_table_id(table_short_name))
+        # Idempotent on every cycle: cheap on warm paths (one Glue GetTable),
+        # the only thing that prevents NoSuchTableError on cold-start (fresh
+        # deploy, recovered process, new universe table).
+        table = ensure_equities_table(table_short_name, catalog)
         chunked_upsert(
             table, arrow, log_label=f"equities.{table_short_name}",
         )

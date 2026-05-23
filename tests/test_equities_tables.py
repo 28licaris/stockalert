@@ -133,6 +133,45 @@ def test_ensure_all_creates_four_tables(monkeypatch):
     assert catalog.create_table.call_count == 4
 
 
+def test_ensure_equities_table_dispatches_known_name():
+    """ensure_equities_table('schwab_universe') must delegate to
+    ensure_schwab_universe — the live writer relies on this dispatch
+    to avoid NoSuchTableError on cold-start."""
+    catalog = _make_catalog(table_exists=False)
+    result = equities_tables.ensure_equities_table("schwab_universe", catalog)
+
+    catalog.create_table.assert_called_once()
+    kwargs = catalog.create_table.call_args.kwargs
+    assert kwargs["identifier"] == "equities.schwab_universe"
+    assert result is catalog.create_table.return_value
+
+
+def test_ensure_equities_table_raises_on_unknown_name():
+    """Unknown short_name must raise ValueError, NOT silently create
+    a bogus table (NO_SILENT_FAILURES)."""
+    catalog = _make_catalog(table_exists=False)
+
+    with pytest.raises(ValueError, match="Unknown equities table"):
+        equities_tables.ensure_equities_table("nonexistent_table", catalog)
+
+    catalog.create_table.assert_not_called()
+
+
+def test_ensure_equities_table_covers_all_four_v2_tables():
+    """Dispatcher must cover every v2 table — a stale dispatcher would
+    silently fail any caller using a newly-added table name."""
+    for short_name in (
+        "polygon_raw",
+        "polygon_adjusted",
+        "schwab_universe",
+        "market_corp_actions",
+    ):
+        catalog = _make_catalog(table_exists=False)
+        equities_tables.ensure_equities_table(short_name, catalog)
+        kwargs = catalog.create_table.call_args.kwargs
+        assert kwargs["identifier"] == f"equities.{short_name}"
+
+
 def test_table_locations_match_warehouse_layout(monkeypatch):
     """Locations must land at s3://{bucket}/{prefix}/equities/{table}/
     per 03_s3_layout.md (post-CV1 patch). A regression here means data

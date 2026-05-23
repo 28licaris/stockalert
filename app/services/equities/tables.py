@@ -218,3 +218,37 @@ def ensure_all(catalog: Catalog | None = None) -> dict[str, Table]:
         "schwab_universe": ensure_schwab_universe(catalog),
         "market_corp_actions": ensure_market_corp_actions(catalog),
     }
+
+
+# Dispatch table for runtime callers that know the table name as a
+# string (e.g. live writers parameterized by config). Keep in sync with
+# the four ensure_*() functions above.
+_ENSURE_DISPATCH: dict[str, "callable[[Catalog | None], Table]"] = {
+    "polygon_raw": ensure_polygon_raw,
+    "polygon_adjusted": ensure_polygon_adjusted,
+    "schwab_universe": ensure_schwab_universe,
+    "market_corp_actions": ensure_market_corp_actions,
+}
+
+
+def ensure_equities_table(
+    table_name: str, catalog: Catalog | None = None
+) -> Table:
+    """Idempotent ensure-by-short-name for callers parameterized at runtime.
+
+    The static ensure_*() functions are preferred when the table is known
+    at write-time. This dispatcher exists for callers like the live lake
+    writer that pick the table from config — they need an idempotent
+    create-if-missing without a four-way `if/elif` on every cycle.
+
+    Raises ValueError on unknown short_name rather than silently creating
+    a bogus table (NO_SILENT_FAILURES).
+    """
+    try:
+        fn = _ENSURE_DISPATCH[table_name]
+    except KeyError:
+        raise ValueError(
+            f"Unknown equities table short_name: {table_name!r}. "
+            f"Known: {sorted(_ENSURE_DISPATCH)}"
+        ) from None
+    return fn(catalog)
