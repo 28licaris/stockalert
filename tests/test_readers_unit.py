@@ -4,7 +4,7 @@ Unit tests for the live-tier and provider read services.
 These are *unit* tests — they exercise the readers with stubbed CH
 queries and stubbed providers, no real ClickHouse or HTTP calls.
 Integration coverage (real CH, real Schwab REST) lives in the route
-tests + manual smoke procedures documented in BUILD_JOURNAL.md.
+tests + tests/integration/ (gated by the `integration` marker).
 
 What we cover:
 

@@ -68,8 +68,7 @@ Rules:
 
 Today only divergence is implemented. The plan is to grow this folder
 into a catalog of named detectors that strategies and agents can
-compose. Tracked in
-[BUILD_JOURNAL.md backlog](../../docs/BUILD_JOURNAL.md).
+compose.
 
 Candidate detectors, grouped by family:
 

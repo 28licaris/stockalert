@@ -46,7 +46,9 @@ signoff (see [`engagement.md`](engagement.md)). The process:
 If a rule no longer applies (rare), open a PR that:
 1. Removes the file.
 2. Removes the row from this index.
-3. Adds a `BUILD_JOURNAL.md` entry with the date and the reason.
+3. Documents the date and reason in the commit message
+   (per [`doc_discipline.md`](doc_discipline.md) — commit messages are
+   the build journal).
 
 Do not silently soften or delete a standard. Removing a rule is itself a
 decision worth recording.

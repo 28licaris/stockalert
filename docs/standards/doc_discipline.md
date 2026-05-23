@@ -1,8 +1,9 @@
 # Doc Discipline
 
 **Locked 2026-05-18.** Detailed commit messages are the build journal.
-**Do not write to `docs/BUILD_JOURNAL.md`** — read it for historical
-context only.
+**Do not create `docs/BUILD_JOURNAL.md`** — it was retired on the lock
+date and the file deleted 2026-05-21 (CV18). Historical entries are
+preserved in the git history.
 
 Why: the journal duplicated what the commit history already captured in
 a more searchable form. Two writes for the same information cost more

@@ -2,9 +2,8 @@
 
 The initial `scripts/run_silver_ohlcv_build.py --full` run is the
 one slow operation in this pipeline. After it lands, nightly delta
-runs take 2–7 min/night for the seed universe (see
-[BUILD_JOURNAL.md](BUILD_JOURNAL.md) and the runbook). This doc
-covers ways to shorten the **one-shot** initial backfill.
+runs take 2–7 min/night for the seed universe (see the runbook).
+This doc covers ways to shorten the **one-shot** initial backfill.
 
 **Baseline (today):** ~18–25 hr local sequential, $0.
 

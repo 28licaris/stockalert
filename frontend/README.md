@@ -8,8 +8,6 @@ Companion docs:
 
 - [docs/frontend_plan.md](../docs/frontend_plan.md) — full plan,
   page catalog, SaaS-readiness contract.
-- [docs/BUILD_JOURNAL.md](../docs/BUILD_JOURNAL.md) — phase tracking
-  (Phase FE-1, FE-2, …).
 
 ---
 

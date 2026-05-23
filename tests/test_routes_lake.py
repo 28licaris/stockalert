@@ -15,10 +15,8 @@ Two complementary tests:
      test will fail BEFORE production breakage.
 
 Plus error-path tests for unknown provider (400) and infra errors
-(500). The full end-to-end check with a real bronze table and a
-real stopped ClickHouse is documented in BUILD_JOURNAL.md as the
-manual gate procedure — Slice 2 lands when both this test passes
-AND the manual procedure has been run once.
+(500). Integration coverage with real Glue + real stopped ClickHouse
+lives under tests/integration/ (gated by the `integration` marker).
 """
 from __future__ import annotations
 

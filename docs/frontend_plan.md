@@ -8,8 +8,7 @@ backtests, agents, MCP tools, monitoring — in one cohesive UI.
 **Status:** FE-1, FE-1.5, FE-2 **landed** 2026-05-18. Stack decisions
 locked — see §3.0 below. FE-2 ships the chart primitive scaffold;
 FE-2.1 (indicator overlays, coverage strip, journal panel) is the
-next follow-on. See [BUILD_JOURNAL.md](BUILD_JOURNAL.md) for the
-gate evidence.
+next follow-on.
 
 **Goal:** a developer-first cockpit built to **production-grade
 modular standards** so it can graduate into a subscription product

@@ -75,7 +75,6 @@ Rules:
 Today's three indicators (RSI, MACD, TSI) are what divergence detection
 needs. The plan is to expand this folder into a full TA toolkit so
 agents and strategies can pick from a rich set without external deps.
-Tracked in [BUILD_JOURNAL.md backlog](../../docs/BUILD_JOURNAL.md).
 
 Candidate adds, grouped by family:
 

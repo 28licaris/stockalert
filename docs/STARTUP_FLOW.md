@@ -137,7 +137,7 @@ Cancels all background tasks in reverse order. From
 
 ## Recommended improvements (not yet implemented)
 
-Tracked in [BUILD_JOURNAL.md](BUILD_JOURNAL.md) deferred items:
+Deferred items (track in commit messages as they ship):
 
 1. **`/health/services` endpoint** — returns JSON status of every
    subsystem, grouped by tier. Removes the need to parse logs.

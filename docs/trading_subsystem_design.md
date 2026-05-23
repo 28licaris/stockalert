@@ -10,8 +10,8 @@ engineering). This doc is the **implementation contract** — the
 Pydantic shapes, Protocols, folder layout, and modularity guarantees
 that govern the code we're about to write.
 
-When the plan and this doc conflict, [BUILD_JOURNAL.md](BUILD_JOURNAL.md)
-wins (per [`standards/doc_discipline.md`](standards/doc_discipline.md)).
+When the plan and this doc conflict, **code wins**
+(per [`standards/doc_discipline.md`](standards/doc_discipline.md)).
 
 ---
 
