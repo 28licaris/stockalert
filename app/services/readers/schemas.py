@@ -113,10 +113,10 @@ class LakeLatestDayResponse(BaseModel):
 class CorpActionsResponse(BaseModel):
     """Response wrapper for a windowed corp-actions query.
 
-    Reads from `silver.corp_actions` — the canonical consumer surface
-    per the medallion contract. Callers never read bronze corp-actions
-    directly; silver build merges providers with precedence and
-    publishes here.
+    Surfaces `equities.market_corp_actions` (v2 canonical store, CV9/CV10).
+    The v1 silver/bronze split for corp-actions was retired in CV14 —
+    there's now one ingest path (Polygon REST → `market_corp_actions`)
+    and one consumer surface.
     """
 
     symbol: str
@@ -493,24 +493,30 @@ class IndicatorChartData(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Silver OHLCV (TA-5.1.5) — canonical consumer surface for 1m bars
+# Adjusted OHLCV (CV11) — canonical consumer surface for 1m bars
 # ─────────────────────────────────────────────────────────────────────
 #
-# These response wrappers are what the HTTP route (`/api/silver/bars/...`)
-# and the MCP tool (`get_silver_bars`) both surface. Same Pydantic
-# contract on both surfaces. Reads `silver.ohlcv_1m` — the
-# provider-merged, corp-action-adjusted, dedup'd canonical OHLCV.
+# These response wrappers are what the HTTP route (`/api/adjusted/bars/...`)
+# and the MCP tool (`get_adjusted_bars`) both surface. Same Pydantic
+# contract on both surfaces. The reader (`AdjustedOhlcvReader`) sources
+# from `equities.polygon_adjusted` — split-adjusted whole-market history
+# produced by the Spark adjustment job — UNION'd with the live tier
+# `equities.schwab_universe` when `include_live=True` (CV25).
+#
+# Class names retain the v1 `Silver*` prefix (SilverBar, SilverBarsResponse,
+# BarQualityRow) for downstream API stability; the docstring describes the
+# real v2 source. See app/services/equities/models.py for the SilverBar
+# definition + rename rationale.
 
 
 class SilverBarsResponse(BaseModel):
-    """Response wrapper for a windowed silver-OHLCV query.
+    """Response wrapper for a windowed adjusted-OHLCV query.
 
-    Reads `silver.ohlcv_1m`. Every row carries BOTH `_raw` (what the
-    provider sent) and `_adj` (split + cash-dividend back-adjusted)
-    columns — consumers pick which they want per the
-    [silver_layer_plan consumer contract](../../../docs/silver_layer_plan.md).
-    Default consumption is `_adj` (chart, screener, indicators,
-    backtest, ML); `_raw` is for replay-accuracy / trade-tape reconstruction.
+    Sources from `equities.polygon_adjusted` (deep history, split-adjusted
+    by the Spark adjustment job); optionally UNION'd with the live tier
+    `equities.schwab_universe` for fresh bars. The `SilverBars` name is
+    a v1 carry-over kept for API stability — see the section header
+    above for the rationale.
 
     `snapshot_id` is the Iceberg snapshot pinned by the read.
     Recording this lets callers replay against the exact lake state.
@@ -522,8 +528,8 @@ class SilverBarsResponse(BaseModel):
     snapshot_id: Optional[str] = Field(
         None,
         description=(
-            "Iceberg snapshot pinned by the read. None if the silver "
-            "table doesn't exist yet (cold-start before first build)."
+            "Iceberg snapshot pinned by the read. None if the target "
+            "table doesn't exist yet (cold-start before first Spark run)."
         ),
     )
     bars: list[SilverBar]
@@ -531,13 +537,13 @@ class SilverBarsResponse(BaseModel):
 
 
 class BarQualityRow(BaseModel):
-    """One row from `silver.bar_quality` — the per-(symbol, date) audit
-    ledger produced alongside silver.ohlcv_1m.
+    """One row from a per-(symbol, date) bar-quality audit.
 
-    Used by:
-      - Operators inspecting nightly silver-build health.
-      - Agents asking "did my training set have any silent gaps on day X?"
-      - The dashboard's data-quality panel.
+    The v1 `silver.bar_quality` table was retired with the silver layer
+    (CV14); v2 has no equivalent table yet — `AdjustedOhlcvReader.get_bar_quality()`
+    currently returns an empty `BarQualityResponse` so callers can already
+    code against the shape. When/if a v2 quality surface lands, it'll
+    attach to `equities.polygon_adjusted` and populate this row.
     """
 
     symbol: str
@@ -550,7 +556,7 @@ class BarQualityRow(BaseModel):
         ),
     )
     actual_bars: Optional[int] = Field(
-        None, description="Distinct minute timestamps observed in silver.",
+        None, description="Distinct minute timestamps observed in the adjusted table.",
     )
     gap_count: Optional[int] = Field(
         None,
@@ -581,11 +587,18 @@ class BarQualityRow(BaseModel):
         ),
     )
     ingestion_ts: Optional[datetime] = Field(
-        None, description="When silver_ohlcv_build wrote this row (UTC).",
+        None,
+        description=(
+            "When the adjustment job wrote this row (UTC). Currently "
+            "always None — v2 has no bar-quality table yet."
+        ),
     )
     ingestion_run_id: Optional[str] = Field(
         None,
-        description="Run ID linking this row to the silver-build invocation.",
+        description=(
+            "Run ID linking this row to the adjustment-job invocation. "
+            "Currently always None — see ingestion_ts note above."
+        ),
     )
 
 
@@ -602,8 +615,8 @@ class BarQualityResponse(BaseModel):
     snapshot_id: Optional[str] = Field(
         None,
         description=(
-            "Iceberg snapshot pinned by the read. None if silver.bar_quality "
-            "doesn't exist yet."
+            "Iceberg snapshot pinned by the read. None until v2 publishes "
+            "a bar-quality surface (currently always None — see BarQualityRow)."
         ),
     )
     rows: list[BarQualityRow]

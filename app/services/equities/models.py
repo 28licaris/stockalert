@@ -13,11 +13,16 @@ NOT carried forward — their v2 replacements live in
 `app/services/equities/schemas.py` (CV1).
 
 Why "SilverBar" still has the silver name: the class is consumed by
-the `AdjustedOhlcvReader` (renamed in CV15) and the v1
-public API contract (`/api/silver/bars/...`). Renaming the class +
-the routes + the MCP tool surfaces is a follow-up clean-up. The
-class today represents "an adjusted OHLCV bar from the lake" — call
-it that mentally; the literal name stays for caller compatibility.
+the `AdjustedOhlcvReader` (renamed in CV15) and many downstream call
+sites (route handlers, MCP tools, tests, ingest paths). The v1 HTTP
+URL `/api/silver/bars/{symbol}` was retired in CV20 (current path is
+`/api/v1/adjusted/bars/{symbol}`), but renaming the Python class +
+the dependent Pydantic schemas (`SilverBarsResponse`) is deferred
+until the cross-cutting rename has explicit signoff. The class
+today represents "an adjusted OHLCV bar from the v2 lake
+(`equities.polygon_adjusted` + optional `equities.schwab_universe`
+UNION)" — call it that mentally; the literal name stays for caller
+compatibility.
 """
 from __future__ import annotations
 
