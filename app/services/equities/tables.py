@@ -102,7 +102,7 @@ def _equities_table_location(table_name: str) -> str:
     Matches docs/architecture_v2/03_s3_layout.md (post-CV1 patch):
         s3://{bucket}/{warehouse_prefix}/{equities_db}/{table_name}/
 
-    e.g. s3://stockalert-lake/iceberg/equities/polygon_raw/
+    e.g. s3://<your-bucket>/iceberg/equities/polygon_raw/
     """
     return (
         f"s3://{settings.stock_lake_bucket}/"

@@ -3,7 +3,7 @@
 ## Bucket structure
 
 ```
-s3://stockalert-lake/
+s3://{your-bucket}/
 │
 ├── iceberg/                               ← Iceberg warehouse root
 │   │                                       (ICEBERG_WAREHOUSE_PREFIX in .env)
@@ -68,7 +68,7 @@ s3://stockalert-lake/
 
 Concrete table location format:
 `s3://{STOCK_LAKE_BUCKET}/{ICEBERG_WAREHOUSE_PREFIX}/{ICEBERG_EQUITIES_GLUE_DATABASE}/{table_name}/`
-— defaults: `s3://stockalert-lake/iceberg/equities/<table>/`.
+— defaults: `s3://{your-bucket}/iceberg/equities/<table>/`.
 Partition directory names (`symbol_bucket=N`, `ts_month=YYYY-MM`,
 `ex_month=YYYY-MM`) are what PyIceberg's `BucketTransform` /
 `MonthTransform` emit — verified by the CV1 unit tests in
@@ -78,13 +78,13 @@ Partition directory names (`symbol_bucket=N`, `ts_month=YYYY-MM`,
 
 | Bucket | Purpose | Storage class |
 |---|---|---|
-| `stockalert-lake` | Primary data lake + Iceberg metadata | S3 Standard |
-| `stockalert-lake/glacier/` | Old raw files (>2y) | S3 Glacier Deep Archive (via lifecycle policy) |
+| `{your-bucket}` | Primary data lake + Iceberg metadata | S3 Standard |
+| `{your-bucket}/glacier/` | Old raw files (>2y) | S3 Glacier Deep Archive (via lifecycle policy) |
 | `stockalert-models` | ML model artifacts + training feature outputs | S3 Standard |
 | `stockalert-features` | Materialized feature views | S3 Standard |
 | `stockalert-code` | Spark JARs, scripts deployed to EMR | S3 Standard |
 
-Lifecycle policy on `stockalert-lake/raw/polygon/`:
+Lifecycle policy on `{your-bucket}/raw/polygon/`:
 - 0-2 years: Standard
 - 2+ years: Glacier Deep Archive (rarely accessed; cheap)
 
@@ -230,7 +230,7 @@ the underlying Parquet files directly:
 ```python
 duckdb.sql("""
     SELECT * FROM read_parquet(
-        's3://stockalert-lake/iceberg/equities/polygon_raw/data/**/*.parquet',
+        's3://{your-bucket}/iceberg/equities/polygon_raw/data/**/*.parquet',
         hive_partitioning = 1
     )
     WHERE symbol = 'AAPL'

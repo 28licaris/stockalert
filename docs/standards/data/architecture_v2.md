@@ -91,7 +91,7 @@ laptop. ML feature engineering becomes cheap.
 #### Tiering layout in S3
 
 ```
-s3://stockalert-lake/
+s3://{your-bucket}/
 ├── data/
 │   ├── polygon_raw/
 │   │   ├── metadata/                     ← Iceberg snapshots
@@ -242,20 +242,20 @@ import duckdb
 
 # Whole-market historical
 df = duckdb.sql("""
-  SELECT * FROM iceberg_scan('s3://stockalert-lake/data/polygon_adjusted/')
+  SELECT * FROM iceberg_scan('s3://{your-bucket}/data/polygon_adjusted/')
   WHERE symbol = 'AAPL' AND timestamp BETWEEN '2020-01-01' AND '2024-12-31'
 """).df()
 
 # Cross-provider continuity for ML training
 df = duckdb.sql("""
   SELECT symbol, timestamp, open, high, low, close, volume, 'polygon' AS source
-  FROM iceberg_scan('s3://stockalert-lake/data/polygon_adjusted/')
+  FROM iceberg_scan('s3://{your-bucket}/data/polygon_adjusted/')
   WHERE symbol = 'AAPL' AND timestamp < '2025-05-01'
 
   UNION ALL
 
   SELECT symbol, timestamp, open, high, low, close, volume, 'schwab' AS source
-  FROM iceberg_scan('s3://stockalert-lake/data/schwab_universe/')
+  FROM iceberg_scan('s3://{your-bucket}/data/schwab_universe/')
   WHERE symbol = 'AAPL' AND timestamp >= '2025-05-01'
   ORDER BY timestamp
 """).df()
@@ -277,7 +277,7 @@ spark = (SparkSession.builder
     .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
     .config("spark.sql.catalog.lake", "org.apache.iceberg.spark.SparkCatalog")
     .config("spark.sql.catalog.lake.type", "glue")
-    .config("spark.sql.catalog.lake.warehouse", "s3://stockalert-lake/data")
+    .config("spark.sql.catalog.lake.warehouse", "s3://{your-bucket}/data")
     .getOrCreate())
 
 # Snapshot-pinned for reproducibility (train v1 always reads the same data)
@@ -489,7 +489,7 @@ Inputs:
   --mode full | incremental          (incremental = symbols dirty since last run)
 
 Outputs:
-  s3://stockalert-lake/data/polygon_adjusted/...
+  s3://{your-bucket}/data/polygon_adjusted/...
   ingestion_runs row recording the snapshot_id
 
 Default schedule: weekly via EMR Serverless (CodeBuild trigger).

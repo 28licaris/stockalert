@@ -388,7 +388,7 @@ import duckdb
 
 # Single-symbol deep history
 df = duckdb.sql("""
-    SELECT * FROM iceberg_scan('s3://stockalert-lake/equities/polygon_adjusted/')
+    SELECT * FROM iceberg_scan('s3://{your-bucket}/equities/polygon_adjusted/')
     WHERE symbol = 'AAPL'
       AND timestamp BETWEEN '2020-01-01' AND '2024-12-31'
 """).df()

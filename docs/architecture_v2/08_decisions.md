@@ -97,7 +97,7 @@ for the same data is confusing).
 **Watch-out (accepted):** A latent v2 bug that surfaces past day 7
 forces a re-bulk-load from Polygon flat-files (~6h, ~$15). Acceptable
 because (a) Phase 3 is the only behavior change and is testable in
-under an hour, (b) flat-files in `s3://stockalert-lake/raw/polygon/`
+under an hour, (b) flat-files in `s3://${STOCK_LAKE_BUCKET}/raw/polygon/`
 are immutable so the re-load is mechanical.
 
 **Revisit trigger:** If Phase 3 cutover shows ANY regression in the

@@ -41,7 +41,7 @@ def get_spark(app_name: str = "stockalert-batch") -> "SparkSession":
       - Iceberg extensions enabled
       - Catalog `lake` backed by `org.apache.iceberg.aws.glue.GlueCatalog`
       - Warehouse path read from `STOCK_LAKE_BUCKET_S3` env var
-        (e.g. `s3://stockalert-lake/iceberg/`)
+        (e.g. `s3://<your-bucket>/iceberg/`)
       - AWS region from `AWS_REGION` (default `us-east-1`)
       - Adaptive query execution + vectorized Parquet reads enabled
 
@@ -60,7 +60,7 @@ def get_spark(app_name: str = "stockalert-batch") -> "SparkSession":
     if not warehouse:
         raise RuntimeError(
             "STOCK_LAKE_BUCKET_S3 is empty — set it to the Iceberg "
-            "warehouse root (e.g. s3://stockalert-lake/iceberg/) "
+            "warehouse root (e.g. s3://<your-bucket>/iceberg/) "
             "before running Spark jobs."
         )
 

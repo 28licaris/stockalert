@@ -392,9 +392,9 @@ aws events put-targets \
 # In a dev shell:
 pip install pyspark==3.5.* 'pyiceberg[s3fs,glue]'
 
-# AWS credentials (uses your normal profile)
-export AWS_PROFILE=stockalert-dev
-export STOCK_LAKE_BUCKET_S3=s3://stockalert-lake/equities/
+# AWS credentials + lake bucket (use your actual profile + bucket).
+export AWS_PROFILE=<your-aws-profile>
+export STOCK_LAKE_BUCKET_S3=s3://<your-bucket>/equities/
 export STOCKALERT_SPARK_LOCAL_MODE=true
 
 # Run any Spark job:

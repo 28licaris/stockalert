@@ -10,8 +10,8 @@ Verify state before starting:
 
 - [ ] All `tests/test_*.py` and integration tests pass on `main`
 - [ ] `data/.schwab_refresh_token` is valid (not expired)
-- [ ] `STOCK_LAKE_BUCKET=s3://stockalert-lake` is set in env
-- [ ] AWS credentials work (`aws s3 ls s3://stockalert-lake/`)
+- [ ] `STOCK_LAKE_BUCKET` is set in env (your actual lake bucket name)
+- [ ] AWS credentials work (`aws s3 ls "s3://${STOCK_LAKE_BUCKET}/"`)
 - [ ] Glue catalog accessible (`aws glue get-databases`)
 - [x] All 14 gates in [08_decisions.md](08_decisions.md) approved 2026-05-20 (lake/Spark infra: 1-7, ML pipeline: 8-11, scope: 12-14). Phase 1 unblocked.
 
@@ -155,7 +155,7 @@ Dropping Iceberg tables is **destructive**. To recover:
 This is why Phase 5 has a 7-day smoke window before destructive drops.
 
 **Watch-out (Gate 6 accepted risk):** a latent v2 bug that surfaces
-past day 7 means rebuilding from the immutable `s3://stockalert-lake/raw/polygon/`
+past day 7 means rebuilding from the immutable `s3://${STOCK_LAKE_BUCKET}/raw/polygon/`
 flat-files via `polygon_adjustment_job` whole-market (~6h, ~$15) — not
 a partial revert. Mechanical, but not free. Mitigation: the 48-hour
 window after Phase 3 cutover is the high-attention window — if any
