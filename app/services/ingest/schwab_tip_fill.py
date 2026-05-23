@@ -152,18 +152,21 @@ class SchwabTipFill:
     def compute_gap(
         self, symbol: str, *, now: Optional[datetime] = None,
     ) -> tuple[Optional[datetime], datetime, datetime]:
-        """Compute the (silver_watermark, gap_start, gap_end) tuple.
+        """Compute the (lake_watermark, gap_start, gap_end) tuple.
 
-        silver_watermark = max(timestamp) in silver.ohlcv_1m for this
-                          symbol, or None if the symbol is absent.
+        lake_watermark = max(timestamp) in `equities.schwab_universe`
+                         for this symbol, or None if absent. (The
+                         tuple field + dataclass attribute keep the
+                         legacy name `silver_watermark` — see
+                         `_read_silver_watermark` for the rationale.)
 
-        gap_start = max(silver_watermark + 1min, now - 48d)
+        gap_start = max(lake_watermark + 1min, now - 48d)
                     — bounded by Schwab REST's reach.
 
         gap_end   = now - 1 minute, snapped to the minute boundary
                     — avoid the in-flight live minute.
 
-        Why +1min on silver_watermark: silver bars are minute-boundary
+        Why +1min on the watermark: lake bars are minute-boundary
         timestamps, so the watermark IS the last filled minute. The
         next minute is the first unfilled one.
         """

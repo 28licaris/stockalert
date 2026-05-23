@@ -6,9 +6,9 @@ Thin adapter over `CorpActionsReader`. One endpoint:
   GET /api/corp-actions/{symbol}  — splits + dividends for a symbol,
                                     optionally windowed.
 
-Reads from `silver.corp_actions` (the canonical consumer surface).
-Bronze corp-action tables are NOT exposed here — per the consumer
-contract, every reader hits silver.
+Reads from `equities.market_corp_actions` (v2 canonical store, post-
+CV9/CV10). The v1 silver layer is retired; there is no separate
+bronze/silver split for corp-actions anymore.
 
 Same `CorpActionsReader` instance backs the MCP `get_corp_actions`
 tool. One service, two surfaces.
@@ -32,7 +32,7 @@ router = APIRouter()
 
 
 # Valid action_type values — matches the CorpActionKind Literal in
-# app/services/silver/schemas.py. Keep in sync.
+# app/services/equities/models.py. Keep in sync.
 _VALID_KINDS = frozenset({
     "split",
     "cash_dividend",
@@ -79,9 +79,9 @@ def get_corp_actions(
 ) -> CorpActionsResponse:
     """Return corp-action events for `symbol`.
 
-    Reads from `silver.corp_actions` (provider-precedence-resolved
-    canonical view). Returns empty `actions` if silver hasn't been
-    built yet OR if no events match — never raises.
+    Reads from `equities.market_corp_actions` (provider-precedence-
+    resolved canonical view). Returns empty `actions` if the table
+    hasn't been populated yet OR if no events match — never raises.
     """
     parsed_kinds: Optional[list[CorpActionKind]] = None
     if action_types:

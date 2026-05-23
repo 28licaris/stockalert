@@ -3,7 +3,7 @@ MCP tools for corp-actions — agent-facing surface.
 
 Thin adapter over `CorpActionsReader`. Identical Pydantic shapes as
 the HTTP route in `app/api/routes_corp_actions.py`. Reads
-`silver.corp_actions` per the consumer contract.
+`equities.market_corp_actions` (v2 canonical store, post-CV9/CV10).
 
 USE CASE: an LLM agent reasoning about adjusted prices on a chart,
 or a backtest planning around an upcoming ex-date, asks
@@ -46,10 +46,10 @@ def get_corp_actions(
     why a price gap appeared ("did AAPL really drop 75% on
     2020-08-31? Or was that a split?").
 
-    Reads `silver.corp_actions` — the canonical, provider-precedence-
-    resolved view. Snapshot-pinned for reproducibility (the returned
-    `snapshot_id` lets a follow-up call replay against the same
-    lake state).
+    Reads `equities.market_corp_actions` — the canonical, provider-
+    precedence-resolved view. Snapshot-pinned for reproducibility (the
+    returned `snapshot_id` lets a follow-up call replay against the
+    same lake state).
 
     Args:
         symbol: Ticker (case-insensitive; "aapl" → "AAPL").
@@ -66,8 +66,9 @@ def get_corp_actions(
 
     Edge cases:
         - Unknown / empty symbol → empty `actions`, count=0.
-        - Silver table doesn't exist yet → empty `actions`, count=0
-          (system hasn't built silver corp-actions yet).
+        - `equities.market_corp_actions` doesn't exist yet → empty
+          `actions`, count=0 (system hasn't run the corp-actions
+          backfill yet).
         - No matching events in window → empty `actions`, count=0.
     """
     return _reader().get_corp_actions(

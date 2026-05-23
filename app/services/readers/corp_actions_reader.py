@@ -39,7 +39,7 @@ _TABLE_NAME = "market_corp_actions"
 
 
 class CorpActionsReader:
-    """Read silver.corp_actions via PyIceberg.
+    """Read `equities.market_corp_actions` via PyIceberg.
 
     Construct via `from_settings()` for production; pass `catalog` /
     `table` explicitly for tests.
