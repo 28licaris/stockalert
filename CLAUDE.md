@@ -91,7 +91,7 @@ Lake tables (v2 / `equities.*` Glue DB):
 |-----|------|
 | [`docs/standards/`](docs/standards/README.md) | **Always — the rules** |
 | [`docs/architecture_v2/`](docs/architecture_v2/README.md) | v2 lake / ML design (canonical) |
-| `docs/ARCHITECTURE.md` | System overview, service map |
+| `docs/ARCHITECTURE.md` | Redirect stub — points to the canonical docs after v1 deprecation |
 | `docs/ISSUES.md` | Known issues, flaky tests |
 | `docs/COMMANDS.md` | Cheatsheet |
 | `docs/architecture_v2/07_runbook.md` | Operator procedures |
