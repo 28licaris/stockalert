@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.api.schemas.market import MoversResponse
-from app.services.live.watchlist_service import watchlist_service
+from app.services.stream import stream_service
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +159,7 @@ async def get_movers(
                    + ", ".join(str(f) for f in sorted(VALID_FREQUENCIES)),
         )
 
-    provider = watchlist_service._ensure_provider()
+    provider = stream_service.ensure_provider()
     if provider is None or not hasattr(provider, "get_movers"):
         raise HTTPException(
             status_code=503,

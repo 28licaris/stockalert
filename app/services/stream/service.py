@@ -96,7 +96,15 @@ class StreamService:
     # Provider plumbing
     # ─────────────────────────────────────────────────────────────────
 
-    def _ensure_provider(self) -> Optional[DataProvider]:
+    def ensure_provider(self) -> Optional[DataProvider]:
+        """Lazy-init + return the live streaming provider.
+
+        Constructs the provider on first call (post-CV15 routes that need
+        the provider before StreamService.start() runs — e.g.
+        `routes_movers` — call this instead of `get_provider`). On
+        construction failure, records the error and returns None so the
+        caller can return a clean 503.
+        """
         if self._provider is not None:
             return self._provider
         try:
@@ -113,13 +121,12 @@ class StreamService:
             return None
 
     def get_provider(self) -> Optional[DataProvider]:
-        """Public read of the live streaming provider handle.
+        """Read the live streaming provider handle WITHOUT initializing it.
 
         Returns `None` if the provider hasn't been initialized yet (e.g.
         StreamService.start() hasn't run, or initialization failed).
-        Other modules (e.g. `routes_instruments`) use this to share the
-        already-authenticated provider rather than constructing a fresh
-        one per call.
+        Callers that want lazy-init on first access should use
+        `ensure_provider()` instead.
         """
         return self._provider
 
@@ -163,7 +170,7 @@ class StreamService:
         to_unsub = sorted(before - after)
         if not to_sub and not to_unsub:
             return [], []
-        provider = self._ensure_provider()
+        provider = self.ensure_provider()
         if provider is None:
             logger.warning(
                 "Stream: provider unavailable, "
