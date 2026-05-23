@@ -2,10 +2,24 @@
 
 Day-to-day procedures for running the v2 system.
 
+## Conventions
+
+All AWS commands in this runbook use environment-variable placeholders.
+Set these once before running anything:
+
+```bash
+export AWS_PROFILE=<your-aws-profile>             # e.g. stock-lake
+export STOCK_LAKE_BUCKET=<your-lake-bucket-name>  # e.g. stock-lake-562741918372-us-east-1-an
+```
+
+The Python code reads `STOCK_LAKE_BUCKET` directly via
+`settings.stock_lake_bucket`, so consistent shell + Python env is critical.
+`AWS_PROFILE` is honored automatically by both the AWS CLI and boto3.
+
 ## Phase 1 → production cutover checklist
 
 Step-by-step deployment sequence after the Phase 1 code (`v2-architecture`
-branch, commits CV1-CV21) merges to `main`. Run these in order — each
+branch, commits CV1-CV29) merges to `main`. Run these in order — each
 step depends on the previous one having completed.
 
 ### 0. Pre-flight (no-op if already done)
@@ -13,20 +27,20 @@ step depends on the previous one having completed.
 ```bash
 # Confirm the existing flat-file Parquet cache is intact + covers
 # the expected window.
-aws s3 ls s3://stockalert-lake/raw/provider=polygon-flatfiles/kind=minute/
-# Expect: year=2021/, year=2022/, year=2023/, year=2024/, year=2025/
-aws s3 ls s3://stockalert-lake/raw/provider=polygon-flatfiles/kind=minute/year=2021/ | head -3
-aws s3 ls s3://stockalert-lake/raw/provider=polygon-flatfiles/kind=minute/year=2025/ | tail -3
+aws s3 ls "s3://${STOCK_LAKE_BUCKET}/raw/provider=polygon-flatfiles/kind=minute/"
+# Expect: year=2021/, year=2022/, year=2023/, year=2024/, year=2025/, year=2026/
+aws s3 ls "s3://${STOCK_LAKE_BUCKET}/raw/provider=polygon-flatfiles/kind=minute/year=2021/" | head -3
+aws s3 ls "s3://${STOCK_LAKE_BUCKET}/raw/provider=polygon-flatfiles/kind=minute/year=2026/" | tail -3
 
 # Confirm AWS Glue databases exist (or will be created by ensure_*).
 aws glue get-databases --query 'DatabaseList[].Name'
-# Expect: stock_lake (v1, still has bronze.* + silver.*), equities (v2)
-# If `equities` is missing, ensure_polygon_raw() will create it on
-# first call.
+# Expect: equities (v2). The v1 `stock_lake` database may also appear
+# if you have not yet dropped it (see §7 cleanup below); its bronze.*
+# / silver.* tables were retired in CV13-CV14 but the empty Glue
+# entries can linger until explicit drop.
 
-# Confirm EMR Serverless application exists (needed for CV6 step
-# below). One-time setup is in §"EMR Serverless setup" further down
-# this runbook.
+# Confirm EMR Serverless application exists (needed for §3 Spark step).
+# One-time setup is in §"EMR Serverless setup" further down this runbook.
 aws emr-serverless list-applications
 ```
 
@@ -39,7 +53,6 @@ No Polygon API calls; reads + writes entirely inside AWS.
 cd /path/to/stockalert
 git fetch && git checkout v2-architecture
 poetry install
-export AWS_PROFILE=stockalert-prod
 poetry run python scripts/lake_import_athena.py
 ```
 
@@ -143,7 +156,7 @@ the v1 tables:
 aws athena start-query-execution \
   --query-string "DROP TABLE stock_lake.polygon_minute" \
   --query-execution-context Database=stock_lake \
-  --result-configuration OutputLocation=s3://stockalert-lake/athena-results/
+  --result-configuration "OutputLocation=s3://${STOCK_LAKE_BUCKET}/athena-results/"
 aws athena start-query-execution \
   --query-string "DROP TABLE stock_lake.schwab_minute" ...
 aws athena start-query-execution \
@@ -282,7 +295,7 @@ from `source = "schwab-live"`.
 After CV1-CV5 + CV10' ship and `equities.polygon_raw` exists but is
 empty, populate it from the **existing 5y of Polygon flat-file
 Parquets already in our S3** at
-`s3://stockalert-lake/raw/provider=polygon-flatfiles/kind=minute/`.
+`s3://${STOCK_LAKE_BUCKET}/raw/provider=polygon-flatfiles/kind=minute/`.
 
 We do NOT re-query Polygon — the data is already in our bucket from
 the original v1 ingest, paid for once. The Athena server-side import
@@ -290,7 +303,6 @@ reads + writes entirely inside AWS:
 
 ```bash
 cd /path/to/stockalert
-export AWS_PROFILE=stockalert-prod
 poetry run python scripts/lake_import_athena.py
 ```
 
@@ -381,8 +393,8 @@ poetry run python scripts/spark/polygon_adjustment_job.py \
 
 ```bash
 export STOCKALERT_SPARK_LOCAL_MODE=true
-export STOCK_LAKE_BUCKET_S3=s3://stockalert-lake/iceberg/
-export AWS_PROFILE=stockalert-dev
+export STOCK_LAKE_BUCKET_S3=s3://${STOCK_LAKE_BUCKET}/iceberg/
+# AWS_PROFILE already exported (see Conventions section at the top).
 
 cd /path/to/stockalert
 poetry run python scripts/spark/polygon_adjustment_job.py \
@@ -390,7 +402,7 @@ poetry run python scripts/spark/polygon_adjustment_job.py \
 ```
 
 Expected: ~30s for one symbol, ~12 months. Output in
-`s3://stockalert-lake/iceberg/equities/polygon_adjusted/`.
+`s3://${STOCK_LAKE_BUCKET}/iceberg/equities/polygon_adjusted/`.
 
 ### Run `polygon_adjustment_job` whole-market (production)
 
@@ -484,6 +496,8 @@ If ClickHouse is wiped or corrupted:
 
 ```python
 # scripts/restore_ch_from_lake.py
+import os
+
 import duckdb
 from app.db.client import get_client
 from app.db.universe_repo import list_active_stream_universe
@@ -496,10 +510,11 @@ ch = get_client()
 # operator-curated CSV at data/stream_universe_seed.csv before running this.
 syms = [r["symbol"] for r in list_active_stream_universe(ch)]
 syms_csv = ",".join(f"'{s}'" for s in syms)
+bucket = os.environ["STOCK_LAKE_BUCKET"]
 
 df = duckdb.sql(f"""
     SELECT symbol, timestamp, open, high, low, close, volume, vwap, trade_count, source
-    FROM iceberg_scan('s3://stockalert-lake/iceberg/equities/schwab_universe/')
+    FROM iceberg_scan('s3://{bucket}/iceberg/equities/schwab_universe/')
     WHERE symbol IN ({syms_csv})
 """).arrow()
 
@@ -549,8 +564,8 @@ spark.sql("SELECT count(*) FROM lake.equities.polygon_adjusted").show()
 
 | Check | Command | Healthy? |
 |---|---|---|
-| Iceberg file count | `aws s3 ls s3://stockalert-lake/iceberg/equities/polygon_adjusted/data/ --recursive \| wc -l` | < 10,000 (else schedule compaction) |
-| Iceberg metadata size | `aws s3 ls s3://stockalert-lake/iceberg/equities/polygon_adjusted/metadata/ --recursive --summarize` | < 1 GB |
+| Iceberg file count | `aws s3 ls "s3://${STOCK_LAKE_BUCKET}/iceberg/equities/polygon_adjusted/data/" --recursive \| wc -l` | < 10,000 (else schedule compaction) |
+| Iceberg metadata size | `aws s3 ls "s3://${STOCK_LAKE_BUCKET}/iceberg/equities/polygon_adjusted/metadata/" --recursive --summarize` | < 1 GB |
 | EMR Serverless cost MTD | CloudWatch metric | < $20 |
 | S3 storage MTD | S3 Storage Lens | < 1 TB |
 
@@ -565,7 +580,7 @@ spark.sql("SELECT count(*) FROM lake.equities.polygon_adjusted").show()
 
 ### S3 storage
 ```bash
-aws s3 ls s3://stockalert-lake/ --recursive --summarize | tail -2
+aws s3 ls "s3://${STOCK_LAKE_BUCKET}/" --recursive --summarize | tail -2
 ```
 Expected: ~150 GB total. Growth: ~1 GB/month.
 
