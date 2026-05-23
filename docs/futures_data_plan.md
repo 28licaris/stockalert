@@ -1,7 +1,7 @@
 # Futures data ingestion — investigation + plan
 
 Plan-only doc. Investigates how to add futures (ES, NQ, CL, GC, …)
-to the pipeline. Companion to [data_platform_plan.md](data_platform_plan.md)
+to the pipeline. Companion to [architecture_v2/](architecture_v2/README.md)
 and [streaming_universe_model.md](streaming_universe_model.md), both of
 which explicitly defer futures ("Equities only for now").
 

@@ -7,8 +7,9 @@ and (future) the silver/gold ML pipeline.
 Complements:
 - [trading_subsystem_design.md](trading_subsystem_design.md) —
   how indicators are used by the strategy framework.
-- [data_platform_plan.md](data_platform_plan.md) — where gold-tier
-  pre-computed features fit into the medallion lake.
+- [architecture_v2/](architecture_v2/README.md) — the v2 Iceberg lake
+  (`equities.*` raw + adjusted). Pre-computed feature storage is
+  post-v1 architecture; will land separately.
 - [`app/indicators/README.md`](../app/indicators/README.md) —
   the per-indicator catalog and TA-library backlog.
 

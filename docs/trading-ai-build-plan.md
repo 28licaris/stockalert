@@ -5,8 +5,9 @@
 > contract; local dev runs them in-process, production deploys each as its
 > own container.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for system-wide context and
-[data_platform_plan.md](data_platform_plan.md) for the data lake this
+See [CLAUDE.md](../CLAUDE.md) for the system layer map (canonical
+post-v2 cutover; `ARCHITECTURE.md` is a redirect stub) and
+[architecture_v2/](architecture_v2/README.md) for the data lake this
 plan reads from.
 
 ---
@@ -40,7 +41,8 @@ plan reads from.
   risk controls.
 - An agent that takes **fewer, higher-probability trades over time**.
 - Every model training run is **bit-reproducible** via Iceberg snapshot
-  pinning ([data_platform_plan §10](data_platform_plan.md#10-ml-reproducibility)).
+  pinning (see [architecture_v2/](architecture_v2/README.md) — Iceberg
+  snapshot-id-based time travel is the v2 reproducibility primitive).
 - Promotion path: **sim → Schwab paper → Schwab live** with the same code.
 - Each capability is a **deployable service** — testable in isolation,
   scaled independently, swappable for a fake in tests.

@@ -13,8 +13,9 @@ each phase against the journal before advancing.
   framework + Context + Phasing table this plan will feed.
 - [indicator_exposure_design.md](indicator_exposure_design.md) — how
   indicator-shaped data is served to dashboards, MCP, training.
-- [data_platform_plan.md](data_platform_plan.md) — bronze/silver/gold
-  tiers; gold feature store is where labeled wave history will live.
+- [architecture_v2/](architecture_v2/README.md) — the v2 `equities.*`
+  Iceberg lake. Labeled wave history will need a new feature surface
+  (the v1 medallion's gold tier was retired with CV14).
 - [`app/signals/README.md`](../app/signals/README.md) — folder this
   work expands; divergence is the closest existing precedent.
 
@@ -192,7 +193,7 @@ app/
 | [`app/services/readers/`](../app/services/readers/) | Add `WaveReader` alongside `IndicatorReader` | Shared by HTTP route + MCP tool |
 | [`app/api/routes_indicators.py`](../app/api/routes_indicators.py) | Mirror `routes_wave.py` | `GET /api/wave/{symbol}?interval=1d` |
 | [`app/mcp/tools/`](../app/mcp/tools/) | New `wave.py` tool module → `get_wave_state` MCP tool | LLM agents can see wave state |
-| [`docs/data_platform_plan.md`](data_platform_plan.md) | Add `gold.elliott_wave_labels` table to §7 (gold layer) | Pre-computed historical labels for training |
+| [`docs/architecture_v2/`](architecture_v2/README.md) | Add an `equities.elliott_wave_labels` (or sibling feature table) — v2 has no separate gold layer | Pre-computed historical labels for training |
 
 ### 3.3 The core types (sketch)
 

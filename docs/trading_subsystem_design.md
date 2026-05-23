@@ -716,7 +716,7 @@ backlog in [`app/signals/README.md`](../app/signals/README.md):
 
 ### Phase TA-7: Gold features tier
 
-**Detailed plan:** [data_platform_plan.md §7](data_platform_plan.md).
+**Detailed plan:** [architecture_v2/](architecture_v2/README.md). Note: the bronze/silver/gold layer model below predates the v2 migration; v2 collapsed to raw + adjusted Iceberg tables in `equities.*`. A feature surface for the items below will land separately.
 
 - `gold.features_daily` (per `(symbol, date)` — pre-computed
   indicators + microstructure features)

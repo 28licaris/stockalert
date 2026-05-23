@@ -549,7 +549,7 @@ periodically (~$200/mo).
 |---|---|
 | [`docs/streaming_universe_model.md`](../../streaming_universe_model.md) | SUPERSEDED |
 | [`docs/standards/data/symbol_lifecycle.md`](symbol_lifecycle.md) | SUPERSEDED on architecture; quick-path retained as runtime spec |
-| [`docs/data_platform_plan.md`](../../data_platform_plan.md) | Phase 1 medallion language retired; this doc is the new platform plan |
+| `docs/data_platform_plan.md` (deleted) | Phase 1 medallion language retired; this doc is the new platform plan |
 | [`docs/standards/data/lean_silver.md`](lean_silver.md) | RETIRED (silver layer removed) |
 | [`docs/standards/data/bronze_idempotency.md`](bronze_idempotency.md) | RETIRED (bronze layer renamed; idempotency now lives in Iceberg merge-on-read) |
 

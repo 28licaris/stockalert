@@ -5,7 +5,7 @@ the right things are happening. Reference doc — updated when the
 startup sequence changes.
 
 For the big-picture architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
-For the medallion lake design, see [data_platform_plan.md](data_platform_plan.md).
+For the v2 Iceberg lake design, see [architecture_v2/](architecture_v2/README.md).
 
 ## The two ingestion tiers
 

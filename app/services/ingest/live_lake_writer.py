@@ -13,7 +13,7 @@ extra `adj_factor` column (REQUIRED, Gate 2). Schwab returns
 pre-adjusted prices, so every row this writer produces carries
 `adj_factor = 1.0` literally.
 
-**Per [data_platform_plan §8 Path A](../../../docs/data_platform_plan.md):**
+**Per [architecture_v2/](../../../docs/architecture_v2/README.md) — live tier (Path A):**
 
     Path A — live streaming (T+0 → T+5min lake)
     1. Provider WebSocket → existing async batcher → ClickHouse ohlcv_1m

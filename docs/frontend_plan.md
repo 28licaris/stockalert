@@ -36,8 +36,8 @@ in SaaS mode. See §7 (SaaS-Readiness Contract) for the seams.
   rename, etc.) that need signoff before FE-CONTRACTS-* phases start.
 - [trading_subsystem_design.md](trading_subsystem_design.md) — strategy
   framework backing the Backtest + Runs pages.
-- [data_platform_plan.md](data_platform_plan.md) — bronze/silver/gold
-  surfaces backing the Lake + Coverage pages.
+- [architecture_v2/](architecture_v2/README.md) — the v2 `equities.*`
+  Iceberg surfaces backing the Lake + Coverage pages.
 - [indicator_exposure_design.md](indicator_exposure_design.md) —
   IndicatorReader behind the Indicators + Symbol pages.
 - [assistant_plan.md](assistant_plan.md) — the conversational

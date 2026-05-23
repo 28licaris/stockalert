@@ -20,8 +20,8 @@ than they paid back.
 
    | Change                                | Update                                |
    |---------------------------------------|---------------------------------------|
-   | New service / contract change         | [`ARCHITECTURE.md`](../ARCHITECTURE.md) |
-   | Storage / ingestion change            | [`data_platform_plan.md`](../data_platform_plan.md) |
+   | New service / contract change         | [`CLAUDE.md`](../../CLAUDE.md) layer-map (canonical post-v2 cutover; `ARCHITECTURE.md` is a redirect stub) |
+   | Storage / ingestion change            | [`architecture_v2/`](../architecture_v2/README.md) |
    | AI-trading change                     | [`trading-ai-build-plan.md`](../trading-ai-build-plan.md) |
    | Standards rule change                 | [`standards/`](README.md) (doc + index entry) |
    | Phase / gate / decision log           | **Commit message**, not BUILD_JOURNAL |

@@ -5,7 +5,8 @@ backfill code. Changes to the model require explicit signoff per
 [engagement.md](../engagement.md). This doc supersedes prior
 "add a streamed symbol" derivations in
 [../../streaming_universe_model.md](../../streaming_universe_model.md)
-and [../../data_platform_plan.md](../../data_platform_plan.md).
+and the retired v1 `data_platform_plan.md` (replaced by
+[../../architecture_v2/](../../architecture_v2/README.md)).
 
 ## TL;DR
 
