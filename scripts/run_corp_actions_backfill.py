@@ -68,12 +68,15 @@ async def run_bronze(since: date, until: date) -> dict:
     silently-killed python process can "succeed" without writing.
     """
     from app.services.equities.schemas import equities_table_id
+    from app.services.equities.tables import ensure_market_corp_actions
     from app.services.iceberg_catalog import get_catalog
 
     logger.info("=== Polygon REST → equities.market_corp_actions ===")
 
     # Pre-state — captured BEFORE the ingest so post-verify is a true delta.
     pre_cat = get_catalog()
+    # Idempotent: creates namespace + table on a fresh deploy, no-op otherwise.
+    ensure_market_corp_actions(pre_cat)
     pre_tbl = pre_cat.load_table(equities_table_id("market_corp_actions"))
     pre_snap = pre_tbl.current_snapshot()
     pre_snap_id = str(pre_snap.snapshot_id) if pre_snap else None
@@ -233,20 +236,16 @@ async def main() -> int:
     print("─── corp_actions_backfill summary ───")
     print(f"  status:       {summary['status']}")
     print(f"  window:       {summary['since']} .. {summary['until']}")
-    if summary["bronze"]:
-        b = summary["bronze"]
+    if summary["ingest"]:
+        i = summary["ingest"]
         print(
-            f"  bronze:       splits={b['splits_written']}  "
-            f"dividends={b['dividends_written']}  "
-            f"duration={b['duration_seconds']:.1f}s"
+            f"  ingest:       splits={i['splits_written']}  "
+            f"dividends={i['dividends_written']}  "
+            f"duration={i['duration_seconds']:.1f}s"
         )
-    if summary["silver"]:
-        s = summary["silver"]
         print(
-            f"  silver:       rows_merged={s.get('rows_merged')}  "
-            f"inserted={s.get('rows_inserted')}  "
-            f"updated={s.get('rows_updated')}  "
-            f"duration={s.get('duration_seconds', 0):.1f}s"
+            f"  delta:        pre_rows={i['pre_rows']:,}  "
+            f"post_rows={i['post_rows']:,}  row_delta={i['row_delta']:+,}"
         )
     if "error" in summary:
         print(f"  error:        {summary['error']}")
