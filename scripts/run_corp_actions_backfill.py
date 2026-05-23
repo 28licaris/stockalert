@@ -205,11 +205,6 @@ async def main() -> int:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
-    if args.bronze_only and args.silver_only:
-        print("FAIL: --bronze-only and --silver-only are mutually exclusive.",
-              file=sys.stderr)
-        return 2
-
     since, until = _resolve_window(args)
     logger.info(
         "Corp-actions backfill: since=%s until=%s",
