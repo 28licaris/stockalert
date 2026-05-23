@@ -12,19 +12,22 @@ import pytest
 
 pyiceberg = pytest.importorskip("pyiceberg")
 
-from pyiceberg.exceptions import NoSuchNamespaceError, NoSuchTableError  # noqa: E402
+from pyiceberg.exceptions import NamespaceAlreadyExistsError, NoSuchTableError  # noqa: E402
 
 from app.services.equities import tables as equities_tables  # noqa: E402
 
 
 def _make_catalog(*, table_exists: bool, namespace_exists: bool = True):
-    """Build a MagicMock Catalog with the requested load behavior."""
+    """Build a MagicMock Catalog with the requested load behavior.
+
+    `_ensure_namespace` always calls `create_namespace` and swallows
+    `NamespaceAlreadyExistsError` — so we mock that, not `list_namespaces`.
+    """
     catalog = MagicMock()
 
     if namespace_exists:
-        catalog.list_namespaces.return_value = [("equities",)]
-    else:
-        catalog.list_namespaces.side_effect = NoSuchNamespaceError("missing")
+        catalog.create_namespace.side_effect = NamespaceAlreadyExistsError("exists")
+    # else: create_namespace returns a MagicMock (succeeds silently).
 
     if table_exists:
         existing = MagicMock(name="ExistingTable")
@@ -103,11 +106,18 @@ def test_ensure_creates_namespace_when_missing():
     catalog.create_namespace.assert_called_once_with("equities")
 
 
-def test_ensure_skips_namespace_create_when_present():
+def test_ensure_swallows_namespace_already_exists():
+    """Idempotent create: attempt every time, swallow AlreadyExists.
+
+    Regression guard for the bug where `list_namespaces(db)` returned
+    `[]` on a missing namespace (no exception), so the old probe
+    silently no-op'd and `create_table` then failed with
+    `Database not found`.
+    """
     catalog = _make_catalog(table_exists=False, namespace_exists=True)
     equities_tables.ensure_polygon_raw(catalog)
 
-    catalog.create_namespace.assert_not_called()
+    catalog.create_namespace.assert_called_once_with("equities")
 
 
 def test_ensure_all_creates_four_tables(monkeypatch):

@@ -19,7 +19,6 @@ import logging
 from pyiceberg.catalog import Catalog
 from pyiceberg.exceptions import (
     NamespaceAlreadyExistsError,
-    NoSuchNamespaceError,
     NoSuchTableError,
 )
 from pyiceberg.table import Table
@@ -81,16 +80,20 @@ _CORP_ACTIONS_PROPERTIES: dict[str, str] = {
 
 
 def _ensure_namespace(catalog: Catalog) -> None:
-    """Create the `equities` Glue database if absent."""
+    """Create the `equities` Glue database if absent.
+
+    PyIceberg's Glue `list_namespaces(db)` lists child namespaces of
+    `db` and returns `[]` when `db` itself is missing — it does NOT
+    raise `NoSuchNamespaceError`. A list-then-create probe silently
+    no-ops on a fresh environment, then `create_table` blows up with
+    `Database not found`. Always attempt create; swallow already-exists.
+    """
     db = settings.iceberg_equities_glue_database
     try:
-        catalog.list_namespaces(db)
-    except NoSuchNamespaceError:
-        try:
-            catalog.create_namespace(db)
-            log.info("Created Iceberg namespace %s", db)
-        except NamespaceAlreadyExistsError:
-            pass
+        catalog.create_namespace(db)
+        log.info("Created Iceberg namespace %s", db)
+    except NamespaceAlreadyExistsError:
+        pass
 
 
 def _equities_table_location(table_name: str) -> str:
