@@ -791,6 +791,16 @@ class AdjustedOhlcvReader:
                 )
                 continue
 
+            # Polygon flat-files store volume + trade_count as DoubleType
+            # in the Iceberg schema because some extended-hours / low-
+            # liquidity bars arrive with fractional values (VWAP-weighted
+            # aggregation in Polygon's pipeline). SilverBar declares these
+            # as `int` for downstream consumers (CH ohlcv_1m's volume
+            # column is integer; chart UI doesn't render fractional
+            # shares). Round at the reader boundary — sub-share precision
+            # has no meaning at the per-bar level for stocks.
+            vol_raw = r.get("volume")
+            tc_raw = r.get("trade_count")
             out.append(
                 SilverBar(
                     symbol=r["symbol"],
@@ -799,9 +809,9 @@ class AdjustedOhlcvReader:
                     high=r["high"],
                     low=r["low"],
                     close=r["close"],
-                    volume=r.get("volume") or 0,
+                    volume=int(round(vol_raw)) if vol_raw is not None else 0,
                     vwap=r.get("vwap"),
-                    trade_count=r.get("trade_count"),
+                    trade_count=int(round(tc_raw)) if tc_raw is not None else None,
                     source_provider=source_provider,
                     sources_seen=sources_seen,
                     ingestion_ts=ing_ts,
