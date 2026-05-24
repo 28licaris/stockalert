@@ -1,0 +1,41 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EMRServerlessApplicationManagement",
+      "Effect": "Allow",
+      "Action": [
+        "emr-serverless:CreateApplication",
+        "emr-serverless:GetApplication",
+        "emr-serverless:ListApplications",
+        "emr-serverless:UpdateApplication",
+        "emr-serverless:DeleteApplication",
+        "emr-serverless:StartApplication",
+        "emr-serverless:StopApplication"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "EMRServerlessJobRuns",
+      "Effect": "Allow",
+      "Action": [
+        "emr-serverless:StartJobRun",
+        "emr-serverless:GetJobRun",
+        "emr-serverless:ListJobRuns",
+        "emr-serverless:CancelJobRun"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PassSparkEMRRole",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::562741918372:role/stock-lake-spark-emr",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "emr-serverless.amazonaws.com"
+        }
+      }
+    }
+  ]
+}

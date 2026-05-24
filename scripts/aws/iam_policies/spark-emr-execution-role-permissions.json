@@ -1,0 +1,83 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "GlueCatalogEquities",
+      "Effect": "Allow",
+      "Action": [
+        "glue:GetCatalog",
+        "glue:GetDatabase",
+        "glue:GetDatabases"
+      ],
+      "Resource": [
+        "arn:aws:glue:us-east-1:562741918372:catalog",
+        "arn:aws:glue:us-east-1:562741918372:database/equities"
+      ]
+    },
+    {
+      "Sid": "GlueTablesEquities",
+      "Effect": "Allow",
+      "Action": [
+        "glue:GetTable",
+        "glue:GetTables",
+        "glue:CreateTable",
+        "glue:UpdateTable",
+        "glue:DeleteTable",
+        "glue:GetPartition",
+        "glue:GetPartitions",
+        "glue:BatchCreatePartition",
+        "glue:CreatePartition",
+        "glue:UpdatePartition",
+        "glue:DeletePartition",
+        "glue:BatchDeletePartition"
+      ],
+      "Resource": [
+        "arn:aws:glue:us-east-1:562741918372:catalog",
+        "arn:aws:glue:us-east-1:562741918372:database/equities",
+        "arn:aws:glue:us-east-1:562741918372:table/equities/*"
+      ]
+    },
+    {
+      "Sid": "S3LakeBucketLevel",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket",
+        "s3:ListBucketVersions",
+        "s3:GetBucketLocation"
+      ],
+      "Resource": "arn:aws:s3:::stock-lake-562741918372-us-east-1-an"
+    },
+    {
+      "Sid": "S3LakeReadAll",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion"
+      ],
+      "Resource": "arn:aws:s3:::stock-lake-562741918372-us-east-1-an/*"
+    },
+    {
+      "Sid": "S3IcebergEquitiesWrite",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts"
+      ],
+      "Resource": "arn:aws:s3:::stock-lake-562741918372-us-east-1-an/iceberg/equities/*"
+    },
+    {
+      "Sid": "CloudWatchLogsEMR",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "logs:DescribeLogGroups",
+        "logs:DescribeLogStreams"
+      ],
+      "Resource": "arn:aws:logs:us-east-1:562741918372:log-group:/aws/emr-serverless/*"
+    }
+  ]
+}
