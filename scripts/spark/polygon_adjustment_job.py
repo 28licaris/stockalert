@@ -101,9 +101,38 @@ def adjust(
     since: date | None,
     until: date | None,
 ) -> tuple[int, int]:
-    """Compute and write the adjusted bars. Returns (n_symbols, n_rows)."""
+    """Compute and write the adjusted bars. Returns (n_symbols, n_rows).
+
+    Algorithm (post-CV19 refactor — broadcast lookup, no shuffle):
+
+      1. Pre-aggregate splits per (symbol, ex_date) and compute, per row,
+         the cumulative factor for THIS ex_date plus all LATER ex_dates
+         in the same symbol. (Tiny — ~3K rows total even whole-market.)
+      2. Collect that splits_cum to the driver and build a per-symbol
+         (ex_dates_asc, cum_factors) pair of NumPy arrays — `searchsorted`-
+         ready.
+      3. Broadcast the lookup dict to every executor.
+      4. For each raw bar, a pandas_udf does an O(log(splits_per_symbol))
+         binary search: find the smallest ex_date > bar_date → that row's
+         cum_factor (else 1.0). No shuffle, no wide join, no groupBy.
+      5. Apply adjustment math via column arithmetic and write.
+
+    Why this beats the prior raw.join(splits).groupBy(9-cols) pattern:
+      - That join inflated rows for symbols with multiple splits (AAPL
+        bars × 2 splits = 2x; symbols with 5 splits = 5x). For
+        whole-market with ~3K splits across the universe, this could
+        materialize tens of billions of intermediate row-pairs.
+      - The wide groupBy then shuffled all 2.1B rows by a 9-column hash,
+        filling EMR executor disks (the "No space left on device" failure
+        that motivated this refactor).
+      - This version reads raw once, applies a tiny in-memory lookup per
+        row, and writes once. Embarrassingly parallel.
+    """
+    import numpy as np
+    import pandas as pd
+
     spark = get_spark(JOB_NAME)
-    from pyspark.sql import functions as F  # lazy import
+    from pyspark.sql import Window, functions as F  # lazy import
 
     raw = spark.sql(f"SELECT * FROM {RAW_TABLE}")
     if symbols:
@@ -115,12 +144,18 @@ def adjust(
         # the NEXT day to keep the predicate timestamp-comparable.
         raw = raw.where(
             F.col("timestamp")
-            < F.lit(datetime.combine(until, datetime.min.time())).cast("timestamp") + F.expr("INTERVAL 1 DAY")
+            < F.lit(datetime.combine(until, datetime.min.time())).cast("timestamp")
+              + F.expr("INTERVAL 1 DAY")
         )
 
-    # Only forward-split rows contribute to adj_factor (factor != 1.0
-    # ignores no-op rows; cash dividends use `cash_amount`, never
-    # `factor`).
+    # ─────────────────────────────────────────────────────────────────
+    # Build splits_cum: per (symbol, ex_date), the cumulative factor for
+    # THIS split and all LATER splits in the same symbol.
+    #
+    # AAPL has splits on 2014-06-09 (7×) and 2020-08-31 (4×). Result:
+    #   (AAPL, 2020-08-31, 4)   ← only the 2020 split contributes
+    #   (AAPL, 2014-06-09, 28)  ← 7 × 4 = 28 for bars before 2014-06-09
+    # ─────────────────────────────────────────────────────────────────
     splits = spark.sql(f"""
         SELECT symbol, ex_date, factor
         FROM {CORP_ACTIONS_TABLE}
@@ -131,38 +166,103 @@ def adjust(
     if symbols:
         splits = splits.where(F.col("symbol").isin(symbols))
 
-    # Left-join raw × splits on symbol, gate each split's log(factor)
-    # contribution on ex_date > bar.date, sum-of-logs → exp gives the
-    # cumulative future-splits factor. Rows with no future splits
-    # produce NULL sum → exp NULL → coalesce(1.0).
-    #
-    # bar.date is computed once (cast timestamp → date) so the join
-    # predicate has clean comparison semantics. v1's
-    # cumulative_factor_after() uses bar_date (not bar_ts) for the
-    # same reason — a bar ON the split day itself is in the post-split
-    # frame.
-    factored = (
-        raw.withColumn("_bar_date", F.to_date(F.col("timestamp")))
-        .join(splits, on="symbol", how="left")
-        .groupBy(
-            raw["symbol"], raw["timestamp"],
-            raw["open"], raw["high"], raw["low"], raw["close"],
-            raw["volume"], raw["vwap"], raw["trade_count"],
-        )
-        .agg(
-            F.coalesce(
-                F.exp(F.sum(
-                    F.when(F.col("ex_date") > F.col("_bar_date"), F.log("factor"))
-                )),
-                F.lit(1.0),
-            ).alias("adj_factor")
-        )
+    splits_agg = (
+        splits
+        .groupBy("symbol", "ex_date")
+        .agg(F.sum(F.log("factor")).alias("lf"))
+    )
+    # Window: per symbol, DESC by ex_date, cumulative sum of lf for
+    # current row + all preceding (= later in date) rows.
+    # exp() of that sum = cumulative future-splits factor at this ex_date.
+    w = (
+        Window.partitionBy("symbol")
+        .orderBy(F.desc("ex_date"))
+        .rowsBetween(Window.unboundedPreceding, Window.currentRow)
+    )
+    splits_cum = (
+        splits_agg
+        .withColumn("cum_factor", F.exp(F.sum("lf").over(w)))
+        .select("symbol", "ex_date", "cum_factor")
     )
 
-    # Apply the adjustment math + restamp ingestion columns + tag source.
+    # ─────────────────────────────────────────────────────────────────
+    # Collect to driver (tiny — ~3K rows whole-market) and build a
+    # per-symbol (ex_dates_asc, cum_factors) lookup for binary search.
+    # ─────────────────────────────────────────────────────────────────
+    splits_pdf = splits_cum.toPandas()
+    log.info(
+        "splits_cum: %d (symbol, ex_date) rows for %d distinct symbols",
+        len(splits_pdf), splits_pdf["symbol"].nunique() if len(splits_pdf) else 0,
+    )
+
+    lookup: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    for sym, grp in splits_pdf.sort_values(["symbol", "ex_date"]).groupby("symbol"):
+        # ex_date arrives as datetime64[ns] from PyIceberg/PyArrow → date promotion.
+        # Keep as datetime64[ns] for fast searchsorted against bar timestamps.
+        ex_dates_np = pd.to_datetime(grp["ex_date"]).to_numpy()
+        cum_np = grp["cum_factor"].to_numpy(dtype=np.float64)
+        lookup[sym] = (ex_dates_np, cum_np)
+
+    lookup_bc = spark.sparkContext.broadcast(lookup)
+
+    # ─────────────────────────────────────────────────────────────────
+    # Per-row adj_factor via mapInPandas (explicit-schema variant —
+    # avoids pandas_udf's type-annotation reflection, which collides
+    # with this module's `from __future__ import annotations` and
+    # fails with UNSUPPORTED_SIGNATURE on Spark 3.5).
+    #
+    # Operates per partition of raw — no shuffle, just a closure over
+    # the broadcast variable. The output schema is raw + adj_factor.
+    # ─────────────────────────────────────────────────────────────────
+    from pyspark.sql.types import DoubleType, StructField, StructType
+
+    # Defensive copy — raw.schema.add(...) MUTATES the underlying StructType
+    # and returns it. Spark's lazy DataFrame plans share schema references,
+    # so the mutation can leave the source `raw` DF with adj_factor visible
+    # to the planner but not produced by the partition fn (depending on
+    # eval order). UNRESOLVED_COLUMN at write time. Build a fresh StructType.
+    out_schema = StructType(
+        list(raw.schema.fields) + [StructField("adj_factor", DoubleType(), True)]
+    )
+
+    def add_adj_factor_partition(iterator):
+        # Per-task local import keeps the closure pickle small and avoids
+        # depending on numpy/pandas already being imported on the executor.
+        import numpy as _np
+        import pandas as _pd
+
+        sd = lookup_bc.value
+        for pdf in iterator:
+            # Normalize bar timestamps to date-at-midnight for the search
+            # (matches v1 cumulative_factor_after() semantics: bars ON
+            # the split day are in the post-split frame; only ex_date >
+            # date qualifies for adjustment).
+            bar_dates = _pd.to_datetime(pdf["timestamp"]).dt.normalize().to_numpy()
+            symbols_np = pdf["symbol"].to_numpy()
+            out = _np.ones(len(pdf), dtype=_np.float64)
+            for i in range(len(pdf)):
+                entry = sd.get(symbols_np[i])
+                if entry is None:
+                    # Most symbols have zero splits in our window — common path.
+                    continue
+                ex_dates_np, cum = entry
+                # side='right' → ex_date > bar_date (strict inequality).
+                idx = int(_np.searchsorted(ex_dates_np, bar_dates[i], side="right"))
+                if idx < len(ex_dates_np):
+                    out[i] = cum[idx]
+            pdf["adj_factor"] = out
+            yield pdf
+
+    raw_with_factor = raw.mapInPandas(add_adj_factor_partition, schema=out_schema)
+
+    # ─────────────────────────────────────────────────────────────────
+    # Apply adjustment math + restamp ingestion columns + tag source.
+    # No shuffle: this is column arithmetic over the same partitioning
+    # as raw_with_factor (which is raw's partitioning + the udf column).
+    # ─────────────────────────────────────────────────────────────────
     ingestion_run_id = str(uuid.uuid4())
     ingestion_ts = datetime.now(tz=timezone.utc).replace(microsecond=0)
-    adjusted = factored.select(
+    adjusted = raw_with_factor.select(
         F.col("symbol"),
         F.col("timestamp"),
         (F.col("open") / F.col("adj_factor")).alias("open"),
@@ -179,16 +279,14 @@ def adjust(
     )
 
     # Cache before the write: writeTo + the two post-write counts each
-    # trigger a separate evaluation of the upstream DAG (raw scan → join
-    # → groupBy → select). Without caching, whole-market runs evaluate
-    # the 2.1B-row pipeline 3 times — ~30-60 min and ~$0.50-1 wasted.
-    # Cache once, materialize on the write, reuse for both counts.
+    # trigger a separate evaluation of the upstream DAG. Without caching,
+    # whole-market runs evaluate the 2.1B-row pipeline 3 times.
     adjusted = adjusted.cache()
 
     # Merge-on-read overwrite of touched partitions only. Whole-market
-    # full rebuild rewrites every partition (~$2-3 on EMR Serverless).
-    # Incremental --since runs touch only the partitions covered by
-    # the filter — no full-table rewrite.
+    # full rebuild rewrites every partition. Incremental --since runs
+    # touch only the partitions covered by the filter — no full-table
+    # rewrite.
     adjusted.writeTo(ADJUSTED_TABLE).overwritePartitions()
 
     n_symbols = adjusted.select("symbol").distinct().count()
