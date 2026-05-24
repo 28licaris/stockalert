@@ -1,21 +1,20 @@
 """
 Gap detection for v2 `equities.*` Iceberg tables.
 
-Identical algorithm to `app.services.bronze.gaps` — same ET-vs-UTC
-reasoning applies because Polygon flat-files mark trading-day-N
-after-hours bars with a UTC timestamp that falls on calendar day N+1.
-Bucketing by UTC date would falsely advance the "latest day" counter
-and make the gap detector miss the next trading day.
+Same algorithm the v1 bronze gap detector used: ET-vs-UTC reasoning
+matters because Polygon flat-files mark trading-day-N after-hours
+bars with a UTC timestamp that falls on calendar day N+1. Bucketing
+by UTC date would falsely advance the "latest day" counter and make
+the gap detector miss the next trading day.
 
 Used by:
   - `scripts/polygon_history_backfill.py` (CV3) — pre-computes skip
     set so re-runs of the same window are no-ops.
-  - `app/services/ingest/nightly_polygon_refresh.py` post-Phase 1B
-    when the nightly cron is cut over to `equities.polygon_raw`.
+  - `app/services/ingest/nightly_polygon_refresh.py` (CV7) — cuts the
+    nightly cron over to `equities.polygon_raw`.
 
-`app.services.bronze.gaps` stays put until v1 is deleted in Phase 1C;
-the two modules briefly co-exist (one is pure-Python copy of the
-other), which keeps every Phase 1A commit purely additive.
+The v1 `app.services.bronze.gaps` module was deleted in CV14; this is
+now the canonical gap-detection module.
 """
 from __future__ import annotations
 

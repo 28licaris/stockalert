@@ -59,9 +59,10 @@ SCHWAB_BUCKET_COUNT = 16
 # equities.polygon_raw — Polygon flat-files, RAW (unadjusted)
 # ─────────────────────────────────────────────────────────────────────
 #
-# Field IDs match bronze.polygon_minute so a future re-bucket migration
-# (CV2) can reuse the same Schema-evolution path if needed. `adj_factor`
-# is intentionally absent — raw is unadjusted by definition (02_schema.md).
+# Field IDs preserved from the v1 bronze.polygon_minute schema so the
+# Athena bulk-import (scripts/lake_import_athena.py) can copy data
+# without a schema-evolution rewrite. `adj_factor` is intentionally
+# absent — raw is unadjusted by definition (02_schema.md).
 POLYGON_RAW_SCHEMA = Schema(
     NestedField(1, "symbol", StringType(), required=True),
     NestedField(2, "timestamp", TimestamptzType(), required=True),

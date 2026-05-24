@@ -2,29 +2,32 @@
 EquitiesIcebergSink — canonical writer for the architecture-v2
 `equities.*` Iceberg tables.
 
-Mirrors `app.services.bronze.sink.BronzeIcebergSink` because the v1
-design (append-only, ingestion-stamped, upstream idempotency) is the
-right one for the v2 cadence too: PyIceberg's `merge_rows` /
-`overwrite(filter)` reads existing files at write time — hundreds of
-MB of I/O per call, unacceptable for nightly whole-market writes and
-sub-second live writes. Idempotency lives UPSTREAM in
-`ingestion_runs` watermarks (set by `nightly_polygon_refresh`, the
-live Schwab writer, and the history backfill script).
+Inherits the v1 bronze sink design (append-only, ingestion-stamped,
+upstream idempotency) because it's the right model for v2's cadence
+too: PyIceberg's `merge_rows` / `overwrite(filter)` reads existing
+files at write time — hundreds of MB of I/O per call, unacceptable
+for nightly whole-market writes and sub-second live writes. Idempotency
+lives UPSTREAM in `ingestion_runs` watermarks (set by
+`nightly_polygon_refresh`, the live Schwab writer, and the history
+backfill script). The v1 `app.services.bronze.sink.BronzeIcebergSink`
+module was deleted in CV14; this is the canonical Iceberg writer now.
 
-Tables targeted by this sink (Phase 1A — net-new code, no callers):
+Tables targeted by this sink:
 
   - `equities.polygon_raw`      via `for_polygon_raw()`
   - `equities.schwab_universe`  via `for_schwab_universe()`
 
 `equities.polygon_adjusted` is populated by the Spark adjustment job
-(CV5), not by this sink. `equities.market_corp_actions` has a
-different row shape and gets its own factory in CV9 when the
-corp-actions writer cuts over.
+(CV5), not by this sink. `equities.market_corp_actions` has its own
+writer in `app/services/ingest/corp_actions.py` (CV9) — different row
+shape, different cadence, separate code path.
 
-Schema differences vs the v1 bronze sink:
+Schema notes:
 
-  - `polygon_raw` is 12 canonical OHLCV cols (identical to
-    bronze.polygon_minute).
+  - `polygon_raw` is 12 canonical OHLCV cols (same shape the v1 bronze
+    polygon table had — the schema was preserved 1:1 across the
+    migration so the Athena bulk-import in `scripts/lake_import_athena.py`
+    is a straight copy).
   - `schwab_universe` is the same 12 cols PLUS `adj_factor` (required,
     Gate 2). Schwab returns pre-adjusted prices, so the sink stamps
     `adj_factor = 1.0` on every row. The column exists for schema
