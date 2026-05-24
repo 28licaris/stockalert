@@ -140,12 +140,22 @@ JSON
 #     be a smarter join strategy in polygon_adjustment_job.adjust(),
 #     tracked separately.
 
+# Enable CloudWatch log shipping per job run so `aws logs tail` can stream
+# driver + executor output live. Without this, only the AWS-managed Spark UI
+# dashboard shows logs (still useful, just not scriptable). Logs land at
+# /aws/emr-serverless/applications/<app-id>/jobs/<job-id>/SPARK_{DRIVER,EXECUTOR}/...
+MONITORING_CONFIG='{
+  "cloudWatchLoggingConfiguration": {"enabled": true},
+  "managedPersistenceMonitoringConfiguration": {"enabled": true}
+}'
+
 JOB_RUN_ID="$(aws emr-serverless start-job-run \
   --region "${AWS_REGION}" \
   --application-id "${EMR_APP_ID}" \
   --execution-role-arn "${ROLE_ARN}" \
   --name "${JOB_NAME}" \
   --job-driver "${JOB_DRIVER}" \
+  --configuration-overrides "{\"monitoringConfiguration\": ${MONITORING_CONFIG}}" \
   --query 'jobRunId' --output text)"
 ok "Submitted job-run-id=${JOB_RUN_ID}"
 echo ""

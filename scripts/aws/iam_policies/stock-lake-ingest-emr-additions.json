@@ -22,9 +22,33 @@
         "emr-serverless:StartJobRun",
         "emr-serverless:GetJobRun",
         "emr-serverless:ListJobRuns",
-        "emr-serverless:CancelJobRun"
+        "emr-serverless:CancelJobRun",
+        "emr-serverless:GetDashboardForJobRun"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "CloudWatchLogsDescribeGlobal",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogGroups",
+        "logs:StartLiveTail",
+        "logs:StopLiveTail"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "EMRServerlessCloudWatchLogsScoped",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogStreams",
+        "logs:GetLogEvents",
+        "logs:FilterLogEvents"
+      ],
+      "Resource": [
+        "arn:aws:logs:us-east-1:562741918372:log-group:/aws/emr-serverless/*",
+        "arn:aws:logs:us-east-1:562741918372:log-group:/aws/emr-serverless/*:log-stream:*"
+      ]
     },
     {
       "Sid": "PassSparkEMRRole",
