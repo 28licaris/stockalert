@@ -45,7 +45,15 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${HERE}/../.." && pwd)"
 POLICIES_DIR="${HERE}/iam_policies"
 ENTRY_SCRIPT="${ROOT}/scripts/spark/polygon_adjustment_job.py"
-PYDEPS_SOURCE_REL="scripts/spark/__init__.py"   # relative to ROOT for the zip
+# Files (relative to ROOT) to bundle into pydeps.zip. Both __init__.py
+# files MUST be present so EMR's Spark workers can import scripts.spark
+# as a regular package (Python 3 namespace-package resolution does NOT
+# work reliably inside --py-files zips on EMR Serverless — surfaced as
+# `ModuleNotFoundError: No module named 'scripts'` on the first smoke run).
+PYDEPS_SOURCES_REL=(
+  "scripts/__init__.py"
+  "scripts/spark/__init__.py"
+)
 
 # Output paths in S3.
 SCRIPT_S3_URI="s3://${LAKE_BUCKET}/${CODE_PREFIX}/polygon_adjustment_job.py"
@@ -68,7 +76,9 @@ log "0. Preflight"
 command -v aws >/dev/null || { echo "aws CLI not found"; exit 1; }
 command -v zip >/dev/null || { echo "zip not found"; exit 1; }
 [[ -f "${ENTRY_SCRIPT}" ]] || { echo "Entry script missing: ${ENTRY_SCRIPT}"; exit 1; }
-[[ -f "${ROOT}/${PYDEPS_SOURCE_REL}" ]] || { echo "pydeps source missing: ${ROOT}/${PYDEPS_SOURCE_REL}"; exit 1; }
+for f in "${PYDEPS_SOURCES_REL[@]}"; do
+  [[ -f "${ROOT}/${f}" ]] || { echo "pydeps source missing: ${ROOT}/${f}"; exit 1; }
+done
 for f in spark-emr-execution-role-trust-policy.json \
          spark-emr-execution-role-permissions.json \
          stock-lake-ingest-emr-additions.json; do
@@ -156,8 +166,9 @@ log "4. Build pydeps.zip"
 PYDEPS_TMP="$(mktemp -d)/pydeps.zip"
 (
   cd "${ROOT}"
-  # Zip path-prefixed so `from scripts.spark import …` works at runtime.
-  zip -q -r "${PYDEPS_TMP}" "${PYDEPS_SOURCE_REL}"
+  # Zip path-prefixed so `from scripts.spark import …` works at runtime
+  # on EMR (both __init__.py markers are required — see PYDEPS_SOURCES_REL).
+  zip -q -r "${PYDEPS_TMP}" "${PYDEPS_SOURCES_REL[@]}"
 )
 PYDEPS_BYTES="$(wc -c < "${PYDEPS_TMP}" | tr -d ' ')"
 ok "Built pydeps.zip (${PYDEPS_BYTES} bytes)"
