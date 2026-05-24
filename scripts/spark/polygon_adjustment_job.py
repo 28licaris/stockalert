@@ -141,8 +141,6 @@ def adjust(
     # cumulative_factor_after() uses bar_date (not bar_ts) for the
     # same reason — a bar ON the split day itself is in the post-split
     # frame.
-    bar_date = F.to_date(raw["timestamp"]).alias("_bar_date")
-
     factored = (
         raw.withColumn("_bar_date", F.to_date(F.col("timestamp")))
         .join(splits, on="symbol", how="left")
@@ -180,14 +178,19 @@ def adjust(
         F.col("adj_factor"),
     )
 
+    # Cache before the write: writeTo + the two post-write counts each
+    # trigger a separate evaluation of the upstream DAG (raw scan → join
+    # → groupBy → select). Without caching, whole-market runs evaluate
+    # the 2.1B-row pipeline 3 times — ~30-60 min and ~$0.50-1 wasted.
+    # Cache once, materialize on the write, reuse for both counts.
+    adjusted = adjusted.cache()
+
     # Merge-on-read overwrite of touched partitions only. Whole-market
     # full rebuild rewrites every partition (~$2-3 on EMR Serverless).
     # Incremental --since runs touch only the partitions covered by
     # the filter — no full-table rewrite.
     adjusted.writeTo(ADJUSTED_TABLE).overwritePartitions()
 
-    # Cheap to compute after the write because the writer's stats are
-    # cached; if not, this is one extra Spark stage (still cheap).
     n_symbols = adjusted.select("symbol").distinct().count()
     n_rows = adjusted.count()
     return n_symbols, n_rows
