@@ -108,22 +108,31 @@ log "Submit job: ${JOB_NAME}"
 # JSON-escape each entry-point arg.
 JSON_ARGS=$(printf '"%s",' "${ENTRY_ARGS[@]}" | sed 's/,$//')
 
+# The Spark session helper (scripts/spark/__init__.py:get_spark) reads
+# STOCK_LAKE_BUCKET_S3 from the environment to point Iceberg's Glue catalog
+# at the warehouse root. On local runs the operator exports it; on EMR we
+# inject it into both driver + executor env via Spark conf below.
+STOCK_LAKE_BUCKET_S3_VAL="s3://${LAKE_BUCKET}/iceberg/"
+
 JOB_DRIVER=$(cat <<JSON
 {
   "sparkSubmit": {
     "entryPoint": "${SCRIPT_S3_URI}",
     "entryPointArguments": [${JSON_ARGS}],
-    "sparkSubmitParameters": "--conf spark.executor.cores=4 --conf spark.dynamicAllocation.enabled=true --py-files ${PYDEPS_S3_URI}"
+    "sparkSubmitParameters": "--conf spark.executor.cores=4 --conf spark.dynamicAllocation.enabled=true --py-files ${PYDEPS_S3_URI} --conf spark.emr-serverless.driverEnv.STOCK_LAKE_BUCKET_S3=${STOCK_LAKE_BUCKET_S3_VAL} --conf spark.executorEnv.STOCK_LAKE_BUCKET_S3=${STOCK_LAKE_BUCKET_S3_VAL}"
   }
 }
 JSON
 )
-# NOTE: Do NOT pass --packages org.apache.iceberg:... here. EMR Serverless
-# release emr-7.0.0+ already bundles iceberg-spark-runtime + iceberg-aws-bundle
-# on the worker classpath; --packages would tell Spark to re-fetch from Maven
-# Central, which EMR Serverless workers cannot reach (no internet egress by
-# default). Doing so caused a 20-min ConnectionTimeout failure on the first
-# smoke-test run before this comment existed.
+# NOTES on sparkSubmitParameters:
+#   - Do NOT add --packages org.apache.iceberg:...  emr-7.0.0+ bundles
+#     iceberg-spark-runtime + iceberg-aws-bundle on the worker classpath;
+#     --packages tells Spark to re-fetch from Maven, which EMR Serverless
+#     workers cannot reach (no internet egress). Caused 20-min
+#     ConnectionTimeout on the first smoke run.
+#   - spark.emr-serverless.driverEnv.<VAR> + spark.executorEnv.<VAR> are
+#     how EMR Serverless ships env vars to the JVMs. Required for the
+#     STOCK_LAKE_BUCKET_S3 read in scripts/spark/__init__.py:get_spark().
 
 JOB_RUN_ID="$(aws emr-serverless start-job-run \
   --region "${AWS_REGION}" \
