@@ -57,7 +57,7 @@ def _parse_date(s: str) -> date:
         )
 
 
-async def run_bronze(since: date, until: date) -> dict:
+async def run_bronze(since: date, until: date, *, append_only: bool = False) -> dict:
     """Stage 1: Polygon REST → equities.market_corp_actions.
 
     **Verify-mutation contract (coding_standards.md rule 3):**
@@ -90,7 +90,9 @@ async def run_bronze(since: date, until: date) -> dict:
     )
 
     ingest = PolygonCorpActionsIngest.from_settings()
-    result = await ingest.backfill_full_history(since=since, until=until)
+    result = await ingest.backfill_full_history(
+        since=since, until=until, append_only=append_only,
+    )
     logger.info(
         "Bronze ingest done: splits=%d dividends=%d duration=%.1fs",
         result["splits_written"],
@@ -181,6 +183,19 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Write structured run report to this path.",
     )
+    p.add_argument(
+        "--append-only",
+        action="store_true",
+        help=(
+            "Switch from upsert to bulk-append. ~500x faster on cold loads "
+            "because it skips PyIceberg's metadata scan + delete-files, but "
+            "the [since, until] window MUST NOT overlap any existing rows in "
+            "equities.market_corp_actions — duplicates are silently created "
+            "otherwise. Use ONLY when seeding a fresh year range, or after "
+            "surgically deleting prior data in the target window. Never "
+            "use for nightly cron (which always re-touches yesterday's date)."
+        ),
+    )
     return p
 
 
@@ -210,8 +225,8 @@ async def main() -> int:
 
     since, until = _resolve_window(args)
     logger.info(
-        "Corp-actions backfill: since=%s until=%s",
-        since, until,
+        "Corp-actions backfill: since=%s until=%s append_only=%s",
+        since, until, args.append_only,
     )
 
     summary: dict = {
@@ -223,7 +238,9 @@ async def main() -> int:
     }
 
     try:
-        summary["ingest"] = await run_bronze(since, until)
+        summary["ingest"] = await run_bronze(
+            since, until, append_only=args.append_only,
+        )
         summary["status"] = "ok"
     except Exception as e:
         summary["status"] = "fail"

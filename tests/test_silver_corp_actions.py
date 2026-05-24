@@ -614,3 +614,73 @@ class TestBackfillFullHistoryYearChunking:
         # 3 years × 10 splits/year + 3 years × 100 dividends/year
         assert result["splits_written"] == 30
         assert result["dividends_written"] == 300
+
+
+class TestAppendOnlyMode:
+    """append_only=True uses table.append (fast bulk write) instead of
+    upsert (slow per-chunk metadata scan). Caller must guarantee the
+    window doesn't overlap existing rows.
+
+    Locked-in because the upsert path is ~500x slower on cold-loads;
+    a future "let's simplify by always upserting" refactor would
+    silently regress the production cutover from minutes back to hours.
+    """
+
+    @pytest.mark.asyncio
+    async def test_append_only_calls_table_append_not_upsert(self) -> None:
+        from datetime import date as _date
+        from unittest.mock import AsyncMock, MagicMock
+
+        fake_split = CorpAction(
+            symbol="X", ex_date=_date(2024, 1, 2), action_type="split", factor=2.0,
+        )
+        fake_div = CorpAction(
+            symbol="X", ex_date=_date(2024, 1, 2),
+            action_type="cash_dividend", cash_amount=0.1,
+        )
+
+        client = MagicMock(spec=PolygonCorpActionsClient)
+        client.collect_splits = AsyncMock(return_value=[fake_split])
+        client.collect_dividends = AsyncMock(return_value=[fake_div])
+
+        fake_table = MagicMock()
+
+        ingest = PolygonCorpActionsIngest(client=client, table=fake_table)
+        await ingest.backfill_full_history(
+            since=_date(2024, 1, 1),
+            until=_date(2024, 12, 31),
+            append_only=True,
+        )
+
+        # append() must be called (once per non-empty chunk type).
+        assert fake_table.append.call_count >= 1
+        # upsert() must NOT be called.
+        fake_table.upsert.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_default_still_uses_upsert_path(self) -> None:
+        """Regression guard — default mode must remain the safe upsert
+        path (idempotent on overlap, slow on cold-load)."""
+        from datetime import date as _date
+        from unittest.mock import AsyncMock, MagicMock
+
+        fake_split = CorpAction(
+            symbol="X", ex_date=_date(2024, 1, 2), action_type="split", factor=2.0,
+        )
+
+        client = MagicMock(spec=PolygonCorpActionsClient)
+        client.collect_splits = AsyncMock(return_value=[fake_split])
+        client.collect_dividends = AsyncMock(return_value=[])
+
+        fake_table = MagicMock()
+        fake_table.upsert.return_value = MagicMock(rows_updated=0, rows_inserted=1)
+
+        ingest = PolygonCorpActionsIngest(client=client, table=fake_table)
+        # No append_only kwarg → default False
+        await ingest.backfill_full_history(
+            since=_date(2024, 1, 1), until=_date(2024, 12, 31),
+        )
+
+        # upsert() called via chunked_upsert; append() must NOT be called.
+        assert fake_table.upsert.called
+        fake_table.append.assert_not_called()

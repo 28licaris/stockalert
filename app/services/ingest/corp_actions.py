@@ -111,6 +111,7 @@ class PolygonCorpActionsIngest:
         *,
         since: date = date(2003, 1, 1),
         until: Optional[date] = None,
+        append_only: bool = False,
     ) -> dict:
         """One-shot historical backfill of Polygon corp-actions.
 
@@ -118,6 +119,23 @@ class PolygonCorpActionsIngest:
         through yesterday). Writes via Iceberg upsert so a partial-
         failure restart is safe — re-running covers the same range
         without duplicates.
+
+        `append_only=True` switches the write path to `table.append(arrow)`
+        — a bulk Parquet write with no read-existing / merge / delete-file
+        machinery. ~500x throughput vs the upsert path on cold loads,
+        because each upsert chunk scans existing metadata (cost grows
+        super-linearly with table size); append skips all of that.
+
+        CALLER CONTRACT for `append_only=True`:
+          - The `[since, until]` window MUST NOT overlap any rows
+            already in the table. Duplicates are silently created
+            (append has no identifier-key join). Use ONLY when seeding
+            a fresh year range or after surgically deleting any prior
+            data in the target window.
+          - Idempotency on crash is LOST. A killed run leaves
+            partially-appended files in the table.
+          - Use the upsert path (default) for nightly cron, partial
+            re-runs, and any window that overlaps existing data.
 
         **Internally chunks by calendar year** to avoid OOM. Earlier
         attempts to pull the full 23-year window in one shot crashed
@@ -141,9 +159,17 @@ class PolygonCorpActionsIngest:
         started = datetime.now(timezone.utc)
 
         logger.info(
-            "polygon_corp_actions_ingest: full backfill since=%s until=%s run_id=%s",
+            "polygon_corp_actions_ingest: full backfill since=%s until=%s run_id=%s mode=%s",
             since, until, run_id,
+            "APPEND-ONLY (no dedup vs existing rows)" if append_only else "upsert",
         )
+        if append_only:
+            logger.warning(
+                "polygon_corp_actions_ingest: APPEND-ONLY mode — caller asserts "
+                "no existing rows in [%s, %s]. Duplicates will be created if "
+                "the window overlaps prior data. Caller is responsible.",
+                since, until,
+            )
 
         client = self._get_client()
         table = self._get_table()
@@ -173,7 +199,10 @@ class PolygonCorpActionsIngest:
                 year, len(chunk_splits),
             )
             if chunk_splits:
-                self._upsert(table, chunk_splits, ingestion_run_id=run_id)
+                self._upsert(
+                    table, chunk_splits,
+                    ingestion_run_id=run_id, append_only=append_only,
+                )
                 total_splits += len(chunk_splits)
 
             chunk_divs = await client.collect_dividends(
@@ -184,7 +213,10 @@ class PolygonCorpActionsIngest:
                 year, len(chunk_divs),
             )
             if chunk_divs:
-                self._upsert(table, chunk_divs, ingestion_run_id=run_id)
+                self._upsert(
+                    table, chunk_divs,
+                    ingestion_run_id=run_id, append_only=append_only,
+                )
                 total_dividends += len(chunk_divs)
 
             # Year-completed marker — makes it trivial to grep
@@ -321,21 +353,26 @@ class PolygonCorpActionsIngest:
         actions: list[CorpAction],
         *,
         ingestion_run_id: str,
+        append_only: bool = False,
     ) -> None:
-        """Write actions to bronze via Iceberg `upsert`.
+        """Write actions to `equities.market_corp_actions`.
 
-        Dedupes input first (same-day same-symbol same-kind events get
-        their cash_amount summed; see `_dedupe_actions`). Then writes
-        with PyIceberg's `upsert`, which uses the identifier fields
-        (symbol, ex_date, action_type) for the join. When matched,
-        updates non-key columns (handles Polygon revising a prior
-        announcement). When not matched, inserts.
+        Always dedupes input first (same-day same-symbol same-kind
+        events get their cash_amount summed; see `_dedupe_actions`).
+        Then the write path branches on `append_only`:
 
-        Goes through `chunked_upsert` to dodge PyIceberg's multi-column
-        predicate-tree SIGBUS. See `app/services/iceberg_safe_upsert.py`
-        for the root-cause analysis. The outer `backfill_full_history`
-        is idempotent so partial chunk-progress on a crash heals on
-        re-run.
+        - **Default (upsert path)**: PyIceberg's identifier-key upsert
+          via `chunked_upsert` (400-row batches dodge a multi-column
+          predicate-tree SIGBUS; see `iceberg_safe_upsert.py`).
+          Idempotent on partial-failure restart.
+
+        - **`append_only=True`**: single bulk `table.append(arrow)`
+          per call. No identifier-key join, no metadata scan, no
+          delete-files. ~500x throughput on cold loads (the upsert
+          path's per-chunk cost grows super-linearly with table size,
+          because each upsert scans existing metadata). Caller must
+          guarantee no overlap with existing rows — see the warning
+          in `backfill_full_history`.
         """
         if not actions:
             return
@@ -347,6 +384,16 @@ class PolygonCorpActionsIngest:
                 n_collapsed,
             )
         arrow = cls._actions_to_arrow(deduped, ingestion_run_id=ingestion_run_id)
+
+        if append_only:
+            table.append(arrow)
+            logger.info(
+                "polygon_corp_actions_ingest: append-only write complete "
+                "rows_appended=%d (post-dedup)",
+                len(deduped),
+            )
+            return
+
         result = chunked_upsert(
             table, arrow, log_label="equities.market_corp_actions",
         )
