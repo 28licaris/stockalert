@@ -116,33 +116,29 @@ class PolygonCorpActionsIngest:
         """One-shot historical backfill of Polygon corp-actions.
 
         Pulls every split + dividend from `since` to `until` (default:
-        through yesterday). Writes via Iceberg upsert so a partial-
-        failure restart is safe — re-running covers the same range
-        without duplicates.
+        through yesterday). **Auto-picks the write mode PER YEAR** based
+        on the table's existing watermark (max ex_date):
 
-        `append_only=True` switches the write path to `table.append(arrow)`
-        — a bulk Parquet write with no read-existing / merge / delete-file
-        machinery. ~500x throughput vs the upsert path on cold loads,
-        because each upsert chunk scans existing metadata (cost grows
-        super-linearly with table size); append skips all of that.
+          - **Empty table** → `table.append()` for every year (fast cold-load)
+          - **year_start > existing_max_ex_date** → `table.append()`
+            (strictly forward; no overlap with existing data, safe by
+            construction; ~500x faster than upsert)
+          - **Otherwise (year overlaps existing data)** → `chunked_upsert()`
+            (slow but idempotent; handles Polygon revising prior
+            announcements correctly)
 
-        CALLER CONTRACT for `append_only=True`:
-          - The `[since, until]` window MUST NOT overlap any rows
-            already in the table. Duplicates are silently created
-            (append has no identifier-key join). Use ONLY when seeding
-            a fresh year range or after surgically deleting any prior
-            data in the target window.
-          - Idempotency on crash is LOST. A killed run leaves
-            partially-appended files in the table.
-          - Use the upsert path (default) for nightly cron, partial
-            re-runs, and any window that overlaps existing data.
+        This means default behavior is FAST for the common cases (initial
+        backfill, weekly cron pulling new dates) AND SAFE for the rare ones
+        (re-running an old window, recovering from a partial run).
+        No caller flag required.
 
-        **Internally chunks by calendar year** to avoid OOM. Earlier
-        attempts to pull the full 23-year window in one shot crashed
-        silently during the dividend pull (millions of rows held in
-        memory at once on residential hardware). Year-chunking holds
-        at most ~150K rows in memory per chunk while still producing
-        identical output via Iceberg upsert.
+        `append_only=True` is an EMERGENCY OVERRIDE that forces append for
+        every year regardless of watermark. Use only when you've manually
+        confirmed no overlap (e.g. after deleting partial-load rows
+        surgically). Otherwise the auto-detect path is safer + just as fast.
+
+        **Internally chunks by calendar year** to avoid OOM. Year-chunking
+        holds at most ~150K rows in memory per chunk.
 
         Returns a summary dict:
             {
@@ -152,30 +148,43 @@ class PolygonCorpActionsIngest:
                 "splits_written": 52840,
                 "dividends_written": 2_945_119,
                 "duration_seconds": 2841.5,
+                "write_modes": {"append": 21, "upsert": 3},  # per-year tally
             }
         """
         until = until or (datetime.now(timezone.utc).date() - timedelta(days=1))
         run_id = uuid.uuid4().hex
         started = datetime.now(timezone.utc)
 
-        logger.info(
-            "polygon_corp_actions_ingest: full backfill since=%s until=%s run_id=%s mode=%s",
-            since, until, run_id,
-            "APPEND-ONLY (no dedup vs existing rows)" if append_only else "upsert",
-        )
-        if append_only:
-            logger.warning(
-                "polygon_corp_actions_ingest: APPEND-ONLY mode — caller asserts "
-                "no existing rows in [%s, %s]. Duplicates will be created if "
-                "the window overlaps prior data. Caller is responsible.",
-                since, until,
-            )
-
         client = self._get_client()
         table = self._get_table()
 
+        # Detect existing watermark ONCE at start (cheap — single column scan).
+        # Later we compare each year's start against this to pick mode per chunk.
+        if append_only:
+            existing_max = None
+            logger.warning(
+                "polygon_corp_actions_ingest: APPEND-ONLY override — every "
+                "year will append regardless of watermark. Duplicates will "
+                "be created if any year overlaps prior data. Caller is "
+                "responsible. (Default behavior auto-detects safely; only "
+                "use this flag when you know what you're doing.)",
+            )
+        else:
+            existing_max = self._get_max_ex_date(table)
+            logger.info(
+                "polygon_corp_actions_ingest: watermark check — "
+                "existing max(ex_date)=%s (None = empty table → all-append)",
+                existing_max,
+            )
+
+        logger.info(
+            "polygon_corp_actions_ingest: full backfill since=%s until=%s run_id=%s",
+            since, until, run_id,
+        )
+
         total_splits = 0
         total_dividends = 0
+        mode_tally: dict[str, int] = {"append": 0, "upsert": 0}
 
         # Iterate by calendar year so each Polygon pagination + each
         # Iceberg upsert holds bounded memory.
@@ -191,6 +200,21 @@ class PolygonCorpActionsIngest:
             chunk_start = max(date(year, 1, 1), since)
             chunk_end = min(date(year, 12, 31), until)
 
+            # Auto-pick per-year mode:
+            #   - append_only override → append
+            #   - empty table (existing_max is None) → append
+            #   - this year strictly newer than watermark → append
+            #   - else → upsert (overlapping window needs identifier-key merge)
+            if append_only or existing_max is None or chunk_start > existing_max:
+                year_mode = "append"
+            else:
+                year_mode = "upsert"
+            logger.info(
+                "polygon_corp_actions_ingest: year=%d mode=%s "
+                "(chunk_start=%s vs existing_max=%s)",
+                year, year_mode, chunk_start, existing_max,
+            )
+
             chunk_splits = await client.collect_splits(
                 since=chunk_start, until=chunk_end,
             )
@@ -199,9 +223,9 @@ class PolygonCorpActionsIngest:
                 year, len(chunk_splits),
             )
             if chunk_splits:
-                self._upsert(
+                self._write(
                     table, chunk_splits,
-                    ingestion_run_id=run_id, append_only=append_only,
+                    ingestion_run_id=run_id, mode=year_mode,
                 )
                 total_splits += len(chunk_splits)
 
@@ -213,11 +237,13 @@ class PolygonCorpActionsIngest:
                 year, len(chunk_divs),
             )
             if chunk_divs:
-                self._upsert(
+                self._write(
                     table, chunk_divs,
-                    ingestion_run_id=run_id, append_only=append_only,
+                    ingestion_run_id=run_id, mode=year_mode,
                 )
                 total_dividends += len(chunk_divs)
+
+            mode_tally[year_mode] += 1
 
             # Year-completed marker — makes it trivial to grep
             # `year_complete=2022` in operator logs + know exactly
@@ -232,8 +258,8 @@ class PolygonCorpActionsIngest:
         duration = (datetime.now(timezone.utc) - started).total_seconds()
         logger.info(
             "polygon_corp_actions_ingest: full backfill done — "
-            "splits=%d dividends=%d duration=%.1fs",
-            total_splits, total_dividends, duration,
+            "splits=%d dividends=%d duration=%.1fs write_modes=%s",
+            total_splits, total_dividends, duration, mode_tally,
         )
         return {
             "ingestion_run_id": run_id,
@@ -242,6 +268,7 @@ class PolygonCorpActionsIngest:
             "splits_written": total_splits,
             "dividends_written": total_dividends,
             "duration_seconds": duration,
+            "write_modes": mode_tally,
         }
 
     async def run_nightly(self) -> dict:
@@ -346,34 +373,60 @@ class PolygonCorpActionsIngest:
             )
         return deduped, n_collapsed
 
+    @staticmethod
+    def _get_max_ex_date(table) -> Optional[date]:
+        """Read max(ex_date) from the target table — None if empty.
+
+        Used by backfill_full_history to auto-pick append vs upsert per
+        year (years whose start is strictly > existing_max can safely
+        append; overlapping years need upsert).
+
+        Cheap: single-column scan, projection-pushed to ex_date only.
+        ~16 MB to materialize 2M int64 values, sub-second.
+        """
+        snap = table.current_snapshot()
+        if snap is None:
+            return None
+        total = int(snap.summary.additional_properties.get("total-records", 0))
+        if total == 0:
+            return None
+        arrow = table.scan().select("ex_date").to_arrow()
+        if arrow.num_rows == 0:
+            return None
+        dates = arrow.column("ex_date").to_pylist()
+        valid = [d for d in dates if d is not None]
+        return max(valid) if valid else None
+
     @classmethod
-    def _upsert(
+    def _write(
         cls,
         table,
         actions: list[CorpAction],
         *,
         ingestion_run_id: str,
-        append_only: bool = False,
+        mode: str,
     ) -> None:
-        """Write actions to `equities.market_corp_actions`.
+        """Write actions to `equities.market_corp_actions` via the chosen mode.
 
         Always dedupes input first (same-day same-symbol same-kind
         events get their cash_amount summed; see `_dedupe_actions`).
-        Then the write path branches on `append_only`:
+        Then dispatches on `mode`:
 
-        - **Default (upsert path)**: PyIceberg's identifier-key upsert
-          via `chunked_upsert` (400-row batches dodge a multi-column
+        - **`mode="append"`**: single bulk `table.append(arrow)`. No
+          identifier-key join, no metadata scan, no delete-files.
+          ~500x throughput on cold loads. Caller must guarantee no
+          overlap with existing rows (the watermark check in
+          `backfill_full_history` provides this guarantee automatically).
+
+        - **`mode="upsert"`**: PyIceberg's identifier-key upsert via
+          `chunked_upsert` (400-row batches to dodge multi-column
           predicate-tree SIGBUS; see `iceberg_safe_upsert.py`).
-          Idempotent on partial-failure restart.
-
-        - **`append_only=True`**: single bulk `table.append(arrow)`
-          per call. No identifier-key join, no metadata scan, no
-          delete-files. ~500x throughput on cold loads (the upsert
-          path's per-chunk cost grows super-linearly with table size,
-          because each upsert scans existing metadata). Caller must
-          guarantee no overlap with existing rows — see the warning
-          in `backfill_full_history`.
+          Idempotent on partial-failure restart; handles Polygon
+          revising prior announcements correctly. Slow on large tables
+          because per-chunk cost grows super-linearly with table size.
         """
+        if mode not in ("append", "upsert"):
+            raise ValueError(f"mode must be 'append' or 'upsert', got {mode!r}")
         if not actions:
             return
         deduped, n_collapsed = cls._dedupe_actions(actions)
@@ -385,10 +438,10 @@ class PolygonCorpActionsIngest:
             )
         arrow = cls._actions_to_arrow(deduped, ingestion_run_id=ingestion_run_id)
 
-        if append_only:
+        if mode == "append":
             table.append(arrow)
             logger.info(
-                "polygon_corp_actions_ingest: append-only write complete "
+                "polygon_corp_actions_ingest: append write complete "
                 "rows_appended=%d (post-dedup)",
                 len(deduped),
             )

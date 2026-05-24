@@ -536,9 +536,9 @@ class TestBackfillFullHistoryYearChunking:
         assert last_call.kwargs["until"] == _date(2025, 3, 10)
 
     def test_upsert_routes_through_chunked_upsert(self) -> None:
-        """`_upsert` MUST delegate the actual table write to
-        `chunked_upsert` — the shared helper that guards every
-        iceberg upsert in the codebase from the PyIceberg multi-col
+        """`_write(mode='upsert')` MUST delegate the actual table write to
+        `chunked_upsert` — the shared helper that guards every iceberg
+        upsert in the codebase from the PyIceberg multi-col
         predicate-tree SIGBUS.
 
         **Regression context (2026-05-18):** bronze.polygon_corp_actions
@@ -570,7 +570,10 @@ class TestBackfillFullHistoryYearChunking:
             mock_chunked.return_value = MagicMock(
                 rows_updated=0, rows_inserted=1500, chunks_committed=4,
             )
-            _Cls._upsert(fake_table, actions, ingestion_run_id="test-run")
+            _Cls._write(
+                fake_table, actions,
+                ingestion_run_id="test-run", mode="upsert",
+            )
 
             # Must be exactly one call to the helper — the helper itself
             # handles chunking internally.
@@ -616,51 +619,47 @@ class TestBackfillFullHistoryYearChunking:
         assert result["dividends_written"] == 300
 
 
-class TestAppendOnlyMode:
-    """append_only=True uses table.append (fast bulk write) instead of
-    upsert (slow per-chunk metadata scan). Caller must guarantee the
-    window doesn't overlap existing rows.
+class TestWriteModeDispatch:
+    """The backfill auto-picks append vs upsert PER YEAR based on the
+    existing table watermark (max ex_date):
 
-    Locked-in because the upsert path is ~500x slower on cold-loads;
-    a future "let's simplify by always upserting" refactor would
+      - Empty table        → append for every year (cold-load fast path)
+      - year_start > max   → append (strictly forward, no overlap)
+      - year_start <= max  → upsert (window overlaps existing data)
+
+    `append_only=True` is an emergency override that forces append for
+    every year regardless of watermark.
+
+    Locked-in because: the upsert path is ~500x slower than append for
+    cold loads; a future "always upsert for safety" refactor would
     silently regress the production cutover from minutes back to hours.
+    Conversely an "always append" default would silently create
+    duplicates on any overlapping re-run.
     """
 
-    @pytest.mark.asyncio
-    async def test_append_only_calls_table_append_not_upsert(self) -> None:
-        from datetime import date as _date
-        from unittest.mock import AsyncMock, MagicMock
+    @staticmethod
+    def _fake_table_empty():
+        from unittest.mock import MagicMock
+        t = MagicMock()
+        t.current_snapshot.return_value = None
+        return t
 
-        fake_split = CorpAction(
-            symbol="X", ex_date=_date(2024, 1, 2), action_type="split", factor=2.0,
-        )
-        fake_div = CorpAction(
-            symbol="X", ex_date=_date(2024, 1, 2),
-            action_type="cash_dividend", cash_amount=0.1,
-        )
-
-        client = MagicMock(spec=PolygonCorpActionsClient)
-        client.collect_splits = AsyncMock(return_value=[fake_split])
-        client.collect_dividends = AsyncMock(return_value=[fake_div])
-
-        fake_table = MagicMock()
-
-        ingest = PolygonCorpActionsIngest(client=client, table=fake_table)
-        await ingest.backfill_full_history(
-            since=_date(2024, 1, 1),
-            until=_date(2024, 12, 31),
-            append_only=True,
-        )
-
-        # append() must be called (once per non-empty chunk type).
-        assert fake_table.append.call_count >= 1
-        # upsert() must NOT be called.
-        fake_table.upsert.assert_not_called()
+    @staticmethod
+    def _fake_table_with_max_ex_date(max_date):
+        from unittest.mock import MagicMock
+        import pyarrow as pa
+        t = MagicMock()
+        snap = MagicMock()
+        snap.summary.additional_properties = {"total-records": "100"}
+        t.current_snapshot.return_value = snap
+        # Mock scan().select("ex_date").to_arrow()
+        arrow = pa.table({"ex_date": [max_date]})
+        t.scan.return_value.select.return_value.to_arrow.return_value = arrow
+        return t
 
     @pytest.mark.asyncio
-    async def test_default_still_uses_upsert_path(self) -> None:
-        """Regression guard — default mode must remain the safe upsert
-        path (idempotent on overlap, slow on cold-load)."""
+    async def test_empty_table_default_uses_append(self) -> None:
+        """Empty target → auto-detect picks append (fast cold-load)."""
         from datetime import date as _date
         from unittest.mock import AsyncMock, MagicMock
 
@@ -672,15 +671,122 @@ class TestAppendOnlyMode:
         client.collect_splits = AsyncMock(return_value=[fake_split])
         client.collect_dividends = AsyncMock(return_value=[])
 
-        fake_table = MagicMock()
-        fake_table.upsert.return_value = MagicMock(rows_updated=0, rows_inserted=1)
+        fake_table = self._fake_table_empty()
 
         ingest = PolygonCorpActionsIngest(client=client, table=fake_table)
-        # No append_only kwarg → default False
-        await ingest.backfill_full_history(
+        result = await ingest.backfill_full_history(
             since=_date(2024, 1, 1), until=_date(2024, 12, 31),
         )
 
-        # upsert() called via chunked_upsert; append() must NOT be called.
+        assert fake_table.append.called
+        fake_table.upsert.assert_not_called()
+        assert result["write_modes"]["append"] == 1
+        assert result["write_modes"]["upsert"] == 0
+
+    @pytest.mark.asyncio
+    async def test_forward_window_default_uses_append(self) -> None:
+        """Existing data, since > max(ex_date) → auto-detect picks
+        append (no overlap, safe + fast)."""
+        from datetime import date as _date
+        from unittest.mock import AsyncMock, MagicMock
+
+        fake_split = CorpAction(
+            symbol="X", ex_date=_date(2024, 1, 2), action_type="split", factor=2.0,
+        )
+
+        client = MagicMock(spec=PolygonCorpActionsClient)
+        client.collect_splits = AsyncMock(return_value=[fake_split])
+        client.collect_dividends = AsyncMock(return_value=[])
+
+        # Table contains rows up to 2023-12-31; backfill starts 2024-01-01
+        fake_table = self._fake_table_with_max_ex_date(_date(2023, 12, 31))
+
+        ingest = PolygonCorpActionsIngest(client=client, table=fake_table)
+        result = await ingest.backfill_full_history(
+            since=_date(2024, 1, 1), until=_date(2024, 12, 31),
+        )
+
+        assert fake_table.append.called
+        fake_table.upsert.assert_not_called()
+        assert result["write_modes"]["append"] == 1
+
+    @pytest.mark.asyncio
+    async def test_overlapping_window_default_uses_upsert(self) -> None:
+        """Existing data, since <= max(ex_date) → auto-detect picks
+        upsert (overlap requires identifier-key merge for idempotency)."""
+        from datetime import date as _date
+        from unittest.mock import AsyncMock, MagicMock
+
+        fake_split = CorpAction(
+            symbol="X", ex_date=_date(2023, 6, 15), action_type="split", factor=2.0,
+        )
+
+        client = MagicMock(spec=PolygonCorpActionsClient)
+        client.collect_splits = AsyncMock(return_value=[fake_split])
+        client.collect_dividends = AsyncMock(return_value=[])
+
+        # Table contains rows up to 2024-12-31; backfill re-covers 2023-2024
+        fake_table = self._fake_table_with_max_ex_date(_date(2024, 12, 31))
+        fake_table.upsert.return_value = MagicMock(rows_updated=0, rows_inserted=1)
+
+        ingest = PolygonCorpActionsIngest(client=client, table=fake_table)
+        result = await ingest.backfill_full_history(
+            since=_date(2023, 1, 1), until=_date(2023, 12, 31),
+        )
+
+        # upsert via chunked_upsert; append NOT called
         assert fake_table.upsert.called
         fake_table.append.assert_not_called()
+        assert result["write_modes"]["upsert"] == 1
+        assert result["write_modes"]["append"] == 0
+
+    @pytest.mark.asyncio
+    async def test_append_only_override_forces_append_regardless(self) -> None:
+        """append_only=True forces append even when window overlaps —
+        caller asserts they've handled the overlap manually (e.g. via
+        a surgical delete first)."""
+        from datetime import date as _date
+        from unittest.mock import AsyncMock, MagicMock
+
+        fake_split = CorpAction(
+            symbol="X", ex_date=_date(2023, 6, 15), action_type="split", factor=2.0,
+        )
+
+        client = MagicMock(spec=PolygonCorpActionsClient)
+        client.collect_splits = AsyncMock(return_value=[fake_split])
+        client.collect_dividends = AsyncMock(return_value=[])
+
+        # Table HAS data overlapping the window — auto-detect would pick
+        # upsert, but append_only forces append.
+        fake_table = self._fake_table_with_max_ex_date(_date(2024, 12, 31))
+
+        ingest = PolygonCorpActionsIngest(client=client, table=fake_table)
+        await ingest.backfill_full_history(
+            since=_date(2023, 1, 1), until=_date(2023, 12, 31),
+            append_only=True,
+        )
+
+        assert fake_table.append.called
+        fake_table.upsert.assert_not_called()
+
+    def test_get_max_ex_date_empty_table_returns_none(self) -> None:
+        from unittest.mock import MagicMock
+        from app.services.ingest.corp_actions import PolygonCorpActionsIngest as _Cls
+        t = MagicMock()
+        t.current_snapshot.return_value = None
+        assert _Cls._get_max_ex_date(t) is None
+
+    def test_get_max_ex_date_returns_actual_max(self) -> None:
+        from datetime import date as _date
+        from unittest.mock import MagicMock
+        import pyarrow as pa
+        from app.services.ingest.corp_actions import PolygonCorpActionsIngest as _Cls
+
+        t = MagicMock()
+        snap = MagicMock()
+        snap.summary.additional_properties = {"total-records": "3"}
+        t.current_snapshot.return_value = snap
+        arrow = pa.table({"ex_date": [_date(2022, 1, 1), _date(2024, 6, 15), _date(2023, 3, 1)]})
+        t.scan.return_value.select.return_value.to_arrow.return_value = arrow
+
+        assert _Cls._get_max_ex_date(t) == _date(2024, 6, 15)
