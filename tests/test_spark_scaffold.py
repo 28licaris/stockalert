@@ -40,8 +40,23 @@ def test_get_spark_raises_when_warehouse_env_empty_string(monkeypatch):
         get_spark("test-app")
 
 
-# Full SparkSession construction needs pyspark — only available in the
-# `spark` poetry group. Skip otherwise.
+# Full SparkSession construction needs:
+#   (1) pyspark installed (poetry install --with spark)
+#   (2) a JVM Spark can actually launch against. Java 17 LTS works;
+#       Java 21+ partially does (some Hadoop incompatibility); Java 26
+#       reliably fails (Subject.getSubject removed). The brew-built
+#       openjdk@17 has Apple Silicon JIT bugs too — only Adoptium
+#       Temurin 17 has been observed stable end-to-end.
+#
+# Both are environmental — gating by `pytest.importorskip("pyspark")`
+# alone isn't enough (the test can pass on a fresh CI image but fail
+# locally for anyone whose system Java is 26, or vice versa).
+#
+# Marked `integration` so default `pytest -m "not integration"` runs
+# skip it. Opt in via `pytest -m integration` when you have a known-
+# compatible JVM (e.g. `JAVA_HOME=/Library/Java/JavaVirtualMachines/
+# temurin-17.jdk/Contents/Home pytest -m integration ...`).
+@pytest.mark.integration
 def test_get_spark_builds_session_when_pyspark_available(monkeypatch):
     pyspark = pytest.importorskip("pyspark")
     monkeypatch.setenv("STOCK_LAKE_BUCKET_S3", "s3://stockalert-lake-test/iceberg/")
