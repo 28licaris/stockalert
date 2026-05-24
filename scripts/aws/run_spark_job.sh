@@ -119,7 +119,7 @@ JOB_DRIVER=$(cat <<JSON
   "sparkSubmit": {
     "entryPoint": "${SCRIPT_S3_URI}",
     "entryPointArguments": [${JSON_ARGS}],
-    "sparkSubmitParameters": "--conf spark.executor.cores=4 --conf spark.dynamicAllocation.enabled=true --py-files ${PYDEPS_S3_URI} --conf spark.emr-serverless.driverEnv.STOCK_LAKE_BUCKET_S3=${STOCK_LAKE_BUCKET_S3_VAL} --conf spark.executorEnv.STOCK_LAKE_BUCKET_S3=${STOCK_LAKE_BUCKET_S3_VAL}"
+    "sparkSubmitParameters": "--conf spark.executor.cores=4 --conf spark.executor.disk=200G --conf spark.dynamicAllocation.enabled=true --py-files ${PYDEPS_S3_URI} --conf spark.emr-serverless.driverEnv.STOCK_LAKE_BUCKET_S3=${STOCK_LAKE_BUCKET_S3_VAL} --conf spark.executorEnv.STOCK_LAKE_BUCKET_S3=${STOCK_LAKE_BUCKET_S3_VAL}"
   }
 }
 JSON
@@ -133,6 +133,12 @@ JSON
 #   - spark.emr-serverless.driverEnv.<VAR> + spark.executorEnv.<VAR> are
 #     how EMR Serverless ships env vars to the JVMs. Required for the
 #     STOCK_LAKE_BUCKET_S3 read in scripts/spark/__init__.py:get_spark().
+#   - spark.executor.disk=200G is the EMR Serverless max. The default
+#     20G runs out during the polygon_adjustment_job whole-market shuffle
+#     (groupBy across 9 columns on 2.1B rows) — "No space left on
+#     device" cascade fails the job at ~7 min wall. Code-level fix would
+#     be a smarter join strategy in polygon_adjustment_job.adjust(),
+#     tracked separately.
 
 JOB_RUN_ID="$(aws emr-serverless start-job-run \
   --region "${AWS_REGION}" \
