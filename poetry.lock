@@ -2282,6 +2282,18 @@ files = [
 ]
 
 [[package]]
+name = "py4j"
+version = "0.10.9.9"
+description = "Enables Python programs to dynamically access arbitrary Java objects"
+optional = false
+python-versions = "*"
+groups = ["spark"]
+files = [
+    {file = "py4j-0.10.9.9-py2.py3-none-any.whl", hash = "sha256:c7c26e4158defb37b0bb124933163641a2ff6e3a3913f7811b0ddbe07ed61533"},
+    {file = "py4j-0.10.9.9.tar.gz", hash = "sha256:f694cad19efa5bd1dee4f3e5270eb406613c974394035e5bfc4ec1aba870b879"},
+]
+
+[[package]]
 name = "pyarrow"
 version = "24.0.0"
 description = "Python library for Apache Arrow"
@@ -2778,6 +2790,27 @@ files = [
     {file = "pyroaring-1.1.0-cp39-cp39-win_arm64.whl", hash = "sha256:3d04c3eb039cf2295e4d375ef81fd6e3cae7cefe3b5c457ccaf78d7d6f963a5d"},
     {file = "pyroaring-1.1.0.tar.gz", hash = "sha256:f02e4021397ae02a139defdc6813b9942ab163de90affddd4ce4efbac299f619"},
 ]
+
+[[package]]
+name = "pyspark"
+version = "3.5.8"
+description = "Apache Spark Python API"
+optional = false
+python-versions = ">=3.8"
+groups = ["spark"]
+files = [
+    {file = "pyspark-3.5.8.tar.gz", hash = "sha256:54cca0767b21b40e3953ad1d30f8601c53abf9cbda763653289cdcfcac52313c"},
+]
+
+[package.dependencies]
+py4j = ">=0.10.9.7,<0.10.9.10"
+
+[package.extras]
+connect = ["googleapis-common-protos (>=1.56.4)", "grpcio (>=1.56.0)", "grpcio-status (>=1.56.0)", "numpy (>=1.15,<2)", "pandas (>=1.0.5)", "pyarrow (>=4.0.0)"]
+ml = ["numpy (>=1.15,<2)"]
+mllib = ["numpy (>=1.15,<2)"]
+pandas-on-spark = ["numpy (>=1.15,<2)", "pandas (>=1.0.5)", "pyarrow (>=4.0.0)"]
+sql = ["numpy (>=1.15,<2)", "pandas (>=1.0.5)", "pyarrow (>=4.0.0)"]
 
 [[package]]
 name = "pytest"
@@ -4049,4 +4082,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "9f0e6177178edd2aacf71fb7d6205348fc5f42ac21d5a26f5822eb6854b275b4"
+content-hash = "6f929291e3bc8210ca9c31f3b6ac3f80413cb56015a9cadf4ccb2d958c177a74"
