@@ -136,3 +136,31 @@ def test_main_whole_market_passes_none_to_adjust():
 
     args, _ = mocked_adjust.call_args
     assert args[0] is None  # symbols=None
+
+
+# ─────────────────────────────────────────────────────────────────────
+# --skip-ensure (EMR Serverless path)
+# ─────────────────────────────────────────────────────────────────────
+
+def test_main_skip_ensure_does_not_call_ensure():
+    """EMR Serverless has no pyiceberg → operator pre-creates the table
+    locally and passes --skip-ensure. ensure_target_exists must NOT be
+    called when the flag is set."""
+    with patch.object(job, "_ensure_target_exists") as mocked_ensure, \
+         patch.object(job, "adjust", return_value=(1, 100)), \
+         patch.object(job, "record_run"):
+        rc = job.main(["--symbols", "AAPL", "--skip-ensure"])
+
+    assert rc == 0
+    mocked_ensure.assert_not_called()
+
+
+def test_main_default_calls_ensure():
+    """Default (no --skip-ensure) must call ensure — local path preserved."""
+    with patch.object(job, "_ensure_target_exists") as mocked_ensure, \
+         patch.object(job, "adjust", return_value=(1, 100)), \
+         patch.object(job, "record_run"):
+        rc = job.main(["--symbols", "AAPL"])
+
+    assert rc == 0
+    mocked_ensure.assert_called_once()

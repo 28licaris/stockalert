@@ -210,6 +210,15 @@ def main(argv: Iterable[str] | None = None) -> int:
         "--until", default=None,
         help="Upper bound (inclusive), YYYY-MM-DD. Omit for through-today.",
     )
+    p.add_argument(
+        "--skip-ensure", action="store_true",
+        help=(
+            "Skip the pyiceberg-backed ensure_polygon_adjusted() call. "
+            "Required for EMR Serverless runs (pyiceberg is not in the EMR "
+            "Python env). Caller is responsible for pre-creating the table "
+            "locally before submitting the EMR job."
+        ),
+    )
     args = p.parse_args(list(argv) if argv is not None else None)
 
     symbols = _parse_symbols(args.symbols)
@@ -222,15 +231,21 @@ def main(argv: Iterable[str] | None = None) -> int:
         symbols if symbols else "ALL", since, until,
     )
 
-    try:
-        _ensure_target_exists()
-    except Exception as e:
-        log.exception("failed to ensure target table exists: %s", e)
-        record_run(
-            job_name=JOB_NAME, status="error",
-            started_at=started, error=f"ensure_target_failed: {e}",
+    if args.skip_ensure:
+        log.info(
+            "--skip-ensure: target table assumed to exist (caller-managed). "
+            "Required for EMR Serverless (pyiceberg not in EMR env)."
         )
-        return 1
+    else:
+        try:
+            _ensure_target_exists()
+        except Exception as e:
+            log.exception("failed to ensure target table exists: %s", e)
+            record_run(
+                job_name=JOB_NAME, status="error",
+                started_at=started, error=f"ensure_target_failed: {e}",
+            )
+            return 1
 
     try:
         n_symbols, n_rows = adjust(symbols, since, until)
