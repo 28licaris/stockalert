@@ -113,11 +113,17 @@ JOB_DRIVER=$(cat <<JSON
   "sparkSubmit": {
     "entryPoint": "${SCRIPT_S3_URI}",
     "entryPointArguments": [${JSON_ARGS}],
-    "sparkSubmitParameters": "--conf spark.executor.cores=4 --conf spark.dynamicAllocation.enabled=true --py-files ${PYDEPS_S3_URI} --packages org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.6.0,org.apache.iceberg:iceberg-aws-bundle:1.6.0"
+    "sparkSubmitParameters": "--conf spark.executor.cores=4 --conf spark.dynamicAllocation.enabled=true --py-files ${PYDEPS_S3_URI}"
   }
 }
 JSON
 )
+# NOTE: Do NOT pass --packages org.apache.iceberg:... here. EMR Serverless
+# release emr-7.0.0+ already bundles iceberg-spark-runtime + iceberg-aws-bundle
+# on the worker classpath; --packages would tell Spark to re-fetch from Maven
+# Central, which EMR Serverless workers cannot reach (no internet egress by
+# default). Doing so caused a 20-min ConnectionTimeout failure on the first
+# smoke-test run before this comment existed.
 
 JOB_RUN_ID="$(aws emr-serverless start-job-run \
   --region "${AWS_REGION}" \

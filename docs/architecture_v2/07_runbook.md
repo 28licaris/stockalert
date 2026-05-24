@@ -414,11 +414,23 @@ aws emr-serverless start-job-run \
   --name "polygon_adjust_full_$(date -u +%Y%m%d)" \
   --job-driver '{
     "sparkSubmit": {
-      "entryPoint": "s3://stockalert-code/spark/polygon_adjustment_job.py",
-      "entryPointArguments": [],
-      "sparkSubmitParameters": "--conf spark.executor.cores=4 --conf spark.dynamicAllocation.enabled=true --packages org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.6.0,org.apache.iceberg:iceberg-aws-bundle:1.6.0"
+      "entryPoint": "s3://<your-bucket>/code/spark/polygon_adjustment_job.py",
+      "entryPointArguments": ["--skip-ensure"],
+      "sparkSubmitParameters": "--conf spark.executor.cores=4 --conf spark.dynamicAllocation.enabled=true --py-files s3://<your-bucket>/code/spark/pydeps.zip"
     }
   }'
+
+# Notes:
+#   - Do NOT add --packages org.apache.iceberg:... — emr-7.0.0 already bundles
+#     iceberg-spark-runtime + iceberg-aws-bundle on the worker classpath, and
+#     EMR Serverless workers have NO public internet egress so a --packages
+#     pull from Maven will time out after ~20 min.
+#   - --skip-ensure: pyiceberg is not in the EMR Python env. The operator
+#     pre-creates the target table locally via `ensure_polygon_adjusted()`
+#     before submitting; the helper scripts/aws/run_spark_job.sh does this
+#     automatically.
+#   - --py-files pydeps.zip ships scripts/spark/__init__.py so the entry
+#     script's `from scripts.spark import get_spark, record_run` resolves.
 
 # Get the job-run id from output, then watch:
 aws emr-serverless get-job-run \
@@ -433,22 +445,28 @@ Wall-clock: ~1-2 hours whole-market 5y. Cost: ~$2-3.
 After new corp_actions land (Polygon weekly cron):
 
 ```bash
-# Find affected symbols
+# 1. Find symbols whose corp-actions changed in the last ${WINDOW} days.
+#    The v1 `find_corp_action_dirty_symbols` helper (in the deleted
+#    app.services.silver.ohlcv.build) was retired with the silver layer;
+#    v2 has no direct equivalent yet (tracked separately). For now the
+#    simplest approach is a quick Athena/PyIceberg query against
+#    equities.market_corp_actions:
 SYMBOLS_DIRTY=$(poetry run python -c "
-from app.services.silver.ohlcv.build import find_corp_action_dirty_symbols
-print(','.join(find_corp_action_dirty_symbols(since='2025-05-13')))
+from datetime import date, timedelta
+from app.services.iceberg_catalog import get_catalog
+from app.services.equities.schemas import equities_table_id
+cat = get_catalog()
+t = cat.load_table(equities_table_id('market_corp_actions'))
+recent = (
+    t.scan(row_filter=f\"ex_date >= '{(date.today() - timedelta(days=7)).isoformat()}'\")
+     .to_arrow()
+)
+print(','.join(sorted(set(recent.column('symbol').to_pylist()))))
 ")
 
-# Re-adjust just those
-aws emr-serverless start-job-run \
-  --application-id "$EMR_APP_ID" \
-  --execution-role-arn ... \
-  --job-driver '{
-    "sparkSubmit": {
-      "entryPoint": "s3://stockalert-code/spark/polygon_adjustment_job.py",
-      "entryPointArguments": ["--symbols", "'$SYMBOLS_DIRTY'", "--since", "2020-01-01"]
-    }
-  }'
+# 2. Re-adjust just those (uses the helper which handles --skip-ensure,
+#    --py-files, pre-create, etc).
+scripts/aws/run_spark_job.sh --symbols "$SYMBOLS_DIRTY" --since 2020-01-01 --wait
 ```
 
 Per-symbol incremental run: ~1 min each on EMR Serverless.
