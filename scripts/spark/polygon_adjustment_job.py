@@ -278,19 +278,39 @@ def adjust(
         F.col("adj_factor"),
     )
 
-    # Cache before the write: writeTo + the two post-write counts each
-    # trigger a separate evaluation of the upstream DAG. Without caching,
-    # whole-market runs evaluate the 2.1B-row pipeline 3 times.
-    adjusted = adjusted.cache()
-
     # Merge-on-read overwrite of touched partitions only. Whole-market
     # full rebuild rewrites every partition. Incremental --since runs
     # touch only the partitions covered by the filter — no full-table
     # rewrite.
+    #
+    # NOTE: do NOT .cache() adjusted before this write. For AAPL/5-month
+    # smoke that's fine (cache ~1 MB), but whole-market materializes ~100 GB
+    # and spills to local executor disk → "No space left on device" even
+    # with --executor-disk=200G. The post-write counts below use Iceberg
+    # snapshot metadata instead of re-evaluating the DataFrame, so the
+    # cache isn't needed.
     adjusted.writeTo(ADJUSTED_TABLE).overwritePartitions()
 
-    n_symbols = adjusted.select("symbol").distinct().count()
-    n_rows = adjusted.count()
+    # Read row count from the snapshot we just committed — metadata-only,
+    # zero data scan, sub-second. Iceberg's <table>.snapshots metadata
+    # table exposes summary.total-records per snapshot. Most recent
+    # snapshot (committed_at DESC LIMIT 1) is the one we just wrote.
+    snap_row = spark.sql(f"""
+        SELECT CAST(summary['total-records'] AS BIGINT) AS rows
+        FROM {ADJUSTED_TABLE}.snapshots
+        ORDER BY committed_at DESC
+        LIMIT 1
+    """).first()
+    n_rows = int(snap_row["rows"]) if snap_row and snap_row["rows"] is not None else 0
+
+    # n_symbols not in snapshot metadata; skipping to avoid the full-table
+    # distinct scan (~5-10 min on whole-market for marginal audit value).
+    # Operators who want exact symbol count can run:
+    #   poetry run python -c "from app.services.iceberg_catalog import get_catalog; \
+    #     from app.services.equities.schemas import equities_table_id; \
+    #     t = get_catalog().load_table(equities_table_id('polygon_adjusted')); \
+    #     print(t.scan().select('symbol').to_arrow().column('symbol').unique().to_pylist().__len__())"
+    n_symbols = 0
     return n_symbols, n_rows
 
 
