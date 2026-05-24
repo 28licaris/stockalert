@@ -119,7 +119,7 @@ JOB_DRIVER=$(cat <<JSON
   "sparkSubmit": {
     "entryPoint": "${SCRIPT_S3_URI}",
     "entryPointArguments": [${JSON_ARGS}],
-    "sparkSubmitParameters": "--conf spark.executor.cores=4 --conf spark.executor.disk=200G --conf spark.dynamicAllocation.enabled=true --py-files ${PYDEPS_S3_URI} --conf spark.emr-serverless.driverEnv.STOCK_LAKE_BUCKET_S3=${STOCK_LAKE_BUCKET_S3_VAL} --conf spark.executorEnv.STOCK_LAKE_BUCKET_S3=${STOCK_LAKE_BUCKET_S3_VAL}"
+    "sparkSubmitParameters": "--conf spark.executor.cores=4 --conf spark.emr-serverless.executor.disk=200G --conf spark.dynamicAllocation.enabled=true --py-files ${PYDEPS_S3_URI} --conf spark.emr-serverless.driverEnv.STOCK_LAKE_BUCKET_S3=${STOCK_LAKE_BUCKET_S3_VAL} --conf spark.executorEnv.STOCK_LAKE_BUCKET_S3=${STOCK_LAKE_BUCKET_S3_VAL}"
   }
 }
 JSON
