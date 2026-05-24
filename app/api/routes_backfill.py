@@ -16,7 +16,15 @@ router = APIRouter()
 
 class BackfillRequest(BaseModel):
     symbols: List[str] = Field(..., description="Symbols to backfill, e.g. ['SPY', 'AAPL']")
-    days: int = Field(30, ge=1, le=2000, description="Lookback window in days")
+    days: int = Field(
+        30, ge=1, le=7500,
+        description=(
+            "Lookback window in days. Max 7500 (~20.5y) — Schwab's "
+            "/pricehistory practical ceiling for daily bars on long-listed "
+            "symbols. For symbols listed less than 20y ago, Schwab will "
+            "just return data from listing date forward."
+        ),
+    )
     force: bool = Field(
         False,
         description=(
@@ -164,7 +172,7 @@ async def list_gaps(
 @router.get("/backfill/coverage")
 async def backfill_coverage(
     symbol: str = Query(..., description="Single symbol, e.g. SPY"),
-    days: int = Query(30, ge=1, le=2000),
+    days: int = Query(30, ge=1, le=7500),
 ):
     """Report DB coverage of `symbol` over the last `days` days (no fetch)."""
     sym = (symbol or "").strip().upper()
