@@ -198,7 +198,7 @@ def step1_recreate_target() -> None:
 # ─────────────────────────────────────────────────────────────────────
 # Step 2 — register raw flat-files as external Athena table
 # ─────────────────────────────────────────────────────────────────────
-def step2_register_external(athena: AthenaClient) -> None:
+def step2_register_external(athena: AthenaClient, *, year_range_min: int = 2021) -> None:
     # Drop if it exists so re-runs are idempotent.
     athena.run(f"DROP TABLE IF EXISTS {DB}.{EXTERNAL_TABLE}")
 
@@ -238,18 +238,21 @@ def step2_register_external(athena: AthenaClient) -> None:
         TBLPROPERTIES (
           'projection.enabled'='true',
           'projection.year.type'='integer',
-          'projection.year.range'='2021,2030',
+          'projection.year.range'='{year_range_min},2030',
           'storage.location.template'='{RAW_LOC}year=${{year}}/'
         )
     """
     athena.run(ddl)
-    log.info("Registered external table %s.%s", DB, EXTERNAL_TABLE)
+    log.info(
+        "Registered external table %s.%s (year range %d-2030)",
+        DB, EXTERNAL_TABLE, year_range_min,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────
 # Step 3 — INSERT INTO bronze SELECT … FROM external
 # ─────────────────────────────────────────────────────────────────────
-def step3_insert(athena: AthenaClient) -> None:
+def step3_insert(athena: AthenaClient, *, years: list[int] | None = None) -> None:
     # Project only the columns we want; cast types as needed.
     # `ingestion_ts` / `ingestion_run_id` set to NULL for imported rows
     # so the trailing nullable fields on the Iceberg schema are present
@@ -265,6 +268,12 @@ def step3_insert(athena: AthenaClient) -> None:
     # garbage from Polygon ingestion. Drop them at the boundary; the
     # v2 polygon_raw identifier is (symbol, timestamp) and both are NOT
     # NULL in CV1's schema.
+    year_filter = ""
+    if years:
+        year_list = ",".join(str(y) for y in sorted(years))
+        year_filter = f"AND year IN ({year_list})"
+        log.info("Filtering INSERT to years: %s", year_list)
+
     sql = f"""
         INSERT INTO {DB}.{TARGET_TABLE}
         SELECT
@@ -283,6 +292,7 @@ def step3_insert(athena: AthenaClient) -> None:
         FROM {DB}.{EXTERNAL_TABLE}
         WHERE symbol IS NOT NULL
           AND "timestamp" IS NOT NULL
+          {year_filter}
     """
     athena.run(sql)
 
@@ -361,14 +371,44 @@ def main():
              "already has rows. Use ONLY if you know the existing rows "
              "are about to be replaced by this import (recovery scenario).",
     )
+    p.add_argument(
+        "--incremental", action="store_true",
+        help="INSERT-only mode — does NOT drop polygon_raw. For adding "
+             "new years after a Polygon subscription upgrade (Polygon "
+             "back-populates S3 with new year=YYYY/ partitions). Requires "
+             "--years to specify which year partitions to import. Preserves "
+             "all existing rows; SAFE on a live table.",
+    )
+    p.add_argument(
+        "--years", default=None,
+        help="Comma-separated year list (incremental mode only), "
+             "e.g. '2003,2004,2005,2006'. Caller is responsible for "
+             "ensuring these years are present in S3 and absent from "
+             "polygon_raw — otherwise duplicates result.",
+    )
     args = p.parse_args()
 
     log.info("DB=%s  target=%s  bucket=%s", DB, TARGET_TABLE, BUCKET)
 
+    if args.incremental:
+        if not args.years:
+            log.error("--incremental requires --years YYYY,YYYY,...")
+            sys.exit(2)
+        years = [int(y.strip()) for y in args.years.split(",") if y.strip()]
+        if not years:
+            log.error("--years parsed to empty list")
+            sys.exit(2)
+        _run_incremental(years)
+    else:
+        _run_full(force=args.force)
+
+
+def _run_full(force: bool) -> None:
+    """Original DROP+RECREATE flow — first-time full import."""
     athena = AthenaClient()
 
     log.info("─── Step 0: preflight ───")
-    step0_preflight(athena, force=args.force)
+    step0_preflight(athena, force=force)
 
     log.info("─── Step 1: recreate empty equities.polygon_raw ───")
     step1_recreate_target()
@@ -389,6 +429,71 @@ def main():
     print("=== CV10' Athena import complete ===")
     for k, v in summary.items():
         print(f"  {k}: {v if not isinstance(v, int) or v < 10000 else f'{v:,}'}")
+
+
+def _run_incremental(years: list[int]) -> None:
+    """INSERT-only flow — extend polygon_raw with new years after a
+    Polygon subscription upgrade. DOES NOT drop the existing table.
+
+    Pre-flight expectations (caller's responsibility — see
+    scripts/aws/upgrade_polygon_depth.sh for the orchestrated path):
+      - polygon_raw exists and has the current data.
+      - The named years are present in S3 under
+        s3://${STOCK_LAKE_BUCKET}/raw/provider=polygon-flatfiles/kind=minute/year=YYYY/
+      - The named years are NOT yet in polygon_raw (else duplicates).
+    """
+    athena = AthenaClient()
+
+    log.info("─── Incremental import for years: %s ───", years)
+
+    # Pre-flight: confirm the target exists (we're EXTENDING, not creating).
+    log.info("─── Step 0: confirm polygon_raw exists ───")
+    try:
+        rs = athena.run(
+            f'SELECT count(*) AS n FROM {DB}.{TARGET_TABLE}',
+            expect_rows=True,
+        )
+        n = int(rs["ResultSet"]["Rows"][1]["Data"][0]["VarCharValue"])
+        log.info("polygon_raw current row count: %s (will INSERT new years on top)", f"{n:,}")
+    except Exception as e:
+        log.error(
+            "polygon_raw not found or unreadable: %s. "
+            "Run without --incremental for a first-time full import.", e,
+        )
+        sys.exit(2)
+
+    # Widen external table's year-range projection to include the new years.
+    year_range_min = min(years)
+    log.info("─── Step 2: register external table (year range %d-2030) ───", year_range_min)
+    step2_register_external(athena, year_range_min=year_range_min)
+
+    log.info("─── Step 3: INSERT INTO polygon_raw WHERE year IN (%s) ───",
+             ",".join(str(y) for y in years))
+    step3_insert(athena, years=years)
+
+    log.info("─── Step 3b: OPTIMIZE (BIN_PACK on the whole table) ───")
+    step3b_optimize(athena)
+
+    log.info("─── Step 4: verify ───")
+    summary = step4_verify(athena)
+    rs = athena.run(
+        f'SELECT count(*) AS n FROM {DB}.{TARGET_TABLE}',
+        expect_rows=True,
+    )
+    post_n = int(rs["ResultSet"]["Rows"][1]["Data"][0]["VarCharValue"])
+
+    print()
+    print(f"=== Incremental import complete: added years {years} ===")
+    print(f"  polygon_raw post-import rows: {post_n:,}")
+    for k, v in summary.items():
+        print(f"  {k}: {v if not isinstance(v, int) or v < 10000 else f'{v:,}'}")
+    print()
+    print("Next steps:")
+    print("  1. Re-run Spark adjustment over the expanded raw window:")
+    print("     scripts/aws/run_spark_job.sh --wait")
+    print("  2. Hot-load CH from the expanded lake:")
+    print("     poetry run python scripts/hotload_ch_from_lake.py")
+    print("  (or just run scripts/aws/upgrade_polygon_depth.sh to chain all three)")
 
 
 if __name__ == "__main__":
