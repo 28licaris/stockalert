@@ -23,6 +23,7 @@
       "Action": [
         "glue:GetDatabase",
         "glue:GetDatabases",
+        "glue:CreateDatabase",
         "glue:GetTable",
         "glue:GetTables",
         "glue:GetTableVersion",
