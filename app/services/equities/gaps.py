@@ -22,7 +22,7 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from pyiceberg.expressions import GreaterThanOrEqual
+from pyiceberg.expressions import And, GreaterThanOrEqual, LessThan
 from pyiceberg.table import Table
 
 logger = logging.getLogger(__name__)
@@ -123,11 +123,20 @@ def loaded_dates_in_range(
     materialized, which OOM-kills 15 GB workers. Result set is bounded
     by the window size (≤7300 trading days for 20y) so it stays tiny.
     """
+    # Lower bound: pad by 1 ET day to catch after-hours bars (UTC date = ET+1).
+    # Upper bound: pad by 1 ET day for symmetry. Both bounds let Iceberg
+    # partition-prune to the requested window — without an upper bound the
+    # filter degenerates to "scan everything from start onward", which on a
+    # multi-billion-row table OOM-kills the worker even with batched reads.
     since = datetime.combine(start - timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc)
+    until = datetime.combine(end + timedelta(days=2), datetime.min.time(), tzinfo=timezone.utc)
     out: set[date] = set()
     try:
         scan = table.scan(
-            row_filter=GreaterThanOrEqual("timestamp", since.isoformat()),
+            row_filter=And(
+                GreaterThanOrEqual("timestamp", since.isoformat()),
+                LessThan("timestamp", until.isoformat()),
+            ),
             selected_fields=("timestamp",),
         )
         reader = scan.to_arrow_batch_reader()
