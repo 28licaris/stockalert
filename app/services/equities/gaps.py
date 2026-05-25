@@ -117,29 +117,30 @@ def loaded_dates_in_range(
     the missing days. Returns an empty set on scan failure (treated as
     "skip nothing, let the sink handle re-writes") to avoid masking
     Iceberg errors with silent skips.
+
+    Streams record batches rather than buffering the entire timestamp
+    column — a 20y whole-market scan is ~2B rows × 8B = ~17 GB if
+    materialized, which OOM-kills 15 GB workers. Result set is bounded
+    by the window size (≤7300 trading days for 20y) so it stays tiny.
     """
-    # Pad both bounds by one ET day's worth of UTC to catch after-hours
-    # bars whose UTC date is end+1.
     since = datetime.combine(start - timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc)
+    out: set[date] = set()
     try:
-        arrow = table.scan(
+        scan = table.scan(
             row_filter=GreaterThanOrEqual("timestamp", since.isoformat()),
             selected_fields=("timestamp",),
-        ).to_arrow()
+        )
+        reader = scan.to_arrow_batch_reader()
+        for batch in reader:
+            for ts in batch.column("timestamp").to_pylist():
+                if ts is None:
+                    continue
+                et_date = ts.astimezone(_ET).date()
+                if start <= et_date <= end:
+                    out.add(et_date)
     except Exception as exc:
         logger.warning(
             "loaded_dates_in_range(%s): scan failed: %s", table.name(), exc,
         )
         return set()
-
-    if arrow.num_rows == 0:
-        return set()
-
-    out: set[date] = set()
-    for ts in arrow["timestamp"].to_pylist():
-        if ts is None:
-            continue
-        et_date = ts.astimezone(_ET).date()
-        if start <= et_date <= end:
-            out.add(et_date)
     return out
