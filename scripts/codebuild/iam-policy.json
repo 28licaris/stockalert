@@ -42,9 +42,23 @@
       "Resource": [
         "arn:aws:glue:us-east-1:562741918372:catalog",
         "arn:aws:glue:us-east-1:562741918372:database/stock_lake",
-        "arn:aws:glue:us-east-1:562741918372:table/stock_lake/*"
+        "arn:aws:glue:us-east-1:562741918372:table/stock_lake/*",
+        "arn:aws:glue:us-east-1:562741918372:database/equities",
+        "arn:aws:glue:us-east-1:562741918372:table/equities/*"
       ],
-      "_comment": "PyIceberg uses Glue as the catalog for table metadata. Full table-level R/W is needed because each commit calls glue:UpdateTable. PartitionAware actions cover Iceberg's hidden partition spec changes."
+      "_comment": "PyIceberg uses Glue as the catalog for table metadata. Full table-level R/W is needed because each commit calls glue:UpdateTable. PartitionAware actions cover Iceberg's hidden partition spec changes. equities/* added for polygon_history_backfill writes to equities.polygon_raw."
+    },
+    {
+      "Sid": "ReadPolygonFlatfilesSecret",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret"
+      ],
+      "Resource": [
+        "arn:aws:secretsmanager:us-east-1:562741918372:secret:polygon/flatfiles-*"
+      ],
+      "_comment": "buildspec_polygon_history.yml pulls POLYGON_S3_ACCESS_KEY_ID/SECRET_ACCESS_KEY from this secret via env: secrets-manager. ARN ends in -<6-char-suffix> AWS appends on creation; wildcard covers rotation."
     },
     {
       "Sid": "CloudWatchLogsForBuildOutput",

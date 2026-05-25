@@ -1,0 +1,108 @@
+# CodeBuild buildspec for `scripts/polygon_history_backfill.py`.
+#
+# Runs in-AWS (us-east-1) so the data path is:
+#   polygon S3 (files.massive.com, us-east-1) → CodeBuild memory →
+#   equities.polygon_raw Iceberg (our S3, us-east-1)
+# No laptop egress. Idempotent: skip-loaded-dates pre-scan in the
+# script means re-running the same --since/--until is a no-op once
+# the window is fully loaded.
+#
+# Use:
+#   aws codebuild start-build \
+#     --project-name sockalert-silver-full-backfill \
+#     --buildspec-override scripts/codebuild/buildspec_polygon_history.yml \
+#     --source-version v2-architecture \
+#     --compute-type-override BUILD_GENERAL1_LARGE \
+#     --timeout-in-minutes-override 480 \
+#     --environment-variables-override \
+#         "name=BACKFILL_SINCE,value=2006-01-01,type=PLAINTEXT" \
+#         "name=BACKFILL_UNTIL,value=,type=PLAINTEXT" \
+#         "name=BACKFILL_CONCURRENCY,value=4,type=PLAINTEXT" \
+#     --region us-east-1
+#
+# Defaults below: 2006-01-01 .. yesterday-ET at concurrency=4.
+# Wall: ~3-7 hours for 20 years × 252 trading days × whole-market.
+
+version: 0.2
+
+env:
+  variables:
+    AWS_REGION: us-east-1
+    STOCK_LAKE_BUCKET: stock-lake-562741918372-us-east-1-an
+    STOCK_LAKE_REGION: us-east-1
+    ICEBERG_GLUE_DATABASE: stock_lake
+    ICEBERG_EQUITIES_GLUE_DATABASE: equities
+    ICEBERG_WAREHOUSE_PREFIX: iceberg
+    ICEBERG_CATALOG_NAME: stock_lake
+    POLYGON_FLATFILES_ENABLED: "true"
+    POLYGON_S3_ENDPOINT: "https://files.massive.com"
+    POLYGON_S3_BUCKET: "flatfiles"
+    LAKE_HISTORY_START: "2006-01-04"
+    # Overridable per build via --environment-variables-override.
+    BACKFILL_SINCE: "2006-01-01"
+    BACKFILL_UNTIL: ""
+    BACKFILL_CONCURRENCY: "4"
+  secrets-manager:
+    POLYGON_S3_ACCESS_KEY_ID: "polygon/flatfiles:access_key_id"
+    POLYGON_S3_SECRET_ACCESS_KEY: "polygon/flatfiles:secret_access_key"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - echo "=== install ==="
+      - python --version
+      - pip install --upgrade pip
+      - pip install poetry==1.8.3
+      - poetry config virtualenvs.create false
+      - poetry install --without dev --no-interaction --no-ansi
+
+  pre_build:
+    commands:
+      - echo "=== pre_build ==="
+      - 'echo "Region                $AWS_REGION"'
+      - 'echo "Bucket                $STOCK_LAKE_BUCKET"'
+      - 'echo "Equities Glue DB      $ICEBERG_EQUITIES_GLUE_DATABASE"'
+      - 'echo "Since                 $BACKFILL_SINCE"'
+      - 'echo "Until                 ${BACKFILL_UNTIL:-(yesterday-ET)}"'
+      - 'echo "Concurrency           $BACKFILL_CONCURRENCY"'
+      - 'echo "Polygon endpoint      $POLYGON_S3_ENDPOINT"'
+      - 'echo "Polygon bucket        $POLYGON_S3_BUCKET"'
+      - 'echo "Build ID              $CODEBUILD_BUILD_ID"'
+      # Reach-out sanity: confirm we can hit S3 + Glue + Polygon's bucket.
+      - aws s3 ls "s3://$STOCK_LAKE_BUCKET/iceberg/" | head -3
+      - aws glue get-database --name "$ICEBERG_EQUITIES_GLUE_DATABASE" --query 'Database.Name'
+      - |
+        python -c "
+        import boto3
+        c = boto3.client('s3', endpoint_url='$POLYGON_S3_ENDPOINT',
+                         aws_access_key_id='$POLYGON_S3_ACCESS_KEY_ID',
+                         aws_secret_access_key='$POLYGON_S3_SECRET_ACCESS_KEY',
+                         region_name='us-east-1')
+        r = c.list_objects_v2(Bucket='$POLYGON_S3_BUCKET',
+                              Prefix='us_stocks_sip/minute_aggs_v1/2006/01/',
+                              MaxKeys=3)
+        for o in r.get('Contents', []):
+            print('polygon S3:', o['Key'], o['Size'])
+        "
+
+  build:
+    commands:
+      - echo "=== build ==="
+      - chmod +x scripts/codebuild/run_polygon_history.sh
+      - bash scripts/codebuild/run_polygon_history.sh
+
+  post_build:
+    commands:
+      - echo "=== post_build ==="
+      - 'echo "Exit code             $CODEBUILD_BUILD_SUCCEEDING"'
+      - |
+        poetry run python -c "
+        from app.services.iceberg_catalog import get_catalog
+        from app.services.equities.schemas import equities_table_id
+        t = get_catalog().load_table(equities_table_id('polygon_raw'))
+        snap = t.current_snapshot()
+        rows = int(snap.summary.additional_properties.get('total-records', 0)) if snap else 0
+        print(f'equities.polygon_raw current rows: {rows:,}')
+        " || true
