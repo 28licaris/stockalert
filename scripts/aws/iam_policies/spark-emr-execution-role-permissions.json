@@ -68,16 +68,23 @@
       "Resource": "arn:aws:s3:::stock-lake-562741918372-us-east-1-an/iceberg/equities/*"
     },
     {
-      "Sid": "CloudWatchLogsEMR",
+      "Sid": "CloudWatchLogsEMRScoped",
       "Effect": "Allow",
       "Action": [
         "logs:CreateLogGroup",
         "logs:CreateLogStream",
         "logs:PutLogEvents",
-        "logs:DescribeLogGroups",
         "logs:DescribeLogStreams"
       ],
       "Resource": "arn:aws:logs:us-east-1:562741918372:log-group:/aws/emr-serverless/*"
+    },
+    {
+      "Sid": "CloudWatchLogsDescribeGroups",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogGroups"
+      ],
+      "Resource": "*"
     }
   ]
 }
