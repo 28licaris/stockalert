@@ -76,7 +76,12 @@
         "logs:PutLogEvents",
         "logs:DescribeLogStreams"
       ],
-      "Resource": "arn:aws:logs:us-east-1:562741918372:log-group:/aws/emr-serverless/*"
+      "Resource": [
+        "arn:aws:logs:us-east-1:562741918372:log-group:/aws/emr-serverless",
+        "arn:aws:logs:us-east-1:562741918372:log-group:/aws/emr-serverless:*",
+        "arn:aws:logs:us-east-1:562741918372:log-group:/aws/emr-serverless/*",
+        "arn:aws:logs:us-east-1:562741918372:log-group:/aws/emr-serverless/*:*"
+      ]
     },
     {
       "Sid": "CloudWatchLogsDescribeGroups",
