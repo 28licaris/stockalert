@@ -14,6 +14,7 @@ The endpoint is a thin adapter over `QuoteService`:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -135,12 +136,14 @@ async def market_banner(
         return _empty_response(provider_name, errors=[{"message": str(exc)}])
 
     if not raw and want:
-        return _empty_response(
-            provider_name,
-            errors=[
-                {"message": "empty quotes response (token expired, network, or unsupported batch)"},
-            ],
-        )
+        logger.warning("market_banner: empty quotes response, falling back to ClickHouse last bars")
+        ch_items = await _ch_banner_fallback(want)
+        return {
+            "as_of": datetime.now(timezone.utc).isoformat(),
+            "provider": "clickhouse-fallback",
+            "items": ch_items,
+            "errors": [{"message": "live quotes unavailable, showing last known prices"}],
+        }
 
     errors: list[dict[str, Any]] = [
         {"symbol": sym, "message": "invalid or unsupported symbol"}
@@ -177,6 +180,46 @@ async def market_banner(
 def _provider_supports_get_quotes(svc: QuoteService) -> bool:
     """True iff the wrapped provider has a callable `get_quotes`."""
     return callable(getattr(svc._provider, "get_quotes", None))  # noqa: SLF001
+
+
+async def _ch_banner_fallback(symbols: list[str]) -> list[dict[str, Any]]:
+    """Return last-bar prices from ClickHouse when live quotes are unavailable.
+
+    Produces BannerItem-compatible dicts with `last` set and
+    `net_change`/`change_pct` as None — shows prices without change direction.
+    """
+    from app.db.client import get_client
+    if not symbols:
+        return []
+    safe = [s.replace("'", "") for s in symbols if s.replace("'", "")]
+    if not safe:
+        return []
+    in_clause = "','".join(safe)
+    try:
+        client = get_client()
+        result = await asyncio.to_thread(
+            client.query,
+            f"SELECT symbol, argMax(close, timestamp) AS last, argMax(timestamp, timestamp) AS ts"
+            f" FROM stocks.ohlcv_1m WHERE symbol IN ('{in_clause}')"
+            f" GROUP BY symbol ORDER BY symbol",
+        )
+        items = []
+        for row in result.result_rows:
+            sym, last, _ = row[0], row[1], row[2]
+            items.append({
+                "symbol": sym,
+                "label": sym,
+                "description": "",
+                "asset_type": "EQUITY",
+                "last": float(last) if last is not None else None,
+                "net_change": None,
+                "change_pct": None,
+                "close": None,
+            })
+        return [it for it in items if it["last"] is not None]
+    except Exception as exc:
+        logger.warning("ch banner fallback failed: %s", exc)
+        return []
 
 
 def _empty_response(provider_name: Optional[str], *, errors: list[dict[str, Any]]) -> dict:

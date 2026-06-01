@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
 import { SymbolSearchInput } from "@/components/symbol/SymbolSearchInput";
 import {
-  useSymbolBars,
+  useLakeBars,
   useSymbolSignals,
 } from "@/api/queries";
 import { useUserSetting } from "@/lib/storage";
@@ -38,7 +38,7 @@ export function SymbolPage() {
     DEFAULT_INTERVAL,
   );
 
-  const bars = useSymbolBars(ticker || undefined, interval, 500);
+  const bars = useLakeBars(ticker || undefined, interval);
   const signals = useSymbolSignals(ticker || undefined, 100);
 
   if (!ticker) {

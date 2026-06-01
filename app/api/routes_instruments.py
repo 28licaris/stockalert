@@ -15,7 +15,9 @@ overhead) — duplicate prefixes within `CACHE_TTL_S` reuse the previous result.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 import time
 from typing import Optional
 
@@ -31,6 +33,36 @@ from app.services.stream import stream_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_SAFE_SYMBOL_RE = re.compile(r"[^A-Z0-9$/.]")
+
+
+async def _ch_symbol_fallback(query: str, limit: int) -> list[dict]:
+    """Search known symbols in ClickHouse when the provider is unavailable.
+
+    Matches symbol prefix (case-insensitive) against the live ohlcv_1m table.
+    Returns symbols with empty description — autocomplete still works, just
+    without company name enrichment.
+    """
+    from app.db.client import get_client
+    safe = _SAFE_SYMBOL_RE.sub("", query.upper())
+    if not safe:
+        return []
+    try:
+        client = get_client()
+        result = await asyncio.to_thread(
+            client.query,
+            "SELECT DISTINCT symbol FROM stocks.ohlcv_1m"
+            f" WHERE symbol LIKE '{safe}%'"
+            f" ORDER BY symbol LIMIT {limit}",
+        )
+        return [
+            {"symbol": row[0], "description": "", "exchange": "", "asset_type": "EQUITY"}
+            for row in result.result_rows
+        ]
+    except Exception as exc:
+        logger.warning("ch symbol fallback failed: %s", exc)
+        return []
 
 # Small TTL so live ticker descriptions stay reasonably fresh while still
 # absorbing the keystroke burst of an autocomplete field. Keyed by
@@ -98,16 +130,18 @@ async def search_instruments(
     # ready (e.g. token expired) — caller treats this as "no suggestions".
     provider = stream_service.get_provider()
     if provider is None:
-        logger.debug("search_instruments: provider not ready, returning empty list")
-        return InstrumentSearchResponse(query=query, results=[], cached=False)
+        logger.debug("search_instruments: provider not ready, using CH fallback")
+        results = await _ch_symbol_fallback(query, limit)
+        return InstrumentSearchResponse(query=query, results=results, cached=False)
 
     try:
         results = await provider.search_instruments(query, limit=limit)
     except Exception as e:
-        # Don't propagate provider failures to the UI — autocomplete failure
-        # should never block the user from typing a ticker manually.
         logger.warning("search_instruments(%r) provider error: %s", query, e)
         results = []
+
+    if not results:
+        results = await _ch_symbol_fallback(query, limit)
 
     _cache_put(key, results)
     return InstrumentSearchResponse(

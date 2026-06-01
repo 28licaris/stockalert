@@ -170,11 +170,12 @@ class Settings(BaseModel):
     clickhouse_database: str = os.getenv("CLICKHOUSE_DATABASE", "stocks")
     # Optional tag stored on OHLCV rows (e.g. matches DATA_PROVIDER)
     data_source_tag: str = os.getenv("DATA_SOURCE_TAG", "")
-    # Comma-separated symbols for the dashboard tape (indexes, ETFs, explicit
-    # futures roots like /ESM26). Override via MARKET_BANNER_SYMBOLS in .env.
+    # Comma-separated symbols for the dashboard tape. Uses liquid ETFs that
+    # Schwab quotes reliably (no index/futures syntax). Override via
+    # MARKET_BANNER_SYMBOLS in .env.
     market_banner_symbols: str = os.getenv(
         "MARKET_BANNER_SYMBOLS",
-        "$SPX,$NDX,$DJI,$RUT,$VIX,/ESM26,/MNQM26,/CLM26,/GCM26",
+        "SPY,QQQ,IWM,DIA,GLD,TLT,VIXY,SLV",
     )
     
     # ─────────────────────────────────────────────────────────

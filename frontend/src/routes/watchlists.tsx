@@ -6,6 +6,7 @@ import {
   useCreateWatchlist,
   useDeleteWatchlist,
   useInstrumentLookup,
+  useMarketBanner,
   useRemoveWatchlistMembers,
   useWatchlists,
   type Watchlist,
@@ -13,7 +14,7 @@ import {
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
 import { Button } from "@/components/ui/button";
 import { SymbolSearchInput } from "@/components/symbol/SymbolSearchInput";
-import { fmtAgo, fmtInt } from "@/lib/fmt";
+import { fmtAgo, fmtInt, fmtPrice } from "@/lib/fmt";
 import { cn } from "@/lib/utils";
 
 /**
@@ -416,6 +417,16 @@ function MembersList({
     return m;
   }, [lookup.data]);
 
+  const symbolsCsv = useMemo(() => memberArray.join(","), [memberArray]);
+  const quotes = useMarketBanner(symbolsCsv || undefined);
+  const priceMap = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const item of quotes.data?.items ?? []) {
+      if (item.last != null) m.set(item.symbol.toUpperCase(), item.last);
+    }
+    return m;
+  }, [quotes.data]);
+
   if (members.length === 0) {
     return (
       <div className="px-4 py-6 text-center text-sm text-fg-subtle">
@@ -432,7 +443,7 @@ function MembersList({
             key={symbol}
             className="flex items-center justify-between gap-3 px-4 py-2 hover:bg-bg-muted/40"
           >
-            <div className="flex min-w-0 items-baseline gap-3">
+            <div className="flex min-w-0 flex-1 items-baseline gap-3">
               <Link
                 to={`/symbol/${encodeURIComponent(symbol)}`}
                 className="font-mono text-sm font-medium text-fg-base hover:text-accent"
@@ -443,6 +454,13 @@ function MembersList({
                 {desc ?? (lookup.isLoading ? "…" : "")}
               </span>
             </div>
+            <span className="font-mono text-sm text-fg-base tabular-nums">
+              {priceMap.has(symbol.toUpperCase())
+                ? fmtPrice(priceMap.get(symbol.toUpperCase()))
+                : quotes.isLoading
+                  ? "…"
+                  : "—"}
+            </span>
             <Button
               type="button"
               variant="ghost"

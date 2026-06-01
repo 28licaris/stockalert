@@ -124,6 +124,8 @@ export const queryKeys = {
     ["market", "banner", symbols ?? "default"] as const,
   symbolBars: (symbol: string, interval: string, limit: number) =>
     ["symbol", "bars", symbol, interval, limit] as const,
+  lakeBars: (symbol: string, interval: string, windowDays: number) =>
+    ["lake", "bars", symbol, interval, windowDays] as const,
   symbolSignals: (symbol: string, limit: number) =>
     ["symbol", "signals", symbol, limit] as const,
   watchlists: ["watchlists"] as const,
@@ -265,6 +267,66 @@ export function useSymbolBars(
     },
     enabled: Boolean(symbol),
     staleTime: 15_000,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// useLakeBars — CH-first chart hook with on-demand lake fill.
+//
+// Calls `/api/v1/bars?symbol=…&interval=…&lookback_days=N` which:
+//   1. Reads from ClickHouse (sub-100ms on warm symbols)
+//   2. If CH coverage is insufficient, the route reads the same
+//      bounded window from `equities.polygon_adjusted` and inserts it
+//      into CH, then re-queries — so the next chart load for that
+//      symbol is also hot. Lake stays the cold backup; CH is the
+//      canonical chart source.
+//
+// Aggregation (5m, 15m, …) is done server-side by ClickHouse via
+// `toStartOfInterval` — no client-side resampling.
+// ─────────────────────────────────────────────────────────────────────
+
+/** How many days of history to request per display interval. */
+const LAKE_WINDOW_DAYS: Record<string, number> = {
+  "1m":  7,
+  "5m":  30,
+  "15m": 60,
+  "30m": 90,
+  "1h":  180,
+  "1d":  365,
+};
+
+/**
+ * Fetch chart bars via `/api/v1/bars` (ClickHouse). When CH doesn't
+ * cover the requested window, the backend transparently fills from
+ * `equities.polygon_adjusted` and re-queries — the caller never sees
+ * the lake directly; data always arrives as a server-aggregated
+ * `Bar[]`.
+ *
+ * The name `useLakeBars` is preserved for backward compatibility (the
+ * symbol page + watchlists import it). The implementation now routes
+ * through CH so the chart hits the hot path on every subsequent load.
+ */
+export function useLakeBars(symbol: string | undefined, interval: string) {
+  const windowDays = LAKE_WINDOW_DAYS[interval] ?? 30;
+
+  return useQuery({
+    queryKey: queryKeys.lakeBars(symbol ?? "", interval, windowDays),
+    queryFn: async (): Promise<Bar[]> => {
+      if (!symbol) throw new Error("symbol required");
+      const { data } = await apiClient.GET("/api/v1/bars", {
+        params: {
+          query: {
+            symbol,
+            interval,
+            lookback_days: windowDays,
+          },
+        },
+      });
+      return data ?? [];
+    },
+    enabled: Boolean(symbol),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 }
 

@@ -116,10 +116,16 @@ async def list_bars(
     reader: BarReader = Depends(get_bar_reader),
 ) -> list[Bar]:
     """
-    Return OHLCV bars for `symbol` at `interval`. All source-table
-    selection, fallback, and auto-limit logic lives in
-    `BarReader.get_bars_for_chart`; this route validates input, calls
-    the reader, and reshapes the response for the dashboard.
+    Return OHLCV bars for `symbol` at `interval`. Source-table selection,
+    fallback, and auto-limit logic live in `BarReader.get_bars_for_chart`.
+
+    **CH-first with on-demand lake fill.** Queries ClickHouse first; if
+    the returned bar count is well below what the window should contain
+    (heuristic: <50% of expected), reads the same window from
+    `equities.polygon_adjusted` and inserts into CH, then re-queries.
+    This makes the chart work for any symbol — universe or ad-hoc —
+    while keeping CH as the canonical hot-path source for subsequent
+    requests.
     """
     if interval not in queries.SUPPORTED_INTERVALS:
         raise HTTPException(
@@ -135,6 +141,32 @@ async def list_bars(
         lookback_days=lookback_days,
         limit=limit,
     )
+
+    # If CH has nothing for this symbol in the requested window, fill
+    # from polygon_adjusted (bounded to the window so the PyIceberg
+    # scan stays fast — seconds, not minutes) and re-query. Triggered
+    # only on empty result: partial coverage is accepted as-is to avoid
+    # re-filling on every chart load when CH legitimately has gaps
+    # (weekends, low-volume hours, etc.). Skipped when lookback_days
+    # isn't set — without a window we'd have to fill 20yr.
+    if lookback_days is not None and lookback_days <= 365 and not bars:
+        try:
+            from datetime import datetime, timedelta, timezone
+            from app.services.equities.lake_to_ch_fill import fill_ch_from_lake
+            end = datetime.now(timezone.utc)
+            start = end - timedelta(days=lookback_days)
+            inserted = await fill_ch_from_lake(symbol.upper(), start, end)
+            if inserted > 0:
+                bars = await asyncio.to_thread(
+                    reader.get_bars_for_chart,
+                    symbol,
+                    interval=interval,
+                    lookback_days=lookback_days,
+                    limit=limit,
+                )
+        except Exception as e:  # noqa: BLE001 — boundary
+            logger.warning("lake_fill for %s failed: %s", symbol, e)
+
     return [
         Bar(
             ts=_ts(b.timestamp) or "",
