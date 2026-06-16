@@ -150,9 +150,21 @@ def load_one_symbol(
             )
             result.inserted = len(merged)
         elif merged:
-            # Per-thread CH client.
+            # Chunk by year — stocks.ohlcv_1m partitions by toYYYYMM(timestamp),
+            # so 20yr of data = 240 partitions per INSERT block. CH's default
+            # max_partitions_per_insert_block=100 caps each insert at ~8yr. We
+            # split per calendar year (12 partitions each) for safe headroom.
+            # The timestamp column is index 1 in CH_COLUMNS.
             ch = get_client()
-            ch.insert("stocks.ohlcv_1m", merged, column_names=CH_COLUMNS)
+            chunks: dict[int, list[list]] = {}
+            for r in merged:
+                ts = r[1]
+                # Polygon timestamps come back as pandas.Timestamp / datetime
+                # via PyArrow; both expose .year.
+                year = ts.year if hasattr(ts, "year") else int(str(ts)[:4])
+                chunks.setdefault(year, []).append(r)
+            for year in sorted(chunks):
+                ch.insert("stocks.ohlcv_1m", chunks[year], column_names=CH_COLUMNS)
             result.inserted = len(merged)
     except Exception as e:
         result.error = f"{type(e).__name__}: {e}"
