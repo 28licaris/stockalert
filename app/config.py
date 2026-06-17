@@ -2,15 +2,51 @@ import os
 from pathlib import Path
 
 from pydantic import BaseModel
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]  # stockalert/stockalert
+_ENV_FILE: Path | None = None
 for _candidate in (_REPO_ROOT / ".env", _REPO_ROOT / "scripts" / ".env", _REPO_ROOT.parent / ".env"):
     if _candidate.is_file():
         load_dotenv(_candidate, override=False)
+        _ENV_FILE = _candidate
         break
 else:
     load_dotenv(override=False)
+
+
+def _normalize_aws_env() -> None:
+    """Make AWS credential resolution robust against a polluted ambient env.
+
+    boto3/PyIceberg read AWS creds from ``os.environ`` at client-build time.
+    Two failure modes bite the lake-backed readers:
+
+      1. A blank ``AWS_PROFILE`` exported by the launching shell. Because
+         ``load_dotenv(override=False)`` will not replace an already-present
+         (even if empty) value, the profile our .env intends never lands, and
+         boto3 falls through to the EC2 metadata service — which hangs ~45-90s
+         per call on a non-EC2 host. This silently breaks every lake endpoint
+         and the CH→S3 chart fallback.
+
+      2. Empty explicit-key vars (``AWS_ACCESS_KEY_ID=``) left in .env, which
+         can trip botocore's partial-credential detection.
+
+    Fix: drop blank explicit-key vars, and force the profile our .env declares
+    whenever the ambient ``AWS_PROFILE`` is blank. Idempotent; safe to call at
+    import time before any boto3 client is constructed.
+    """
+    for _k in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"):
+        if os.environ.get(_k, "").strip() == "":
+            os.environ.pop(_k, None)
+
+    if not os.environ.get("AWS_PROFILE", "").strip():
+        _file_vals = dotenv_values(_ENV_FILE) if _ENV_FILE else {}
+        _want = (_file_vals.get("AWS_PROFILE") or "").strip()
+        if _want:
+            os.environ["AWS_PROFILE"] = _want
+
+
+_normalize_aws_env()
 
 
 class Settings(BaseModel):
