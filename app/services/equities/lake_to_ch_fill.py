@@ -65,6 +65,41 @@ def _get_lock(symbol: str) -> asyncio.Lock:
         return lock
 
 
+# Sync per-symbol locks — for callers outside an event loop (the MCP
+# tools run in FastMCP's thread pool; the bars gateway is sync). Distinct
+# from the asyncio locks above: a threading.Lock can't be awaited and an
+# asyncio.Lock can't be held across a plain `with` in a worker thread.
+_sync_per_symbol_locks: dict[str, Lock] = {}
+
+
+def _get_sync_lock(symbol: str) -> Lock:
+    with _locks_mu:
+        lock = _sync_per_symbol_locks.get(symbol)
+        if lock is None:
+            lock = Lock()
+            _sync_per_symbol_locks[symbol] = lock
+        return lock
+
+
+def fill_ch_from_lake_sync(
+    symbol: str,
+    start: datetime,
+    end: datetime,
+    *,
+    source_tag: str = "lake-fill",
+) -> int:
+    """Synchronous twin of :func:`fill_ch_from_lake`.
+
+    Same bounded-window scan + CH insert, but callable from sync code
+    (the bars gateway, MCP tools running in a worker thread). Dedupes
+    concurrent same-symbol fills via a threading.Lock. Returns rows
+    inserted (0 on empty window / missing symbol, never raises).
+    """
+    sym = symbol.upper()
+    with _get_sync_lock(sym):
+        return _fill_sync(sym, start, end, source_tag)
+
+
 async def fill_ch_from_lake(
     symbol: str,
     start: datetime,

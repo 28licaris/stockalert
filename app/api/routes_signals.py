@@ -21,6 +21,7 @@ from app.api.schemas.bars import Bar
 from app.api.schemas.signals import Signal
 from app.db import queries  # only for SUPPORTED_INTERVALS (validation)
 from app.services.readers.bar_reader import BarReader
+from app.services.readers.bars_gateway import BarSource, get_chart_bars
 from app.services.readers.signal_reader import SignalReader
 
 logger = logging.getLogger(__name__)
@@ -113,19 +114,26 @@ async def list_bars(
         le=20000,
         description="Restrict to bars in the last N days (server-side window).",
     ),
+    source: BarSource = Query(
+        BarSource.AUTO,
+        description=(
+            "Data tier. 'auto' (default): ClickHouse first, fill the "
+            "window from the S3 lake on a miss, re-query CH. "
+            "'clickhouse': hot cache only (fast, may be partial). "
+            "'lake': S3 ground truth only (complete history; no CH write)."
+        ),
+    ),
     reader: BarReader = Depends(get_bar_reader),
 ) -> list[Bar]:
     """
-    Return OHLCV bars for `symbol` at `interval`. Source-table selection,
-    fallback, and auto-limit logic live in `BarReader.get_bars_for_chart`.
+    Return OHLCV bars for `symbol` at `interval`, routed across the
+    ClickHouse hot cache and the S3 lake by `source` (see param). The
+    CH-vs-S3 routing lives in `bars_gateway.get_chart_bars` so this
+    route and the MCP `get_bars_for_chart` tool behave identically.
 
-    **CH-first with on-demand lake fill.** Queries ClickHouse first; if
-    the returned bar count is well below what the window should contain
-    (heuristic: <50% of expected), reads the same window from
-    `equities.polygon_adjusted` and inserts into CH, then re-queries.
-    This makes the chart work for any symbol — universe or ad-hoc —
-    while keeping CH as the canonical hot-path source for subsequent
-    requests.
+    Default `auto` is CH-first with on-demand lake fill: ad-hoc and
+    universe symbols both chart correctly, and CH warms for subsequent
+    requests. `lake` reads ground truth without writing CH.
     """
     if interval not in queries.SUPPORTED_INTERVALS:
         raise HTTPException(
@@ -135,37 +143,14 @@ async def list_bars(
         )
 
     bars = await asyncio.to_thread(
-        reader.get_bars_for_chart,
+        get_chart_bars,
         symbol,
         interval=interval,
         lookback_days=lookback_days,
         limit=limit,
+        source=source,
+        reader=reader,
     )
-
-    # If CH has nothing for this symbol in the requested window, fill
-    # from polygon_adjusted (bounded to the window so the PyIceberg
-    # scan stays fast — seconds, not minutes) and re-query. Triggered
-    # only on empty result: partial coverage is accepted as-is to avoid
-    # re-filling on every chart load when CH legitimately has gaps
-    # (weekends, low-volume hours, etc.). Skipped when lookback_days
-    # isn't set — without a window we'd have to fill 20yr.
-    if lookback_days is not None and lookback_days <= 365 and not bars:
-        try:
-            from datetime import datetime, timedelta, timezone
-            from app.services.equities.lake_to_ch_fill import fill_ch_from_lake
-            end = datetime.now(timezone.utc)
-            start = end - timedelta(days=lookback_days)
-            inserted = await fill_ch_from_lake(symbol.upper(), start, end)
-            if inserted > 0:
-                bars = await asyncio.to_thread(
-                    reader.get_bars_for_chart,
-                    symbol,
-                    interval=interval,
-                    lookback_days=lookback_days,
-                    limit=limit,
-                )
-        except Exception as e:  # noqa: BLE001 — boundary
-            logger.warning("lake_fill for %s failed: %s", symbol, e)
 
     return [
         Bar(

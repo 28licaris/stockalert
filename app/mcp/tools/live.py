@@ -17,6 +17,7 @@ from typing import Optional
 from app.mcp.middleware import tool_call
 from app.mcp.server import mcp
 from app.services.readers.bar_reader import BarReader
+from app.services.readers.bars_gateway import BarSource, get_chart_bars
 from app.services.readers.schemas import (
     LatestBarsResponse,
     LiveBar,
@@ -111,44 +112,57 @@ def get_bars_for_chart(
     interval: str = "1m",
     lookback_days: Optional[int] = None,
     limit: Optional[int] = None,
+    source: str = "auto",
 ) -> LiveBarsResponse:
-    """Chart-style bar query with multi-table fallback + auto-limits.
+    """Chart-style bar query routed across ClickHouse and the S3 lake.
 
     USE WHEN: an agent wants "last N days of <interval> for <symbol>"
-    without specifying exact timestamps. Owns the same routing logic
-    that powers the dashboard's chart endpoint:
+    without specifying exact timestamps. Routes via the shared bars
+    gateway, so this behaves identically to the dashboard's
+    `/api/v1/bars` endpoint.
 
-      - 1d -> native `ohlcv_daily`; fall back to resampled if daily
-        is empty (pre-first-daily-backfill).
-      - 1m -> always from `ohlcv_1m` (highest fidelity).
-      - 5m..4h with lookback > 48d -> from `ohlcv_5m` (longer history);
-        fall back to `ohlcv_1m` if 5m table is empty.
-      - 5m..4h with lookback <= 48d (or omitted) -> from `ohlcv_1m`
-        (highest fidelity for recent windows).
+    `source` selects the data tier (S3 lake is ground truth — every
+    symbol, full history; ClickHouse is a fast but partial hot cache):
+      - 'auto' (default): ClickHouse first; on an empty bounded window,
+        fill it from the lake (`equities.polygon_adjusted`) into CH and
+        re-query. Self-healing — works for ad-hoc symbols not in the
+        streaming universe, and the next call is hot.
+      - 'clickhouse': hot cache only. Fast, may be partial. No S3 read.
+      - 'lake': S3 ground truth only — complete split-adjusted history,
+        resampled to `interval`. Does NOT write CH; use for deep history
+        or analysis without warming the local cache.
 
-    Auto-limit (when `limit` omitted):
-      - No lookback -> 500 rows.
-      - With lookback -> ~bars/day * lookback * 1.5, capped at 100k.
+    Auto-limit (when `limit` omitted): no lookback -> 500 rows; with
+    lookback -> ~bars/day * lookback * 1.5, capped at 100k.
 
     Args:
         symbol: Ticker.
         interval: '1m', '5m', '15m', '30m', '1h', '4h', '1d'.
         lookback_days: Restrict to bars in the last N days. If omitted,
-            returns `limit` most-recent bars across all history.
+            returns `limit` most-recent bars (CH paths) / last 30d (lake).
         limit: Row cap. Default 500 or auto-sized (see above).
+        source: 'auto' | 'clickhouse' | 'lake'. Default 'auto'.
 
     Returns:
         LiveBarsResponse sorted oldest-first.
 
-    Errors: ValueError on unknown interval.
+    Errors: ValueError on unknown interval or unknown source.
     """
+    try:
+        src = BarSource(source)
+    except ValueError:
+        raise ValueError(
+            f"Unknown source {source!r}. "
+            f"Allowed: {[s.value for s in BarSource]}."
+        )
     with tool_call(
         "get_bars_for_chart", symbol=symbol, interval=interval,
-        lookback_days=lookback_days,
+        lookback_days=lookback_days, source=src.value,
     ):
-        bars = _reader().get_bars_for_chart(
+        bars = get_chart_bars(
             symbol, interval=interval,
             lookback_days=lookback_days, limit=limit,
+            source=src, reader=_reader(),
         )
         return LiveBarsResponse(
             symbol=symbol, interval=interval, bars=bars, count=len(bars),
