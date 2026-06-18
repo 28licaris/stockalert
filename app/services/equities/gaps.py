@@ -32,21 +32,27 @@ _ET = ZoneInfo("America/New_York")
 
 def latest_loaded_date(table: Table, *, lookback_days: int = 14) -> date | None:
     """Most recent **trading day (ET date)** with ≥1 row in `table`, or
-    None if no rows exist in the last `lookback_days` days.
+    None if the table is genuinely EMPTY in the last `lookback_days` days.
 
     Cheap: scans only the timestamp column for the lookback window via
     Iceberg's partition pruning. For our 5y × 32-bucket × month layout,
     that's ~1-2 monthly manifest reads — typically under a second.
+
+    NO SILENT FAILURES: a scan error (e.g. S3 ACCESS_DENIED, transient
+    lake outage) is RAISED, not swallowed into a None. The two outcomes
+    are semantically different — "no data yet" (None) vs "I couldn't
+    read the data" (error) — and conflating them previously let an
+    ACCESS_DENIED masquerade as cold-start, triggering a blind 14-day
+    re-fetch on every nightly run. Callers decide how to degrade (the
+    nightly skips that run; the freshness reader returns None).
     """
     since = datetime.now(tz=timezone.utc) - timedelta(days=lookback_days)
-    try:
-        arrow = table.scan(
-            row_filter=GreaterThanOrEqual("timestamp", since.isoformat()),
-            selected_fields=("timestamp",),
-        ).to_arrow()
-    except Exception as exc:
-        logger.warning("latest_loaded_date(%s): scan failed: %s", table.name(), exc)
-        return None
+    # Let scan errors propagate — the caller must distinguish them from
+    # a genuinely-empty result.
+    arrow = table.scan(
+        row_filter=GreaterThanOrEqual("timestamp", since.isoformat()),
+        selected_fields=("timestamp",),
+    ).to_arrow()
 
     if arrow.num_rows == 0:
         return None
@@ -80,7 +86,22 @@ def missing_weekdays(
     cold-start fallback that won't try to backfill years of history.
     """
     through = through or yesterday_et()
-    latest = latest_loaded_date(table, lookback_days=max_lookback_days)
+
+    try:
+        latest = latest_loaded_date(table, lookback_days=max_lookback_days)
+    except Exception as exc:
+        # A coverage-scan failure (S3 ACCESS_DENIED, transient lake
+        # outage, etc.) must NOT be silently read as "no data → cold
+        # start" — that would blindly re-fetch `max_lookback_days` every
+        # run. Fail loud and skip this run; the underlying read error is
+        # the thing to fix, not paper over with a redundant backfill.
+        logger.error(
+            "missing_weekdays(%s): coverage scan FAILED (%s) — skipping this "
+            "run instead of a blind %dd cold-start re-fetch. Fix the lake "
+            "read error (creds/perms/outage) and the next run self-heals.",
+            table.name(), exc, max_lookback_days,
+        )
+        return []
 
     if latest is None:
         start = through - timedelta(days=max_lookback_days)

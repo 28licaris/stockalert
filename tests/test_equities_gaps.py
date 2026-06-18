@@ -70,11 +70,26 @@ def test_latest_loaded_date_empty_table_returns_none():
     assert latest_loaded_date(_empty_table()) is None
 
 
-def test_latest_loaded_date_scan_failure_returns_none():
+def test_latest_loaded_date_scan_failure_raises():
+    """NO SILENT FAILURES: a scan error must propagate, NOT degrade to
+    None. None means 'genuinely empty'; an error means 'couldn't read'
+    — conflating them let an ACCESS_DENIED masquerade as cold-start."""
     table = MagicMock()
     table.name.return_value = "lake.equities.polygon_raw"
     table.scan.side_effect = RuntimeError("S3 timeout")
-    assert latest_loaded_date(table) is None
+    with pytest.raises(RuntimeError, match="S3 timeout"):
+        latest_loaded_date(table)
+
+
+def test_missing_weekdays_skips_run_on_scan_failure():
+    """A coverage-scan failure must NOT be read as cold-start (which
+    would blind-refetch max_lookback_days every run). missing_weekdays
+    returns [] (skip this run) so nothing is backfilled until the read
+    error is fixed."""
+    table = MagicMock()
+    table.name.return_value = "lake.equities.schwab_universe"
+    table.scan.side_effect = RuntimeError("AWS Error ACCESS_DENIED")
+    assert missing_weekdays(table) == []
 
 
 # ─────────────────────────────────────────────────────────────────────

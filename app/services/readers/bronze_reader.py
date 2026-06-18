@@ -290,4 +290,14 @@ class BronzeReader:
 
         from app.services.equities.gaps import latest_loaded_date
 
-        return latest_loaded_date(table, lookback_days=lookback_days)
+        # latest_loaded_date now RAISES on a scan error (vs None for a
+        # genuinely-empty table). This is a freshness/display surface, so
+        # degrade gracefully to None on a read error rather than 500 —
+        # but log it (no silent failure).
+        try:
+            return latest_loaded_date(table, lookback_days=lookback_days)
+        except Exception as exc:  # noqa: BLE001 — boundary; freshness display
+            logger.warning(
+                "latest_trading_day(%s): lake scan failed: %s", provider, exc,
+            )
+            return None
