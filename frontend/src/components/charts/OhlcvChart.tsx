@@ -49,8 +49,16 @@ export function OhlcvChart({ bars, signals, height = 480 }: OhlcvChartProps) {
     const palette = readPalette();
     paletteRef.current = palette;
 
-    const chart = createChart(containerRef.current, {
-      autoSize: true,
+    const container = containerRef.current;
+    const chart = createChart(container, {
+      // NOTE: we size the chart ourselves via ResizeObserver below rather than
+      // `autoSize: true`. autoSize captures the container's size at creation,
+      // and during a client-side route transition that size is momentarily 0
+      // (layout hasn't settled) — the chart then renders blank until a manual
+      // page refresh. Observing the container and resizing on first non-zero
+      // measurement fixes the blank-on-navigation bug.
+      width: container.clientWidth,
+      height: container.clientHeight,
       layout: {
         background: { color: palette.bg },
         textColor: palette.fg,
@@ -89,7 +97,19 @@ export function OhlcvChart({ bars, signals, height = 480 }: OhlcvChartProps) {
     candleSeriesRef.current = candle;
     volumeSeriesRef.current = volume;
 
+    // Keep the chart sized to its container. Fires once with the real size
+    // after layout settles (covers the SPA-navigation blank-chart case) and
+    // again on every container resize.
+    const ro = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (rect && rect.width > 0 && rect.height > 0) {
+        chart.resize(rect.width, rect.height);
+      }
+    });
+    ro.observe(container);
+
     return () => {
+      ro.disconnect();
       chart.remove();
       chartRef.current = null;
       candleSeriesRef.current = null;
@@ -149,7 +169,7 @@ export function OhlcvChart({ bars, signals, height = 480 }: OhlcvChartProps) {
     <div
       ref={containerRef}
       style={{ height }}
-      className="w-full rounded-md border border-border bg-bg-base"
+      className="w-full shrink-0 rounded-md border border-border bg-bg-base"
       aria-label="OHLCV candlestick chart"
     />
   );

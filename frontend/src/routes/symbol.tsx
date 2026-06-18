@@ -90,7 +90,9 @@ export function SymbolPage() {
         <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
           Recent bars
         </h2>
-        <BarsTable bars={bars.data ?? []} limit={50} interval={interval} />
+        {/* A compact "is it live?" snapshot — the chart is the main view, so we
+            cap this to the latest ~20 bars rather than let it grow the page. */}
+        <BarsTable bars={bars.data ?? []} limit={20} interval={interval} />
       </section>
     </div>
   );
