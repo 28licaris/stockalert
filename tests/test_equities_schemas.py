@@ -28,7 +28,6 @@ from app.services.equities.schemas import (  # noqa: E402
     POLYGON_BUCKET_COUNT,
     POLYGON_RAW_PARTITION,
     POLYGON_RAW_SCHEMA,
-    SCHWAB_BUCKET_COUNT,
     SCHWAB_UNIVERSE_PARTITION,
     SCHWAB_UNIVERSE_SCHEMA,
     equities_table_id,
@@ -122,11 +121,17 @@ def test_schwab_universe_carries_adj_factor():
     assert field.required is True
 
 
-def test_schwab_universe_uses_bucket16_partitioning():
+def test_schwab_universe_partitions_by_month_only():
+    """schwab_universe is the recent rolling window of the active
+    universe (~hundreds of symbols), so it partitions by month(timestamp)
+    ONLY — no symbol bucketing. Bucketing would just fan each nightly
+    write across N files; month-only yields ~1 file/month + the symbol
+    sort order handles per-symbol pruning. (polygon_adjusted, the whole
+    33K-symbol market, keeps bucket(32).)"""
     fields = SCHWAB_UNIVERSE_PARTITION.fields
-    assert fields[0].name == "symbol_bucket"
-    assert fields[0].transform.num_buckets == SCHWAB_BUCKET_COUNT == 16
-    assert fields[1].name == "ts_month"
+    assert len(fields) == 1, "no symbol bucketing — small rolling table"
+    assert fields[0].name == "ts_month"
+    assert str(fields[0].transform) == "month"
 
 
 def test_schwab_universe_schema_unions_with_polygon_adjusted():

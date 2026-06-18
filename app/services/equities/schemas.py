@@ -50,9 +50,11 @@ def equities_table_id(name: str) -> str:
     return f"{settings.iceberg_equities_glue_database}.{name}"
 
 
-# Gate 3 — bucket counts (docs/architecture_v2/08_decisions.md#gate-3).
+# Gate 3 — bucket count (docs/architecture_v2/08_decisions.md#gate-3).
+# Only polygon_adjusted (whole 33K-symbol market) is bucketed;
+# schwab_universe partitions by month(timestamp) only — see its
+# partition spec below for the rationale.
 POLYGON_BUCKET_COUNT = 32
-SCHWAB_BUCKET_COUNT = 16
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -173,13 +175,17 @@ SCHWAB_UNIVERSE_SCHEMA = Schema(
     identifier_field_ids=[1, 2],
 )
 
+# Partition by month(timestamp) ONLY — no symbol bucketing.
+# schwab_universe holds the recent rolling window of the *active* universe
+# (~hundreds of symbols), not the whole market. With a nightly single-file
+# write + the sort order below (symbol-clustered files), a month-only
+# layout yields ~1 file/month and needs no compaction; a single-symbol
+# query month-prunes then uses Parquet symbol-column stats. Bucketing
+# (like polygon_adjusted's bucket(32) for 33K symbols) only pays off once
+# a month partition exceeds ~0.5-1 GB (low-thousands of symbols); below
+# that it just fans every write across N files. Re-add bucket(symbol) if
+# the universe ever grows into the low thousands.
 SCHWAB_UNIVERSE_PARTITION = PartitionSpec(
-    PartitionField(
-        source_id=1,
-        field_id=1000,
-        transform=BucketTransform(SCHWAB_BUCKET_COUNT),
-        name="symbol_bucket",
-    ),
     PartitionField(
         source_id=2,
         field_id=1001,
