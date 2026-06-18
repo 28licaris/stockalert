@@ -245,6 +245,42 @@ export function useMarketBanner(symbols?: string | undefined) {
   });
 }
 
+export interface LatestPrice {
+  symbol: string;
+  last: number | null;
+  ts: string | null;
+}
+
+/**
+ * Latest streamed close per symbol straight from ClickHouse — a single fast
+ * query (~tens of ms) with **no live-provider call**. Use this for a "last"
+ * column over many symbols (e.g. the stream universe), where the market-banner
+ * (live Schwab quotes) would be slow and rate-limit-prone at scale.
+ *
+ * Not in the openapi codegen, so this is a raw `fetch` (same pattern as the
+ * jobs endpoint). `symbolsCsv` is a comma-separated list.
+ */
+export function useLatestBars(symbolsCsv: string | undefined) {
+  return useQuery({
+    queryKey: ["bars", "latest", symbolsCsv ?? ""] as const,
+    queryFn: async (): Promise<LatestPrice[]> => {
+      if (!symbolsCsv) return [];
+      const res = await fetch(
+        `/api/v1/bars/latest?symbols=${encodeURIComponent(symbolsCsv)}`,
+      );
+      if (!res.ok) {
+        const envelope = await readErrorEnvelope(res.clone());
+        throw new ApiError(envelope, res.status);
+      }
+      const data = (await res.json()) as { items: LatestPrice[] };
+      return data.items ?? [];
+    },
+    enabled: Boolean(symbolsCsv),
+    refetchInterval: 10_000,
+    staleTime: 5_000,
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // /api/v1/bars — OHLCV bars for charting (FE-2; FE-CONTRACTS-2 typed)
 // ─────────────────────────────────────────────────────────────────────

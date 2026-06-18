@@ -5,7 +5,7 @@ import {
   useAddSeed,
   useImportSeed,
   useInstrumentLookup,
-  useMarketBanner,
+  useLatestBars,
   useRemoveSeed,
   useSeedUniverse,
   type SeedEntry,
@@ -278,14 +278,15 @@ function StreamList({
     return m;
   }, [lookup.data]);
 
-  // Last-price lookup. /api/v1/market/banner accepts an arbitrary
-  // comma-separated symbol list and returns one quote per symbol — same
-  // pipeline the banner uses, so we share its chunking + provider logic.
+  // Last-price lookup straight from ClickHouse (the symbols are streaming
+  // INTO ch, so the latest 1m close IS the last price). One fast query for
+  // the whole universe — vs. the live market-banner, which fires a heavy
+  // Schwab quote call per symbol and stalls at this scale.
   const symbolsCsv = useMemo(() => symbols.join(","), [symbols]);
-  const quotes = useMarketBanner(symbolsCsv || undefined);
+  const quotes = useLatestBars(symbolsCsv || undefined);
   const priceMap = useMemo(() => {
     const m = new Map<string, number>();
-    for (const item of quotes.data?.items ?? []) {
+    for (const item of quotes.data ?? []) {
       if (item.last != null) {
         m.set(item.symbol.toUpperCase(), item.last);
       }

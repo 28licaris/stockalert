@@ -21,7 +21,8 @@ from app.api.schemas.bars import Bar
 from app.api.schemas.signals import Signal
 from app.db import queries  # only for SUPPORTED_INTERVALS (validation)
 from app.services.readers.bar_reader import BarReader
-from app.services.readers.bars_gateway import BarSource, get_chart_bars
+from app.services.readers.bars_gateway import BarSource
+from app.services.readers.bars_hydration import get_chart_bars_hydrated
 from app.services.readers.signal_reader import SignalReader
 
 logger = logging.getLogger(__name__)
@@ -131,9 +132,12 @@ async def list_bars(
     CH-vs-S3 routing lives in `bars_gateway.get_chart_bars` so this
     route and the MCP `get_bars_for_chart` tool behave identically.
 
-    Default `auto` is CH-first with on-demand lake fill: ad-hoc and
-    universe symbols both chart correctly, and CH warms for subsequent
-    requests. `lake` reads ground truth without writing CH.
+    Default `auto` is CH-first with on-demand lake fill, then a live
+    Schwab REST pull when both stored tiers miss (e.g. an out-of-universe
+    symbol never in the frozen Polygon snapshot): ad-hoc and universe
+    symbols both chart correctly, and CH warms for subsequent requests.
+    `lake` reads ground truth without writing CH; neither `lake` nor
+    `clickhouse` triggers the live Schwab tier.
     """
     if interval not in queries.SUPPORTED_INTERVALS:
         raise HTTPException(
@@ -142,8 +146,7 @@ async def list_bars(
             f"Allowed: {sorted(queries.SUPPORTED_INTERVALS.keys())}",
         )
 
-    bars = await asyncio.to_thread(
-        get_chart_bars,
+    bars = await get_chart_bars_hydrated(
         symbol,
         interval=interval,
         lookback_days=lookback_days,
@@ -166,3 +169,30 @@ async def list_bars(
         )
         for b in bars
     ]
+
+
+@router.get("/bars/latest")
+async def latest_bars(
+    symbols: str = Query(
+        ...,
+        description="Comma-separated tickers, e.g. 'AAPL,MSFT,NVDA'.",
+    ),
+) -> dict:
+    """Latest streamed 1-minute bar per symbol from ClickHouse (`last` = close).
+
+    A single fast query (~tens of ms) for tables that show a "last" column over
+    many symbols — e.g. the stream-universe page. Reads only the hot tier and
+    makes **no live-provider call**, so it stays sub-100ms regardless of symbol
+    count and never blocks on Schwab. Symbols with no CH bars are simply absent
+    from `items` (the caller renders them as "—").
+    """
+    syms = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    if not syms:
+        return {"items": []}
+    rows = await queries.latest_close_per_symbol_async(syms)
+    return {
+        "items": [
+            {"symbol": r["symbol"], "last": r["last"], "ts": _ts(r["ts"])}
+            for r in rows
+        ]
+    }

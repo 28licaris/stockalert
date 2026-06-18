@@ -418,6 +418,49 @@ async def latest_bar_per_symbol_async(symbols: List[str]) -> List[dict]:
     return await asyncio.to_thread(latest_bar_per_symbol, symbols)
 
 
+def latest_close_per_symbol(symbols: List[str], *, lookback_days: int = 3) -> List[dict]:
+    """Fast latest close per symbol from the *recent* ``ohlcv_1m`` partitions.
+
+    Bounded to the last ``lookback_days`` so the scan stays cheap even for a
+    large symbol set (e.g. the full streaming universe). This is deliberately
+    NOT `latest_bar_per_symbol`, which argMaxes over each symbol's *entire*
+    history (+ a `uniqExact` count) — fine for a handful of watchlist symbols,
+    but a hundreds-of-millions-of-rows scan for 200+ symbols.
+
+    Returns `[{symbol, last, ts}]`; symbols with no bar in the window are
+    omitted (callers render them as "—"). For actively-streaming symbols the
+    last bar is minutes old, so a few days of headroom covers long weekends.
+    """
+    if not symbols:
+        return []
+    result = get_client().query(
+        """
+        SELECT symbol,
+               argMax(close, timestamp) AS last,
+               max(timestamp)           AS ts
+        FROM ohlcv_1m
+        WHERE symbol IN {syms:Array(String)}
+          AND timestamp >= now() - toIntervalDay({days:UInt16})
+        GROUP BY symbol
+        """,
+        parameters={"syms": [s.upper() for s in symbols], "days": int(lookback_days)},
+    )
+    return [
+        {"symbol": r[0],
+         "last": float(r[1]) if r[1] is not None else None,
+         "ts": r[2]}
+        for r in result.result_rows
+    ]
+
+
+async def latest_close_per_symbol_async(
+    symbols: List[str], *, lookback_days: int = 3
+) -> List[dict]:
+    return await asyncio.to_thread(
+        latest_close_per_symbol, symbols, lookback_days=lookback_days
+    )
+
+
 def coverage(
     symbol: str, start: datetime, end: datetime, *, source_table: str = "ohlcv_1m"
 ) -> dict:

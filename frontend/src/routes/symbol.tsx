@@ -84,7 +84,20 @@ export function SymbolPage() {
 
       {bars.error ? <ApiErrorAlert error={bars.error} /> : null}
 
-      <OhlcvChart bars={bars.data ?? []} signals={signals.data ?? []} />
+      {/* Out-of-universe symbols are fetched live from Schwab on first view,
+          which takes a few seconds. Overlay the (still-mounted) chart so we
+          don't fight its lifecycle, then fall back to an explicit empty state
+          when the fetch settles with no data (e.g. an unknown ticker). */}
+      <div className="relative">
+        <OhlcvChart bars={bars.data ?? []} signals={signals.data ?? []} />
+        {!bars.data || bars.data.length === 0 ? (
+          <div className="absolute inset-0 flex items-center justify-center rounded-md bg-bg-base/60 text-sm text-fg-muted backdrop-blur-[1px]">
+            {bars.isLoading || bars.isFetching
+              ? "Fetching history…"
+              : `No data available for ${ticker}`}
+          </div>
+        ) : null}
+      </div>
 
       <section className="space-y-2">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">

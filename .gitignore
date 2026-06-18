@@ -36,3 +36,7 @@ __pycache__/
 # Claude Code session artifacts (worktrees are embedded git repos)
 .claude/worktrees/
 agent-skills/
+
+# Runtime artifacts
+.cache/
+data_news.db
