@@ -601,6 +601,55 @@ except Exception as _asst_exc:  # noqa: BLE001
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Legacy API-version redirects.
+# Every non-v1 path (`/api/<x>`, bare `/watchlist*`) 307-redirects to its
+# `/api/v1/<x>` home. 307 preserves both method and body. This is an
+# API-versioning compatibility shim (NOT tied to the deleted static HTML
+# pages) — API consumers and the test suite address routes as `/api/...`.
+# Registered AFTER all /api/v1 routes so the v1 routes match first
+# (Starlette routing is first-match-wins).
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _v1_redirect(target_path: str, request: Request) -> RedirectResponse:
+    """Preserve the query string when redirecting; 307 preserves method+body."""
+    qs = request.url.query
+    url = f"{target_path}?{qs}" if qs else target_path
+    return RedirectResponse(url=url, status_code=307)
+
+
+@app.api_route(
+    "/api/{rest:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    include_in_schema=False,
+)
+async def legacy_api_redirect(rest: str, request: Request):
+    # Defensive: if `/api/v1/<x>` falls through here it means a v1 route
+    # is missing; let it 404 cleanly rather than redirect into a loop.
+    if rest.startswith("v1/") or rest == "v1":
+        raise HTTPException(status_code=404, detail="Not Found")
+    return _v1_redirect(f"/api/v1/{rest}", request)
+
+
+@app.api_route(
+    "/watchlist",
+    methods=["GET", "POST"],
+    include_in_schema=False,
+)
+async def legacy_watchlist_root_redirect(request: Request):
+    return _v1_redirect("/api/v1/watchlist", request)
+
+
+@app.api_route(
+    "/watchlist/{rest:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    include_in_schema=False,
+)
+async def legacy_watchlist_redirect(rest: str, request: Request):
+    return _v1_redirect(f"/api/v1/watchlist/{rest}", request)
+
+
+# ─────────────────────────────────────────────────────────────────────
 # MCP server (Pre-Phase 3 Step 3). Mounted at /mcp — same readers that
 # back HTTP routes back the MCP tools, so agents and humans see the
 # same Pydantic shapes.

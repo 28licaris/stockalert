@@ -103,42 +103,50 @@ def get_adjusted_bars(
 
 
 @mcp.tool()
-def get_symbol_coverage(symbol: str) -> SymbolCoverageResponse:
-    """Coverage stats for `symbol` across the v2 adjusted sources.
+def get_symbol_coverage(
+    symbol: str, sources: Optional[str] = None,
+) -> SymbolCoverageResponse:
+    """Coverage stats for `symbol` across the three data stores.
 
-    USE WHEN: an agent is about to queue a long-running backtest or
-    deep-history query and wants to verify the lake actually has the
-    data first. Cheaper than failing-and-retrying a multi-minute
-    query.
+    USE WHEN: an agent wants to know what data exists for a symbol and
+    how current it is — before queueing a long backtest/deep-history
+    query, or to answer "how far back can I chart AAPL, and is today
+    already loaded?"
 
-    Returns per-table row counts, earliest/latest timestamps, and
-    snapshot IDs for:
+    Returns per-store row counts + earliest/latest timestamps for:
+      - stocks.ohlcv_1m           — ClickHouse hot cache (queryable NOW,
+        live-stream fresh); query THIS for the fast path
       - equities.polygon_adjusted — deep adjusted history (weekly Spark)
-      - equities.schwab_universe  — live + tip-fill (continuous)
+      - equities.schwab_universe  — recent universe window (nightly)
+
+    `sources` selects which stores to query (CSV of the keys above);
+    omit for all three. Pass sources="clickhouse" for the ~tens-of-ms
+    hot-cache answer — the two lake stores cost ~2-3s each (Athena).
+    Selected stores are queried concurrently.
 
     Common interpretations:
+      - clickhouse.latest_timestamp within ~1 min during market hours →
+        live stream healthy.
       - polygon_adjusted.row_count == 0 → cold-start; the first
-        polygon_adjustment_job hasn't run yet. Suggest the operator
-        run it before backtesting.
-      - polygon_adjusted.latest_timestamp older than ~7 days → the
-        weekly Spark adjustment job is lagging or hasn't run since
-        the symbol was last in the universe.
-      - schwab_universe.latest_timestamp older than ~5 min during
-        market hours → live writer is stalled or the symbol isn't
-        subscribed to Schwab WS.
+        polygon_adjustment_job hasn't run yet.
+      - polygon_adjusted.latest_timestamp older than ~7 days is normal
+        (weekly Spark cadence); the gap to "now" is covered by CH +
+        schwab_universe.
       - schwab_universe.row_count > 0 AND polygon_adjusted.row_count
-        == 0 → brand-new symbol; deep history will arrive on the
-        next weekly Spark run.
+        == 0 → brand-new symbol; deep history arrives on the next
+        weekly Spark run.
 
     Args:
         symbol: Ticker (case-insensitive; "nvda" → "NVDA").
+        sources: Optional CSV subset of
+            ['clickhouse','polygon_adjusted','schwab_universe'].
 
-    Returns: `SymbolCoverageResponse` with separate SourceCoverage
-    blocks for polygon_adjusted and schwab_universe. Either side
-    independently degrades to row_count=0 with None timestamps on
-    cold-start / scan failure — never raises.
+    Returns: `SymbolCoverageResponse` with SourceCoverage blocks for
+    clickhouse, polygon_adjusted, and schwab_universe. Un-requested or
+    failed/empty stores come back as row_count=0 with None timestamps
+    — never raises.
     """
-    return _reader().get_symbol_coverage(symbol)
+    return _reader().get_symbol_coverage(symbol, sources=sources)
 
 
 @mcp.tool()

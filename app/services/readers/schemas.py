@@ -683,6 +683,19 @@ class SymbolCoverageResponse(BaseModel):
     symbol: str
     polygon_adjusted: SourceCoverage
     schwab_universe: SourceCoverage
+    clickhouse: SourceCoverage = Field(
+        default_factory=lambda: SourceCoverage(
+            table_name="stocks.ohlcv_1m", row_count=0,
+        ),
+        description=(
+            "Coverage in the ClickHouse hot cache (stocks.ohlcv_1m) — "
+            "what's queryable RIGHT NOW for charts/agents, vs the two "
+            "durable S3 lake sources above. `latest_timestamp` here "
+            "reflects live-stream freshness (seconds), not the lake's "
+            "nightly/weekly cadence. `snapshot_id` is always None (CH "
+            "has no Iceberg snapshots)."
+        ),
+    )
 
 
 class CrossProviderDiffRow(BaseModel):

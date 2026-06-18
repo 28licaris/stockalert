@@ -90,7 +90,13 @@ def test_market_banner_no_get_quotes(app_client) -> None:
 
 
 def test_market_banner_empty_provider_payload(app_client) -> None:
-    """Provider returns {} -> 200 with the 'empty quotes' message."""
+    """Provider returns {} -> 200 with the ClickHouse last-bar fallback.
+
+    When live quotes come back empty the banner falls back to CH last
+    bars (provider='clickhouse-fallback') so the tape still shows
+    last-known prices. `items` content depends on what CH holds; assert
+    the fallback contract instead of an empty list.
+    """
     class P:
         async def get_quotes(self, symbols: list[str]) -> dict:
             return {}
@@ -100,8 +106,11 @@ def test_market_banner_empty_provider_payload(app_client) -> None:
         r = app_client.get("/api/market/banner?symbols=SPY")
         assert r.status_code == 200
         body = r.json()
-        assert body["items"] == []
-        assert any("empty quotes" in (e.get("message") or "") for e in body["errors"])
+        assert body["provider"] == "clickhouse-fallback"
+        assert any(
+            "unavailable" in (e.get("message") or "").lower()
+            for e in body["errors"]
+        )
     finally:
         _clear_override()
 

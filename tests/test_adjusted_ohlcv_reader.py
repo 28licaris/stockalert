@@ -771,105 +771,157 @@ class TestRouteIncludeLiveParam:
 
 
 class TestGetSymbolCoverage:
-    def test_both_sources_populated(self) -> None:
-        ts_a = datetime(2021, 1, 4, 14, 30, tzinfo=timezone.utc)
-        ts_b = datetime(2024, 6, 1, 14, 30, tzinfo=timezone.utc)
-        ts_c = datetime(2024, 6, 3, 13, 30, tzinfo=timezone.utc)
-        polygon = _FakeIcebergTable(pa.Table.from_pylist([
-            _v2_row("AAPL", ts_a, source="polygon-adjusted"),
-            _v2_row("AAPL", ts_b, source="polygon-adjusted"),
-        ]))
-        schwab = _FakeIcebergTable(pa.Table.from_pylist([
-            _v2_row("AAPL", ts_c, source="schwab-live"),
-        ]))
-        reader = AdjustedOhlcvReader(
-            ohlcv_table=polygon, schwab_table=schwab,
+    """Coverage now sources exact min/max/count from Athena (lake) +
+    ClickHouse (hot cache); the PyIceberg tables are only consulted for
+    snapshot_id + existence. These tests patch the Athena + CH helpers
+    and assert the three-store response."""
+
+    def _reader(self):
+        # Fake tables provide snapshot_id (="12345") + existence only.
+        polygon = _FakeIcebergTable(pa.Table.from_pylist([]))
+        schwab = _FakeIcebergTable(pa.Table.from_pylist([]))
+        return AdjustedOhlcvReader(ohlcv_table=polygon, schwab_table=schwab)
+
+    @staticmethod
+    def _patch(monkeypatch, *, athena, ch):
+        """athena: dict table_name -> AthenaCoverage|None ; ch: dict."""
+        from app.services.equities import athena_coverage as ac
+        from app.db import queries
+
+        def fake_athena(table, symbol, **kw):
+            return athena.get(table)
+
+        monkeypatch.setattr(ac, "symbol_coverage", fake_athena)
+        monkeypatch.setattr(queries, "coverage_all", lambda s: ch)
+        return ac
+
+    def test_all_three_sources_populated(self, monkeypatch) -> None:
+        from app.services.equities.athena_coverage import AthenaCoverage
+        ts_a = datetime(2006, 1, 3, tzinfo=timezone.utc)
+        ts_b = datetime(2026, 5, 27, tzinfo=timezone.utc)
+        ts_c = datetime(2026, 6, 17, tzinfo=timezone.utc)
+        self._patch(
+            monkeypatch,
+            athena={
+                "polygon_adjusted": AthenaCoverage(100, ts_a, ts_b),
+                "schwab_universe": AthenaCoverage(5, ts_c, ts_c),
+            },
+            ch={"symbol": "AAPL", "earliest": ts_a, "latest": ts_c, "bar_count": 105},
         )
 
-        resp = reader.get_symbol_coverage("aapl")
+        resp = self._reader().get_symbol_coverage("aapl")
 
         assert resp.symbol == "AAPL"
+        # ClickHouse hot cache
+        assert resp.clickhouse.table_name == "stocks.ohlcv_1m"
+        assert resp.clickhouse.row_count == 105
+        assert resp.clickhouse.earliest_timestamp == ts_a
+        assert resp.clickhouse.latest_timestamp == ts_c
+        # polygon_adjusted lake (Athena), snapshot from the fake table
         assert resp.polygon_adjusted.table_name == "equities.polygon_adjusted"
-        assert resp.polygon_adjusted.row_count == 2
+        assert resp.polygon_adjusted.row_count == 100
         assert resp.polygon_adjusted.earliest_timestamp == ts_a
         assert resp.polygon_adjusted.latest_timestamp == ts_b
         assert resp.polygon_adjusted.snapshot_id == "12345"
-
-        assert resp.schwab_universe.table_name == "equities.schwab_universe"
-        assert resp.schwab_universe.row_count == 1
-        assert resp.schwab_universe.earliest_timestamp == ts_c
+        # schwab_universe lake
+        assert resp.schwab_universe.row_count == 5
         assert resp.schwab_universe.latest_timestamp == ts_c
 
-    def test_polygon_empty_schwab_populated(self) -> None:
-        """Brand-new symbol — schwab live writes started, polygon
-        hasn't been Spark-adjusted yet."""
-        ts = datetime(2024, 6, 3, 13, 30, tzinfo=timezone.utc)
-        polygon = _FakeIcebergTable(pa.Table.from_pylist([]))
-        schwab = _FakeIcebergTable(pa.Table.from_pylist([
-            _v2_row("NEWSYM", ts, source="schwab-live"),
-        ]))
-        reader = AdjustedOhlcvReader(
-            ohlcv_table=polygon, schwab_table=schwab,
+    def test_polygon_empty_schwab_populated(self, monkeypatch) -> None:
+        """Brand-new symbol — schwab has data, polygon not Spark-adjusted yet."""
+        from app.services.equities.athena_coverage import AthenaCoverage
+        ts = datetime(2026, 6, 3, tzinfo=timezone.utc)
+        self._patch(
+            monkeypatch,
+            athena={
+                "polygon_adjusted": AthenaCoverage(0, None, None),
+                "schwab_universe": AthenaCoverage(1, ts, ts),
+            },
+            ch={"symbol": "NEWSYM", "earliest": ts, "latest": ts, "bar_count": 1},
         )
 
-        resp = reader.get_symbol_coverage("NEWSYM")
+        resp = self._reader().get_symbol_coverage("NEWSYM")
 
         assert resp.polygon_adjusted.row_count == 0
         assert resp.polygon_adjusted.earliest_timestamp is None
-        assert resp.polygon_adjusted.latest_timestamp is None
         assert resp.schwab_universe.row_count == 1
+        assert resp.clickhouse.row_count == 1
 
-    def test_both_sources_empty_returns_zeros(self) -> None:
-        """Unknown symbol — both tables return 0 rows. Caller can
-        switch on `polygon_adjusted.row_count == 0 AND
-        schwab_universe.row_count == 0` to say "we don't have this
-        symbol."""
-        polygon = _FakeIcebergTable(pa.Table.from_pylist([]))
-        schwab = _FakeIcebergTable(pa.Table.from_pylist([]))
-        reader = AdjustedOhlcvReader(
-            ohlcv_table=polygon, schwab_table=schwab,
+    def test_all_sources_empty_returns_zeros(self, monkeypatch) -> None:
+        from app.services.equities.athena_coverage import AthenaCoverage
+        self._patch(
+            monkeypatch,
+            athena={
+                "polygon_adjusted": AthenaCoverage(0, None, None),
+                "schwab_universe": AthenaCoverage(0, None, None),
+            },
+            ch={"symbol": "UNKNOWN", "earliest": None, "latest": None, "bar_count": 0},
         )
 
-        resp = reader.get_symbol_coverage("UNKNOWN")
+        resp = self._reader().get_symbol_coverage("UNKNOWN")
+        assert resp.polygon_adjusted.row_count == 0
+        assert resp.schwab_universe.row_count == 0
+        assert resp.clickhouse.row_count == 0
+
+    def test_athena_failure_degrades_to_empty(self, monkeypatch) -> None:
+        """Athena returning None (timeout/error) must not break the
+        response — the failed lake source reports row_count=0 but keeps
+        its snapshot_id; the other stores still flow through."""
+        from app.services.equities.athena_coverage import AthenaCoverage
+        ts = datetime(2026, 6, 3, tzinfo=timezone.utc)
+        self._patch(
+            monkeypatch,
+            athena={
+                "polygon_adjusted": None,  # Athena failed
+                "schwab_universe": AthenaCoverage(1, ts, ts),
+            },
+            ch={"symbol": "AAPL", "earliest": ts, "latest": ts, "bar_count": 1},
+        )
+
+        resp = self._reader().get_symbol_coverage("AAPL")
+        assert resp.polygon_adjusted.row_count == 0
+        assert resp.polygon_adjusted.snapshot_id == "12345"  # table exists
+        assert resp.schwab_universe.row_count == 1
+        assert resp.clickhouse.row_count == 1
+
+    def test_sources_filter_queries_only_requested(self, monkeypatch) -> None:
+        """`sources='clickhouse'` must NOT touch Athena (the slow path)."""
+        from app.services.equities import athena_coverage as ac
+        from app.db import queries
+        ts = datetime(2026, 6, 3, tzinfo=timezone.utc)
+
+        def boom(table, symbol, **kw):  # must not be called
+            raise AssertionError("Athena queried despite sources=clickhouse")
+
+        monkeypatch.setattr(ac, "symbol_coverage", boom)
+        monkeypatch.setattr(
+            queries, "coverage_all",
+            lambda s: {"symbol": s, "earliest": ts, "latest": ts, "bar_count": 9},
+        )
+
+        resp = self._reader().get_symbol_coverage("AAPL", sources="clickhouse")
+        assert resp.clickhouse.row_count == 9
+        # Un-requested lake sources come back as empty placeholders
         assert resp.polygon_adjusted.row_count == 0
         assert resp.schwab_universe.row_count == 0
 
-    def test_polygon_scan_failure_degrades_to_empty(self) -> None:
-        """Single-source scan failure must not break the response —
-        the surviving source still flows through, the failed source
-        reports row_count=0."""
-        ts = datetime(2024, 6, 3, tzinfo=timezone.utc)
-        polygon = _FakeIcebergTable(
-            pa.Table.from_pylist([]),
-            scan_raises=RuntimeError("S3 timeout"),
-        )
-        schwab = _FakeIcebergTable(pa.Table.from_pylist([
-            _v2_row("AAPL", ts, source="schwab-live"),
-        ]))
-        reader = AdjustedOhlcvReader(
-            ohlcv_table=polygon, schwab_table=schwab,
-        )
+    def test_empty_symbol_short_circuits(self, monkeypatch) -> None:
+        from app.services.equities import athena_coverage as ac
+        from app.db import queries
 
-        resp = reader.get_symbol_coverage("AAPL")
-        assert resp.polygon_adjusted.row_count == 0
-        assert resp.schwab_universe.row_count == 1
+        def boom_a(table, symbol, **kw):
+            raise AssertionError("must not query Athena for blank symbol")
 
-    def test_empty_symbol_short_circuits_both_scans(self) -> None:
-        polygon = _FakeIcebergTable(
-            pa.Table.from_pylist([]),
-            scan_raises=AssertionError("must not scan when symbol blank"),
-        )
-        schwab = _FakeIcebergTable(
-            pa.Table.from_pylist([]),
-            scan_raises=AssertionError("must not scan when symbol blank"),
-        )
-        reader = AdjustedOhlcvReader(
-            ohlcv_table=polygon, schwab_table=schwab,
-        )
+        def boom_ch(s):
+            raise AssertionError("must not query CH for blank symbol")
 
-        resp = reader.get_symbol_coverage("   ")
+        monkeypatch.setattr(ac, "symbol_coverage", boom_a)
+        monkeypatch.setattr(queries, "coverage_all", boom_ch)
+
+        resp = self._reader().get_symbol_coverage("   ")
         assert resp.polygon_adjusted.row_count == 0
         assert resp.schwab_universe.row_count == 0
+        assert resp.clickhouse.row_count == 0
 
 
 class TestRouteCoverage:
@@ -881,9 +933,11 @@ class TestRouteCoverage:
         class _CovStub:
             def __init__(self) -> None:
                 self.last_symbol: Optional[str] = None
+                self.last_sources: Any = "unset"
 
-            def get_symbol_coverage(self, symbol):
+            def get_symbol_coverage(self, symbol, sources=None):
                 self.last_symbol = symbol
+                self.last_sources = sources
                 from app.services.readers.schemas import SourceCoverage
                 return SymbolCoverageResponse(
                     symbol=symbol.upper(),
@@ -897,20 +951,28 @@ class TestRouteCoverage:
                         row_count=7,
                         snapshot_id="snap-schwab",
                     ),
+                    clickhouse=SourceCoverage(
+                        table_name="stocks.ohlcv_1m",
+                        row_count=99,
+                    ),
                 )
 
         stub = _CovStub()
         app.dependency_overrides[get_adjusted_ohlcv_reader] = lambda: stub
 
         with TestClient(app) as client:
-            resp = client.get("/api/adjusted/symbols/AAPL/coverage")
+            resp = client.get(
+                "/api/adjusted/symbols/AAPL/coverage?sources=clickhouse"
+            )
 
         assert resp.status_code == 200
         body = resp.json()
         assert body["symbol"] == "AAPL"
         assert body["polygon_adjusted"]["row_count"] == 42
         assert body["schwab_universe"]["row_count"] == 7
+        assert body["clickhouse"]["row_count"] == 99
         assert stub.last_symbol == "AAPL"
+        assert stub.last_sources == "clickhouse"
 
 
 # ─────────────────────────────────────────────────────────────────────

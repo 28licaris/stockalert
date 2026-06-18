@@ -273,13 +273,18 @@ def test_route_rejects_empty_query(app_client: TestClient) -> None:
 def test_route_returns_empty_when_provider_missing(
     app_client: TestClient, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No provider configured -> route returns 200 with empty results."""
+    """No provider configured -> route degrades to the ClickHouse
+    symbol-prefix fallback (still a graceful 200). For a prefix that
+    matches no CH symbol, the fallback returns empty results.
+    """
     from app.api import routes_instruments
     routes_instruments._cache.clear()
     from app.services.stream import stream_service
     monkeypatch.setattr(stream_service, "_provider", None, raising=False)
 
-    r = app_client.get("/api/instruments/search", params={"q": "TSLA"})
+    # A prefix no real ticker starts with -> CH fallback yields nothing,
+    # so the response is a graceful empty 200 regardless of CH contents.
+    r = app_client.get("/api/instruments/search", params={"q": "ZZZZNOPE"})
     assert r.status_code == 200
     assert r.json()["results"] == []
 

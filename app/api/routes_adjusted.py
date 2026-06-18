@@ -126,29 +126,39 @@ def get_adjusted_bars(
 )
 def get_symbol_coverage(
     symbol: str = Path(..., min_length=1, description="Ticker (case-insensitive)."),
+    sources: Optional[str] = Query(
+        None,
+        description=(
+            "Comma-separated subset of ['clickhouse','polygon_adjusted',"
+            "'schwab_universe'] to query. Omit for all three. Query just "
+            "'clickhouse' for the fast (~tens of ms) hot-cache answer; the "
+            "two lake sources cost ~2-3s each (Athena). Un-requested "
+            "sources come back as empty (row_count=0) placeholders."
+        ),
+    ),
     reader: AdjustedOhlcvReader = Depends(get_adjusted_ohlcv_reader),
 ) -> SymbolCoverageResponse:
-    """Coverage stats for `symbol` across both v2 adjusted sources.
+    """Coverage stats for `symbol` across the three data stores.
 
-    Returns per-table row counts, earliest/latest timestamps, and
-    pinned snapshot IDs for:
+    Returns per-store row counts and earliest/latest timestamps for:
+      - `stocks.ohlcv_1m`           — ClickHouse hot cache (what's
+        queryable now; live-stream fresh)
       - `equities.polygon_adjusted` — deep adjusted history (weekly Spark)
-      - `equities.schwab_universe`  — live + tip-fill (continuous)
+      - `equities.schwab_universe`  — recent universe window (nightly)
 
     Use this to answer:
-      - "Is NVDA ready to chart? How far back?" → polygon_adjusted.earliest_timestamp
-      - "How current is the data?" → schwab_universe.latest_timestamp
+      - "Is NVDA ready to chart? How far back?" → clickhouse.earliest_timestamp
+      - "What's the durable lake history?" → polygon_adjusted.earliest_timestamp
+      - "How current is today's data?" → clickhouse.latest_timestamp
       - "Cold-start before first Spark run?" → polygon_adjusted.row_count == 0
 
-    Either source independently degrades to row_count=0 / None
-    timestamps when its table is cold-start empty or its scan fails
-    — the endpoint never 500s on transient lake issues; it surfaces
-    them as empty coverage so the consumer can decide what to do.
-
-    Cheap: two metadata-only scans (timestamp column projection +
-    bucket pruning on symbol). Sub-second on warm cache.
+    Selected stores are queried concurrently. Each independently
+    degrades to row_count=0 / None timestamps when empty or its query
+    fails — the endpoint never 500s on transient issues. ClickHouse is
+    sub-100ms; the lake stores use Athena aggregate pushdown (~2-3s
+    each, exact). Pass `?sources=clickhouse` for the fast path.
     """
-    return reader.get_symbol_coverage(symbol)
+    return reader.get_symbol_coverage(symbol, sources=sources)
 
 
 @router.get(

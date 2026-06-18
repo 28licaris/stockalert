@@ -573,6 +573,45 @@ async def coverage_async(symbol: str, start: datetime, end: datetime) -> dict:
     return await asyncio.to_thread(coverage, symbol, start, end)
 
 
+def coverage_all(symbol: str) -> dict:
+    """Full-history min/max timestamp + distinct-bar count for `symbol`
+    in the ClickHouse hot cache — no time window.
+
+    Fast: `symbol` is the leading column of the `ohlcv_1m` sort key, so
+    this is an index-pruned aggregate (~tens of ms even at 100M+ rows).
+    `uniqExact(timestamp)` counts distinct bars so unmerged
+    ReplacingMergeTree duplicate versions don't inflate the count.
+
+    Use this for "what's in the hot cache for this symbol?" — the
+    ClickHouse peer of the lake-side `AdjustedOhlcvReader` coverage.
+    """
+    client = get_client()
+    result = client.query(
+        """
+        SELECT min(timestamp) AS earliest,
+               max(timestamp) AS latest,
+               uniqExact(timestamp) AS bar_count
+        FROM ohlcv_1m
+        WHERE symbol = {sym:String}
+        """,
+        parameters={"sym": symbol.upper()},
+    )
+    if not result.result_rows:
+        return {"symbol": symbol.upper(), "earliest": None, "latest": None, "bar_count": 0}
+    earliest, latest, n = result.result_rows[0]
+    n_int = int(n) if n is not None else 0
+    return {
+        "symbol": symbol.upper(),
+        "earliest": earliest if n_int > 0 else None,
+        "latest": latest if n_int > 0 else None,
+        "bar_count": n_int,
+    }
+
+
+async def coverage_all_async(symbol: str) -> dict:
+    return await asyncio.to_thread(coverage_all, symbol)
+
+
 def coverage_5m(symbol: str, start: datetime, end: datetime) -> dict:
     """Coverage report against `ohlcv_5m`. Same shape as `coverage()`."""
     result = get_client().query(

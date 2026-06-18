@@ -170,12 +170,19 @@ class Settings(BaseModel):
     # (precedence merged into the deleted silver build; bronze
     # replaced by lake_history_start above).
 
-    # Live-lake-writer config (TA-5.7 — closes the 8-24h Schwab live →
-    # bronze freshness gap). The writer reads CH ohlcv_1m every
-    # cycle_minutes and upserts into bronze.{provider}_minute. See
+    # Live-lake-writer config. DISABLED by default as of the live→CH
+    # architecture decision: Schwab live data flows into ClickHouse only
+    # (the hot tier); the S3 lake is written infrequently — nightly for
+    # equities.schwab_universe (nightly_schwab_refresh) and weekly for
+    # equities.polygon_adjusted (Spark). This writer's 5-min upserts to
+    # schwab_universe were redundant (every row already lands in CH from
+    # the stream) and were the source of severe small-file fragmentation
+    # (~10k tiny files). Leave OFF unless you specifically need an
+    # intraday durable S3 copy of live bars; the nightly REST refresh
+    # re-pulls each day authoritatively. See
     # app/services/ingest/live_lake_writer.py.
     live_lake_writer_enabled: bool = (
-        os.getenv("LIVE_LAKE_WRITER_ENABLED", "true").lower() == "true"
+        os.getenv("LIVE_LAKE_WRITER_ENABLED", "false").lower() == "true"
     )
     live_lake_writer_cycle_minutes: int = int(
         os.getenv("LIVE_LAKE_WRITER_CYCLE_MINUTES", "5")

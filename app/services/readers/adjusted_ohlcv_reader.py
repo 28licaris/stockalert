@@ -346,67 +346,132 @@ class AdjustedOhlcvReader:
             )
             return None
 
-    def get_symbol_coverage(self, symbol: str) -> SymbolCoverageResponse:
-        """Coverage stats for `symbol` across both v2 adjusted sources.
+    # Canonical store keys for the `sources` filter.
+    _COVERAGE_SOURCES = ("clickhouse", "polygon_adjusted", "schwab_universe")
 
-        Returns a SymbolCoverageResponse with per-table SourceCoverage
-        for `equities.polygon_adjusted` and `equities.schwab_universe`.
-        Each side independently degrades to row_count=0 / Nones when
-        the table is cold-start empty or scan fails — never raises.
+    def _normalize_sources(self, sources) -> set:
+        """Resolve the `sources` filter → a validated subset of
+        `_COVERAGE_SOURCES`. Empty / unknown / None → all three."""
+        if not sources:
+            return set(self._COVERAGE_SOURCES)
+        if isinstance(sources, str):
+            sources = sources.split(",")
+        want = {str(s).strip().lower() for s in sources if str(s).strip()}
+        valid = want & set(self._COVERAGE_SOURCES)
+        return valid or set(self._COVERAGE_SOURCES)
 
-        Cheap: two single-symbol bucket-pruned timestamp scans (each
-        ~1/32 of the table's metadata pages thanks to CV1's bucket
-        partitioning). Returns in under a second on warm cache; the
-        scan reads only the `timestamp` column, not the full row.
+    def get_symbol_coverage(
+        self, symbol: str, sources=None,
+    ) -> SymbolCoverageResponse:
+        """Coverage stats for `symbol` across the three data stores.
+
+        Returns a SymbolCoverageResponse with per-store SourceCoverage:
+          - `stocks.ohlcv_1m`           — ClickHouse hot cache (live)
+          - `equities.polygon_adjusted` — deep adjusted history (lake)
+          - `equities.schwab_universe`  — recent universe window (lake)
+
+        `sources` selects which stores to actually query (a list/CSV of
+        the keys above, e.g. `"clickhouse"` for just the hot cache).
+        Default = all three. Stores not requested come back as empty
+        (row_count=0) placeholders. The selected stores are queried
+        **concurrently**, so the all-three latency is ~max(per-store),
+        not the sum.
+
+        Each store independently degrades to row_count=0 / Nones when
+        empty or its query fails — never raises.
+
+        Performance: ClickHouse is an index-pruned SQL aggregate
+        (~tens of ms). The two lake stores use Athena aggregate pushdown
+        (exact min/max/count, ~2-3 s each, pruning by the symbol's
+        bucket partitions) — NOT the old full-column materialization
+        that took 106 s for AAPL. Query CH alone for the fast path.
 
         Used by:
           - The cockpit "is this symbol ready to chart?" check
           - The MCP `get_symbol_coverage` tool agents call before
             queueing a long backtest
           - Operator investigations: "does NVDA have data back to
-            2021? Is today's bar in there yet?"
+            2021? Is today's bar in CH yet?"
         """
         sym = (symbol or "").strip().upper()
+        cov = {
+            "polygon_adjusted": SourceCoverage(
+                table_name="equities.polygon_adjusted", row_count=0,
+            ),
+            "schwab_universe": SourceCoverage(
+                table_name="equities.schwab_universe", row_count=0,
+            ),
+            "clickhouse": SourceCoverage(
+                table_name="stocks.ohlcv_1m", row_count=0,
+            ),
+        }
         if not sym:
-            empty = SourceCoverage(
-                table_name="(empty symbol)", row_count=0,
-            )
-            return SymbolCoverageResponse(
-                symbol=symbol or "",
-                polygon_adjusted=empty.model_copy(
-                    update={"table_name": "equities.polygon_adjusted"}
-                ),
-                schwab_universe=empty.model_copy(
-                    update={"table_name": "equities.schwab_universe"}
-                ),
-            )
+            return SymbolCoverageResponse(symbol=symbol or "", **cov)
 
-        polygon = self._coverage_for(
-            self._get_ohlcv_table,
-            sym,
-            table_label="equities.polygon_adjusted",
-        )
-        schwab = self._coverage_for(
-            self._get_schwab_table,
-            sym,
-            table_label="equities.schwab_universe",
-        )
+        want = self._normalize_sources(sources)
+        runners = {
+            "polygon_adjusted": lambda: self._coverage_for(
+                self._get_ohlcv_table, sym,
+                table_label="equities.polygon_adjusted",
+                athena_table="polygon_adjusted",
+            ),
+            "schwab_universe": lambda: self._coverage_for(
+                self._get_schwab_table, sym,
+                table_label="equities.schwab_universe",
+                athena_table="schwab_universe",
+            ),
+            "clickhouse": lambda: self._ch_coverage(sym),
+        }
+        selected = {k: fn for k, fn in runners.items() if k in want}
+
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(selected) or 1
+        ) as pool:
+            futures = {pool.submit(fn): k for k, fn in selected.items()}
+            for fut in concurrent.futures.as_completed(futures):
+                key = futures[fut]
+                try:
+                    cov[key] = fut.result()
+                except Exception as e:  # noqa: BLE001 — boundary
+                    logger.warning(
+                        "get_symbol_coverage: %s store failed for %s: %s",
+                        key, sym, e,
+                    )
+
         return SymbolCoverageResponse(
             symbol=sym,
-            polygon_adjusted=polygon,
-            schwab_universe=schwab,
+            polygon_adjusted=cov["polygon_adjusted"],
+            schwab_universe=cov["schwab_universe"],
+            clickhouse=cov["clickhouse"],
         )
 
     def _coverage_for(
-        self, table_getter, symbol: str, *, table_label: str,
+        self, table_getter, symbol: str, *, table_label: str, athena_table: str,
     ) -> SourceCoverage:
-        """Build a SourceCoverage for one (symbol, table) pair.
+        """Build a SourceCoverage for one (symbol, lake table) pair.
 
-        Cold-start safe: missing tables / scan failures degrade to
+        Uses **Athena aggregate pushdown** for the exact min/max/count
+        (``app.services.equities.athena_coverage``) instead of
+        materializing every row — the old ``.to_arrow()`` path read all
+        3.4M AAPL timestamps from S3 just to compute min/max (106 s).
+        Athena prunes by the symbol's bucket partitions and pushes the
+        aggregate down: exact answer in ~2-3 s.
+
+        The PyIceberg table is still loaded (cheap metadata) for the
+        `snapshot_id` (reproducibility pin) and as the cold-start /
+        table-missing check.
+
+        Cold-start safe: missing table or Athena failure degrades to
         row_count=0 with None timestamps + a warning log. Never raises.
         """
+        snap_id: Optional[str] = None
         try:
             table = table_getter()
+            snap = table.current_snapshot()
+            if snap is not None:
+                snap_id = str(snap.snapshot_id)
         except Exception as e:
             logger.warning(
                 "AdjustedOhlcvReader.coverage: %s not loadable (%s); "
@@ -414,45 +479,50 @@ class AdjustedOhlcvReader:
             )
             return SourceCoverage(table_name=table_label, row_count=0)
 
-        try:
-            arrow = table.scan(
-                row_filter=EqualTo("symbol", symbol),
-                selected_fields=("timestamp",),
-            ).to_arrow()
-        except Exception as e:
-            logger.warning(
-                "AdjustedOhlcvReader.coverage: %s scan failed for %s: %s",
-                table_label, symbol, e,
+        from app.services.equities.athena_coverage import symbol_coverage
+
+        cov = symbol_coverage(athena_table, symbol)
+        if cov is None:
+            # Athena failed/timed out — surface empty rather than raise,
+            # but keep the snapshot_id so the consumer knows the table exists.
+            return SourceCoverage(
+                table_name=table_label, row_count=0, snapshot_id=snap_id,
             )
-            return SourceCoverage(table_name=table_label, row_count=0)
 
-        row_count = arrow.num_rows
-        if row_count == 0:
-            return SourceCoverage(table_name=table_label, row_count=0)
+        return SourceCoverage(
+            table_name=table_label,
+            row_count=cov.row_count,
+            earliest_timestamp=cov.earliest if cov.row_count > 0 else None,
+            latest_timestamp=cov.latest if cov.row_count > 0 else None,
+            snapshot_id=snap_id,
+        )
 
-        import pyarrow.compute as pc
+    def _ch_coverage(self, symbol: str) -> SourceCoverage:
+        """ClickHouse hot-cache coverage for `symbol` (stocks.ohlcv_1m).
 
-        earliest = pc.min(arrow["timestamp"]).as_py()
-        latest = pc.max(arrow["timestamp"]).as_py()
+        Fast (~tens of ms; `symbol` leads the sort key). Degrades to
+        row_count=0 on any failure. CH has no Iceberg snapshot, so
+        snapshot_id stays None.
+        """
+        try:
+            from app.db import queries
+
+            d = queries.coverage_all(symbol)
+        except Exception as e:  # noqa: BLE001 — boundary
+            logger.warning("AdjustedOhlcvReader.coverage: CH failed for %s: %s", symbol, e)
+            return SourceCoverage(table_name="stocks.ohlcv_1m", row_count=0)
+
+        earliest = d.get("earliest")
+        latest = d.get("latest")
         if earliest is not None and earliest.tzinfo is None:
             earliest = earliest.replace(tzinfo=timezone.utc)
         if latest is not None and latest.tzinfo is None:
             latest = latest.replace(tzinfo=timezone.utc)
-
-        snap_id: Optional[str] = None
-        try:
-            snap = table.current_snapshot()
-            if snap is not None:
-                snap_id = str(snap.snapshot_id)
-        except Exception:
-            pass
-
         return SourceCoverage(
-            table_name=table_label,
-            row_count=row_count,
+            table_name="stocks.ohlcv_1m",
+            row_count=int(d.get("bar_count") or 0),
             earliest_timestamp=earliest,
             latest_timestamp=latest,
-            snapshot_id=snap_id,
         )
 
     def list_symbols(
