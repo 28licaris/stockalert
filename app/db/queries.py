@@ -486,6 +486,62 @@ async def latest_close_per_symbol_async(
     )
 
 
+def price_stats(
+    symbol: str, *, lookback_days: int = 365, source_table: str = "ohlcv_1m"
+) -> dict:
+    """High / low / last for `symbol` over a trailing window — computed in
+    ClickHouse as a single aggregate row.
+
+    This is the correct shape for "52-week high"-style questions
+    (``lookback_days=365`` ≈ 52 weeks). Answering those by fetching every bar
+    and scanning is wrong: callers (e.g. the assistant) truncate large lists,
+    so a row-scan over a long window silently returns a partial — and wrong —
+    max. One ``max(high)`` / ``min(low)`` over the window is exact and tiny.
+
+    Returns ``bar_count=0`` (and null stats) when CH has no bar in the window.
+    """
+    if source_table not in ("ohlcv_1m", "futures_ohlcv_1m"):
+        raise ValueError(f"Unsupported source_table: {source_table!r}")
+    r = get_client().query(
+        f"""
+        SELECT round(max(high), 4)                AS period_high,
+               argMax(timestamp, high)            AS high_ts,
+               round(min(low), 4)                 AS period_low,
+               argMin(timestamp, low)             AS low_ts,
+               round(argMax(close, timestamp), 4) AS last_close,
+               max(timestamp)                     AS last_ts,
+               count()                            AS bar_count
+        FROM {source_table}
+        WHERE symbol = {{sym:String}}
+          AND timestamp >= now() - toIntervalDay({{days:UInt16}})
+        """,
+        parameters={"sym": symbol.upper(), "days": int(lookback_days)},
+    )
+    row = r.result_rows[0] if r.result_rows else None
+    if not row or not row[6]:
+        return {"symbol": symbol.upper(), "lookback_days": int(lookback_days), "bar_count": 0}
+    high, high_ts, low, low_ts, last, last_ts, n = row
+    return {
+        "symbol": symbol.upper(),
+        "lookback_days": int(lookback_days),
+        "period_high": float(high) if high is not None else None,
+        "period_high_ts": high_ts,
+        "period_low": float(low) if low is not None else None,
+        "period_low_ts": low_ts,
+        "last_close": float(last) if last is not None else None,
+        "last_ts": last_ts,
+        "bar_count": int(n),
+    }
+
+
+async def price_stats_async(
+    symbol: str, *, lookback_days: int = 365, source_table: str = "ohlcv_1m"
+) -> dict:
+    return await asyncio.to_thread(
+        price_stats, symbol, lookback_days=lookback_days, source_table=source_table
+    )
+
+
 def coverage(
     symbol: str, start: datetime, end: datetime, *, source_table: str = "ohlcv_1m"
 ) -> dict:
