@@ -1,15 +1,18 @@
 import { useState } from "react";
-import { Menu } from "lucide-react";
+import { Menu, Sparkles } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { SymbolSearchInput } from "@/components/symbol/SymbolSearchInput";
 import { useCurrentUser } from "@/auth/useCurrentUser";
+import { cn } from "@/lib/utils";
 
 interface TopbarProps {
   onMobileMenuOpen: () => void;
+  chatOpen: boolean;
+  onToggleChat: () => void;
 }
 
-export function Topbar({ onMobileMenuOpen }: TopbarProps) {
+export function Topbar({ onMobileMenuOpen, chatOpen, onToggleChat }: TopbarProps) {
   const user = useCurrentUser();
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
@@ -42,7 +45,20 @@ export function Topbar({ onMobileMenuOpen }: TopbarProps) {
         className="max-w-md flex-1"
       />
 
-      <div className="ml-auto flex items-center gap-3 text-sm">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        onClick={onToggleChat}
+        aria-label="Toggle AI assistant"
+        aria-pressed={chatOpen}
+        title="AI assistant (⌘/Ctrl+I)"
+        className={cn("ml-auto", chatOpen && "text-accent")}
+      >
+        <Sparkles className="h-5 w-5" />
+      </Button>
+
+      <div className="flex items-center gap-3 text-sm">
         <div className="hidden text-right leading-tight md:block">
           <div className="text-fg-base">{user.displayName}</div>
           <div className="text-[10px] uppercase tracking-wider text-fg-subtle">

@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { useUserSetting } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 import { MarketBanner } from "@/components/market/MarketBanner";
+import { ChatPanel } from "@/components/chat/ChatPanel";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import { StatusBar } from "./StatusBar";
@@ -21,6 +22,19 @@ export function AppShell() {
     false,
   );
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useUserSetting<boolean>("ui.chat.open", false);
+
+  // ⌘/Ctrl+I toggles the assistant panel.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "i") {
+        e.preventDefault();
+        setChatOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setChatOpen]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -41,11 +55,29 @@ export function AppShell() {
           )}
         >
           <MarketBanner />
-          <Topbar onMobileMenuOpen={() => setMobileOpen(true)} />
+          <Topbar
+            onMobileMenuOpen={() => setMobileOpen(true)}
+            chatOpen={chatOpen}
+            onToggleChat={() => setChatOpen((o) => !o)}
+          />
           <main className="min-h-0 flex-1 overflow-auto bg-bg-base">
             <Outlet />
           </main>
         </div>
+
+        {/* Collapsible AI assistant. Width-animated so the main content
+            reflows smoothly; hidden on mobile for now. */}
+        <aside
+          className={cn(
+            "hidden shrink-0 overflow-hidden border-l border-border transition-[width] duration-200 md:block",
+            chatOpen ? "md:w-[380px]" : "md:w-0",
+          )}
+          aria-hidden={!chatOpen}
+        >
+          <div className="h-full w-[380px]">
+            <ChatPanel onClose={() => setChatOpen(false)} />
+          </div>
+        </aside>
       </div>
       <StatusBar />
     </div>

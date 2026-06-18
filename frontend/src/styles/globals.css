@@ -86,3 +86,37 @@
     background: transparent;
   }
 }
+
+/* Compact markdown styling for assistant messages (.markdown wrapper). */
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown p { margin: 0.5rem 0; }
+.markdown h1, .markdown h2, .markdown h3 { margin: 0.75rem 0 0.4rem; font-weight: 600; }
+.markdown h1 { font-size: 1rem; }
+.markdown h2 { font-size: 0.95rem; }
+.markdown h3 { font-size: 0.9rem; }
+.markdown ul, .markdown ol { margin: 0.4rem 0; padding-left: 1.25rem; }
+.markdown ul { list-style: disc; }
+.markdown ol { list-style: decimal; }
+.markdown li { margin: 0.15rem 0; }
+.markdown a { color: hsl(var(--accent)); text-decoration: underline; }
+.markdown code {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.85em;
+  background: hsl(var(--bg-muted));
+  padding: 0.1em 0.3em;
+  border-radius: 0.25rem;
+}
+.markdown pre {
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.75rem;
+  background: hsl(var(--bg-base));
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.375rem;
+  overflow-x: auto;
+}
+.markdown pre code { background: transparent; padding: 0; }
+.markdown table { width: 100%; border-collapse: collapse; margin: 0.5rem 0; font-size: 0.8rem; }
+.markdown th, .markdown td { border: 1px solid hsl(var(--border)); padding: 0.25rem 0.5rem; text-align: left; }
+.markdown th { background: hsl(var(--bg-muted)); font-weight: 600; }
+.markdown blockquote { border-left: 2px solid hsl(var(--border)); padding-left: 0.75rem; color: hsl(var(--fg-muted)); margin: 0.5rem 0; }
