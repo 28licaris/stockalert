@@ -9,6 +9,9 @@ This is **frontend only**. It consumes the existing backend assistant API; there
 is no new server code. See `app/services/assistant/` and
 `app/api/routes_assistant.py`.
 
+> Design & operations (the end-to-end round-trip, production-readiness, and
+> alternative model architectures): [docs/assistant_chat_interface.md](../../../../docs/assistant_chat_interface.md).
+
 ## Requirements
 
 The backend needs `ANTHROPIC_API_KEY` set (see `.env.example`). Without it, a

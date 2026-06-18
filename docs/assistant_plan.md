@@ -39,6 +39,10 @@ in SaaS mode.
   a new bounded service `app/services/assistant/`.
 - [architecture_v2/](architecture_v2/README.md) — the v2 lake the
   assistant reads via MCP tools (equities.* tables).
+- [assistant_chat_interface.md](assistant_chat_interface.md) — the
+  shipped chat interface end-to-end (browser ⟷ server ⟷ model
+  round-trip), production-readiness checklist, and alternative model
+  architectures (Claude-on-Bedrock, self-hosted open-weight, hybrid).
 
 ---
 

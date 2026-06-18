@@ -51,8 +51,11 @@ For codebase orientation, in this order:
     operational model: Schwab = only streaming provider; two-tier
     universe; the add-streamed-symbol flow.
 15. [assistant_plan.md](assistant_plan.md) — the chat copilot
-    (LLM-backed agent over MCP tools).
-16. [frontend_api_contracts.md](frontend_api_contracts.md) —
+    (LLM-backed agent over MCP tools): backend master plan.
+16. [assistant_chat_interface.md](assistant_chat_interface.md) — the
+    chat interface end-to-end (browser ⟷ server ⟷ model round-trip),
+    production-readiness checklist, and alternative model architectures.
+17. [frontend_api_contracts.md](frontend_api_contracts.md) —
     Pydantic contracts the cockpit consumes.
 
 ## Working agreement
