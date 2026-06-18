@@ -193,14 +193,11 @@ class WatchlistService:
             return
         for sym in symbols:
             try:
+                # Seed recent 1m into the hot cache. All chart timeframes
+                # (5m/15m/1h/1d) are resampled from ohlcv_1m on read, and deep
+                # history is auto-filled from the lake on first request — so no
+                # separate 5m / daily backfill is needed.
                 self._backfill.enqueue_quick(sym, days=30)
-                self._backfill.enqueue_intraday(sym, days=270)
-                # Daily: pull as far back as Schwab will give us (~20 years
-                # for long-listed symbols; for newer IPOs Schwab returns
-                # listing-date forward). Daily is a single REST call per
-                # symbol — latency is bounded by Schwab pagination, not
-                # window size, so the 20-year ask is cheap.
-                self._backfill.enqueue_daily(sym, days=365 * 20)
             except Exception as e:  # noqa: BLE001 — boundary
                 logger.warning("Auto-backfill enqueue failed for %s: %s", sym, e)
 

@@ -61,3 +61,21 @@ export function fmtTime(iso: string | null | undefined): string {
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleTimeString();
 }
+
+/**
+ * Calendar date for a bar, rendered in US Eastern (the trading-day
+ * timezone) so a daily bar stamped at midnight ET reads as the correct
+ * session date regardless of the viewer's locale. Used for daily/1d bars
+ * where a time-of-day label is meaningless.
+ */
+export function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString(undefined, {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+  });
+}

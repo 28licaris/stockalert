@@ -338,7 +338,7 @@ class Bar(BaseModel):
     vwap: float | None = None
     trade_count: int | None = None
     interval: Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
-    source: str | None = None   # 'live' | 'ohlcv_1m' | 'ohlcv_5m' | 'ohlcv_daily'
+    source: str | None = None   # 'live' | 'ohlcv_1m'  (all timeframes resampled from ohlcv_1m on read)
 
 class Signal(BaseModel):
     ts: datetime

@@ -225,6 +225,18 @@ ORDER BY (symbol, timestamp);
 coexist with v1's silver-derived writes during the migration. After
 Phase 5 cutover, only Schwab writes (live + REST) remain.
 
+**`ohlcv_1m` is the only CH serving table.** Every chart timeframe
+(5m / 15m / 30m / 1h / 1d) is resampled from it on read
+(`queries.list_bars_resampled`, daily bucketed on the ET trading day) —
+so all timeframes are always current to the latest streamed minute and
+always split-adjusted. The former `ohlcv_5m` / `ohlcv_daily` cache tables
+were retired (2026-06); maintaining them separately caused staleness and
+duplicate-candle bugs and bought nothing on speed (a 5-year daily
+resample is sub-second). If deep-history daily ever needs to be instant
+under heavy concurrency, add a ClickHouse AggregatingMergeTree
+materialized view (incremental, always-fresh) — don't reintroduce a
+separately-fed table.
+
 ## Cross-table queries — the schema parity payoff
 
 Because `equities.polygon_adjusted` and `equities.schwab_universe` share the

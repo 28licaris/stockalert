@@ -101,8 +101,9 @@ def test_bar_reader_inverted_window_returns_empty() -> None:
     q.assert_not_called()
 
 
-def test_bar_reader_resampled_interval_passes_source_table() -> None:
-    """source_table kwarg flows through to queries.list_bars_resampled."""
+def test_bar_reader_resampled_interval_reads_from_1m() -> None:
+    """Intraday intervals resample from ohlcv_1m via queries.list_bars_resampled
+    (no source_table override — there's only one source)."""
     rows = [
         {"ts": datetime(2024, 8, 1, 14, m * 15, tzinfo=timezone.utc),
          "open": 100, "high": 101, "low": 99, "close": 100.5, "volume": 1000}
@@ -114,17 +115,22 @@ def test_bar_reader_resampled_interval_passes_source_table() -> None:
             datetime(2024, 8, 1, 14, 0, tzinfo=timezone.utc),
             datetime(2024, 8, 1, 16, 0, tzinfo=timezone.utc),
             interval="15m",
-            source_table="ohlcv_5m",
         )
     q.assert_called_once()
-    assert q.call_args.kwargs.get("source_table") == "ohlcv_5m"
+    assert q.call_args.args[1] == "15m"
+    assert "source_table" not in q.call_args.kwargs
     assert all(b.interval == "15m" for b in bars)
 
 
-def test_bar_reader_1d_uses_list_daily_bars() -> None:
-    """`1d` interval uses queries.list_daily_bars (the native daily table)."""
-    rows = [_ch_row(0, timestamp=datetime(2024, 8, d, tzinfo=timezone.utc)) for d in (1, 2)]
-    with patch("app.db.queries.list_daily_bars", return_value=rows) as q:
+def test_bar_reader_1d_resamples_from_1m() -> None:
+    """`1d` interval is resampled from ohlcv_1m like every other interval —
+    no dedicated daily table."""
+    rows = [
+        {"ts": datetime(2024, 8, d, 4, tzinfo=timezone.utc),
+         "open": 100, "high": 101, "low": 99, "close": 100.5, "volume": 1000}
+        for d in (1, 2)
+    ]
+    with patch("app.db.queries.list_bars_resampled", return_value=rows) as q:
         bars = BarReader().get_bars_in_range(
             "AAPL",
             datetime(2024, 8, 1, tzinfo=timezone.utc),
@@ -132,6 +138,7 @@ def test_bar_reader_1d_uses_list_daily_bars() -> None:
             interval="1d",
         )
     q.assert_called_once()
+    assert q.call_args.args[1] == "1d"
     assert len(bars) == 2
     assert bars[0].interval == "1d"
 
@@ -225,66 +232,33 @@ def _resampled_rows(n: int = 3) -> list[dict]:
     ]
 
 
-def test_get_bars_for_chart_1d_prefers_native_daily_table() -> None:
-    """`1d` -> list_daily_bars first; resampled fallback NOT called when daily has rows."""
-    daily_rows = [
-        {"timestamp": datetime(2024, 8, d, tzinfo=timezone.utc),
+def test_get_bars_for_chart_1d_resamples_from_1m() -> None:
+    """Every interval, including 1d, is resampled on read from ohlcv_1m —
+    there is no separate daily table."""
+    rows = [
+        {"ts": datetime(2024, 8, d, 4, tzinfo=timezone.utc),
          "open": 100, "high": 101, "low": 99, "close": 100.5, "volume": 1000}
         for d in (1, 2, 3)
     ]
-    with patch("app.db.queries.list_daily_bars", return_value=daily_rows) as native, \
-         patch("app.db.queries.list_bars_resampled") as resampled:
+    with patch("app.db.queries.list_bars_resampled", return_value=rows) as q:
         bars = BarReader().get_bars_for_chart("AAPL", interval="1d", lookback_days=30)
-    native.assert_called_once()
-    resampled.assert_not_called()
+    q.assert_called_once()
+    assert q.call_args.args[1] == "1d"            # interval positional
+    assert "source_table" not in q.call_args.kwargs
     assert len(bars) == 3
     assert all(b.interval == "1d" for b in bars)
 
 
-def test_get_bars_for_chart_1d_falls_back_to_resampled_when_daily_empty() -> None:
-    """`1d` with empty daily table -> resampled fallback."""
-    with patch("app.db.queries.list_daily_bars", return_value=[]) as native, \
-         patch("app.db.queries.list_bars_resampled", return_value=_resampled_rows()) as resampled:
-        bars = BarReader().get_bars_for_chart("AAPL", interval="1d", lookback_days=10)
-    native.assert_called_once()
-    resampled.assert_called_once()
-    assert len(bars) == 3
-
-
-def test_get_bars_for_chart_1m_always_uses_ohlcv_1m_source() -> None:
-    with patch("app.db.queries.list_bars_resampled", return_value=_resampled_rows()) as q:
-        BarReader().get_bars_for_chart("AAPL", interval="1m", lookback_days=5)
-    assert q.call_args.kwargs.get("source_table") == "ohlcv_1m"
-
-
-def test_get_bars_for_chart_5m_short_lookback_uses_ohlcv_1m() -> None:
-    with patch("app.db.queries.list_bars_resampled", return_value=_resampled_rows()) as q:
-        BarReader().get_bars_for_chart("AAPL", interval="5m", lookback_days=10)
-    assert q.call_args.kwargs.get("source_table") == "ohlcv_1m"
-
-
-def test_get_bars_for_chart_5m_long_lookback_prefers_ohlcv_5m() -> None:
-    """lookback > 48 days -> source_table='ohlcv_5m'."""
-    with patch("app.db.queries.list_bars_resampled", return_value=_resampled_rows()) as q:
-        BarReader().get_bars_for_chart("AAPL", interval="5m", lookback_days=180)
-    assert q.call_args.kwargs.get("source_table") == "ohlcv_5m"
-
-
-def test_get_bars_for_chart_5m_long_lookback_falls_back_to_1m_when_5m_empty() -> None:
-    """If ohlcv_5m is empty (first visit), retry against ohlcv_1m."""
-    calls = []
-
-    def fake_resampled(symbol, interval, start, end, limit, *, source_table="ohlcv_1m"):
-        calls.append(source_table)
-        if source_table == "ohlcv_5m":
-            return []
-        return _resampled_rows()
-
-    with patch("app.db.queries.list_bars_resampled", side_effect=fake_resampled):
-        bars = BarReader().get_bars_for_chart("AAPL", interval="5m", lookback_days=180)
-
-    assert calls == ["ohlcv_5m", "ohlcv_1m"]
-    assert len(bars) == 3
+def test_get_bars_for_chart_every_interval_resamples_from_1m() -> None:
+    """5m/15m/1h resample from the single ohlcv_1m source regardless of
+    lookback — no 5m table, no source switching."""
+    for interval, lookback in [("1m", 5), ("5m", 10), ("5m", 180), ("1h", 365)]:
+        with patch("app.db.queries.list_bars_resampled", return_value=_resampled_rows()) as q:
+            BarReader().get_bars_for_chart("AAPL", interval=interval, lookback_days=lookback)
+        q.assert_called_once()
+        assert q.call_args.args[1] == interval
+        # never forces a source table — always the default ohlcv_1m
+        assert "source_table" not in q.call_args.kwargs
 
 
 def test_get_bars_for_chart_auto_limit_scales_with_lookback() -> None:

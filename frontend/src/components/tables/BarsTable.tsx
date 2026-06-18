@@ -1,10 +1,12 @@
 import type { Bar } from "@/api/queries";
-import { fmtPrice, fmtTime, fmtVol } from "@/lib/fmt";
+import { fmtDate, fmtPrice, fmtTime, fmtVol } from "@/lib/fmt";
 import { cn } from "@/lib/utils";
 
 interface BarsTableProps {
   bars: ReadonlyArray<Bar>;
   limit?: number;
+  /** Active interval; daily bars show a date instead of a time-of-day. */
+  interval?: string;
 }
 
 /**
@@ -14,8 +16,9 @@ interface BarsTableProps {
  * FE-3 will replace this hand-rolled table with TanStack Table once
  * sorting/virtualization is needed; for now N≤100 stays fast.
  */
-export function BarsTable({ bars, limit = 50 }: BarsTableProps) {
+export function BarsTable({ bars, limit = 50, interval }: BarsTableProps) {
   const rows = [...bars].slice(-limit).reverse();
+  const isDaily = interval === "1d";
   return (
     <div className="overflow-x-auto rounded-md border border-border bg-bg-subtle">
       <table className="w-full text-sm">
@@ -44,7 +47,9 @@ export function BarsTable({ bars, limit = 50 }: BarsTableProps) {
             const up = b.close >= b.open;
             return (
               <tr key={b.ts} className="hover:bg-bg-muted/40">
-                <td className="px-3 py-1.5 text-fg-muted">{fmtTime(b.ts)}</td>
+                <td className="px-3 py-1.5 text-fg-muted">
+                  {isDaily ? fmtDate(b.ts) : fmtTime(b.ts)}
+                </td>
                 <td className="px-3 py-1.5 text-right text-fg-base">
                   {fmtPrice(b.open)}
                 </td>

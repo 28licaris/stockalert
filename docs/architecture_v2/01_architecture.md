@@ -67,8 +67,7 @@ flowchart TB
   %% =========================================================
   subgraph LIVE["LIVE TIER — ClickHouse (target &lt;200ms reads)"]
     direction LR
-    OHLCV1M[("ohlcv_1m")]
-    OHLCVD[("ohlcv_daily")]
+    OHLCV1M[("ohlcv_1m<br/>5m/15m/30m/1h/1d resampled on read")]
     STREAMUNIV[("stream_universe")]
     SIG[("signals")]
     AGRUN[("agent_runs")]
@@ -117,7 +116,6 @@ flowchart TB
   SchwabWS -->|live ticks| BB
   BB --> OHLCV1M
   SchwabRest -->|on-add 48d × 1m| OHLCV1M
-  SchwabRest -->|on-add 20y × 1d| OHLCVD
   OHLCV1M -.->|read mirror| LAJ
   LAJ --> SU
   PolygonFF -->|one-time bulk<br/>+ optional nightly| PR
@@ -166,7 +164,6 @@ flowchart TB
   %% READ EDGES
   %% =========================================================
   OHLCV1M --> COCK
-  OHLCVD --> COCK
   SIG --> COCK
   STREAMUNIV --> COCK
   AGRUN --> COCK
@@ -198,7 +195,7 @@ flowchart TB
   classDef model   fill:#fce7f3,stroke:#9f1239,color:#111
 
   class SchwabWS,SchwabRest,PolygonFF,PolygonCA,PolygonTickers ext
-  class OHLCV1M,OHLCVD,STREAMUNIV,SIG,AGRUN live
+  class OHLCV1M,STREAMUNIV,SIG,AGRUN live
   class PR,PA,SU,CA,FT,LBL,PIT,MR,BTBL,FDM lake
   class BB,LAJ,PAJ,FB,LBJ,PITJ,TR,BTJ,DRIFT,SW compute
   class COCK,LB_API,MCP_T,DUCK,SPRK cons
@@ -253,8 +250,7 @@ across any zoom level.
 
 | Table | Contents | Source | Adjusted? |
 |---|---|---|---|
-| `ohlcv_1m` | 1-min bars for `stream_universe` symbols | Schwab WS (live) + Schwab REST (on-add 48d) | yes (Schwab native) |
-| `ohlcv_daily` | Daily bars | Schwab REST on-add (20y) | yes |
+| `ohlcv_1m` | 1-min bars for `stream_universe` symbols; the only CH OHLCV table — all chart timeframes (5m/15m/30m/1h/1d) are resampled from it on read | Schwab WS (live) + Schwab REST (on-add 48d) | yes (Schwab native) |
 | `stream_universe` | Canonical "what's actively streamed" | Cockpit Stream Service page | n/a |
 | `watchlists`, `watchlist_members` | User-organizing labels | Cockpit | n/a |
 | `signals`, `agent_runs` | App state (signals + sim/backtest run records) | App | n/a |
@@ -312,16 +308,15 @@ POST /api/v1/stream {"symbol": "PG"}
    schwab_provider.subscribe_bars(["PG"])      → CH.ohlcv_1m forward (live)
         │
         ▼
-   parallel:
-     ├─ schwab_rest_pricehistory(PG, 48d × 1m)  → CH.ohlcv_1m       ~1-2s
-     └─ schwab_rest_pricehistory(PG, 20y × 1d)  → CH.ohlcv_daily    ~1-2s
+   schwab_rest_pricehistory(PG, 48d × 1m)        → CH.ohlcv_1m       ~1-2s
 
-   Total wall-clock: ~3-5s. Chart usable at every zoom.
+   Total wall-clock: ~3-5s. Chart usable at every zoom (5m/15m/30m/1h/1d
+   resampled from ohlcv_1m on read).
 ```
 
-For 1-min data deeper than 48 days for the new symbol: lazy query
-of `equities.polygon_adjusted` via DuckDB at chart-render time. Most
-users never hit this; 5-year zoom uses daily candles.
+For data deeper than 48 days for the new symbol: lazy query of
+`equities.polygon_adjusted` via DuckDB at chart-render time, resampled
+to the requested timeframe. Most users never hit this.
 
 ### C. Polygon historical (one-time + incremental)
 
@@ -481,7 +476,7 @@ v2 makes that explicit.
 - Bronze / silver as separate Iceberg tables (renamed; merged where adjusted).
 - The "live tier reads from silver-derived CH" indirection.
 - `silver_to_ch_refresh` (deferred in v1; not needed in v2).
-- CH `ohlcv_5m` writes (chart resamples 1m at query time).
+- CH `ohlcv_5m` / `ohlcv_daily` cache tables (retired 2026-06 — chart resamples 5m/15m/30m/1h/1d from `ohlcv_1m` at query time).
 - Schwab REST nightly (universe coverage comes from WS + on-add tip-fill).
 
 ## See also

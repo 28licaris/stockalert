@@ -46,10 +46,6 @@ _BARS_PER_DAY: dict[str, int] = {
 }
 _LIMIT_HARD_CAP = 100_000
 
-# Schwab's pricehistory caps 1-min bars at ~48 days. For longer lookbacks
-# we resample from `ohlcv_5m` (which extends ~270 days) instead.
-_USE_5M_SOURCE_OVER_DAYS = 48
-
 # Sentinel "open lower bound" used by get_bars_for_chart when the caller
 # didn't specify a lookback. Any timestamp safely earlier than the
 # oldest data in CH.
@@ -134,7 +130,6 @@ class BarReader:
         *,
         interval: str = "1m",
         limit: int = _LIMIT_HARD_CAP,
-        source_table: Optional[str] = None,
     ) -> list[LiveBar]:
         """
         Return bars for `symbol` in the half-open window `[start, end)`
@@ -142,19 +137,11 @@ class BarReader:
         `queries.SUPPORTED_INTERVALS`: `'1m'`, `'5m'`, `'15m'`, `'30m'`,
         `'1h'`, `'4h'`, `'1d'`.
 
-        Routing:
-          - `interval='1d'` -> `queries.list_daily_bars`
-            (the dedicated `ohlcv_daily` table; Schwab daily history
-            extends 20+ years).
-          - Everything else -> `queries.list_bars_resampled`. With
-            `interval='1m'` and `source_table='ohlcv_1m'` (the default)
-            this is a pass-through; for longer intervals it does the
-            ClickHouse-side rollup.
-
-        `source_table` lets callers force the source ('ohlcv_1m' for
-        the highest fidelity / shortest window; 'ohlcv_5m' for windows
-        > ~48 days where the 1m table doesn't have history). Omit it
-        to let the reader pick — `get_bars_for_chart` uses this.
+        Every interval is resampled on read from the single source of truth,
+        `ohlcv_1m` (split-adjusted, full-depth, live-streamed). `interval='1m'`
+        is a pass-through; longer intervals roll up ClickHouse-side
+        (`toStartOfInterval`, daily bucketed on the ET trading day). There are
+        no separate 5m / daily tables — see `docs/architecture_v2/02_schema.md`.
 
         Naive datetimes treated as UTC. `end <= start` -> `[]`.
         """
@@ -170,15 +157,7 @@ class BarReader:
 
         from app.db import queries
 
-        if interval == "1d":
-            rows = queries.list_daily_bars(symbol, start_utc, end_utc, limit)
-        else:
-            kwargs: dict = {}
-            if source_table is not None:
-                kwargs["source_table"] = source_table
-            rows = queries.list_bars_resampled(
-                symbol, interval, start_utc, end_utc, limit, **kwargs
-            )
+        rows = queries.list_bars_resampled(symbol, interval, start_utc, end_utc, limit)
         if not rows:
             return []
         return [_row_to_live_bar(r, interval, symbol=symbol) for r in rows]
@@ -192,25 +171,18 @@ class BarReader:
         limit: Optional[int] = None,
     ) -> list[LiveBar]:
         """
-        Higher-level helper for chart endpoints. Owns the multi-table
-        fallback + auto-limit logic that previously lived in the
-        `/api/bars` route.
+        Higher-level helper for chart endpoints. Owns the window +
+        auto-limit logic that previously lived in the `/api/bars` route.
 
         Window selection:
           - If `lookback_days` is set, window is `[now-N, now]`.
           - If not, no window filter — caller gets `limit` most recent
             bars across all available history.
 
-        Source selection:
-          - `interval='1d'` -> try `ohlcv_daily`; fall back to a
-            resampled query if the daily table is empty (useful before
-            the first daily backfill completes).
-          - `interval='1m'` -> always use `ohlcv_1m` as source.
-          - `interval='5m'..'4h'` with `lookback_days > 48` -> prefer
-            `ohlcv_5m` (Schwab 5m extends ~270d). Fall back to
-            `ohlcv_1m` if 5m is empty.
-          - `interval='5m'..'4h'` with `lookback_days <= 48` or None ->
-            use `ohlcv_1m` (highest fidelity for recent data).
+        Source: every interval is resampled on read from `ohlcv_1m`, the
+        single CH source of truth (split-adjusted, full-depth, live). No
+        separate 5m / daily tables — so every timeframe is always current to
+        the latest streamed minute.
 
         Auto-limit when caller omits `limit`:
           - No lookback -> 500 rows (the historical default).
@@ -239,71 +211,12 @@ class BarReader:
                 per_day = _BARS_PER_DAY.get(interval, 16)
                 limit = min(_LIMIT_HARD_CAP, max(500, int(lookback_days * per_day * 1.5)))
 
-        # Daily: native table with resampled fallback (handles the
-        # pre-first-daily-backfill case where ohlcv_daily is empty but
-        # ohlcv_1m has bars covering the same window).
-        if interval == "1d":
-            bars = self.get_bars_in_range(
-                symbol,
-                start or _MIN_TS,
-                end or datetime.now(timezone.utc),
-                interval="1d",
-                limit=limit,
-            )
-            if bars:
-                return bars
-            from app.db import queries
-            rows = queries.list_bars_resampled(
-                symbol,
-                "1d",
-                start or _MIN_TS,
-                end or datetime.now(timezone.utc),
-                limit,
-                source_table="ohlcv_1m",
-            )
-            return [_row_to_live_bar(r, "1d", symbol=symbol) for r in rows]
-
-        # 1m: always from ohlcv_1m.
-        if interval == "1m":
-            return self.get_bars_in_range(
-                symbol,
-                start or _MIN_TS,
-                end or datetime.now(timezone.utc),
-                interval="1m",
-                limit=limit,
-                source_table="ohlcv_1m",
-            )
-
-        # 5m..4h: pick source by lookback. Schwab 1m caps at ~48d; 5m extends ~270d.
-        prefer_5m = lookback_days is not None and lookback_days > _USE_5M_SOURCE_OVER_DAYS
-        if prefer_5m:
-            bars = self.get_bars_in_range(
-                symbol,
-                start or _MIN_TS,
-                end or datetime.now(timezone.utc),
-                interval=interval,
-                limit=limit,
-                source_table="ohlcv_5m",
-            )
-            if bars:
-                return bars
-            # 5m table empty (first visit); fall back to 1m source.
-            return self.get_bars_in_range(
-                symbol,
-                start or _MIN_TS,
-                end or datetime.now(timezone.utc),
-                interval=interval,
-                limit=limit,
-                source_table="ohlcv_1m",
-            )
-
         return self.get_bars_in_range(
             symbol,
             start or _MIN_TS,
             end or datetime.now(timezone.utc),
             interval=interval,
             limit=limit,
-            source_table="ohlcv_1m",
         )
 
     def get_latest_bar_per_symbol(self, symbols: list[str]) -> dict[str, LiveBar]:

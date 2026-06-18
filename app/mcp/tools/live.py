@@ -86,7 +86,6 @@ def get_bars_in_range(
     end: datetime,
     interval: str = "1m",
     limit: int = 100_000,
-    source_table: Optional[str] = None,
 ) -> LiveBarsResponse:
     """Bars in an explicit time window from the live (CH) tier.
 
@@ -98,15 +97,10 @@ def get_bars_in_range(
         symbol: Ticker symbol.
         start: Window start, inclusive. Naive datetimes treated as UTC.
         end: Window end, exclusive.
-        interval: '1m', '5m', '15m', '30m', '1h', '4h', '1d'. Anything
-            beyond '5m'/'daily' is resampled at query time from
-            `ohlcv_1m` (or `ohlcv_5m` if you set source_table).
+        interval: '1m', '5m', '15m', '30m', '1h', '4h', '1d'. Every interval
+            is resampled at query time from `ohlcv_1m`, the single CH source
+            of truth (split-adjusted, full-depth, live).
         limit: Row cap. Default 100k.
-        source_table: Force a specific source ('ohlcv_1m' for highest
-            fidelity short windows, 'ohlcv_5m' for windows > ~48 days
-            where the 1m table doesn't have history). Omit to let the
-            reader pick (it always uses ohlcv_1m here; the smart picker
-            is in `get_bars_for_chart`).
 
     Returns:
         LiveBarsResponse with all bars in [start, end).
@@ -121,7 +115,7 @@ def get_bars_in_range(
         # behavior as get_bars_for_chart.
         bars = get_range_bars(
             symbol, start, end,
-            interval=interval, limit=limit, source_table=source_table,
+            interval=interval, limit=limit,
             source=BarSource.AUTO, reader=_reader(),
         )
         return LiveBarsResponse(

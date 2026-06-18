@@ -11,7 +11,6 @@ import pandas as pd
 
 from app.db.client import get_client
 
-
 def _now_version() -> int:
     return time.time_ns() // 1_000_000
 
@@ -35,11 +34,11 @@ def _dedup_ohlc_intraday_subquery(source_table: str, where_sql: str) -> str:
     """
     Collapse ReplacingMergeTree(version) duplicates without ``FINAL``.
 
-    ``FINAL`` on large ``ohlcv_1m`` / ``ohlcv_5m`` tables can exceed the
-    server's memory limit (full merge-at-read). Grouping by the sort key
-    and taking ``argMax(_, version)`` matches the engine's row-winner rule.
+    ``FINAL`` on the large ``ohlcv_1m`` table can exceed the server's memory
+    limit (full merge-at-read). Grouping by the sort key and taking
+    ``argMax(_, version)`` matches the engine's row-winner rule.
     """
-    if source_table not in ("ohlcv_1m", "ohlcv_5m"):
+    if source_table != "ohlcv_1m":
         raise ValueError(f"Unsupported source_table: {source_table!r}")
     return f"""
         SELECT
@@ -58,26 +57,8 @@ def _dedup_ohlc_intraday_subquery(source_table: str, where_sql: str) -> str:
     """
 
 
-def _dedup_ohlc_daily_subquery(where_sql: str) -> str:
-    """Same as ``_dedup_ohlc_intraday_subquery`` for ``ohlcv_daily``."""
-    return f"""
-        SELECT
-            symbol,
-            timestamp,
-            argMax(open, version) AS open,
-            argMax(high, version) AS high,
-            argMax(low, version) AS low,
-            argMax(close, version) AS close,
-            argMax(volume, version) AS volume,
-            argMax(source, version) AS source
-        FROM ohlcv_daily
-        WHERE {where_sql}
-        GROUP BY symbol, timestamp
-    """
-
-
 def _insert_intraday(table: str, rows: List[dict]) -> None:
-    """Generic 1-min / 5-min insert; both tables share the same column layout."""
+    """1-min bar insert into ``ohlcv_1m``."""
     if not rows:
         return
     client = get_client()
@@ -105,15 +86,6 @@ def _insert_intraday(table: str, rows: List[dict]) -> None:
 def insert_bars_batch(rows: List[dict]) -> None:
     """Insert 1-min bars into `ohlcv_1m`."""
     _insert_intraday("ohlcv_1m", rows)
-
-
-def insert_5m_bars_batch(rows: List[dict]) -> None:
-    """Insert native 5-min bars into `ohlcv_5m`."""
-    _insert_intraday("ohlcv_5m", rows)
-
-
-async def insert_5m_bars_batch_async(rows: List[dict]) -> None:
-    await asyncio.to_thread(insert_5m_bars_batch, rows)
 
 
 def insert_signals_batch(rows: List[dict]) -> None:
@@ -232,111 +204,6 @@ SUPPORTED_INTERVALS: dict[str, str] = {
 }
 
 
-def insert_daily_bars_batch(rows: List[dict]) -> None:
-    if not rows:
-        return
-    client = get_client()
-    ver = _now_version()
-    data: List[List[Any]] = []
-    for r in rows:
-        data.append(
-            [
-                r["symbol"],
-                r["timestamp"],
-                float(r["open"]),
-                float(r["high"]),
-                float(r["low"]),
-                float(r["close"]),
-                float(r["volume"]),
-                str(r.get("source") or ""),
-                int(r.get("version") or ver),
-            ]
-        )
-    client.insert(
-        "ohlcv_daily",
-        data,
-        column_names=[
-            "symbol", "timestamp", "open", "high", "low", "close",
-            "volume", "source", "version",
-        ],
-    )
-
-
-async def insert_daily_bars_batch_async(rows: List[dict]) -> None:
-    await asyncio.to_thread(insert_daily_bars_batch, rows)
-
-
-def list_daily_bars(
-    symbol: str,
-    start: Optional[datetime],
-    end: Optional[datetime],
-    limit: int,
-) -> List[dict]:
-    """Read native daily bars from `ohlcv_daily` (no resampling)."""
-    where_parts = ["symbol = {sym:String}"]
-    params: dict = {"sym": symbol.upper(), "lim": int(limit)}
-    if start is not None:
-        where_parts.append("timestamp >= {start:DateTime64(3)}")
-        params["start"] = start
-    if end is not None:
-        where_parts.append("timestamp <= {end:DateTime64(3)}")
-        params["end"] = end
-    inner = _dedup_ohlc_daily_subquery(" AND ".join(where_parts))
-    sql = f"""
-        SELECT timestamp, open, high, low, close, volume
-        FROM ({inner}) AS deduped
-        ORDER BY timestamp DESC
-        LIMIT {{lim:UInt32}}
-    """
-    result = get_client().query(sql, parameters=params)
-    out: List[dict] = []
-    for row in result.result_rows:
-        ts, o, h, l, c, v = row
-        out.append({
-            "ts": ts,
-            "open": float(o) if o is not None else None,
-            "high": float(h) if h is not None else None,
-            "low": float(l) if l is not None else None,
-            "close": float(c) if c is not None else None,
-            "volume": int(v) if v is not None else 0,
-        })
-    return list(reversed(out))
-
-
-def daily_coverage(symbol: str, start: datetime, end: datetime) -> dict:
-    """Coverage report against `ohlcv_daily`. Same shape as `coverage()`."""
-    result = get_client().query(
-        """
-        SELECT min(timestamp) AS earliest, max(timestamp) AS latest, count() AS bar_count
-        FROM (
-            SELECT timestamp
-            FROM ohlcv_daily
-            WHERE symbol = {sym:String}
-              AND timestamp >= {start:DateTime64(3)}
-              AND timestamp <= {end:DateTime64(3)}
-            GROUP BY symbol, timestamp
-        )
-        """,
-        parameters={"sym": symbol.upper(), "start": start, "end": end},
-    )
-    if not result.result_rows:
-        return {"symbol": symbol.upper(), "start": start, "end": end,
-                "earliest": None, "latest": None, "bar_count": 0}
-    earliest, latest, n = result.result_rows[0]
-    n_int = int(n) if n is not None else 0
-    return {
-        "symbol": symbol.upper(),
-        "start": start, "end": end,
-        "earliest": earliest if n_int > 0 else None,
-        "latest": latest if n_int > 0 else None,
-        "bar_count": n_int,
-    }
-
-
-async def daily_coverage_async(symbol: str, start: datetime, end: datetime) -> dict:
-    return await asyncio.to_thread(daily_coverage, symbol, start, end)
-
-
 def list_bars_resampled(
     symbol: str,
     interval: str,
@@ -348,7 +215,8 @@ def list_bars_resampled(
 ) -> List[dict]:
     """
     Return OHLCV bars resampled to `interval` (e.g. '1m', '5m', '1h', '1d')
-    from the given `source_table` (`ohlcv_1m` or `ohlcv_5m`).
+    from `ohlcv_1m` — the single stored resolution. Every chart timeframe is
+    derived here on read.
 
     Aggregation rules (the only correct ones for candle data):
       - open  = `argMin(open, timestamp)`  (first bar's open)
@@ -357,13 +225,10 @@ def list_bars_resampled(
       - close = `argMax(close, timestamp)` (last bar's close)
       - volume = `sum(volume)`
     """
-    if source_table not in ("ohlcv_1m", "ohlcv_5m"):
-        raise ValueError(f"Unsupported source_table: {source_table!r}")
+    if source_table != "ohlcv_1m":
+        raise ValueError(f"Unsupported source_table: {source_table!r} (only ohlcv_1m)")
     if interval not in SUPPORTED_INTERVALS:
         raise ValueError(f"Unsupported interval: {interval!r}")
-    # 1m can only come from ohlcv_1m (5m can't be downsampled).
-    if interval == "1m" and source_table != "ohlcv_1m":
-        raise ValueError("interval '1m' requires source_table='ohlcv_1m'")
     if interval == "1m" and start is None and end is None:
         return list_bars_desc(symbol, limit)
 
@@ -378,12 +243,21 @@ def list_bars_resampled(
     where_clause = " AND ".join(where_parts)
     interval_expr = SUPPORTED_INTERVALS[interval]
 
+    # Daily buckets anchor on the ET trading day, not UTC midnight — an
+    # after-hours bar (e.g. 19:45 ET) crosses midnight UTC and would otherwise
+    # fall into the next calendar day. Intra-day intervals divide evenly within
+    # a UTC day (ET is a whole-hour offset), so toStartOfInterval is fine there.
+    if interval == "1d":
+        bucket_expr = "toStartOfDay(timestamp, 'America/New_York')"
+    else:
+        bucket_expr = f"toStartOfInterval(timestamp, {interval_expr})"
+
     # ORDER BY ts DESC + LIMIT keeps the NEWEST N rows; reverse in Python for
     # ascending output.
     dedup = _dedup_ohlc_intraday_subquery(source_table, where_clause)
     sql = f"""
         SELECT
-            toStartOfInterval(timestamp, {interval_expr}) AS bucket_ts,
+            {bucket_expr} AS bucket_ts,
             argMin(open, timestamp)  AS o,
             max(high)                AS h,
             min(low)                 AS l,
@@ -612,44 +486,10 @@ async def coverage_all_async(symbol: str) -> dict:
     return await asyncio.to_thread(coverage_all, symbol)
 
 
-def coverage_5m(symbol: str, start: datetime, end: datetime) -> dict:
-    """Coverage report against `ohlcv_5m`. Same shape as `coverage()`."""
-    result = get_client().query(
-        """
-        SELECT min(timestamp) AS earliest, max(timestamp) AS latest, count() AS bar_count
-        FROM (
-            SELECT timestamp
-            FROM ohlcv_5m
-            WHERE symbol = {sym:String}
-              AND timestamp >= {start:DateTime64(3)}
-              AND timestamp <= {end:DateTime64(3)}
-            GROUP BY symbol, timestamp
-        )
-        """,
-        parameters={"sym": symbol.upper(), "start": start, "end": end},
-    )
-    if not result.result_rows:
-        return {"symbol": symbol.upper(), "start": start, "end": end,
-                "earliest": None, "latest": None, "bar_count": 0}
-    earliest, latest, n = result.result_rows[0]
-    n_int = int(n) if n is not None else 0
-    return {
-        "symbol": symbol.upper(),
-        "start": start, "end": end,
-        "earliest": earliest if n_int > 0 else None,
-        "latest": latest if n_int > 0 else None,
-        "bar_count": n_int,
-    }
-
-
-async def coverage_5m_async(symbol: str, start: datetime, end: datetime) -> dict:
-    return await asyncio.to_thread(coverage_5m, symbol, start, end)
-
-
 # ---------- Gap detection ----------
 
 # Source-table → bar resolution in minutes. Used by `find_intraday_gaps`.
-_TABLE_STEP_MINUTES = {"ohlcv_1m": 1, "ohlcv_5m": 5}
+_TABLE_STEP_MINUTES = {"ohlcv_1m": 1}
 
 
 def find_intraday_gaps(

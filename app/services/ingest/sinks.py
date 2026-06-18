@@ -109,8 +109,9 @@ class Sink(Protocol):
 
 class ClickHouseSink:
     """
-    Hot-cache sink. Writes canonical bars to ``ohlcv_1m`` (minute) or
-    ``ohlcv_daily`` (day) via the existing async insert functions.
+    Hot-cache sink. Writes canonical 1-minute bars to ``ohlcv_1m`` via the
+    async insert function. (Daily/5m caches were retired — all chart
+    timeframes are resampled from ``ohlcv_1m`` on read.)
 
     Idempotency is provided by the ClickHouse engine
     (``ReplacingMergeTree(version)`` on ``(symbol, timestamp)``) — re-running
@@ -123,28 +124,20 @@ class ClickHouseSink:
         self,
         *,
         insert_minute_fn: InsertFn,
-        insert_daily_fn: InsertFn,
         batch_size: int = DEFAULT_BATCH_SIZE,
     ) -> None:
-        if insert_minute_fn is None or insert_daily_fn is None:
-            raise ValueError(
-                "ClickHouseSink: insert_minute_fn and insert_daily_fn are required"
-            )
+        if insert_minute_fn is None:
+            raise ValueError("ClickHouseSink: insert_minute_fn is required")
         self._insert_minute_fn = insert_minute_fn
-        self._insert_daily_fn = insert_daily_fn
         self._batch_size = max(1, int(batch_size))
 
     @classmethod
     def from_settings(cls, *, batch_size: int = DEFAULT_BATCH_SIZE) -> "ClickHouseSink":
         # Lazy import keeps this module decoupled from ``app.db`` at
         # import time (matters for the future microservice split).
-        from app.db.queries import (
-            insert_bars_batch_async,
-            insert_daily_bars_batch_async,
-        )
+        from app.db.queries import insert_bars_batch_async
         return cls(
             insert_minute_fn=insert_bars_batch_async,
-            insert_daily_fn=insert_daily_bars_batch_async,
             batch_size=batch_size,
         )
 
@@ -191,9 +184,11 @@ class ClickHouseSink:
     async def _insert_batched(self, records: List[dict], *, kind: Kind) -> int:
         """Insert ``records`` in fixed-size batches. Returns the number
         of batches sent (useful in telemetry)."""
-        insert_fn = (
-            self._insert_minute_fn if kind == "minute" else self._insert_daily_fn
-        )
+        if kind != "minute":
+            raise ValueError(
+                f"ClickHouseSink only writes 1-minute bars; got kind={kind!r}"
+            )
+        insert_fn = self._insert_minute_fn
         n = len(records)
         batches = 0
         for i in range(0, n, self._batch_size):

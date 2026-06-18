@@ -110,7 +110,7 @@ Plus the planned tier:
    │   │  (historical, pre-overlay)           │
    │   └──────────────────────────────────────┘
    │
-   └─► resampled views (ohlcv_5m, ohlcv_daily) — populated by CH MVs from ohlcv_1m
+   └─► chart timeframes (5m/15m/30m/1h/1d) — resampled from ohlcv_1m on read
 ```
 
 Numbered paths ①-⑧ are described in detail in §3.
@@ -154,7 +154,7 @@ arrival + 5-second batch flush ceiling).
 
 ---
 
-### ② Schwab REST `/pricehistory` → CH `ohlcv_1m`/`ohlcv_5m`/`ohlcv_daily`
+### ② Schwab REST `/pricehistory` → CH `ohlcv_1m`
 
 > ⚠️ **LEGACY PATH — VIOLATES THE GROUND-TRUTH RULE.**
 > Scheduled for retirement at **TA-5.5** once TA-5.3 (silver_to_ch_backfill)

@@ -150,7 +150,6 @@ def get_range_bars(
     *,
     interval: str = "1m",
     limit: Optional[int] = None,
-    source_table: Optional[str] = None,
     source: BarSource = BarSource.AUTO,
     reader: Optional[BarReader] = None,
 ) -> list[LiveBar]:
@@ -159,9 +158,8 @@ def get_range_bars(
     `get_chart_bars`, used by the MCP `get_bars_in_range` tool so it
     behaves like the rest of the bars surface.
 
-    AUTO fills (and re-queries) when CH doesn't reach back to `start`.
-    The fill targets ``ohlcv_1m``, so it's skipped when the caller forces
-    a different `source_table`.
+    Every interval is resampled from ``ohlcv_1m``; AUTO fills (and re-queries)
+    that table from the lake when CH doesn't reach back to ``start``.
     """
     ch_reader = reader or BarReader.from_settings()
     if start.tzinfo is None:
@@ -169,16 +167,16 @@ def get_range_bars(
     if end.tzinfo is None:
         end = end.replace(tzinfo=timezone.utc)
 
-    bars = ch_reader.get_bars_in_range(
-        symbol, start, end, interval=interval, limit=limit, source_table=source_table,
-    )
+    kwargs = {"interval": interval}
+    if limit is not None:
+        kwargs["limit"] = limit
+    bars = ch_reader.get_bars_in_range(symbol, start, end, **kwargs)
     if source == BarSource.CLICKHOUSE:
         return bars
 
     window_days = (end - start).days
     if (
         source == BarSource.AUTO
-        and source_table is None
         and 0 < window_days <= _MAX_FILL_LOOKBACK_DAYS
         and _ch_lacks_window(bars, start)
     ):
@@ -191,10 +189,7 @@ def get_range_bars(
                     "bars_gateway: range lake-filled %s (%d rows, %dd); re-querying CH",
                     symbol, inserted, window_days,
                 )
-                bars = ch_reader.get_bars_in_range(
-                    symbol, start, end, interval=interval,
-                    limit=limit, source_table=source_table,
-                )
+                bars = ch_reader.get_bars_in_range(symbol, start, end, **kwargs)
         except Exception as exc:  # noqa: BLE001 — boundary; degrade to CH result
             logger.warning("bars_gateway: range lake fill for %s failed: %s", symbol, exc)
 

@@ -66,34 +66,10 @@ async def backfill_deep(req: BackfillRequest):
     return {"kind": "deep", "days": days, "jobs": results}
 
 
-@router.post("/backfill/daily")
-async def backfill_daily(req: BackfillRequest):
-    """
-    Enqueue a DAILY backfill (native daily candles from the provider, stored
-    in `ohlcv_daily`). Schwab serves 20+ years of daily history per call so
-    this is fast even for long windows. Throttled to once-per-day unless
-    `force=true`.
-    """
-    if not req.symbols:
-        raise HTTPException(400, "symbols list is empty")
-    days = req.days if req.days else 365 * 2
-    results = [backfill_service.enqueue_daily(s, days=days, force=req.force) for s in req.symbols]
-    return {"kind": "daily", "days": days, "jobs": results}
-
-
-@router.post("/backfill/intraday")
-async def backfill_intraday(req: BackfillRequest):
-    """
-    Enqueue an INTRADAY backfill: 5-minute candles, stored in `ohlcv_5m`.
-    Schwab caps 1-min bars at ~48 days; this populates ~270 days of
-    medium-resolution history so 5m/15m/30m/1h/4h charts can stretch
-    further back than 48 days. Throttled to once-per-day unless `force=true`.
-    """
-    if not req.symbols:
-        raise HTTPException(400, "symbols list is empty")
-    days = req.days if req.days else 270
-    results = [backfill_service.enqueue_intraday(s, days=days, force=req.force) for s in req.symbols]
-    return {"kind": "intraday", "days": days, "jobs": results}
+# NOTE: the former /backfill/daily and /backfill/intraday endpoints were
+# removed — all chart timeframes (5m/15m/30m/1h/1d) are now resampled on read
+# from ohlcv_1m, so the ohlcv_5m / ohlcv_daily tables (and their backfills) no
+# longer exist. See docs/architecture_v2/02_schema.md.
 
 
 class GapFillRequest(BaseModel):
@@ -101,7 +77,7 @@ class GapFillRequest(BaseModel):
     days: int | None = Field(default=30, ge=1, le=365)
     source: str = Field(
         default="ohlcv_1m",
-        description="Source table to scan for gaps. One of: ohlcv_1m, ohlcv_5m",
+        description="Source table to scan for gaps. Only ohlcv_1m.",
     )
     force: bool = Field(False, description="Bypass the per-symbol gap-fill throttle")
 
@@ -121,8 +97,8 @@ async def backfill_gaps(req: GapFillRequest):
     """
     if not req.symbols:
         raise HTTPException(400, "symbols list is empty")
-    if req.source not in ("ohlcv_1m", "ohlcv_5m"):
-        raise HTTPException(400, f"invalid source {req.source!r}; must be ohlcv_1m or ohlcv_5m")
+    if req.source != "ohlcv_1m":
+        raise HTTPException(400, f"invalid source {req.source!r}; must be ohlcv_1m")
     days = req.days if req.days else 30
     results = [
         backfill_service.enqueue_gap_fill(s, days=days, source=req.source, force=req.force)
@@ -143,8 +119,8 @@ async def list_gaps(
     a fill. Useful for the UI to show "X gaps remain" after a fill, and for
     the (future) coverage sweeper to inspect coverage.
     """
-    if source not in ("ohlcv_1m", "ohlcv_5m"):
-        raise HTTPException(400, f"invalid source {source!r}")
+    if source != "ohlcv_1m":
+        raise HTTPException(400, f"invalid source {source!r}; must be ohlcv_1m")
     from datetime import datetime, timezone, timedelta
     from app.db import queries
     now = datetime.now(timezone.utc)

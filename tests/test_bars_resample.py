@@ -44,7 +44,7 @@ def _wipe_test_symbols() -> None:
     Safety: refuses to run if a stray real symbol slipped through.
     """
     client = get_client()
-    for table in ("ohlcv_1m", "ohlcv_5m"):
+    for table in ("ohlcv_1m",):
         rows = client.query(
             f"SELECT DISTINCT symbol FROM {table} "
             f"WHERE symbol LIKE '{TEST_SYMBOL_PREFIX}%'"
@@ -210,76 +210,9 @@ def test_invalid_source_table_raises(fresh_db) -> None:
         )
 
 
-def test_1m_interval_rejected_for_5m_source(fresh_db) -> None:
+def test_unsupported_source_table_rejected(fresh_db) -> None:
+    """Only ohlcv_1m is a valid source now — 5m/daily tables were retired."""
     with pytest.raises(ValueError):
         queries.list_bars_resampled(
-            TEST_SYMBOL, "1m", None, None, limit=10, source_table="ohlcv_5m",
+            TEST_SYMBOL, "5m", None, None, limit=10, source_table="ohlcv_5m",
         )
-
-
-def _seed_5m_bars(symbol: str, start: datetime, intervals: int, base_price: float = 100.0) -> None:
-    """Seed `intervals` 5-min bars into ohlcv_5m. Deterministic OHLCV so tests
-    can assert exact aggregations."""
-    rows = []
-    for i in range(intervals):
-        ts = start + timedelta(minutes=5 * i)
-        o = base_price + i
-        rows.append({
-            "symbol": symbol, "timestamp": ts,
-            "open": o, "high": o + 1.0, "low": o - 1.0,
-            "close": o + 0.5, "volume": 100 * (i + 1),
-            "vwap": 0.0, "trade_count": 0, "source": "test",
-        })
-    queries.insert_5m_bars_batch(rows)
-
-
-def test_resample_from_5m_source_passthrough(fresh_db) -> None:
-    """Reading 5m from ohlcv_5m with interval='5m' yields the same rows."""
-    start = datetime(2026, 1, 5, 14, 30, tzinfo=timezone.utc)
-    _seed_5m_bars(TEST_SYMBOL, start, intervals=6)  # 30 minutes of 5m bars
-
-    bars = queries.list_bars_resampled(
-        TEST_SYMBOL, "5m", start, start + timedelta(hours=1), limit=100,
-        source_table="ohlcv_5m",
-    )
-    assert len(bars) == 6
-    assert bars[0]["open"] == pytest.approx(100.0)
-    assert bars[-1]["close"] == pytest.approx(100.0 + 5 + 0.5)
-
-
-def test_resample_5m_to_30m_from_5m_source(fresh_db) -> None:
-    """30m resampling from a 5m source: 6 5m bars per 30m bucket."""
-    start = datetime(2026, 1, 5, 14, 30, tzinfo=timezone.utc)
-    _seed_5m_bars(TEST_SYMBOL, start, intervals=12)  # 1 hour of 5m bars
-
-    bars = queries.list_bars_resampled(
-        TEST_SYMBOL, "30m", start, start + timedelta(hours=2), limit=100,
-        source_table="ohlcv_5m",
-    )
-    assert len(bars) == 2
-    # Bucket 1: 5m indices 0..5 -> open=100, close=105.5, high=106, low=99
-    assert bars[0]["open"] == pytest.approx(100.0)
-    assert bars[0]["close"] == pytest.approx(105.5)
-    assert bars[0]["high"] == pytest.approx(106.0)
-    assert bars[0]["low"] == pytest.approx(99.0)
-    # Bucket 2: 5m indices 6..11 -> open=106, close=111.5, high=112, low=105
-    assert bars[1]["open"] == pytest.approx(106.0)
-    assert bars[1]["close"] == pytest.approx(111.5)
-
-
-def test_resample_5m_to_1h_from_5m_source(fresh_db) -> None:
-    """1h resampling from a 5m source: 12 5m bars per hourly bucket."""
-    start = datetime(2026, 1, 5, 14, 0, tzinfo=timezone.utc)
-    _seed_5m_bars(TEST_SYMBOL, start, intervals=24)  # 2 hours
-
-    bars = queries.list_bars_resampled(
-        TEST_SYMBOL, "1h", start, start + timedelta(hours=3), limit=100,
-        source_table="ohlcv_5m",
-    )
-    assert len(bars) == 2
-    # Hour 1: indices 0..11 -> open=100, close=100+11+0.5=111.5
-    assert bars[0]["open"] == pytest.approx(100.0)
-    assert bars[0]["close"] == pytest.approx(111.5)
-    # Hour 2: indices 12..23 -> open=112, close=100+23+0.5=123.5
-    assert bars[1]["open"] == pytest.approx(112.0)
-    assert bars[1]["close"] == pytest.approx(123.5)

@@ -69,19 +69,20 @@ class JobStatus:
 
 @dataclass
 class SymbolStatus:
-    """Combined status for a symbol's quick / deep / intraday / daily / gap_fill jobs."""
+    """Combined status for a symbol's quick / deep / gap_fill jobs.
+
+    All chart timeframes (5m/15m/1h/1d) are resampled on read from ohlcv_1m,
+    so backfill only ever populates the 1m table — there are no separate
+    intraday (5m) or daily backfill kinds.
+    """
     quick: JobStatus = field(default_factory=JobStatus)
     deep: JobStatus = field(default_factory=JobStatus)
-    intraday: JobStatus = field(default_factory=JobStatus)
-    daily: JobStatus = field(default_factory=JobStatus)
     gap_fill: JobStatus = field(default_factory=JobStatus)
 
     def to_dict(self) -> dict:
         return {
             "quick": self.quick.__dict__,
             "deep": self.deep.__dict__,
-            "intraday": self.intraday.__dict__,
-            "daily": self.daily.__dict__,
             "gap_fill": self.gap_fill.__dict__,
         }
 
@@ -364,23 +365,6 @@ class BackfillService:
     def enqueue_deep(self, symbol: str, days: int = 365, *, force: bool = False) -> dict:
         return self._enqueue(symbol, days=days, kind="deep", force=force)
 
-    def enqueue_daily(self, symbol: str, days: int = 365 * 2, *, force: bool = False) -> dict:
-        """
-        Fetch native daily candles for `[now - days, now]` from the provider
-        and persist into `ohlcv_daily`. Schwab returns 20+ years of daily
-        history in a single call, so we don't bother chunking by default.
-        """
-        return self._enqueue(symbol, days=days, kind="daily", force=force)
-
-    def enqueue_intraday(self, symbol: str, days: int = 270, *, force: bool = False) -> dict:
-        """
-        Fetch native 5-minute candles for `[now - days, now]` and persist
-        into `ohlcv_5m`. Schwab's pricehistory serves ~270 days of 5-min
-        history per call, so this is the source for 5m/15m/30m/1h/4h
-        queries with lookback > 48 days (the 1-min limit).
-        """
-        return self._enqueue(symbol, days=days, kind="intraday", force=force)
-
     def sweep_now(self, *, days: Optional[int] = None) -> dict:
         """
         One-shot gap sweep across the currently registered streaming symbols.
@@ -447,8 +431,7 @@ class BackfillService:
         existing = self._tasks.get(key)
         if existing and not existing.done():
             st = self._sym_status(sym)
-            job_map = {"quick": st.quick, "deep": st.deep, "intraday": st.intraday,
-                       "daily": st.daily, "gap_fill": st.gap_fill}
+            job_map = {"quick": st.quick, "deep": st.deep, "gap_fill": st.gap_fill}
             job = job_map.get(kind, st.quick)
             return {"symbol": sym, "kind": kind, "state": job.state, "reason": "already running"}
 
@@ -475,8 +458,6 @@ class BackfillService:
         job = {
             "quick": st.quick,
             "deep": st.deep,
-            "intraday": st.intraday,
-            "daily": st.daily,
             "gap_fill": st.gap_fill,
         }.get(kind)
         if job is None:
@@ -490,8 +471,6 @@ class BackfillService:
         runner = {
             "quick": self._run_quick,
             "deep": self._run_deep,
-            "intraday": self._run_intraday,
-            "daily": self._run_daily,
             "gap_fill": self._run_gap_fill,
         }[kind]
         task = asyncio.create_task(runner(sym, days, **runner_kwargs),
@@ -508,7 +487,6 @@ class BackfillService:
             try:
                 st = self._sym_status(sym)
                 job_map = {"quick": st.quick, "deep": st.deep,
-                           "intraday": st.intraday, "daily": st.daily,
                            "gap_fill": st.gap_fill}
                 job = job_map.get(kind)
                 if job is not None and job.state in ("done", "skipped"):
@@ -527,18 +505,6 @@ class BackfillService:
     async def _run_deep(self, symbol: str, days: int) -> None:
         async with self._sem_deep:
             await self._execute_deep(symbol, days=days)
-
-    async def _run_daily(self, symbol: str, days: int) -> None:
-        # Reuse the deep semaphore so we don't pound the provider with parallel
-        # long-history calls (Schwab daily is a single request but the loader
-        # may compete with deep 1m chunks).
-        async with self._sem_deep:
-            await self._execute_daily(symbol, days=days)
-
-    async def _run_intraday(self, symbol: str, days: int) -> None:
-        # Reuse deep semaphore - 5m fetches are long-running too.
-        async with self._sem_deep:
-            await self._execute_intraday(symbol, days=days)
 
     async def _run_gap_fill(self, symbol: str, days: int, *,
                             source: str = "ohlcv_1m") -> None:
@@ -806,99 +772,6 @@ class BackfillService:
                 symbol, e, exc_info=True,
             )
 
-    async def _execute_intraday(self, symbol: str, *, days: int) -> None:
-        """
-        Fetch native 5-minute bars from the provider for the requested window
-        and persist into `ohlcv_5m`. Schwab serves ~270d of 5m per call so the
-        single-window path is sufficient - we do NOT chunk by default.
-        Coverage short-circuit: skip if the table already covers `target_start`.
-        """
-        st = self._sym_status(symbol)
-        job = st.intraday
-        job.state = "running"
-        job.started_at = self._now_fn().isoformat()
-        job.bars = 0
-        job.chunks_total = 1
-        job.chunks_done = 0
-
-        try:
-            now = self._now_fn()
-            target_start = now - timedelta(days=days)
-            cov = await asyncio.to_thread(queries.coverage_5m, symbol, target_start, now)
-            earliest = cov["earliest"]
-            if earliest is not None and earliest.tzinfo is None:
-                earliest = earliest.replace(tzinfo=timezone.utc)
-            # If the existing 5m table already covers (close to) the requested
-            # start, skip. We give a 2-day grace so we don't refetch a 268-day
-            # range just because the existing range starts at 270d minus 2.
-            if earliest is not None and earliest <= target_start + timedelta(days=2):
-                job.state = "skipped"
-                job.reason = f"already covers {cov['bar_count']} bars"
-                job.bars = cov["bar_count"]
-                job.finished_at = self._now_fn().isoformat()
-                logger.info(
-                    "Backfill intraday %s: skipped (%d bars from %s)",
-                    symbol, cov["bar_count"], earliest,
-                )
-                return
-
-            bars = await self._fetch_and_persist_5m(symbol, target_start, now)
-            job.bars = bars
-            job.chunks_done = 1
-            job.state = "done"
-            job.finished_at = self._now_fn().isoformat()
-            logger.info("Backfill intraday %s: done (%d bars over %dd)", symbol, bars, days)
-        except Exception as e:
-            job.state = "error"
-            job.error = str(e)
-            job.finished_at = self._now_fn().isoformat()
-            logger.error("Backfill intraday %s failed: %s", symbol, e, exc_info=True)
-
-    async def _execute_daily(self, symbol: str, *, days: int) -> None:
-        """
-        Fetch native daily bars from the provider for the requested window
-        and persist into `ohlcv_daily`. Coverage short-circuit: if the DB
-        already has bars going back to before `target_start`, skip.
-        """
-        st = self._sym_status(symbol)
-        job = st.daily
-        job.state = "running"
-        job.started_at = self._now_fn().isoformat()
-        job.bars = 0
-        job.chunks_total = 1
-        job.chunks_done = 0
-
-        try:
-            now = self._now_fn()
-            target_start = now - timedelta(days=days)
-            cov = await asyncio.to_thread(queries.daily_coverage, symbol, target_start, now)
-            cov_earliest = cov["earliest"]
-            if cov_earliest is not None and cov_earliest.tzinfo is None:
-                cov_earliest = cov_earliest.replace(tzinfo=timezone.utc)
-            if cov_earliest is not None and cov_earliest <= target_start + timedelta(days=2):
-                # Already covers target. Skip.
-                job.state = "skipped"
-                job.reason = f"already covers {cov['bar_count']} days"
-                job.bars = cov["bar_count"]
-                job.finished_at = self._now_fn().isoformat()
-                logger.info(
-                    "Backfill daily %s: skipped (%d bars from %s)",
-                    symbol, cov["bar_count"], cov_earliest,
-                )
-                return
-
-            bars = await self._fetch_and_persist_daily(symbol, target_start, now)
-            job.bars = bars
-            job.chunks_done = 1
-            job.state = "done"
-            job.finished_at = self._now_fn().isoformat()
-            logger.info("Backfill daily %s: done (%d bars over %dd)", symbol, bars, days)
-        except Exception as e:
-            job.state = "error"
-            job.error = str(e)
-            job.finished_at = self._now_fn().isoformat()
-            logger.error("Backfill daily %s failed: %s", symbol, e, exc_info=True)
-
     # ---------- gap-fill ----------
 
     # Adjacent gaps within this many minutes are merged into a single provider
@@ -943,8 +816,8 @@ class BackfillService:
         Detect within-session gaps in [now - days, now] and refetch each gap
         range from the provider. Stores into the same source table.
         """
-        if source not in ("ohlcv_1m", "ohlcv_5m"):
-            raise ValueError(f"Unsupported gap-fill source: {source!r}")
+        if source != "ohlcv_1m":
+            raise ValueError(f"Unsupported gap-fill source: {source!r} (only ohlcv_1m)")
         st = self._sym_status(symbol)
         job = st.gap_fill
         job.state = "running"
@@ -1028,11 +901,8 @@ class BackfillService:
     async def _fetch_gap_range(
         self, symbol: str, start: datetime, end: datetime, *, source: str,
     ) -> int:
-        """Fetch a single gap window from the provider and persist into `source`."""
-        if source == "ohlcv_1m":
-            return await self._fetch_and_persist_range(symbol, start, end)
-        # ohlcv_5m path: ask provider for 5m bars and persist into the 5m table.
-        return await self._fetch_and_persist_5m(symbol, start, end)
+        """Fetch a single 1m gap window from the provider and persist it."""
+        return await self._fetch_and_persist_range(symbol, start, end)
 
     async def _fetch_and_persist(self, symbol: str, days_back: int) -> int:
         """Quick-path fetch: pull 1-min bars for [now-days, now] and persist."""
@@ -1058,92 +928,6 @@ class BackfillService:
 
         await self._persist(symbol, df)
         return int(len(df))
-
-    async def _fetch_and_persist_5m(self, symbol: str, start: datetime, end: datetime) -> int:
-        """Fetch 5-minute bars from the provider and persist to `ohlcv_5m`."""
-        loader = self._loader_or_build()
-        if loader is None:
-            raise RuntimeError("HistoricalDataLoader is not available")
-
-        try:
-            df = await asyncio.wait_for(
-                loader.provider.historical_df(symbol, start, end, timeframe="5m"),
-                timeout=90.0,
-            )
-        except asyncio.TimeoutError:
-            raise RuntimeError("5m fetch timed out after 90s")
-        if df is None or df.empty:
-            logger.info("Backfill intraday %s: provider returned 0 bars", symbol)
-            return 0
-        await self._persist_5m(symbol, df)
-        return int(len(df))
-
-    async def _persist_5m(self, symbol: str, df: pd.DataFrame) -> None:
-        """Insert provider-fetched 5-minute bars into `ohlcv_5m`."""
-        src = self._history_source_tag()
-        records: list[dict] = []
-        for ts, row in df.iterrows():
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
-            records.append({
-                "symbol": symbol.upper(),
-                "timestamp": ts,
-                "open": float(row["open"]),
-                "high": float(row["high"]),
-                "low": float(row["low"]),
-                "close": float(row["close"]),
-                "volume": float(row["volume"]),
-                "vwap": float(row.get("vwap", 0) or 0),
-                "trade_count": int(row.get("trade_count", 0) or 0),
-                "source": src,
-            })
-        BATCH = 1000
-        for i in range(0, len(records), BATCH):
-            await queries.insert_5m_bars_batch_async(records[i : i + BATCH])
-        logger.info("Backfill intraday %s: persisted %d bars", symbol, len(records))
-
-    async def _fetch_and_persist_daily(self, symbol: str, start: datetime, end: datetime) -> int:
-        """Fetch daily bars from the provider and persist to `ohlcv_daily`."""
-        loader = self._loader_or_build()
-        if loader is None:
-            raise RuntimeError("HistoricalDataLoader is not available")
-
-        # The provider's historical_df accepts timeframe='1d' or 'day'.
-        try:
-            df = await asyncio.wait_for(
-                loader.provider.historical_df(symbol, start, end, timeframe="1d"),
-                timeout=60.0,
-            )
-        except asyncio.TimeoutError:
-            raise RuntimeError("daily fetch timed out after 60s")
-        if df is None or df.empty:
-            logger.info("Backfill daily %s: provider returned 0 bars", symbol)
-            return 0
-
-        await self._persist_daily(symbol, df)
-        return int(len(df))
-
-    async def _persist_daily(self, symbol: str, df: pd.DataFrame) -> None:
-        """Insert provider-fetched daily bars into ClickHouse `ohlcv_daily`."""
-        src = self._history_source_tag()
-        records: list[dict] = []
-        for ts, row in df.iterrows():
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
-            records.append({
-                "symbol": symbol.upper(),
-                "timestamp": ts,
-                "open": float(row["open"]),
-                "high": float(row["high"]),
-                "low": float(row["low"]),
-                "close": float(row["close"]),
-                "volume": float(row["volume"]),
-                "source": src,
-            })
-        BATCH = 1000
-        for i in range(0, len(records), BATCH):
-            await queries.insert_daily_bars_batch_async(records[i : i + BATCH])
-        logger.info("Backfill daily %s: persisted %d bars", symbol, len(records))
 
     async def _persist(self, symbol: str, df: pd.DataFrame) -> None:
         """Insert provider-fetched 1-min bars into ClickHouse, deduped on insert."""

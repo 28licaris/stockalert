@@ -168,7 +168,6 @@ class FlatFilesBackfillService:
         # Legacy back-compat: when ``sinks`` is None, build a default
         # ClickHouseSink from these args. Existing tests rely on this.
         insert_minute_fn: Optional[InsertFn] = None,
-        insert_daily_fn: Optional[InsertFn] = None,
         source_tag: str = DEFAULT_SOURCE_TAG,
         batch_size: int = DEFAULT_BATCH_SIZE,
     ) -> None:
@@ -182,17 +181,13 @@ class FlatFilesBackfillService:
             self._sinks: List[Sink] = list(sinks)
         else:
             # Legacy single-sink mode: only build a ClickHouseSink when
-            # the caller provided insert functions. If neither is set,
-            # leave the sink list empty (caller must configure later).
-            if insert_minute_fn is not None or insert_daily_fn is not None:
-                from app.db.queries import (
-                    insert_bars_batch_async,
-                    insert_daily_bars_batch_async,
-                )
+            # the caller provided an insert function. If not set, leave the
+            # sink list empty (caller must configure later).
+            if insert_minute_fn is not None:
+                from app.db.queries import insert_bars_batch_async
                 self._sinks = [
                     ClickHouseSink(
                         insert_minute_fn=insert_minute_fn or insert_bars_batch_async,
-                        insert_daily_fn=insert_daily_fn or insert_daily_bars_batch_async,
                         batch_size=self._batch_size,
                     )
                 ]

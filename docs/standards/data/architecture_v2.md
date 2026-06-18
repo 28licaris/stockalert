@@ -55,16 +55,16 @@ Spark integration. DuckDB serves single-user ad-hoc queries.
 
 | Table | Contents | Source | Adjusted? | Retention |
 |---|---|---|---|---|
-| `ohlcv_1m` | 1-minute bars for `stream_universe` | Schwab WS (live) + Schwab REST (on-add 48d) | yes (Schwab native) | full history per symbol from add-date forward |
-| `ohlcv_daily` | Daily bars for `stream_universe` | Schwab REST on-add (20y) | yes (Schwab native) | full history per symbol from add-date forward |
+| `ohlcv_1m` | 1-minute bars for `stream_universe`; the only CH OHLCV table — all chart timeframes (5m/15m/30m/1h/1d) are resampled from it on read | Schwab WS (live) + Schwab REST (on-add 48d) | yes (Schwab native) | full history per symbol from add-date forward |
 | `stream_universe` | Canonical "what's actively streamed" | Cockpit Stream Service page | n/a | persistent |
 | `watchlists`, `watchlist_members` | User-organizing labels | Cockpit | n/a | persistent |
 | `signals`, `agent_runs`, `sim_trades`, ... | App state | App | n/a | persistent |
 
 **ClickHouse is the only data store the live API reads from.** It is
 re-buildable from the lake at any time (~1 hour for the universe).
-No `ohlcv_5m` writes — chart resamples 1m → 5m/15m/30m/1h/4h via
-`toStartOfInterval()` at query time.
+No `ohlcv_5m` / `ohlcv_daily` writes (those cache tables were retired
+2026-06) — chart resamples 1m → 5m/15m/30m/1h/1d via `toStartOfInterval()`
+at query time (daily bucketed on the ET trading day).
 
 ### Tier 2 — Lake (S3 + Iceberg)
 
@@ -127,7 +127,7 @@ Cost: ~$3-5/month for the whole lake at current scale.
 | `silver.ohlcv_1m` | Multi-source dedup not needed (Schwab adjusted natively + Polygon adjusted built separately) | `data.polygon_adjusted` (ML) + CH (live) |
 | `silver_ohlcv_build` nightly job | Replaced by a one-time + incremental adjustment ETL | `polygon_adjustment_job` (weekly + on-corp-action-trigger) |
 | `silver_to_ch_refresh` (deferred) | CH is rebuilt directly from Schwab REST on add | n/a |
-| CH `ohlcv_5m` writes | Chart resamples 1m at query time | n/a |
+| CH `ohlcv_5m` / `ohlcv_daily` writes | Retired 2026-06 — chart resamples 1m at query time | n/a |
 | Schwab REST nightly | Schwab WS + on-add cover universe needs; no additional REST nightly required | n/a |
 
 The medallion vocabulary (`bronze`, `silver`) is retired. Datasets are
@@ -162,11 +162,10 @@ POST /api/v1/stream {"symbol": "PG"}
         ▼
    schwab_provider.subscribe_bars(["PG"])      → CH.ohlcv_1m forward (live)
         ▼
-   parallel:
-     ├─ schwab_rest_pricehistory(PG, 48d × 1m)  → CH.ohlcv_1m       ~1-2s
-     └─ schwab_rest_pricehistory(PG, 20y × 1d)  → CH.ohlcv_daily    ~1-2s
+   schwab_rest_pricehistory(PG, 48d × 1m)        → CH.ohlcv_1m       ~1-2s
 
-   Total wall-clock: ~3-5s. Chart usable at every zoom.
+   Total wall-clock: ~3-5s. Chart usable at every zoom (5m/15m/30m/1h/1d
+   resampled from ohlcv_1m on read).
 ```
 
 For 1-minute data deeper than 48 days for the new symbol: query
@@ -357,7 +356,7 @@ The cockpit reads exactly the same FastAPI endpoints as today:
 | `GET /api/v1/jobs` | `job_registry.list()` |
 | `GET /api/v1/symbol/.../bars` | `BarReader.get_bars_for_chart()` → CH |
 | `GET /api/v1/instruments/search` | Schwab provider |
-| `POST /api/v1/stream {"symbol"}` | `stream_service.add()` → CH.ohlcv_1m + CH.ohlcv_daily |
+| `POST /api/v1/stream {"symbol"}` | `stream_service.add()` → CH.ohlcv_1m |
 | `GET /api/v1/lake/bars` | DuckDB → `data.polygon_adjusted` / `data.schwab_universe` |
 
 No cockpit changes needed. The architecture refactor is purely
@@ -402,7 +401,7 @@ The current state has:
 - `bronze.schwab_minute` (Iceberg, universe, raw)
 - `silver.ohlcv_1m` (Iceberg, universe, adjusted from bronze + corp_actions)
 - `bronze.polygon_corp_actions` (Iceberg, whole-market)
-- CH `ohlcv_1m`, `ohlcv_5m`, `ohlcv_daily` (universe, derived)
+- CH `ohlcv_1m` (universe; 5m/daily cache tables retired 2026-06 — resampled on read)
 
 The migration replaces silver-on-the-live-path with direct Schwab
 writes, renames bronze → data., and computes polygon_adjusted as a

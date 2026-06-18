@@ -296,6 +296,22 @@ const LAKE_WINDOW_DAYS: Record<string, number> = {
 };
 
 /**
+ * Auto-refresh cadence per interval. Bars resample from live `ohlcv_1m`, so
+ * polling re-pulls the latest closed bar AND the still-forming current bar —
+ * the chart updates without a manual page refresh. Cadence is finer for
+ * fast intervals; React Query pauses polling while the tab is hidden
+ * (refetchIntervalInBackground defaults to false), so this is cheap.
+ */
+const REFETCH_MS: Record<string, number> = {
+  "1m":  15_000,
+  "5m":  15_000,
+  "15m": 30_000,
+  "30m": 30_000,
+  "1h":  60_000,
+  "1d":  60_000,
+};
+
+/**
  * Fetch chart bars via `/api/v1/bars` (ClickHouse). When CH doesn't
  * cover the requested window, the backend transparently fills from
  * `equities.polygon_adjusted` and re-queries — the caller never sees
@@ -325,8 +341,10 @@ export function useLakeBars(symbol: string | undefined, interval: string) {
       return data ?? [];
     },
     enabled: Boolean(symbol),
-    staleTime: 60_000,
-    refetchOnWindowFocus: false,
+    // Keep data fresh enough that a window-focus or poll actually refetches.
+    staleTime: 10_000,
+    refetchInterval: REFETCH_MS[interval] ?? 30_000,
+    refetchOnWindowFocus: true,
   });
 }
 

@@ -94,17 +94,14 @@ async def get_coverage(
     with tool_call("get_coverage", symbol=symbol, interval=interval):
         from app.db import queries
 
-        if interval == "1m":
-            cov = await queries.coverage_async(symbol, start, end)
-        elif interval == "5m":
-            cov = await queries.coverage_5m_async(symbol, start, end)
-        elif interval == "1d":
-            cov = await queries.daily_coverage_async(symbol, start, end)
-        else:
-            cov = {"bar_count": 0, "earliest": None, "latest": None}
+        # Coverage is measured against ohlcv_1m, the single stored resolution —
+        # all chart intervals (5m/1d/...) are resampled from it on read, so the
+        # 1m density IS the coverage. coverage_pct is only computed for 1m,
+        # where actual and expected are on the same resolution.
+        cov = await queries.coverage_async(symbol, start, end)
 
         actual = int(cov.get("bar_count", 0) or 0)
-        expected = _expected_bars(interval, start, end)
+        expected = _expected_bars("1m", start, end) if interval == "1m" else None
         pct = None
         if expected and expected > 0:
             pct = round(actual / expected, 4)

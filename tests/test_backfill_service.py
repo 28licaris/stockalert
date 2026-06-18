@@ -333,88 +333,9 @@ class FakeProvider:
         return self._df
 
 
-def _make_5m_df(start: datetime, count: int) -> pd.DataFrame:
-    idx = pd.date_range(start=start, periods=count, freq="5min", tz=timezone.utc)
-    return pd.DataFrame(
-        {
-            "open": [1.0] * count,
-            "high": [1.0] * count,
-            "low": [1.0] * count,
-            "close": [1.0] * count,
-            "volume": [1.0] * count,
-        },
-        index=idx,
-    )
-
-
-@pytest.mark.asyncio
-async def test_intraday_fetches_when_5m_table_empty(fixed_now, monkeypatch) -> None:
-    # Empty 5m coverage -> backfill fires.
-    async def empty_5m_cov(symbol, start, end):
-        return {"symbol": symbol.upper(), "start": start, "end": end,
-                "earliest": None, "latest": None, "bar_count": 0}
-    monkeypatch.setattr("app.db.queries.coverage_5m", lambda *a, **k: None)
-    # Patch the async helper used by _execute_intraday
-    from app.db import queries as q
-    monkeypatch.setattr(q, "coverage_5m", lambda sym, s, e: {
-        "symbol": sym.upper(), "start": s, "end": e,
-        "earliest": None, "latest": None, "bar_count": 0,
-    })
-
-    df = _make_5m_df(fixed_now - timedelta(days=270), count=100)
-    provider = FakeProvider(df)
-    loader = FakeLoader()
-    loader.provider = provider  # type: ignore[attr-defined]
-    svc = BackfillService(loader=loader, now_fn=lambda: fixed_now)  # type: ignore[arg-type]
-
-    # Stub the 5m persist so we don't touch ClickHouse from a unit test.
-    persisted: list[int] = []
-
-    async def fake_persist_5m(self, symbol, df):
-        persisted.append(len(df))
-
-    monkeypatch.setattr(BackfillService, "_persist_5m", fake_persist_5m)
-
-    svc.enqueue_intraday("AAPL", days=270)
-    for task in list(svc._tasks.values()):
-        await task
-
-    st = svc.status("AAPL")["AAPL"]["intraday"]
-    assert st["state"] == "done"
-    assert st["bars"] == 100
-    assert len(provider.calls) == 1
-    assert provider.calls[0]["timeframe"] == "5m"
-    # Provider should have been asked for the full 270d window.
-    assert provider.calls[0]["start"] == fixed_now - timedelta(days=270)
-    assert provider.calls[0]["end"] == fixed_now
-    assert persisted == [100]
-
-
-@pytest.mark.asyncio
-async def test_intraday_skipped_when_5m_table_already_covers(fixed_now, monkeypatch) -> None:
-    from app.db import queries as q
-    # Existing coverage older than target start - should short-circuit.
-    monkeypatch.setattr(q, "coverage_5m", lambda sym, s, e: {
-        "symbol": sym.upper(), "start": s, "end": e,
-        "earliest": fixed_now - timedelta(days=280),
-        "latest": fixed_now,
-        "bar_count": 9999,
-    })
-
-    provider = FakeProvider(_make_5m_df(fixed_now, count=1))
-    loader = FakeLoader()
-    loader.provider = provider  # type: ignore[attr-defined]
-    svc = BackfillService(loader=loader, now_fn=lambda: fixed_now)  # type: ignore[arg-type]
-
-    svc.enqueue_intraday("AAPL", days=270)
-    for task in list(svc._tasks.values()):
-        await task
-
-    st = svc.status("AAPL")["AAPL"]["intraday"]
-    assert st["state"] == "skipped"
-    assert "already covers" in (st["reason"] or "")
-    # Provider should NOT have been called.
-    assert provider.calls == []
+# NOTE: the intraday (5m) and daily backfill kinds were removed — all chart
+# timeframes are resampled on read from ohlcv_1m, so backfill only populates
+# the 1m table (quick / deep / gap_fill).
 
 
 # ---------- Throttle ----------

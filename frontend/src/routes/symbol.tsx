@@ -90,7 +90,7 @@ export function SymbolPage() {
         <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
           Recent bars
         </h2>
-        <BarsTable bars={bars.data ?? []} limit={50} />
+        <BarsTable bars={bars.data ?? []} limit={50} interval={interval} />
       </section>
     </div>
   );

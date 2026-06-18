@@ -64,7 +64,7 @@
   │  │       polygon (rare)│    │                          │  │         │
   │  └─────────────────────┘    └──────────────────────────┘  │
   │                                                            │
-  │  ohlcv_5m, ohlcv_daily ← Materialized views from ohlcv_1m  │
+  │  5m/15m/30m/1h/1d ← resampled from ohlcv_1m on read       │
   └───────────────────┬────────────────────────────────────────┘
                       │
                       │ ④ every 5 min

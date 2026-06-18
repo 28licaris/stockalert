@@ -71,56 +71,9 @@ def init_schema() -> None:
         """
     )
 
-    # Medium-resolution intraday bars. Schwab's pricehistory serves 5-minute
-    # candles ~270 days back per call; we use this table as the source for
-    # 5m / 15m / 30m / 1h / 4h queries that need MORE than 48 days of history
-    # (the 1-min limit). Same shape as `ohlcv_1m` so resampling logic can be
-    # parameterized on the source table name.
-    client.command(
-        """
-        CREATE TABLE IF NOT EXISTS ohlcv_5m (
-            symbol        LowCardinality(String),
-            timestamp     DateTime64(3, 'UTC'),
-            open          Float64,
-            high          Float64,
-            low           Float64,
-            close         Float64,
-            volume        Float64,
-            vwap          Float64 DEFAULT 0,
-            trade_count   UInt32 DEFAULT 0,
-            source        LowCardinality(String) DEFAULT '',
-            version       UInt64 DEFAULT 0
-        )
-        ENGINE = ReplacingMergeTree(version)
-        PARTITION BY toYYYYMM(timestamp)
-        ORDER BY (symbol, timestamp)
-        SETTINGS index_granularity = 8192
-        """
-    )
-
-    # Daily bars are stored in their own table because Schwab's pricehistory
-    # endpoint can serve daily candles 20+ years back, while 1-min bars are
-    # capped at ~48 days. Keeping daily separate also avoids confusing the
-    # 1-min streamer / resample queries.
-    client.command(
-        """
-        CREATE TABLE IF NOT EXISTS ohlcv_daily (
-            symbol        LowCardinality(String),
-            timestamp     DateTime64(3, 'UTC'),
-            open          Float64,
-            high          Float64,
-            low           Float64,
-            close         Float64,
-            volume        Float64,
-            source        LowCardinality(String) DEFAULT '',
-            version       UInt64 DEFAULT 0
-        )
-        ENGINE = ReplacingMergeTree(version)
-        PARTITION BY toYear(timestamp)
-        ORDER BY (symbol, timestamp)
-        SETTINGS index_granularity = 8192
-        """
-    )
+    # NOTE: ohlcv_5m and ohlcv_daily were retired — all chart timeframes
+    # (5m/15m/30m/1h/1d) are resampled on read from ohlcv_1m, the single CH
+    # source of truth. See docs/architecture_v2/02_schema.md.
 
     client.command(
         """
@@ -195,6 +148,52 @@ def init_schema() -> None:
             symbol      LowCardinality(String),
             owner_id    LowCardinality(String) DEFAULT 'default-tenant',
             asset_type  LowCardinality(String) DEFAULT '',
+            added_at    DateTime64(3, 'UTC') DEFAULT now64(3),
+            added_by    LowCardinality(String) DEFAULT '',
+            notes       String DEFAULT '',
+            is_active   UInt8 DEFAULT 1,
+            version     UInt64 DEFAULT 0
+        )
+        ENGINE = ReplacingMergeTree(version)
+        ORDER BY (owner_id, symbol)
+        SETTINGS index_granularity = 8192
+        """
+    )
+
+    # ---------- Futures (separate hot table; CME futures, continuous roots) ----------
+    # Same shape as ohlcv_1m so the bar reader / resampler / gateway work
+    # unchanged when pointed here. Kept separate from equities because
+    # futures have different session/symbology semantics.
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS futures_ohlcv_1m (
+            symbol        LowCardinality(String),
+            timestamp     DateTime64(3, 'UTC'),
+            open          Float64,
+            high          Float64,
+            low           Float64,
+            close         Float64,
+            volume        Float64,
+            vwap          Float64 DEFAULT 0,
+            trade_count   UInt32 DEFAULT 0,
+            source        LowCardinality(String) DEFAULT '',
+            version       UInt64 DEFAULT 0
+        )
+        ENGINE = ReplacingMergeTree(version)
+        PARTITION BY toYYYYMM(timestamp)
+        ORDER BY (symbol, timestamp)
+        SETTINGS index_granularity = 8192
+        """
+    )
+
+    # Futures universe — the continuous roots we stream + monitor. Mirrors
+    # stream_universe so the same add/remove/list plumbing applies.
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS futures_universe (
+            symbol      LowCardinality(String),
+            owner_id    LowCardinality(String) DEFAULT 'default-tenant',
+            asset_type  LowCardinality(String) DEFAULT 'FUTURE',
             added_at    DateTime64(3, 'UTC') DEFAULT now64(3),
             added_by    LowCardinality(String) DEFAULT '',
             notes       String DEFAULT '',
