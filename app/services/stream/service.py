@@ -259,7 +259,7 @@ class StreamService:
             FINAL
             WHERE owner_id = {{owner:String}}
               AND is_active = 1
-            ORDER BY added_at ASC, symbol ASC
+            ORDER BY symbol ASC
             """,
             parameters={"owner": owner},
         )
