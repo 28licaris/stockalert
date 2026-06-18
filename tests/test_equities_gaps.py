@@ -23,13 +23,16 @@ from app.services.equities.gaps import (  # noqa: E402
 
 
 def _table_with_timestamps(timestamps: list[datetime]) -> MagicMock:
-    """Build a mock PyIceberg `Table` whose `scan(...).to_arrow()`
-    returns the given timestamps."""
+    """Build a mock PyIceberg `Table` whose scan returns the given
+    timestamps. Mocks BOTH ``to_arrow()`` (used by latest_loaded_date)
+    and ``to_arrow_batch_reader()`` (used by loaded_dates_in_range, which
+    streams batches to stay OOM-safe on whole-market scans)."""
     table = MagicMock()
     table.name.return_value = "lake.equities.polygon_raw"
     arrow = pa.table({"timestamp": pa.array(timestamps, type=pa.timestamp("us", tz="UTC"))})
     scan = MagicMock()
     scan.to_arrow.return_value = arrow
+    scan.to_arrow_batch_reader.return_value = arrow.to_batches()
     table.scan.return_value = scan
     return table
 
@@ -40,6 +43,7 @@ def _empty_table() -> MagicMock:
     arrow = pa.table({"timestamp": pa.array([], type=pa.timestamp("us", tz="UTC"))})
     scan = MagicMock()
     scan.to_arrow.return_value = arrow
+    scan.to_arrow_batch_reader.return_value = arrow.to_batches()
     table.scan.return_value = scan
     return table
 
