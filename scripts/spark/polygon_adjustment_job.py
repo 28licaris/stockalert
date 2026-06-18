@@ -100,6 +100,7 @@ def adjust(
     symbols: list[str] | None,
     since: date | None,
     until: date | None,
+    compact: bool = True,
 ) -> tuple[int, int]:
     """Compute and write the adjusted bars. Returns (n_symbols, n_rows).
 
@@ -291,6 +292,43 @@ def adjust(
     # cache isn't needed.
     adjusted.writeTo(ADJUSTED_TABLE).overwritePartitions()
 
+    # Compaction: the merge-on-read overwrite leaves position-delete files,
+    # so the data files accumulate superseded rows (AAPL/1yr was observed at
+    # 656K raw rows for 170K live — ~3.9x bloat). Every downstream reader
+    # that doesn't apply the deletes (ClickHouse s3(), naive scans) then
+    # reads ~4x too much. rewrite_data_files with delete-file-threshold=1
+    # rewrites exactly the files that carry deletes — applying them and
+    # bin-packing — so the table stays lean run-to-run. Best-effort: a
+    # compaction failure must not fail the adjustment that already
+    # committed (NO silent skip — it's logged).
+    if compact:
+        spark = adjusted.sparkSession
+        try:
+            res = spark.sql(
+                "CALL lake.system.rewrite_data_files("
+                "  table => 'equities.polygon_adjusted',"
+                "  options => map("
+                "    'delete-file-threshold','1',"
+                "    'min-input-files','2',"
+                "    'partial-progress.enabled','true'"
+                "  )"
+                ")"
+            ).first()
+            log.info(
+                "rewrite_data_files: rewritten_data_files=%s added_data_files=%s "
+                "rewritten_bytes=%s",
+                res["rewritten_data_files_count"] if res else "?",
+                res["added_data_files_count"] if res else "?",
+                res["rewritten_bytes_count"] if res else "?",
+            )
+        except Exception as e:  # noqa: BLE001 — boundary; don't fail a committed run
+            log.warning(
+                "rewrite_data_files compaction failed (adjustment already "
+                "committed): %s", e,
+            )
+    else:
+        log.info("--skip-compact: leaving merge-on-read deletes uncompacted")
+
     # Read row count from the snapshot we just committed — metadata-only,
     # zero data scan, sub-second. Iceberg's <table>.snapshots metadata
     # table exposes summary.total-records per snapshot. Most recent
@@ -340,6 +378,16 @@ def main(argv: Iterable[str] | None = None) -> int:
             "locally before submitting the EMR job."
         ),
     )
+    p.add_argument(
+        "--skip-compact", action="store_true",
+        help=(
+            "Skip the post-write rewrite_data_files compaction. By default "
+            "the job compacts files carrying merge-on-read position-deletes "
+            "after the overwrite, so polygon_adjusted doesn't accumulate "
+            "dead rows (~3.9x read bloat was observed without it). Use this "
+            "for quick smoke runs where the extra rewrite isn't worth it."
+        ),
+    )
     args = p.parse_args(list(argv) if argv is not None else None)
 
     symbols = _parse_symbols(args.symbols)
@@ -369,7 +417,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             return 1
 
     try:
-        n_symbols, n_rows = adjust(symbols, since, until)
+        n_symbols, n_rows = adjust(symbols, since, until, compact=not args.skip_compact)
     except Exception as e:
         log.exception("adjustment Spark job failed: %s", e)
         record_run(

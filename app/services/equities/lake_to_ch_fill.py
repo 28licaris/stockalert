@@ -34,11 +34,8 @@ from threading import Lock
 from typing import Optional
 
 import pyarrow as pa
-from pyiceberg.expressions import And, EqualTo, GreaterThanOrEqual, LessThan
 
 from app.db.client import get_client
-from app.services.equities.schemas import equities_table_id
-from app.services.iceberg_catalog import get_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -128,24 +125,21 @@ async def fill_ch_from_lake(
 
 
 def _fill_sync(symbol: str, start: datetime, end: datetime, source_tag: str) -> int:
-    """Synchronous worker — runs in the asyncio thread pool."""
-    try:
-        catalog = get_catalog()
-        table = catalog.load_table(equities_table_id("polygon_adjusted"))
-        # Bucket+month partitioning means symbol+timestamp filter prunes
-        # to roughly (months_in_window) files for this symbol's bucket.
-        arr = table.scan(
-            row_filter=And(
-                EqualTo("symbol", symbol),
-                GreaterThanOrEqual("timestamp", start.isoformat()),
-                LessThan("timestamp", end.isoformat()),
-            )
-        ).to_arrow()
-    except Exception as exc:
-        logger.warning(
-            "lake_fill: %s [%s, %s) iceberg scan failed: %s",
-            symbol, start, end, exc,
-        )
+    """Synchronous worker — runs in the asyncio thread pool.
+
+    Reads the window from the lake via Athena UNLOAD (union of
+    polygon_adjusted ∪ schwab_universe, polygon wins overlaps) — Athena
+    prunes the bucket partition + applies merge-on-read deletes natively,
+    so this is ~4x faster than a PyIceberg .to_arrow() scan AND includes
+    the recent schwab tip the old polygon-only scan missed. See
+    app/services/equities/athena_extract.py.
+    """
+    from app.services.equities.athena_extract import extract_symbol_window
+
+    arr = extract_symbol_window(symbol, start, end)
+    if arr is None:
+        # Athena failed/timed out — degrade to empty (caller serves what
+        # CH has). NO SILENT SUCCESS: this is logged in athena_extract.
         return 0
 
     if arr.num_rows == 0:
