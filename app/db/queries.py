@@ -418,29 +418,26 @@ async def latest_bar_per_symbol_async(symbols: List[str]) -> List[dict]:
     return await asyncio.to_thread(latest_bar_per_symbol, symbols)
 
 
-def latest_close_per_symbol(symbols: List[str], *, lookback_days: int = 3) -> List[dict]:
-    """Fast latest close per symbol from the *recent* ``ohlcv_1m`` partitions.
-
-    Bounded to the last ``lookback_days`` so the scan stays cheap even for a
-    large symbol set (e.g. the full streaming universe). This is deliberately
-    NOT `latest_bar_per_symbol`, which argMaxes over each symbol's *entire*
-    history (+ a `uniqExact` count) — fine for a handful of watchlist symbols,
-    but a hundreds-of-millions-of-rows scan for 200+ symbols.
-
-    Returns `[{symbol, last, ts}]`; symbols with no bar in the window are
-    omitted (callers render them as "—"). For actively-streaming symbols the
-    last bar is minutes old, so a few days of headroom covers long weekends.
-    """
+def _latest_close_from_table(
+    symbols: List[str], source_table: str, lookback_days: int
+) -> List[dict]:
+    """Latest close per symbol from one bounded intraday table. `source_table`
+    is whitelisted (the name goes straight into FROM)."""
     if not symbols:
         return []
+    if source_table not in _INTRADAY_BAR_TABLES:
+        raise ValueError(
+            f"Unsupported source_table: {source_table!r} "
+            f"(allowed: {sorted(_INTRADAY_BAR_TABLES)})"
+        )
     result = get_client().query(
-        """
+        f"""
         SELECT symbol,
                argMax(close, timestamp) AS last,
                max(timestamp)           AS ts
-        FROM ohlcv_1m
-        WHERE symbol IN {syms:Array(String)}
-          AND timestamp >= now() - toIntervalDay({days:UInt16})
+        FROM {source_table}
+        WHERE symbol IN {{syms:Array(String)}}
+          AND timestamp >= now() - toIntervalDay({{days:UInt16}})
         GROUP BY symbol
         """,
         parameters={"syms": [s.upper() for s in symbols], "days": int(lookback_days)},
@@ -451,6 +448,34 @@ def latest_close_per_symbol(symbols: List[str], *, lookback_days: int = 3) -> Li
          "ts": r[2]}
         for r in result.result_rows
     ]
+
+
+def latest_close_per_symbol(symbols: List[str], *, lookback_days: int = 3) -> List[dict]:
+    """Fast latest close per symbol from the *recent* 1-min partitions.
+
+    Bounded to the last ``lookback_days`` so the scan stays cheap even for a
+    large symbol set (e.g. the full streaming universe). This is deliberately
+    NOT `latest_bar_per_symbol`, which argMaxes over each symbol's *entire*
+    history (+ a `uniqExact` count) — fine for a handful of watchlist symbols,
+    but a hundreds-of-millions-of-rows scan for 200+ symbols.
+
+    Asset-class aware: ``/``-prefixed roots read ``futures_ohlcv_1m``, the rest
+    ``ohlcv_1m`` — so one mixed call (e.g. the stream page) serves both. Returns
+    `[{symbol, last, ts}]`; symbols with no bar in the window are omitted
+    (callers render them as "—").
+    """
+    if not symbols:
+        return []
+    from app.services.futures.symbols import is_futures_symbol
+
+    futures = [s for s in symbols if is_futures_symbol(s)]
+    equities = [s for s in symbols if not is_futures_symbol(s)]
+    out: List[dict] = []
+    if equities:
+        out.extend(_latest_close_from_table(equities, "ohlcv_1m", lookback_days))
+    if futures:
+        out.extend(_latest_close_from_table(futures, "futures_ohlcv_1m", lookback_days))
+    return out
 
 
 async def latest_close_per_symbol_async(

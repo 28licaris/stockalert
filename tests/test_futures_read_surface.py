@@ -154,3 +154,66 @@ def test_queries_whitelist_allows_futures_rejects_unknown():
     # Arbitrary table names are rejected (SQL-injection guard).
     with pytest.raises(ValueError):
         queries._dedup_ohlc_intraday_subquery("evil; DROP TABLE", "1=1")
+
+
+# ── latest_close_per_symbol routes mixed symbols to both tables ──────
+
+def test_latest_close_per_symbol_splits_by_asset_class(monkeypatch):
+    from app.db import queries
+
+    class _Res:
+        result_rows = []
+
+    captured: list[tuple[str, dict]] = []
+
+    client = MagicMock()
+    client.query.side_effect = lambda sql, parameters=None: (
+        captured.append((sql, parameters)) or _Res()
+    )
+    monkeypatch.setattr("app.db.queries.get_client", lambda: client)
+
+    queries.latest_close_per_symbol(["AAPL", "/ES", "MSFT", "/NQ"])
+
+    # One query per asset class, each against its own table with only its syms.
+    by_table = {
+        ("futures_ohlcv_1m" if "FROM futures_ohlcv_1m" in sql else "ohlcv_1m"): params["syms"]
+        for sql, params in captured
+    }
+    assert by_table["ohlcv_1m"] == ["AAPL", "MSFT"]
+    assert by_table["futures_ohlcv_1m"] == ["/ES", "/NQ"]
+
+
+# ── futures_universe bootstrap ───────────────────────────────────────
+
+def test_bootstrap_futures_seeds_when_empty(monkeypatch):
+    from app.services.futures.schemas import FUTURES_SEED_ROOTS
+    from app.services.stream.service import StreamService
+
+    svc = StreamService()
+    monkeypatch.setattr(svc, "_read_futures_universe", lambda *, owner_id=None: set())
+    client = MagicMock()
+    monkeypatch.setattr("app.services.stream.service.get_client", lambda: client)
+
+    did, count = svc.bootstrap_futures_if_empty()
+
+    assert did is True
+    assert count == len(FUTURES_SEED_ROOTS)
+    args, kwargs = client.insert.call_args
+    assert args[0] == "futures_universe"
+    seeded = [row[0] for row in args[1]]
+    assert seeded == list(FUTURES_SEED_ROOTS)
+
+
+def test_bootstrap_futures_idempotent_when_seeded(monkeypatch):
+    from app.services.stream.service import StreamService
+
+    svc = StreamService()
+    monkeypatch.setattr(svc, "_read_futures_universe", lambda *, owner_id=None: {"/ES", "/NQ"})
+    client = MagicMock()
+    monkeypatch.setattr("app.services.stream.service.get_client", lambda: client)
+
+    did, count = svc.bootstrap_futures_if_empty()
+
+    assert did is False
+    assert count == 2
+    client.insert.assert_not_called()

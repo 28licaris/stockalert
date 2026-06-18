@@ -3,11 +3,13 @@ import { Link } from "react-router-dom";
 import { Plus, RefreshCw, Search, Upload, X } from "lucide-react";
 import {
   useAddSeed,
+  useFuturesUniverse,
   useImportSeed,
   useInstrumentLookup,
   useLatestBars,
   useRemoveSeed,
   useSeedUniverse,
+  type FuturesUniverseEntry,
   type SeedEntry,
 } from "@/api/queries";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
@@ -81,6 +83,136 @@ export function StreamPage() {
       <StreamList entries={filtered} loading={query.isLoading} />
 
       <ImportPanel />
+
+      <FuturesPanel />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Futures roots streaming via Schwab CHART_FUTURES. Separate CH table
+ * (`futures_universe`) from the equities stream universe, so it gets its
+ * own read-only section here — the standard continuous contracts (/ES,
+ * /MES, …) with live last prices from ClickHouse.
+ */
+function FuturesPanel() {
+  const query = useFuturesUniverse();
+  const entries = query.data?.items ?? [];
+
+  const symbolsCsv = useMemo(
+    () => entries.map((e) => e.symbol).join(","),
+    [entries],
+  );
+  const quotes = useLatestBars(symbolsCsv || undefined);
+  const priceMap = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const item of quotes.data ?? []) {
+      if (item.last != null) m.set(item.symbol.toUpperCase(), item.last);
+    }
+    return m;
+  }, [quotes.data]);
+
+  return (
+    <section className="space-y-3">
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-semibold text-fg-base">Futures</h2>
+          <p className="mt-0.5 max-w-2xl text-sm text-fg-muted">
+            Continuous CME roots streaming via Schwab CHART_FUTURES into{" "}
+            <code className="rounded bg-bg-muted px-1 font-mono text-xs">
+              futures_ohlcv_1m
+            </code>
+            . Click a symbol to chart it.
+          </p>
+        </div>
+        <span className="text-xs text-fg-subtle">
+          {fmtInt(query.data?.count)} streaming
+        </span>
+      </div>
+
+      {query.error ? <ApiErrorAlert error={query.error} /> : null}
+
+      <FuturesList
+        entries={entries}
+        loading={query.isLoading}
+        priceMap={priceMap}
+        pricesLoading={quotes.isLoading}
+      />
+    </section>
+  );
+}
+
+function FuturesList({
+  entries,
+  loading,
+  priceMap,
+  pricesLoading,
+}: {
+  entries: ReadonlyArray<FuturesUniverseEntry>;
+  loading: boolean;
+  priceMap: Map<string, number>;
+  pricesLoading: boolean;
+}) {
+  if (loading) {
+    return (
+      <ul className="grid grid-cols-2 gap-1 sm:grid-cols-4">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <li
+            key={i}
+            className="h-10 animate-pulse rounded-md border border-border bg-bg-subtle"
+          />
+        ))}
+      </ul>
+    );
+  }
+
+  if (entries.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed border-border bg-bg-subtle p-6 text-center text-sm text-fg-subtle">
+        No futures roots are streaming yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-md border border-border bg-bg-subtle">
+      <table className="w-full text-sm">
+        <thead className="bg-bg-muted text-xs uppercase tracking-wider text-fg-subtle">
+          <tr>
+            <th className="px-4 py-2 text-left font-medium">Root</th>
+            <th className="px-4 py-2 text-right font-medium">Last</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border-subtle">
+          {entries.map((e) => {
+            const last = priceMap.get(e.symbol.toUpperCase());
+            return (
+              <tr key={e.symbol} className="hover:bg-bg-muted/40">
+                <td className="px-4 py-2">
+                  <Link
+                    to={`/symbol/${encodeURIComponent(e.symbol)}`}
+                    className="font-mono font-medium text-fg-base hover:text-accent"
+                  >
+                    {e.symbol}
+                  </Link>
+                </td>
+                <td className="px-4 py-2 text-right font-mono text-xs text-fg-base">
+                  {last != null
+                    ? last.toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })
+                    : pricesLoading
+                      ? "…"
+                      : "—"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

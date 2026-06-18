@@ -53,6 +53,21 @@ async def list_stream_universe() -> StreamUniverseResponse:
     )
 
 
+@router.get("/stream/futures", response_model=StreamUniverseResponse)
+async def list_futures_universe() -> StreamUniverseResponse:
+    """List the active futures universe (continuous roots streamed via
+    CHART_FUTURES). Separate CH table from the equities stream universe;
+    bootstraps from FUTURES_SEED_ROOTS on first read so the cockpit shows
+    the standard contracts out of the box."""
+    bootstrapped, _ = await asyncio.to_thread(stream_service.bootstrap_futures_if_empty)
+    items = await asyncio.to_thread(stream_service.list_futures_universe)
+    return StreamUniverseResponse(
+        items=_entries(items),
+        count=len(items),
+        bootstrapped=bootstrapped,
+    )
+
+
 @router.get("/stream/status", response_model=StreamStatusResponse)
 async def stream_status() -> StreamStatusResponse:
     """Live subscription state. Polled by the cockpit's status tile."""

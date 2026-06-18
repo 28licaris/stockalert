@@ -585,6 +585,36 @@ export function useImportSeed() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// /api/v1/stream/futures — the continuous futures roots we stream
+// (separate CH table from the equities stream universe). Read-only on the
+// cockpit; bootstraps from FUTURES_SEED_ROOTS on first read. Raw fetch
+// (not in the openapi codegen), same pattern as useLatestBars / useJobs.
+// ─────────────────────────────────────────────────────────────────────
+
+export interface FuturesUniverseEntry {
+  symbol: string;
+  asset_type: string;
+  added_at: string;
+  added_by: string;
+  notes: string;
+}
+
+export interface FuturesUniverseResponse {
+  items: FuturesUniverseEntry[];
+  count: number;
+  bootstrapped: boolean;
+}
+
+export function useFuturesUniverse() {
+  return useQuery({
+    queryKey: ["stream", "futures"] as const,
+    queryFn: () =>
+      fetchJson<FuturesUniverseResponse>("/api/v1/stream/futures"),
+    staleTime: 30_000,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // /api/v1/instruments — autocomplete + batch lookup
 // ─────────────────────────────────────────────────────────────────────
 

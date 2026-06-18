@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 STREAM_UNIVERSE_TABLE = "stream_universe"
+FUTURES_UNIVERSE_TABLE = "futures_universe"
 
 
 def _normalize_symbol(s: str) -> str:
@@ -282,6 +283,78 @@ class StreamService:
             logger.warning("Stream: could not read futures_universe: %s", e)
             return set()
 
+    def list_futures_universe(self, *, owner_id: Optional[str] = None) -> list[dict]:
+        """Full rows for the active futures universe (the continuous roots
+        we stream). Shape matches `_read_universe` so the same
+        StreamUniverseEntry schema + frontend table render it. Tolerates a
+        missing/unreadable table by returning []."""
+        owner = owner_id or self.DEFAULT_OWNER
+        try:
+            rows = get_client().query(
+                f"""
+                SELECT symbol, asset_type, added_at, added_by, notes
+                FROM {FUTURES_UNIVERSE_TABLE}
+                FINAL
+                WHERE owner_id = {{owner:String}}
+                  AND is_active = 1
+                ORDER BY symbol ASC
+                """,
+                parameters={"owner": owner},
+            )
+        except Exception as e:  # noqa: BLE001 — boundary; futures optional
+            logger.warning("Stream: could not list futures_universe: %s", e)
+            return []
+        return [
+            {
+                "symbol": r[0],
+                "asset_type": r[1] or "FUTURE",
+                "added_at": _ts(r[2]),
+                "added_by": r[3] or "",
+                "notes": r[4] or "",
+            }
+            for r in rows.result_rows
+        ]
+
+    def bootstrap_futures_if_empty(
+        self, *, owner_id: Optional[str] = None,
+    ) -> tuple[bool, int]:
+        """Seed `futures_universe` from FUTURES_SEED_ROOTS iff it's empty.
+
+        The futures equivalent of `bootstrap_if_empty` — without it a fresh
+        ClickHouse streams no futures (the live subscription reads this
+        table). Returns `(did_bootstrap, count)`. Never raises — a CH
+        failure is logged and reported as (False, 0)."""
+        owner = owner_id or self.DEFAULT_OWNER
+        try:
+            existing = self._read_futures_universe(owner_id=owner)
+            if existing:
+                return False, len(existing)
+
+            from app.services.futures.schemas import FUTURES_SEED_ROOTS
+
+            now = datetime.now(timezone.utc)
+            version = int(now.timestamp() * 1000)
+            rows = [
+                [
+                    root, owner, "FUTURE", now, "bootstrap",
+                    "seeded from FUTURES_SEED_ROOTS", 1, version,
+                ]
+                for root in FUTURES_SEED_ROOTS
+            ]
+            get_client().insert(
+                FUTURES_UNIVERSE_TABLE,
+                rows,
+                column_names=[
+                    "symbol", "owner_id", "asset_type", "added_at",
+                    "added_by", "notes", "is_active", "version",
+                ],
+            )
+            logger.info("futures_universe: bootstrapped with %d roots", len(rows))
+            return True, len(rows)
+        except Exception as e:  # noqa: BLE001 — boundary; futures optional
+            logger.warning("Stream: futures bootstrap failed: %s", e)
+            return False, 0
+
     def _is_active(self, symbol: str, *, owner_id: Optional[str] = None) -> bool:
         owner = owner_id or self.DEFAULT_OWNER
         client = get_client()
@@ -353,6 +426,13 @@ class StreamService:
             self.bootstrap_if_empty()
         except Exception as e:  # noqa: BLE001 — boundary
             logger.warning("Stream: bootstrap_if_empty failed: %s", e)
+
+        # Futures roots live in a separate table; seed them too so a fresh
+        # CH streams the standard contracts out of the box.
+        try:
+            self.bootstrap_futures_if_empty()
+        except Exception as e:  # noqa: BLE001 — boundary
+            logger.warning("Stream: bootstrap_futures_if_empty failed: %s", e)
 
         try:
             active = {row["symbol"] for row in self._read_universe()}
