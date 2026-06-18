@@ -68,6 +68,47 @@ async def list_futures_universe() -> StreamUniverseResponse:
     )
 
 
+@router.post("/stream/futures", response_model=StreamMutationResponse, status_code=201)
+async def add_futures(req: AddStreamRequest) -> StreamMutationResponse:
+    """Add a continuous futures root (/ES, /MES, …) to the futures universe +
+    subscribe CHART_FUTURES immediately. Idempotent."""
+    try:
+        result = await asyncio.to_thread(
+            stream_service.add_futures, req.symbol, notes=req.notes or "",
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001 — boundary
+        logger.error("futures add(%s) failed: %s", req.symbol, e, exc_info=True)
+        raise HTTPException(500, str(e))
+    return StreamMutationResponse(
+        operation=result["operation"],
+        changed=result["changed"],
+        items=_entries(result["items"]),
+        count=result["count"],
+    )
+
+
+@router.delete("/stream/futures", response_model=StreamMutationResponse)
+async def remove_futures(symbol: str) -> StreamMutationResponse:
+    """Remove a futures root from the futures universe + unsubscribe. `symbol`
+    is a query param (not a path segment) so the leading '/' needs no
+    awkward path encoding."""
+    try:
+        result = await asyncio.to_thread(stream_service.remove_futures, symbol)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001 — boundary
+        logger.error("futures remove(%s) failed: %s", symbol, e, exc_info=True)
+        raise HTTPException(500, str(e))
+    return StreamMutationResponse(
+        operation=result["operation"],
+        changed=result["changed"],
+        items=_entries(result["items"]),
+        count=result["count"],
+    )
+
+
 @router.get("/stream/status", response_model=StreamStatusResponse)
 async def stream_status() -> StreamStatusResponse:
     """Live subscription state. Polled by the cockpit's status tile."""

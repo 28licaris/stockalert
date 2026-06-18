@@ -44,6 +44,15 @@ def _normalize_symbol(s: str) -> str:
     return watchlist_repo.normalize_member_symbol(s)
 
 
+def _normalize_futures_symbol(s: str) -> str:
+    """Continuous futures roots are ``/``-prefixed (``/ES``). Uppercase and
+    ensure the leading slash so 'es' and '/ES' both land as '/ES'."""
+    ss = (s or "").strip().upper()
+    if not ss:
+        return ""
+    return ss if ss.startswith("/") else "/" + ss
+
+
 def _ts(value: datetime | None) -> str:
     if value is None:
         return ""
@@ -304,6 +313,8 @@ class StreamService:
         except Exception as e:  # noqa: BLE001 — boundary; futures optional
             logger.warning("Stream: could not list futures_universe: %s", e)
             return []
+        from app.services.futures.schemas import futures_root_description
+
         return [
             {
                 "symbol": r[0],
@@ -311,9 +322,113 @@ class StreamService:
                 "added_at": _ts(r[2]),
                 "added_by": r[3] or "",
                 "notes": r[4] or "",
+                "description": futures_root_description(r[0]),
             }
             for r in rows.result_rows
         ]
+
+    def _is_futures_active(self, symbol: str, *, owner_id: Optional[str] = None) -> bool:
+        owner = owner_id or self.DEFAULT_OWNER
+        try:
+            rows = get_client().query(
+                f"""
+                SELECT 1 FROM {FUTURES_UNIVERSE_TABLE} FINAL
+                WHERE owner_id = {{owner:String}}
+                  AND symbol = {{sym:String}}
+                  AND is_active = 1
+                LIMIT 1
+                """,
+                parameters={"owner": owner, "sym": symbol},
+            )
+            return bool(rows.result_rows)
+        except Exception as e:  # noqa: BLE001 — boundary
+            logger.warning("Stream: _is_futures_active read failed: %s", e)
+            return False
+
+    def _write_futures_row(
+        self,
+        sym: str,
+        owner: str,
+        is_active: int,
+        *,
+        added_by: str = "",
+        notes: str = "",
+    ) -> None:
+        version = int(datetime.now(timezone.utc).timestamp() * 1000)
+        get_client().insert(
+            FUTURES_UNIVERSE_TABLE,
+            [[
+                sym, owner, "FUTURE", datetime.now(timezone.utc),
+                added_by, notes, is_active, version,
+            ]],
+            column_names=[
+                "symbol", "owner_id", "asset_type", "added_at",
+                "added_by", "notes", "is_active", "version",
+            ],
+        )
+
+    def add_futures(
+        self,
+        symbol: str,
+        *,
+        owner_id: Optional[str] = None,
+        added_by: str = "",
+        notes: str = "",
+    ) -> dict:
+        """Add a continuous futures root to the futures universe + subscribe
+        it immediately (the provider routes '/'-prefixed keys to
+        CHART_FUTURES). Idempotent. No synchronous warmup — futures history
+        fills on-demand via the bars gateway + the nightly reconcile."""
+        sym = _normalize_futures_symbol(symbol)
+        if not sym or sym == "/":
+            raise ValueError(f"invalid futures root {symbol!r} after normalization")
+
+        owner = owner_id or self.DEFAULT_OWNER
+        already_active = self._is_futures_active(sym, owner_id=owner)
+        self._write_futures_row(sym, owner, is_active=1, added_by=added_by, notes=notes)
+
+        if not already_active:
+            with self._lock:
+                if sym not in self._subscribed:
+                    before = set(self._subscribed)
+                    after = before | {sym}
+                    self._apply_subscription_diff(before, after)
+                    self._subscribed = after
+
+        items = self.list_futures_universe(owner_id=owner)
+        return {
+            "operation": "add",
+            "changed": [] if already_active else [sym],
+            "items": items,
+            "count": len(items),
+        }
+
+    def remove_futures(
+        self, symbol: str, *, owner_id: Optional[str] = None,
+    ) -> dict:
+        """Remove a futures root from the futures universe + unsubscribe."""
+        sym = _normalize_futures_symbol(symbol)
+        if not sym or sym == "/":
+            raise ValueError(f"invalid futures root {symbol!r} after normalization")
+
+        owner = owner_id or self.DEFAULT_OWNER
+        was_active = self._is_futures_active(sym, owner_id=owner)
+        if was_active:
+            self._write_futures_row(sym, owner, is_active=0)
+            with self._lock:
+                if sym in self._subscribed:
+                    before = set(self._subscribed)
+                    after = before - {sym}
+                    self._apply_subscription_diff(before, after)
+                    self._subscribed = after
+
+        items = self.list_futures_universe(owner_id=owner)
+        return {
+            "operation": "remove",
+            "changed": [sym] if was_active else [],
+            "items": items,
+            "count": len(items),
+        }
 
     def bootstrap_futures_if_empty(
         self, *, owner_id: Optional[str] = None,

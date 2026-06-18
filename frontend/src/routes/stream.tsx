@@ -2,11 +2,13 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Plus, RefreshCw, Search, Upload, X } from "lucide-react";
 import {
+  useAddFutures,
   useAddSeed,
   useFuturesUniverse,
   useImportSeed,
   useInstrumentLookup,
   useLatestBars,
+  useRemoveFutures,
   useRemoveSeed,
   useSeedUniverse,
   type FuturesUniverseEntry,
@@ -177,8 +179,10 @@ function FuturesPanel() {
         <code className="rounded bg-bg-muted px-1 font-mono text-xs">
           futures_ohlcv_1m
         </code>
-        . Click a root to chart it.
+        . Add a root to subscribe it; click a root to chart it.
       </p>
+
+      <FuturesAddRow />
 
       {query.error ? <ApiErrorAlert error={query.error} /> : null}
 
@@ -188,6 +192,44 @@ function FuturesPanel() {
         priceMap={priceMap}
         pricesLoading={quotes.isLoading}
       />
+    </div>
+  );
+}
+
+function FuturesAddRow() {
+  const add = useAddFutures();
+  const [symbol, setSymbol] = useState("");
+
+  const doAdd = () => {
+    const norm = symbol.trim().toUpperCase();
+    if (!norm) return;
+    // Backend also normalizes, but enforce the leading slash for clarity.
+    const root = norm.startsWith("/") ? norm : `/${norm}`;
+    add.mutate(root, { onSuccess: () => setSymbol("") });
+  };
+
+  return (
+    <div className="space-y-2 rounded-md border border-border bg-bg-subtle p-4">
+      <div className="flex flex-wrap gap-2">
+        <input
+          value={symbol}
+          onChange={(e) => setSymbol(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") doAdd();
+          }}
+          placeholder="Add futures root, e.g. /ES"
+          className="w-60 rounded-md border border-border bg-bg-base px-3 py-1.5 font-mono text-sm uppercase text-fg-base focus:border-accent focus:outline-none"
+        />
+        <Button
+          type="button"
+          onClick={doAdd}
+          disabled={!symbol.trim() || add.isPending}
+        >
+          <Plus className="h-4 w-4" />
+          Add futures
+        </Button>
+      </div>
+      {add.error ? <ApiErrorAlert error={add.error} /> : null}
     </div>
   );
 }
@@ -203,9 +245,11 @@ function FuturesList({
   priceMap: Map<string, number>;
   pricesLoading: boolean;
 }) {
+  const remove = useRemoveFutures();
+
   if (loading) {
     return (
-      <ul className="grid grid-cols-2 gap-1 sm:grid-cols-4">
+      <ul className="space-y-1">
         {Array.from({ length: 8 }).map((_, i) => (
           <li
             key={i}
@@ -219,7 +263,7 @@ function FuturesList({
   if (entries.length === 0) {
     return (
       <div className="rounded-md border border-dashed border-border bg-bg-subtle p-6 text-center text-sm text-fg-subtle">
-        No futures roots are streaming yet.
+        No futures roots are streaming yet. Add one above.
       </div>
     );
   }
@@ -230,7 +274,9 @@ function FuturesList({
         <thead className="bg-bg-muted text-xs uppercase tracking-wider text-fg-subtle">
           <tr>
             <th className="px-4 py-2 text-left font-medium">Root</th>
+            <th className="px-4 py-2 text-left font-medium">Contract</th>
             <th className="px-4 py-2 text-right font-medium">Last</th>
+            <th className="px-4 py-2 text-right font-medium" aria-label="Actions" />
           </tr>
         </thead>
         <tbody className="divide-y divide-border-subtle">
@@ -246,6 +292,9 @@ function FuturesList({
                     {e.symbol}
                   </Link>
                 </td>
+                <td className="px-4 py-2 text-xs text-fg-muted">
+                  {e.description || "—"}
+                </td>
                 <td className="px-4 py-2 text-right font-mono text-xs text-fg-base">
                   {last != null
                     ? last.toLocaleString(undefined, {
@@ -256,11 +305,29 @@ function FuturesList({
                       ? "…"
                       : "—"}
                 </td>
+                <td className="px-4 py-2 text-right">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => remove.mutate(e.symbol)}
+                    disabled={remove.isPending}
+                    aria-label={`Remove ${e.symbol} from futures stream`}
+                    title="Remove from stream — unsubscribes Schwab"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </td>
               </tr>
             );
           })}
         </tbody>
       </table>
+      {remove.error ? (
+        <div className="border-t border-border p-2">
+          <ApiErrorAlert error={remove.error} />
+        </div>
+      ) : null}
     </div>
   );
 }

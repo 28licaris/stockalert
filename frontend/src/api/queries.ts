@@ -597,6 +597,7 @@ export interface FuturesUniverseEntry {
   added_at: string;
   added_by: string;
   notes: string;
+  description: string;
 }
 
 export interface FuturesUniverseResponse {
@@ -605,12 +606,51 @@ export interface FuturesUniverseResponse {
   bootstrapped: boolean;
 }
 
+const futuresUniverseKey = ["stream", "futures"] as const;
+
 export function useFuturesUniverse() {
   return useQuery({
-    queryKey: ["stream", "futures"] as const,
+    queryKey: futuresUniverseKey,
     queryFn: () =>
       fetchJson<FuturesUniverseResponse>("/api/v1/stream/futures"),
     staleTime: 30_000,
+  });
+}
+
+export function useAddFutures() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (symbol: string): Promise<unknown> => {
+      const res = await fetch("/api/v1/stream/futures", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol }),
+      });
+      if (!res.ok) {
+        const envelope = await readErrorEnvelope(res.clone());
+        throw new ApiError(envelope, res.status);
+      }
+      return res.json();
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: futuresUniverseKey }),
+  });
+}
+
+export function useRemoveFutures() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (symbol: string): Promise<unknown> => {
+      const res = await fetch(
+        `/api/v1/stream/futures?symbol=${encodeURIComponent(symbol)}`,
+        { method: "DELETE" },
+      );
+      if (!res.ok) {
+        const envelope = await readErrorEnvelope(res.clone());
+        throw new ApiError(envelope, res.status);
+      }
+      return res.json();
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: futuresUniverseKey }),
   });
 }
 

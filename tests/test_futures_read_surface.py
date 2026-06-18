@@ -217,3 +217,65 @@ def test_bootstrap_futures_idempotent_when_seeded(monkeypatch):
     assert did is False
     assert count == 2
     client.insert.assert_not_called()
+
+
+# ── add / remove futures + descriptions ──────────────────────────────
+
+def test_normalize_futures_symbol():
+    from app.services.stream.service import _normalize_futures_symbol
+
+    assert _normalize_futures_symbol("es") == "/ES"
+    assert _normalize_futures_symbol("/ES") == "/ES"
+    assert _normalize_futures_symbol("  /mnq ") == "/MNQ"
+    assert _normalize_futures_symbol("") == ""
+
+
+def test_futures_root_description():
+    from app.services.futures.schemas import futures_root_description
+
+    assert futures_root_description("/ES") == "E-mini S&P 500"
+    assert futures_root_description("/MNQ") == "Micro E-mini Nasdaq-100"
+    assert futures_root_description("es") == ""  # needs the leading slash
+    assert futures_root_description("/UNKNOWN") == ""
+
+
+def test_add_futures_normalizes_writes_and_subscribes(monkeypatch):
+    from app.services.stream.service import StreamService
+
+    svc = StreamService()
+    monkeypatch.setattr(svc, "_is_futures_active", lambda sym, *, owner_id=None: False)
+    monkeypatch.setattr(svc, "_apply_subscription_diff", lambda before, after: None)
+    monkeypatch.setattr(svc, "list_futures_universe", lambda *, owner_id=None: [{"symbol": "/CL"}])
+    written: dict = {}
+    monkeypatch.setattr(
+        svc, "_write_futures_row",
+        lambda sym, owner, is_active, **kw: written.update(symbol=sym, is_active=is_active),
+    )
+
+    res = svc.add_futures("cl")
+
+    assert res["operation"] == "add"
+    assert res["changed"] == ["/CL"]
+    assert written == {"symbol": "/CL", "is_active": 1}
+    assert "/CL" in svc._subscribed
+
+
+def test_remove_futures_marks_inactive_and_unsubscribes(monkeypatch):
+    from app.services.stream.service import StreamService
+
+    svc = StreamService()
+    svc._subscribed = {"/CL"}
+    monkeypatch.setattr(svc, "_is_futures_active", lambda sym, *, owner_id=None: True)
+    monkeypatch.setattr(svc, "_apply_subscription_diff", lambda before, after: None)
+    monkeypatch.setattr(svc, "list_futures_universe", lambda *, owner_id=None: [])
+    written: dict = {}
+    monkeypatch.setattr(
+        svc, "_write_futures_row",
+        lambda sym, owner, is_active, **kw: written.update(symbol=sym, is_active=is_active),
+    )
+
+    res = svc.remove_futures("/CL")
+
+    assert res["changed"] == ["/CL"]
+    assert written == {"symbol": "/CL", "is_active": 0}
+    assert "/CL" not in svc._subscribed

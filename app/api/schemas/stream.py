@@ -38,6 +38,10 @@ class StreamUniverseEntry(BaseModel):
         description="Principal.userId of the operator (or 'bootstrap'/'auto-added by watchlist:<name>').",
     )
     notes: str = Field(default="", description="Operator-supplied freeform note.")
+    description: str = Field(
+        default="",
+        description="Human-readable instrument name (e.g. futures root '/ES' → 'E-mini S&P 500'). Empty for equities.",
+    )
 
 
 class StreamUniverseResponse(BaseModel):

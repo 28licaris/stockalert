@@ -41,6 +41,34 @@ FUTURES_SEED_ROOTS: list[str] = [
 ]
 
 
+# Human-readable name per continuous root — shown next to the symbol on the
+# cockpit. Single source of truth; `list_futures_universe` enriches rows from
+# here. Roots not listed (operator-added) just render with no description.
+FUTURES_ROOT_DESCRIPTIONS: dict[str, str] = {
+    "/ES": "E-mini S&P 500",
+    "/MES": "Micro E-mini S&P 500",
+    "/NQ": "E-mini Nasdaq-100",
+    "/MNQ": "Micro E-mini Nasdaq-100",
+    "/YM": "E-mini Dow",
+    "/MYM": "Micro E-mini Dow",
+    "/RTY": "E-mini Russell 2000",
+    "/M2K": "Micro E-mini Russell 2000",
+    "/GC": "Gold",
+    "/MGC": "Micro Gold",
+    "/SI": "Silver",
+    "/SIL": "Micro Silver",
+    "/HG": "Copper",
+    "/CL": "Crude Oil (WTI)",
+    "/MCL": "Micro Crude Oil",
+    "/NG": "Natural Gas",
+}
+
+
+def futures_root_description(symbol: str) -> str:
+    """Human name for a continuous root (``/ES`` → 'E-mini S&P 500'), or ''."""
+    return FUTURES_ROOT_DESCRIPTIONS.get((symbol or "").strip().upper(), "")
+
+
 def futures_table_id(name: str) -> str:
     """Fully-qualified PyIceberg table id (`<futures_glue_db>.<name>`)."""
     return f"{settings.iceberg_futures_glue_database}.{name}"
