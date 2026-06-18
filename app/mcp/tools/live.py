@@ -17,7 +17,11 @@ from typing import Optional
 from app.mcp.middleware import tool_call
 from app.mcp.server import mcp
 from app.services.readers.bar_reader import BarReader
-from app.services.readers.bars_gateway import BarSource, get_chart_bars
+from app.services.readers.bars_gateway import (
+    BarSource,
+    get_chart_bars,
+    get_range_bars,
+)
 from app.services.readers.schemas import (
     LatestBarsResponse,
     LiveBar,
@@ -55,6 +59,21 @@ def get_recent_bars(symbol: str, limit: int = 200) -> LiveBarsResponse:
     """
     with tool_call("get_recent_bars", symbol=symbol, limit=limit):
         bars = _reader().get_recent_bars(symbol, limit=limit)
+        # Cold-symbol self-heal: if CH has nothing (e.g. an off-universe
+        # ticker never streamed), fill a recent window from the lake and
+        # re-query. Hot/universe symbols skip this — they're already fast.
+        if not bars:
+            try:
+                from datetime import datetime, timedelta, timezone
+
+                from app.services.equities.lake_to_ch_fill import fill_ch_from_lake_sync
+
+                end = datetime.now(timezone.utc)
+                inserted = fill_ch_from_lake_sync(symbol.upper(), end - timedelta(days=7), end)
+                if inserted > 0:
+                    bars = _reader().get_recent_bars(symbol, limit=limit)
+            except Exception as exc:  # noqa: BLE001 — boundary; degrade to empty
+                logger.warning("get_recent_bars: lake fill for %s failed: %s", symbol, exc)
         return LiveBarsResponse(
             symbol=symbol, interval="1m", bars=bars, count=len(bars),
         )
@@ -97,9 +116,13 @@ def get_bars_in_range(
     with tool_call(
         "get_bars_in_range", symbol=symbol, interval=interval,
     ):
-        bars = _reader().get_bars_in_range(
+        # Route through the gateway so the window self-heals from the lake
+        # when CH doesn't cover it (cold symbol / missing depth) — same
+        # behavior as get_bars_for_chart.
+        bars = get_range_bars(
             symbol, start, end,
             interval=interval, limit=limit, source_table=source_table,
+            source=BarSource.AUTO, reader=_reader(),
         )
         return LiveBarsResponse(
             symbol=symbol, interval=interval, bars=bars, count=len(bars),

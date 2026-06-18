@@ -59,6 +59,25 @@ _INTERVAL_MINUTES: dict[str, int] = {
 # full 20-year scan into the hot path. 365d matches the route's prior cap.
 _MAX_FILL_LOOKBACK_DAYS = 365
 
+# CH is considered to lack the requested depth (→ fill) when its earliest
+# bar starts more than this many days AFTER the window start. The buffer
+# absorbs a legit market-closed run at the very start of the window
+# (long weekend / holiday) so we don't refill on every load. A real depth
+# gap (CH loaded 3mo, window asks 1yr) blows past it.
+_COVERAGE_BUFFER_DAYS = 4
+
+
+def _ch_lacks_window(bars, window_start: datetime) -> bool:
+    """True when CH's coverage doesn't reach back to `window_start` — either
+    empty, or its earliest bar starts > _COVERAGE_BUFFER_DAYS after it.
+    `bars` is oldest-first (so bars[0] is the earliest)."""
+    if not bars:
+        return True
+    earliest = bars[0].timestamp
+    if earliest.tzinfo is None:
+        earliest = earliest.replace(tzinfo=timezone.utc)
+    return earliest > window_start + timedelta(days=_COVERAGE_BUFFER_DAYS)
+
 
 def get_chart_bars(
     symbol: str,
@@ -93,29 +112,91 @@ def get_chart_bars(
     if source == BarSource.CLICKHOUSE:
         return bars
 
-    # AUTO: CH-first; fill from the lake on an empty bounded window, re-query.
+    # AUTO: CH-first; fill from the lake when CH doesn't cover the window —
+    # empty OR lacking depth (CH loaded 3mo but the agent asked for 1yr).
+    # The depth check catches the partial-coverage case the old empty-only
+    # trigger missed. Mid-window holes in *today's* session aren't fillable
+    # here (the lake is nightly-fed) — those are the reconcile job's domain.
     if (
-        not bars
-        and lookback_days is not None
+        lookback_days is not None
         and lookback_days <= _MAX_FILL_LOOKBACK_DAYS
+    ):
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=lookback_days)
+        if _ch_lacks_window(bars, start):
+            try:
+                from app.services.equities.lake_to_ch_fill import fill_ch_from_lake_sync
+
+                inserted = fill_ch_from_lake_sync(symbol.upper(), start, end)
+                if inserted > 0:
+                    logger.info(
+                        "bars_gateway: lake-filled %s (%d rows, %dd window); re-querying CH",
+                        symbol, inserted, lookback_days,
+                    )
+                    bars = ch_reader.get_bars_for_chart(
+                        symbol, interval=interval,
+                        lookback_days=lookback_days, limit=limit,
+                    )
+            except Exception as exc:  # noqa: BLE001 — boundary; degrade to CH result
+                logger.warning("bars_gateway: lake fill for %s failed: %s", symbol, exc)
+
+    return bars
+
+
+def get_range_bars(
+    symbol: str,
+    start: datetime,
+    end: datetime,
+    *,
+    interval: str = "1m",
+    limit: Optional[int] = None,
+    source_table: Optional[str] = None,
+    source: BarSource = BarSource.AUTO,
+    reader: Optional[BarReader] = None,
+) -> list[LiveBar]:
+    """CH-first bars for an explicit ``[start, end)`` window, self-healing
+    from the lake on a coverage gap. The window-based peer of
+    `get_chart_bars`, used by the MCP `get_bars_in_range` tool so it
+    behaves like the rest of the bars surface.
+
+    AUTO fills (and re-queries) when CH doesn't reach back to `start`.
+    The fill targets ``ohlcv_1m``, so it's skipped when the caller forces
+    a different `source_table`.
+    """
+    ch_reader = reader or BarReader.from_settings()
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+
+    bars = ch_reader.get_bars_in_range(
+        symbol, start, end, interval=interval, limit=limit, source_table=source_table,
+    )
+    if source == BarSource.CLICKHOUSE:
+        return bars
+
+    window_days = (end - start).days
+    if (
+        source == BarSource.AUTO
+        and source_table is None
+        and 0 < window_days <= _MAX_FILL_LOOKBACK_DAYS
+        and _ch_lacks_window(bars, start)
     ):
         try:
             from app.services.equities.lake_to_ch_fill import fill_ch_from_lake_sync
 
-            end = datetime.now(timezone.utc)
-            start = end - timedelta(days=lookback_days)
             inserted = fill_ch_from_lake_sync(symbol.upper(), start, end)
             if inserted > 0:
                 logger.info(
-                    "bars_gateway: lake-filled %s (%d rows, %dd window); re-querying CH",
-                    symbol, inserted, lookback_days,
+                    "bars_gateway: range lake-filled %s (%d rows, %dd); re-querying CH",
+                    symbol, inserted, window_days,
                 )
-                bars = ch_reader.get_bars_for_chart(
-                    symbol, interval=interval,
-                    lookback_days=lookback_days, limit=limit,
+                bars = ch_reader.get_bars_in_range(
+                    symbol, start, end, interval=interval,
+                    limit=limit, source_table=source_table,
                 )
         except Exception as exc:  # noqa: BLE001 — boundary; degrade to CH result
-            logger.warning("bars_gateway: lake fill for %s failed: %s", symbol, exc)
+            logger.warning("bars_gateway: range lake fill for %s failed: %s", symbol, exc)
 
     return bars
 
