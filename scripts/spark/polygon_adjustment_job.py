@@ -292,42 +292,37 @@ def adjust(
     # cache isn't needed.
     adjusted.writeTo(ADJUSTED_TABLE).overwritePartitions()
 
-    # Compaction: the merge-on-read overwrite leaves position-delete files,
-    # so the data files accumulate superseded rows (AAPL/1yr was observed at
-    # 656K raw rows for 170K live — ~3.9x bloat). Every downstream reader
-    # that doesn't apply the deletes (ClickHouse s3(), naive scans) then
-    # reads ~4x too much. rewrite_data_files with delete-file-threshold=1
-    # rewrites exactly the files that carry deletes — applying them and
-    # bin-packing — so the table stays lean run-to-run. Best-effort: a
-    # compaction failure must not fail the adjustment that already
-    # committed (NO silent skip — it's logged).
+    # Maintenance: overwritePartitions() replaces partition files (this
+    # table carries 0 merge-on-read delete files — verified via the $files
+    # metadata table), so each run leaves the PREVIOUS run's partition
+    # files as orphans referenced only by old snapshots. They don't slow
+    # current-snapshot readers (Athena/PyIceberg ignore them) but they
+    # waste S3 storage and pile up week over week (~2k orphan files
+    # observed). expire_snapshots drops snapshots beyond retain_last and
+    # frees their now-unreferenced files. Best-effort: a maintenance
+    # failure must not fail the adjustment that already committed (logged,
+    # not silently skipped).
     if compact:
         spark = adjusted.sparkSession
         try:
             res = spark.sql(
-                "CALL lake.system.rewrite_data_files("
+                "CALL lake.system.expire_snapshots("
                 "  table => 'equities.polygon_adjusted',"
-                "  options => map("
-                "    'delete-file-threshold','1',"
-                "    'min-input-files','2',"
-                "    'partial-progress.enabled','true'"
-                "  )"
+                "  retain_last => 4"
                 ")"
             ).first()
             log.info(
-                "rewrite_data_files: rewritten_data_files=%s added_data_files=%s "
-                "rewritten_bytes=%s",
-                res["rewritten_data_files_count"] if res else "?",
-                res["added_data_files_count"] if res else "?",
-                res["rewritten_bytes_count"] if res else "?",
+                "expire_snapshots: deleted_data_files=%s deleted_manifest_files=%s",
+                res["deleted_data_files_count"] if res else "?",
+                res["deleted_manifest_files_count"] if res else "?",
             )
         except Exception as e:  # noqa: BLE001 — boundary; don't fail a committed run
             log.warning(
-                "rewrite_data_files compaction failed (adjustment already "
+                "expire_snapshots maintenance failed (adjustment already "
                 "committed): %s", e,
             )
     else:
-        log.info("--skip-compact: leaving merge-on-read deletes uncompacted")
+        log.info("--skip-compact: leaving old-snapshot orphan files in place")
 
     # Read row count from the snapshot we just committed — metadata-only,
     # zero data scan, sub-second. Iceberg's <table>.snapshots metadata
