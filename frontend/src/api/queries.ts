@@ -617,6 +617,28 @@ export function useFuturesUniverse() {
   });
 }
 
+export interface FuturesCatalogEntry {
+  symbol: string;
+  description: string;
+}
+
+/**
+ * Static catalog of known continuous futures roots (symbol + human name) —
+ * backs the "add futures" autocomplete. Unlike Schwab's instrument search
+ * (which returns dated contracts like /ESH27), this is the continuous roots
+ * we actually stream. Cached indefinitely; it's a constant.
+ */
+export function useFuturesCatalog() {
+  return useQuery({
+    queryKey: ["stream", "futures", "catalog"] as const,
+    queryFn: () =>
+      fetchJson<{ items: FuturesCatalogEntry[] }>(
+        "/api/v1/stream/futures/catalog",
+      ),
+    staleTime: Infinity,
+  });
+}
+
 export function useAddFutures() {
   const qc = useQueryClient();
   return useMutation({

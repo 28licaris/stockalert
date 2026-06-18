@@ -239,6 +239,23 @@ def test_futures_root_description():
     assert futures_root_description("/UNKNOWN") == ""
 
 
+def test_futures_catalog_complete_and_sorted():
+    from app.services.futures.schemas import (
+        FUTURES_ROOT_DESCRIPTIONS,
+        FUTURES_SEED_ROOTS,
+        futures_catalog,
+    )
+
+    cat = futures_catalog()
+    syms = [c["symbol"] for c in cat]
+    assert len(cat) == len(FUTURES_ROOT_DESCRIPTIONS)
+    assert syms == sorted(syms)
+    # Every streamed seed root must be discoverable + described.
+    for root in FUTURES_SEED_ROOTS:
+        assert root in syms
+    assert all(c["description"] for c in cat)
+
+
 def test_add_futures_normalizes_writes_and_subscribes(monkeypatch):
     from app.services.stream.service import StreamService
 

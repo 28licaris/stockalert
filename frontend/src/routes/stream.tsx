@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Plus, RefreshCw, Search, Upload, X } from "lucide-react";
 import {
   useAddFutures,
   useAddSeed,
+  useFuturesCatalog,
   useFuturesUniverse,
   useImportSeed,
   useInstrumentLookup,
@@ -11,6 +12,7 @@ import {
   useRemoveFutures,
   useRemoveSeed,
   useSeedUniverse,
+  type FuturesCatalogEntry,
   type FuturesUniverseEntry,
   type SeedEntry,
 } from "@/api/queries";
@@ -198,31 +200,28 @@ function FuturesPanel() {
 
 function FuturesAddRow() {
   const add = useAddFutures();
+  const catalog = useFuturesCatalog();
   const [symbol, setSymbol] = useState("");
 
-  const doAdd = () => {
-    const norm = symbol.trim().toUpperCase();
+  const doAdd = (raw: string) => {
+    const norm = raw.trim().toUpperCase();
     if (!norm) return;
-    // Backend also normalizes, but enforce the leading slash for clarity.
     const root = norm.startsWith("/") ? norm : `/${norm}`;
     add.mutate(root, { onSuccess: () => setSymbol("") });
   };
 
   return (
     <div className="space-y-2 rounded-md border border-border bg-bg-subtle p-4">
-      <div className="flex flex-wrap gap-2">
-        <input
+      <div className="flex flex-wrap items-start gap-2">
+        <FuturesSearchInput
           value={symbol}
-          onChange={(e) => setSymbol(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") doAdd();
-          }}
-          placeholder="Add futures root, e.g. /ES"
-          className="w-60 rounded-md border border-border bg-bg-base px-3 py-1.5 font-mono text-sm uppercase text-fg-base focus:border-accent focus:outline-none"
+          onChange={setSymbol}
+          onSubmit={doAdd}
+          catalog={catalog.data?.items ?? []}
         />
         <Button
           type="button"
-          onClick={doAdd}
+          onClick={() => doAdd(symbol)}
           disabled={!symbol.trim() || add.isPending}
         >
           <Plus className="h-4 w-4" />
@@ -230,6 +229,130 @@ function FuturesAddRow() {
         </Button>
       </div>
       {add.error ? <ApiErrorAlert error={add.error} /> : null}
+    </div>
+  );
+}
+
+/**
+ * Autocomplete for the "add futures" field. Filters the known continuous
+ * roots locally (symbol or description substring) — instant, no API call
+ * per keystroke. Picking a suggestion adds it; free text still works for
+ * roots outside the catalog. Mirrors the equities SymbolSearchInput UX.
+ */
+function FuturesSearchInput({
+  value,
+  onChange,
+  onSubmit,
+  catalog,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  onSubmit: (symbol: string) => void;
+  catalog: ReadonlyArray<FuturesCatalogEntry>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [highlight, setHighlight] = useState(0);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+
+  const matches = useMemo(() => {
+    const needle = value.trim().toUpperCase().replace(/^\//, "");
+    if (!needle) return catalog.slice(0, 12);
+    return catalog
+      .filter(
+        (c) =>
+          c.symbol.replace(/^\//, "").includes(needle) ||
+          c.description.toUpperCase().includes(needle),
+      )
+      .slice(0, 12);
+  }, [value, catalog]);
+
+  useEffect(() => setHighlight(0), [matches]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const pick = (entry: FuturesCatalogEntry) => {
+    onSubmit(entry.symbol);
+    setOpen(false);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setOpen(true);
+      setHighlight((h) => (matches.length ? (h + 1) % matches.length : 0));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlight((h) => (matches.length ? (h <= 0 ? matches.length - 1 : h - 1) : 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (open && matches[highlight]) pick(matches[highlight]);
+      else onSubmit(value);
+    } else if (e.key === "Escape") {
+      setOpen(false);
+    }
+  };
+
+  const showDropdown = open && matches.length > 0;
+
+  return (
+    <div ref={wrapperRef} className="relative w-72">
+      <div className="flex h-9 items-center gap-2 rounded-md border border-border bg-bg-base px-3 focus-within:border-accent">
+        <Search className="h-4 w-4 shrink-0 text-fg-subtle" aria-hidden />
+        <input
+          value={value}
+          onChange={(e) => {
+            onChange(e.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={onKeyDown}
+          placeholder="Search futures, e.g. ES or Gold"
+          autoComplete="off"
+          spellCheck={false}
+          role="combobox"
+          aria-expanded={showDropdown}
+          className="h-full flex-1 bg-transparent text-sm uppercase tracking-wide text-fg-base placeholder:normal-case placeholder:tracking-normal focus:outline-none"
+        />
+      </div>
+      {showDropdown ? (
+        <ul
+          role="listbox"
+          className="absolute left-0 right-0 top-full z-30 mt-1 max-h-72 overflow-y-auto rounded-md border border-border bg-bg-elevated shadow-lg"
+        >
+          {matches.map((m, idx) => (
+            <li
+              key={m.symbol}
+              role="option"
+              aria-selected={idx === highlight}
+              onMouseEnter={() => setHighlight(idx)}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                pick(m);
+              }}
+              className={cn(
+                "flex cursor-pointer items-center justify-between gap-3 px-3 py-2 text-sm",
+                idx === highlight ? "bg-bg-muted" : "hover:bg-bg-muted/60",
+              )}
+            >
+              <span className="font-mono font-semibold text-fg-base">
+                {m.symbol}
+              </span>
+              <span className="truncate text-xs text-fg-muted">
+                {m.description}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }

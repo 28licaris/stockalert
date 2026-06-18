@@ -68,6 +68,17 @@ async def list_futures_universe() -> StreamUniverseResponse:
     )
 
 
+@router.get("/stream/futures/catalog")
+async def futures_catalog() -> dict:
+    """Known continuous futures roots (symbol + human name) for the cockpit's
+    'add futures' autocomplete. Static catalog — broader than what's currently
+    streaming."""
+    from app.services.futures.schemas import futures_catalog as _catalog
+
+    items = _catalog()
+    return {"items": items, "count": len(items)}
+
+
 @router.post("/stream/futures", response_model=StreamMutationResponse, status_code=201)
 async def add_futures(req: AddStreamRequest) -> StreamMutationResponse:
     """Add a continuous futures root (/ES, /MES, …) to the futures universe +

@@ -41,10 +41,14 @@ FUTURES_SEED_ROOTS: list[str] = [
 ]
 
 
-# Human-readable name per continuous root — shown next to the symbol on the
-# cockpit. Single source of truth; `list_futures_universe` enriches rows from
-# here. Roots not listed (operator-added) just render with no description.
+# Catalog of common continuous roots → human name. Two jobs: (1) the
+# description shown next to a streamed root on the cockpit, and (2) the
+# autocomplete suggestions for the "add futures" search. Broader than
+# FUTURES_SEED_ROOTS (what we stream by default) so search is useful for
+# discovery; operator-added roots outside this map just render with no
+# description. Single source of truth.
 FUTURES_ROOT_DESCRIPTIONS: dict[str, str] = {
+    # Equity index
     "/ES": "E-mini S&P 500",
     "/MES": "Micro E-mini S&P 500",
     "/NQ": "E-mini Nasdaq-100",
@@ -53,20 +57,62 @@ FUTURES_ROOT_DESCRIPTIONS: dict[str, str] = {
     "/MYM": "Micro E-mini Dow",
     "/RTY": "E-mini Russell 2000",
     "/M2K": "Micro E-mini Russell 2000",
+    # Metals
     "/GC": "Gold",
     "/MGC": "Micro Gold",
     "/SI": "Silver",
     "/SIL": "Micro Silver",
     "/HG": "Copper",
+    "/PL": "Platinum",
+    "/PA": "Palladium",
+    # Energy
     "/CL": "Crude Oil (WTI)",
     "/MCL": "Micro Crude Oil",
     "/NG": "Natural Gas",
+    "/RB": "RBOB Gasoline",
+    "/HO": "Heating Oil",
+    "/BZ": "Brent Crude Oil",
+    # Rates
+    "/ZB": "30-Year U.S. T-Bond",
+    "/UB": "Ultra U.S. T-Bond",
+    "/ZN": "10-Year U.S. T-Note",
+    "/ZF": "5-Year U.S. T-Note",
+    "/ZT": "2-Year U.S. T-Note",
+    # FX
+    "/6E": "Euro FX",
+    "/6J": "Japanese Yen",
+    "/6B": "British Pound",
+    "/6A": "Australian Dollar",
+    "/6C": "Canadian Dollar",
+    "/6S": "Swiss Franc",
+    # Agriculture
+    "/ZC": "Corn",
+    "/ZS": "Soybeans",
+    "/ZW": "Chicago Wheat",
+    "/ZM": "Soybean Meal",
+    "/ZL": "Soybean Oil",
+    "/LE": "Live Cattle",
+    "/HE": "Lean Hogs",
+    # Crypto
+    "/BTC": "Bitcoin",
+    "/MBT": "Micro Bitcoin",
+    "/ETH": "Ether",
+    "/MET": "Micro Ether",
 }
 
 
 def futures_root_description(symbol: str) -> str:
     """Human name for a continuous root (``/ES`` → 'E-mini S&P 500'), or ''."""
     return FUTURES_ROOT_DESCRIPTIONS.get((symbol or "").strip().upper(), "")
+
+
+def futures_catalog() -> list[dict]:
+    """Sorted ``[{symbol, description}]`` of the known continuous roots —
+    backs the cockpit's 'add futures' autocomplete."""
+    return [
+        {"symbol": sym, "description": desc}
+        for sym, desc in sorted(FUTURES_ROOT_DESCRIPTIONS.items())
+    ]
 
 
 def futures_table_id(name: str) -> str:
