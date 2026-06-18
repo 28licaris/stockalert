@@ -112,6 +112,14 @@ class Settings(BaseModel):
     # (the canonical "what's our hot universe" table).
     schwab_nightly_symbols: str = os.getenv("SCHWAB_NIGHTLY_SYMBOLS", "active")
 
+    # CH reconcile — push equities.schwab_universe (authoritative, complete)
+    # back into ClickHouse so live-stream gaps (restarts/outages) self-heal.
+    # Runs daily AFTER the nightly Schwab refresh (default 23:00 UTC vs its
+    # 22:00). See app/services/ingest/ch_reconcile.py.
+    ch_reconcile_enabled: bool = os.getenv("CH_RECONCILE_ENABLED", "true").lower() == "true"
+    ch_reconcile_run_hour_utc: int = int(os.getenv("CH_RECONCILE_RUN_HOUR_UTC", "23"))
+    ch_reconcile_lookback_days: int = int(os.getenv("CH_RECONCILE_LOOKBACK_DAYS", "7"))
+
     # ─────────────────────────────────────────────────────────
     # Iceberg catalog (AWS Glue) — see docs/architecture_v2/.
     # Iceberg warehouse path: s3://${STOCK_LAKE_BUCKET}/${ICEBERG_WAREHOUSE_PREFIX}/

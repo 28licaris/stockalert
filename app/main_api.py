@@ -362,6 +362,29 @@ async def lifespan(app: FastAPI):
                 exc,
             )
 
+    # CH reconcile: post-close, push schwab_universe (authoritative) into CH
+    # so live-stream gaps self-heal. Runs after the nightly refresh.
+    ch_reconcile_task: asyncio.Task | None = None
+    if _settings.ch_reconcile_enabled and (_settings.stock_lake_bucket or "").strip():
+        try:
+            from app.services.ingest.ch_reconcile import run_ch_reconcile_loop
+
+            ch_reconcile_task = asyncio.create_task(
+                run_ch_reconcile_loop(),
+                name="ch_reconcile",
+            )
+            app.state.ch_reconcile_task = ch_reconcile_task
+            logger.info(
+                "ch_reconcile: background loop started "
+                "(CH_RECONCILE_RUN_HOUR_UTC=%s, lookback=%dd)",
+                _settings.ch_reconcile_run_hour_utc,
+                _settings.ch_reconcile_lookback_days,
+            )
+        except Exception as exc:
+            logger.exception(
+                "✗ ch_reconcile failed to start: %s — continuing without it", exc,
+            )
+
     # CV13: nightly_silver_ohlcv_build loop removed.
     # equities.polygon_adjusted is now built whole-market by the
     # weekly polygon_adjustment_job (Spark, EMR Serverless / CodeBuild
@@ -422,6 +445,16 @@ async def lifespan(app: FastAPI):
             pass
         except Exception as e:
             logger.warning("nightly_schwab_refresh task shutdown: %s", e)
+
+    rt = getattr(app.state, "ch_reconcile_task", None)
+    if rt is not None and not rt.done():
+        rt.cancel()
+        try:
+            await rt
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning("ch_reconcile task shutdown: %s", e)
 
     # CV13: nightly_silver_ohlcv_task removed — no in-process silver
     # build loop to shut down.
