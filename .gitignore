@@ -31,5 +31,8 @@ __pycache__/
 # Frontend cockpit (frontend/ has its own .gitignore for node_modules
 # etc.) — the build artifact ships from CI, not from devs' machines.
 /frontend/node_modules/
-/app/static/dist/.claude/worktrees/
+/app/static/dist/
+
+# Claude Code session artifacts (worktrees are embedded git repos)
+.claude/worktrees/
 agent-skills/
