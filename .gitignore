@@ -31,4 +31,5 @@ __pycache__/
 # Frontend cockpit (frontend/ has its own .gitignore for node_modules
 # etc.) — the build artifact ships from CI, not from devs' machines.
 /frontend/node_modules/
-/app/static/dist/
+/app/static/dist/.claude/worktrees/
+agent-skills/

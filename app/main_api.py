@@ -589,13 +589,6 @@ except ImportError:
     logger.info("ℹ️  Signals routes not available")
 
 try:
-    from app.api import routes_backtest
-    app.include_router(routes_backtest.router, prefix=_V1, tags=["Backtest"])
-    logger.info("✅ Backtest routes loaded")
-except ImportError:
-    logger.info("ℹ️  Backtest routes not available")
-
-try:
     from app.api import routes_assistant
     app.include_router(
         routes_assistant.router,
@@ -605,62 +598,6 @@ try:
     logger.info("✅ Assistant routes loaded")
 except Exception as _asst_exc:  # noqa: BLE001
     logger.warning("ℹ️  Assistant routes not mounted: %s", _asst_exc)
-
-
-# ─────────────────────────────────────────────────────────────────────
-# Legacy redirects (FE-CONTRACTS-1)
-# Every legacy path returns 307 → /api/v1/<same path tail>. 307
-# preserves both method and body, so legacy HTML POSTs to /watchlist/add
-# arrive at /api/v1/watchlist/add intact.
-#
-# Registered AFTER all /api/v1 routes so the v1 routes match first
-# (Starlette routing is first-match-wins).
-#
-# Deletion plan: tracked in [docs/frontend_api_contracts.md §10.2] —
-# legacy redirects removed when the last static HTML page is gone or
-# at FE-CONTRACTS-7, whichever comes first.
-# ─────────────────────────────────────────────────────────────────────
-
-
-def _v1_redirect(target_path: str, request: Request) -> RedirectResponse:
-    """Preserve the query string when redirecting; 307 preserves method+body."""
-    qs = request.url.query
-    url = f"{target_path}?{qs}" if qs else target_path
-    return RedirectResponse(url=url, status_code=307)
-
-
-@app.api_route(
-    "/api/{rest:path}",
-    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-    include_in_schema=False,
-)
-async def legacy_api_redirect(rest: str, request: Request):
-    # Defensive: if `/api/v1/<x>` falls through here it means a v1 route
-    # is missing; let it 404 cleanly rather than redirect into a loop.
-    if rest.startswith("v1/") or rest == "v1":
-        raise HTTPException(status_code=404, detail="Not Found")
-    return _v1_redirect(f"/api/v1/{rest}", request)
-
-
-# The single-watchlist legacy routes lived at root (/watchlist, /watchlist/add,
-# /watchlist/remove, /watchlist/snapshot). They're still called by symbol.html
-# and dashboard.html. Map each to its new /api/v1 home.
-@app.api_route(
-    "/watchlist",
-    methods=["GET", "POST"],
-    include_in_schema=False,
-)
-async def legacy_watchlist_root_redirect(request: Request):
-    return _v1_redirect("/api/v1/watchlist", request)
-
-
-@app.api_route(
-    "/watchlist/{rest:path}",
-    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-    include_in_schema=False,
-)
-async def legacy_watchlist_redirect(rest: str, request: Request):
-    return _v1_redirect(f"/api/v1/watchlist/{rest}", request)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -675,13 +612,9 @@ except Exception as _mcp_exc:  # noqa: BLE001 — boundary; isolate startup fail
     logger.warning("ℹ️  MCP server not mounted: %s", _mcp_exc)
 
 
-_DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "static", "dashboard.html")
-_SYMBOL_PATH = os.path.join(os.path.dirname(__file__), "static", "symbol.html")
-_JOURNAL_PATH = os.path.join(os.path.dirname(__file__), "static", "journal.html")
-
-# React cockpit (FE-1+). Vite builds to app/static/dist/. Purely
-# additive: legacy /dashboard, /symbol/{ticker}, /journal stay
-# unchanged. The cockpit is reachable at /app/ only after a build.
+# React cockpit (the only UI). Source lives in frontend/; `npm run build`
+# emits to app/static/dist/, which we serve at /app/. In dev the Vite
+# server on :5173 serves /app/ directly and proxies /api + /ws here.
 _COCKPIT_DIST = os.path.join(os.path.dirname(__file__), "static", "dist")
 _COCKPIT_INDEX = os.path.join(_COCKPIT_DIST, "index.html")
 _COCKPIT_AVAILABLE = os.path.isfile(_COCKPIT_INDEX)
@@ -706,29 +639,14 @@ if _COCKPIT_AVAILABLE:
 else:
     logger.info(
         "ℹ️  Cockpit build not found at %s — run `cd frontend && npm run build` "
-        "to enable /app/. Legacy /dashboard, /symbol, /journal continue to work.",
+        "to serve the dashboard at /app/ (or use the Vite dev server on :5173).",
         _COCKPIT_DIST,
     )
 
 
 @app.get("/", include_in_schema=False)
 async def root():
-    return RedirectResponse(url="/dashboard")
-
-
-@app.get("/dashboard", include_in_schema=False)
-async def dashboard():
-    return FileResponse(_DASHBOARD_PATH, media_type="text/html")
-
-
-@app.get("/symbol/{ticker}", include_in_schema=False)
-async def symbol_page(ticker: str):
-    return FileResponse(_SYMBOL_PATH, media_type="text/html")
-
-
-@app.get("/journal", include_in_schema=False)
-async def journal_page():
-    return FileResponse(_JOURNAL_PATH, media_type="text/html")
+    return RedirectResponse(url="/app/")
 
 
 @app.get("/health")
