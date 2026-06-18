@@ -112,10 +112,20 @@ class Settings(BaseModel):
     # (the canonical "what's our hot universe" table).
     schwab_nightly_symbols: str = os.getenv("SCHWAB_NIGHTLY_SYMBOLS", "active")
 
-    # CH reconcile — push equities.schwab_universe (authoritative, complete)
-    # back into ClickHouse so live-stream gaps (restarts/outages) self-heal.
-    # Runs daily AFTER the nightly Schwab refresh (default 23:00 UTC vs its
-    # 22:00). See app/services/ingest/ch_reconcile.py.
+    # Schwab REST pricehistory → futures.schwab_futures (see
+    # nightly_futures_refresh). Same shape as the equities nightly, gated
+    # separately so futures can be toggled independently. "active" reads
+    # the continuous roots from stocks.futures_universe (∪ seed fallback);
+    # "seed" forces the static FUTURES_SEED_ROOTS list.
+    futures_nightly_enabled: bool = os.getenv("FUTURES_NIGHTLY_ENABLED", "false").lower() == "true"
+    futures_nightly_run_hour_utc: int = int(os.getenv("FUTURES_NIGHTLY_RUN_HOUR_UTC", "22"))
+    futures_nightly_symbols: str = os.getenv("FUTURES_NIGHTLY_SYMBOLS", "active")
+
+    # CH reconcile — push the authoritative, complete lake tables
+    # (equities.schwab_universe → ohlcv_1m, futures.schwab_futures →
+    # futures_ohlcv_1m) back into ClickHouse so live-stream gaps
+    # (restarts/outages) self-heal. Runs daily AFTER the nightly refreshes
+    # (default 23:00 UTC vs their 22:00). See ch_reconcile.py.
     ch_reconcile_enabled: bool = os.getenv("CH_RECONCILE_ENABLED", "true").lower() == "true"
     ch_reconcile_run_hour_utc: int = int(os.getenv("CH_RECONCILE_RUN_HOUR_UTC", "23"))
     ch_reconcile_lookback_days: int = int(os.getenv("CH_RECONCILE_LOOKBACK_DAYS", "7"))

@@ -80,6 +80,7 @@ def _register_background_jobs(
     *,
     polygon_started: bool,
     schwab_started: bool,
+    futures_started: bool,
     live_lake_writer_started: bool,
     journal_started: bool,
 ) -> None:
@@ -158,6 +159,24 @@ def _register_background_jobs(
             schedule=f"daily at {int(_s.schwab_nightly_run_hour_utc):02d}:00 UTC",
             setting_key="SCHWAB_NIGHTLY_RUN_HOUR_UTC",
             run_now=_run_schwab_once,
+        )
+
+    # Nightly Futures — refresh_futures_yesterday doesn't audit.
+    if futures_started:
+        async def _run_futures_once() -> None:
+            from app.services.ingest.nightly_futures_refresh import (
+                refresh_futures_yesterday,
+            )
+
+            async with audit_run("nightly_futures_refresh"):
+                await refresh_futures_yesterday()
+
+        job_registry.register(
+            name="nightly_futures_refresh",
+            display_name="Nightly Futures refresh",
+            schedule=f"daily at {int(_s.futures_nightly_run_hour_utc):02d}:00 UTC",
+            setting_key="FUTURES_NIGHTLY_RUN_HOUR_UTC",
+            run_now=_run_futures_once,
         )
 
     # CV13: silver_ohlcv_build job removed. polygon_adjustment_job runs
@@ -365,8 +384,31 @@ async def lifespan(app: FastAPI):
                 exc,
             )
 
-    # CH reconcile: post-close, push schwab_universe (authoritative) into CH
-    # so live-stream gaps self-heal. Runs after the nightly refresh.
+    nightly_futures_task: asyncio.Task | None = None
+    if _settings.futures_nightly_enabled and (_settings.stock_lake_bucket or "").strip():
+        try:
+            from app.services.ingest.nightly_futures_refresh import run_futures_refresh_loop
+
+            nightly_futures_task = asyncio.create_task(
+                run_futures_refresh_loop(),
+                name="nightly_futures_refresh",
+            )
+            app.state.nightly_futures_task = nightly_futures_task
+            logger.info(
+                "nightly_futures_refresh: background loop started "
+                "(FUTURES_NIGHTLY_RUN_HOUR_UTC=%s, symbols=%s)",
+                _settings.futures_nightly_run_hour_utc,
+                _settings.futures_nightly_symbols,
+            )
+        except Exception as exc:
+            logger.exception(
+                "✗ nightly_futures_refresh failed to start: %s — continuing without it",
+                exc,
+            )
+
+    # CH reconcile: post-close, push the authoritative lakes (schwab_universe
+    # + schwab_futures) into CH so live-stream gaps self-heal. Runs after the
+    # nightly refreshes.
     ch_reconcile_task: asyncio.Task | None = None
     if _settings.ch_reconcile_enabled and (_settings.stock_lake_bucket or "").strip():
         try:
@@ -419,6 +461,7 @@ async def lifespan(app: FastAPI):
     _register_background_jobs(
         polygon_started=nightly_lake_task is not None,
         schwab_started=nightly_schwab_task is not None,
+        futures_started=nightly_futures_task is not None,
         live_lake_writer_started=_llw_settings.live_lake_writer_enabled,
         journal_started=_settings.journal_enabled and _journal_has_creds,
     )
@@ -448,6 +491,16 @@ async def lifespan(app: FastAPI):
             pass
         except Exception as e:
             logger.warning("nightly_schwab_refresh task shutdown: %s", e)
+
+    ft = getattr(app.state, "nightly_futures_task", None)
+    if ft is not None and not ft.done():
+        ft.cancel()
+        try:
+            await ft
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning("nightly_futures_refresh task shutdown: %s", e)
 
     rt = getattr(app.state, "ch_reconcile_task", None)
     if rt is not None and not rt.done():

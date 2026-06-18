@@ -1,6 +1,45 @@
 # Futures data ingestion — investigation + plan
 
-Plan-only doc. Investigates how to add futures (ES, NQ, CL, GC, …)
+> **STATUS (2026-06-18): §1–§2 SUPERSEDED BY THE SHIPPED F1–F4 BUILD.**
+> Code wins (per CLAUDE.md). The actual implementation took a simpler,
+> better path than the TF-1/TF-2/TF-3 framing below, and **disproved the
+> doc's central premise**. See "What actually shipped" immediately below.
+> §3–§7 (continuous-contract rollover math, vendor options) remain valid
+> reference for future work.
+
+## What actually shipped (F1–F4)
+
+The blocking claim in this doc's original TL;DR — *"Schwab `/pricehistory`
+is equity-only, so we can't REST-backfill futures"* — is **FALSE**.
+Verified 2026-06-18: Schwab `/pricehistory` returns full 1-min Globex
+sessions (~1380 bars/day/root) for **continuous roots** (`/ES`, `/MES`, …).
+That single fact collapses the entire TF-2 "need a paid Polygon Futures
+plan for history" phase: Schwab gives us both live AND ~48 days of REST
+history for free, exactly like equities.
+
+What we built instead (mirrors the equities pipeline 1:1):
+
+| Concern | Equities | Futures (shipped) |
+|---|---|---|
+| Hot tier (CH) | `stocks.ohlcv_1m` | `stocks.futures_ohlcv_1m` |
+| Cold lake (Iceberg) | `equities.schwab_universe` | `futures.schwab_futures` (own Glue DB + `iceberg/futures/` S3) |
+| Universe table | `stream_universe` | `futures_universe` (16 continuous roots) |
+| Live ingest | CHART_EQUITY → batcher | **F2**: CHART_FUTURES → futures batcher |
+| Nightly REST history | `nightly_schwab_refresh` | **F3**: `nightly_futures_refresh` → `scripts/futures_history_backfill.py` |
+| Post-close CH self-heal | `ch_reconcile` (equities) | **F3**: same loop, `reconcile_ch_from_futures` |
+| Session calendar | Mon-Fri (`equities.gaps`) | Sun-Fri / Sat-dark (`futures.gaps`) |
+| Adjustment tier | `polygon_adjusted` (splits/divs) | **none** — futures don't split (no `adj_factor`) |
+
+Symbology decision (operator-approved): **continuous roots only** (`/ES`,
+not `/ESM26`). Schwab's streamer + pricehistory both resolve the root to
+the active front month, so we get a continuous series for free without
+building the TF-3 rollover machinery. §3–§4's back-adjusted continuous math
+stays on file for when ML training needs splice-point control, but is not
+required for live monitoring + recent-history charting.
+
+---
+
+Plan-only doc (original). Investigates how to add futures (ES, NQ, CL, GC, …)
 to the pipeline. Companion to [architecture_v2/](architecture_v2/README.md)
 and [streaming_universe_model.md](streaming_universe_model.md), both of
 which explicitly defer futures ("Equities only for now").
