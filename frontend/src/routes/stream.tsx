@@ -31,8 +31,12 @@ import { cn } from "@/lib/utils";
  *     same symbol do NOT keep it streaming — only an add here puts
  *     a symbol on the stream, and only a remove here takes it off.
  */
+type StreamTab = "equities" | "futures";
+
 export function StreamPage() {
   const query = useSeedUniverse();
+  const futures = useFuturesUniverse();
+  const [tab, setTab] = useState<StreamTab>("equities");
   const [filter, setFilter] = useState("");
 
   const filtered: SeedEntry[] = useMemo(() => {
@@ -42,6 +46,9 @@ export function StreamPage() {
     return items.filter((i) => i.symbol.toUpperCase().includes(needle));
   }, [query.data, filter]);
 
+  // Refresh acts on whichever tab is showing.
+  const active = tab === "equities" ? query : futures;
+
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
       <header className="flex items-end justify-between gap-4">
@@ -50,41 +57,91 @@ export function StreamPage() {
             Stream Service
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-fg-muted">
-            Tickers that are actively streaming into ClickHouse from
-            Schwab. Add a symbol to subscribe it + backfill history;
-            remove to take it off the stream. This is the single source
-            of truth for the active streaming universe.
+            Symbols streaming live into ClickHouse from Schwab — equities
+            and CME futures roots. The single source of truth for the
+            active streaming universe.
           </p>
         </div>
-        <div className="flex items-center gap-3 text-xs text-fg-subtle">
-          <span>{fmtInt(query.data?.count)} streaming</span>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => query.refetch()}
-            disabled={query.isFetching}
-          >
-            <RefreshCw
-              className={cn("h-3.5 w-3.5", query.isFetching && "animate-spin")}
-            />
-            Refresh
-          </Button>
-        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => active.refetch()}
+          disabled={active.isFetching}
+        >
+          <RefreshCw
+            className={cn("h-3.5 w-3.5", active.isFetching && "animate-spin")}
+          />
+          Refresh
+        </Button>
       </header>
 
-      {query.data?.bootstrapped ? <BootstrapNotice /> : null}
-      {query.error ? <ApiErrorAlert error={query.error} /> : null}
+      <StreamTabs
+        value={tab}
+        onChange={setTab}
+        equitiesCount={query.data?.count}
+        futuresCount={futures.data?.count}
+      />
 
-      <AddRow />
+      {tab === "equities" ? (
+        <div className="space-y-6">
+          {query.data?.bootstrapped ? <BootstrapNotice /> : null}
+          {query.error ? <ApiErrorAlert error={query.error} /> : null}
+          <AddRow />
+          <SearchBar value={filter} onChange={setFilter} />
+          <StreamList entries={filtered} loading={query.isLoading} />
+          <ImportPanel />
+        </div>
+      ) : (
+        <FuturesPanel />
+      )}
+    </div>
+  );
+}
 
-      <SearchBar value={filter} onChange={setFilter} />
+// ─────────────────────────────────────────────────────────────────────
 
-      <StreamList entries={filtered} loading={query.isLoading} />
-
-      <ImportPanel />
-
-      <FuturesPanel />
+function StreamTabs({
+  value,
+  onChange,
+  equitiesCount,
+  futuresCount,
+}: {
+  value: StreamTab;
+  onChange: (next: StreamTab) => void;
+  equitiesCount?: number;
+  futuresCount?: number;
+}) {
+  const tabs: { id: StreamTab; label: string; count?: number }[] = [
+    { id: "equities", label: "Equities", count: equitiesCount },
+    { id: "futures", label: "Futures", count: futuresCount },
+  ];
+  return (
+    <div
+      role="tablist"
+      aria-label="Asset class"
+      className="inline-flex rounded-md border border-border bg-bg-subtle p-0.5"
+    >
+      {tabs.map((t) => (
+        <button
+          key={t.id}
+          type="button"
+          role="tab"
+          aria-selected={value === t.id}
+          onClick={() => onChange(t.id)}
+          className={cn(
+            "rounded-sm px-3 py-1 text-sm font-medium transition-colors",
+            value === t.id
+              ? "bg-accent text-accent-fg"
+              : "text-fg-muted hover:bg-bg-muted hover:text-fg-base",
+          )}
+        >
+          {t.label}
+          {t.count != null ? (
+            <span className="ml-1.5 text-xs opacity-70">{fmtInt(t.count)}</span>
+          ) : null}
+        </button>
+      ))}
     </div>
   );
 }
@@ -92,10 +149,9 @@ export function StreamPage() {
 // ─────────────────────────────────────────────────────────────────────
 
 /**
- * Futures roots streaming via Schwab CHART_FUTURES. Separate CH table
- * (`futures_universe`) from the equities stream universe, so it gets its
- * own read-only section here — the standard continuous contracts (/ES,
- * /MES, …) with live last prices from ClickHouse.
+ * Futures tab — the continuous CME roots streamed via Schwab
+ * CHART_FUTURES. Separate CH table (`futures_universe`) from the equities
+ * stream universe; read-only here, with live last prices from ClickHouse.
  */
 function FuturesPanel() {
   const query = useFuturesUniverse();
@@ -115,22 +171,14 @@ function FuturesPanel() {
   }, [quotes.data]);
 
   return (
-    <section className="space-y-3">
-      <div className="flex items-end justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-semibold text-fg-base">Futures</h2>
-          <p className="mt-0.5 max-w-2xl text-sm text-fg-muted">
-            Continuous CME roots streaming via Schwab CHART_FUTURES into{" "}
-            <code className="rounded bg-bg-muted px-1 font-mono text-xs">
-              futures_ohlcv_1m
-            </code>
-            . Click a symbol to chart it.
-          </p>
-        </div>
-        <span className="text-xs text-fg-subtle">
-          {fmtInt(query.data?.count)} streaming
-        </span>
-      </div>
+    <div className="space-y-3">
+      <p className="max-w-2xl text-sm text-fg-muted">
+        Continuous CME roots streaming via Schwab CHART_FUTURES into{" "}
+        <code className="rounded bg-bg-muted px-1 font-mono text-xs">
+          futures_ohlcv_1m
+        </code>
+        . Click a root to chart it.
+      </p>
 
       {query.error ? <ApiErrorAlert error={query.error} /> : null}
 
@@ -140,7 +188,7 @@ function FuturesPanel() {
         priceMap={priceMap}
         pricesLoading={quotes.isLoading}
       />
-    </section>
+    </div>
   );
 }
 
