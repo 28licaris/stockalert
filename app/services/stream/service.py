@@ -131,19 +131,24 @@ class StreamService:
         return self._provider
 
     async def _on_bar(self, bar) -> None:
-        """Forward every bar to the OHLCV batch writer."""
-        from app.db import get_bar_batcher
+        """Forward every bar to the OHLCV batch writer.
+
+        Futures (symbol starts with '/', e.g. /ES) route to a separate
+        batcher → stocks.futures_ohlcv_1m; equities → stocks.ohlcv_1m.
+        """
+        from app.db import get_bar_batcher, get_futures_bar_batcher
 
         ts = getattr(bar, "timestamp", None) or getattr(bar, "ts", None)
         symbol = getattr(bar, "ticker", None) or getattr(bar, "symbol", None)
         if not ts or not symbol:
             return
         try:
-            batcher = (
-                self._bar_batcher_factory()
-                if self._bar_batcher_factory
-                else get_bar_batcher()
-            )
+            if self._bar_batcher_factory:
+                batcher = self._bar_batcher_factory()
+            elif str(symbol).startswith("/"):
+                batcher = get_futures_bar_batcher()
+            else:
+                batcher = get_bar_batcher()
             await batcher.add(
                 {
                     "symbol": symbol,
@@ -259,6 +264,24 @@ class StreamService:
             for r in rows.result_rows
         ]
 
+    def _read_futures_universe(self, *, owner_id: Optional[str] = None) -> set[str]:
+        """Active continuous-root symbols in the `futures_universe` table.
+
+        Separate table from the equities stream_universe; merged into the
+        subscription set so the provider streams these via CHART_FUTURES.
+        """
+        owner = owner_id or self.DEFAULT_OWNER
+        try:
+            rows = get_client().query(
+                "SELECT symbol FROM futures_universe FINAL "
+                "WHERE owner_id = {owner:String} AND is_active = 1",
+                parameters={"owner": owner},
+            )
+            return {r[0] for r in rows.result_rows}
+        except Exception as e:  # noqa: BLE001 — boundary; futures optional
+            logger.warning("Stream: could not read futures_universe: %s", e)
+            return set()
+
     def _is_active(self, symbol: str, *, owner_id: Optional[str] = None) -> bool:
         owner = owner_id or self.DEFAULT_OWNER
         client = get_client()
@@ -333,6 +356,9 @@ class StreamService:
 
         try:
             active = {row["symbol"] for row in self._read_universe()}
+            # Futures (continuous roots) live in a separate universe table;
+            # the provider routes '/'-prefixed keys to CHART_FUTURES.
+            active |= self._read_futures_universe()
         except Exception as e:  # noqa: BLE001 — boundary
             logger.error("Stream: could not read universe table: %s", e)
             active = set()

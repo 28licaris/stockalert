@@ -20,6 +20,7 @@ from app.api.schemas import ErrorResponse
 from app.db import (
     close_client,
     get_bar_batcher,
+    get_futures_bar_batcher,
     init_schema,
     migrate_default_watchlist,
     ping,
@@ -202,7 +203,9 @@ async def lifespan(app: FastAPI):
 
     batcher = get_bar_batcher()
     await batcher.start()
-    logger.info("✅ OHLCV batch writer started")
+    futures_batcher = get_futures_bar_batcher()
+    await futures_batcher.start()
+    logger.info("✅ OHLCV batch writers started (equities + futures)")
 
     # ── Subsystem startup, each isolated ───────────────────────────────
     # One subsystem's failure must not affect the others.
@@ -489,6 +492,7 @@ async def lifespan(app: FastAPI):
         logger.info("✅ Journal sync stopped")
 
     await get_bar_batcher().stop()
+    await get_futures_bar_batcher().stop()
     reset_bar_batcher()
     logger.info("✅ OHLCV batch writer stopped")
 

@@ -112,6 +112,12 @@ def svc(monkeypatch) -> StreamService:
         StreamService, "_is_active",
         lambda self, sym, *, owner_id=None: fake_repo.is_active(sym),
     )
+    # Futures universe is a separate CH table; these tests cover the
+    # equities universe logic, so stub it to empty.
+    monkeypatch.setattr(
+        StreamService, "_read_futures_universe",
+        lambda self, *, owner_id=None: set(),
+    )
     monkeypatch.setattr(
         StreamService, "_write_row",
         lambda self, sym, owner, is_active, *, asset_type="", added_by="", notes="":

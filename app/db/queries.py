@@ -83,9 +83,10 @@ def _insert_intraday(table: str, rows: List[dict]) -> None:
     client.insert(table, data, column_names=_INTRADAY_COLUMNS)
 
 
-def insert_bars_batch(rows: List[dict]) -> None:
-    """Insert 1-min bars into `ohlcv_1m`."""
-    _insert_intraday("ohlcv_1m", rows)
+def insert_bars_batch(rows: List[dict], table: str = "ohlcv_1m") -> None:
+    """Insert 1-min bars into `table` (default `ohlcv_1m`; futures use
+    `futures_ohlcv_1m`). Both have the identical column shape."""
+    _insert_intraday(table, rows)
 
 
 def insert_signals_batch(rows: List[dict]) -> None:
@@ -347,8 +348,8 @@ def recent_signals(limit: int = 5) -> List[dict]:
     return list_signals(None, limit)
 
 
-async def insert_bars_batch_async(rows: List[dict]) -> None:
-    await asyncio.to_thread(insert_bars_batch, rows)
+async def insert_bars_batch_async(rows: List[dict], table: str = "ohlcv_1m") -> None:
+    await asyncio.to_thread(insert_bars_batch, rows, table)
 
 
 async def insert_signals_batch_async(rows: List[dict]) -> None:

@@ -13,18 +13,30 @@ _DEFAULT_SIZE = 500
 _DEFAULT_INTERVAL = 5.0
 
 _batcher: Optional["AsyncBarBatcher"] = None
+_futures_batcher: Optional["AsyncBarBatcher"] = None
 
 
 def get_bar_batcher() -> "AsyncBarBatcher":
+    """Equities batcher → stocks.ohlcv_1m."""
     global _batcher
     if _batcher is None:
         _batcher = AsyncBarBatcher()
     return _batcher
 
 
+def get_futures_bar_batcher() -> "AsyncBarBatcher":
+    """Futures batcher → stocks.futures_ohlcv_1m. Separate buffer so
+    futures and equities don't share a flush (different tables)."""
+    global _futures_batcher
+    if _futures_batcher is None:
+        _futures_batcher = AsyncBarBatcher(table_name="futures_ohlcv_1m")
+    return _futures_batcher
+
+
 def reset_bar_batcher() -> None:
-    global _batcher
+    global _batcher, _futures_batcher
     _batcher = None
+    _futures_batcher = None
 
 
 class AsyncBarBatcher:
@@ -32,9 +44,11 @@ class AsyncBarBatcher:
         self,
         flush_size: int = _DEFAULT_SIZE,
         flush_interval_seconds: float = _DEFAULT_INTERVAL,
+        table_name: str = "ohlcv_1m",
     ):
         self._flush_size = flush_size
         self._flush_interval = flush_interval_seconds
+        self._table_name = table_name
         self._buf: List[Dict[str, Any]] = []
         self._lock = asyncio.Lock()
         self._task: Optional[asyncio.Task] = None
@@ -85,7 +99,7 @@ class AsyncBarBatcher:
         if not batch:
             return
         try:
-            await queries.insert_bars_batch_async(batch)
-            logger.debug("Flushed %s OHLCV rows to ClickHouse", len(batch))
+            await queries.insert_bars_batch_async(batch, self._table_name)
+            logger.debug("Flushed %s OHLCV rows to %s", len(batch), self._table_name)
         except Exception as e:
             logger.error("ClickHouse batch insert failed: %s", e, exc_info=True)
