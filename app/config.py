@@ -139,6 +139,11 @@ class Settings(BaseModel):
     iceberg_equities_glue_database: str = os.getenv(
         "ICEBERG_EQUITIES_GLUE_DATABASE", "equities"
     )
+    # Futures live in their own Glue DB + S3 folder (iceberg/futures/),
+    # separate from equities. No adjustment tier (futures have no splits).
+    iceberg_futures_glue_database: str = os.getenv(
+        "ICEBERG_FUTURES_GLUE_DATABASE", "futures"
+    )
 
     # Earliest date for which we have OHLCV coverage. Operator scripts
     # (Athena bulk-import, history backfill) use this as the lower
