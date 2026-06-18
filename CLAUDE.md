@@ -46,10 +46,13 @@ docker compose --profile full up --build          # full stack
 app/api/             FastAPI routes (routes_*.py — one per domain)
 app/services/        Domain modules (see standards/service_modules.md)
   equities/          v2 lake: schemas + sink + tables + gaps + models
+  futures/           v2 futures mirror: schemas/sink/tables/gaps +
+                     universe + symbols (/-prefix routing) + lake_to_ch_fill
   ingest/            Provider → lake writers (Polygon flat-files,
-                     Schwab REST/live, corp-actions)
+                     Schwab REST/live, corp-actions, nightly_futures_refresh)
   readers/           Lake → consumer Pydantic shapes
-                     (AdjustedOhlcvReader, BronzeReader, CorpActionsReader)
+                     (AdjustedOhlcvReader, BronzeReader, CorpActionsReader);
+                     bars_gateway routes /-prefix symbols to futures tables
   live/              Live-tier orchestration (stream, watchlist)
   sim/               Backtest (see standards/trading_subsystem.md)
   journal/  screener/  universe/  legacy/
@@ -66,6 +69,8 @@ scripts/             Ops scripts:
                          flat-files puller into equities.polygon_raw
                        schwab_history_backfill.py — Schwab REST →
                          equities.schwab_universe
+                       futures_history_backfill.py — Schwab REST →
+                         futures.schwab_futures (continuous roots)
                        run_corp_actions_backfill.py — Polygon REST →
                          equities.market_corp_actions
                        spark/polygon_adjustment_job.py — whole-market
@@ -84,6 +89,12 @@ Lake tables (v2 / `equities.*` Glue DB):
 | `equities.polygon_adjusted` | Spark job (CV5) reads raw + corp_actions | Split-adjusted + `adj_factor` column; merge-on-read |
 | `equities.schwab_universe` | Schwab live + REST (CV8) | Pre-adjusted (adj_factor=1.0); bucket(16) |
 | `equities.market_corp_actions` | Polygon REST (CV9) | Splits + dividends; month(ex_date) partition |
+
+Futures lake (separate `futures.*` Glue DB + `iceberg/futures/` S3):
+
+| Table | Source | Notes |
+|---|---|---|
+| `futures.schwab_futures` | Schwab live (F2) + REST nightly (F3) | Continuous roots (/ES,…); no adjustment tier; month(timestamp) partition |
 
 ## Docs
 

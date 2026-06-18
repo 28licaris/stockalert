@@ -58,20 +58,30 @@ def get_recent_bars(symbol: str, limit: int = 200) -> LiveBarsResponse:
     Cost: 10-50ms typical. Reads from `ohlcv_1m` (ReplacingMergeTree).
     """
     with tool_call("get_recent_bars", symbol=symbol, limit=limit):
-        bars = _reader().get_recent_bars(symbol, limit=limit)
+        from app.services.futures.symbols import ch_table_for, is_futures_symbol
+
+        table = ch_table_for(symbol)
+        bars = _reader().get_recent_bars(symbol, limit=limit, source_table=table)
         # Cold-symbol self-heal: if CH has nothing (e.g. an off-universe
-        # ticker never streamed), fill a recent window from the lake and
-        # re-query. Hot/universe symbols skip this — they're already fast.
+        # ticker never streamed), fill a recent window from the asset class's
+        # lake and re-query. Hot/universe symbols skip this — already fast.
         if not bars:
             try:
                 from datetime import datetime, timedelta, timezone
 
-                from app.services.equities.lake_to_ch_fill import fill_ch_from_lake_sync
+                if is_futures_symbol(symbol):
+                    from app.services.futures.lake_to_ch_fill import (
+                        fill_ch_from_futures_lake_sync as _fill,
+                    )
+                else:
+                    from app.services.equities.lake_to_ch_fill import (
+                        fill_ch_from_lake_sync as _fill,
+                    )
 
                 end = datetime.now(timezone.utc)
-                inserted = fill_ch_from_lake_sync(symbol.upper(), end - timedelta(days=7), end)
+                inserted = _fill(symbol.upper(), end - timedelta(days=7), end)
                 if inserted > 0:
-                    bars = _reader().get_recent_bars(symbol, limit=limit)
+                    bars = _reader().get_recent_bars(symbol, limit=limit, source_table=table)
             except Exception as exc:  # noqa: BLE001 — boundary; degrade to empty
                 logger.warning("get_recent_bars: lake fill for %s failed: %s", symbol, exc)
         return LiveBarsResponse(
@@ -141,9 +151,10 @@ def get_bars_for_chart(
     `source` selects the data tier (S3 lake is ground truth — every
     symbol, full history; ClickHouse is a fast but partial hot cache):
       - 'auto' (default): ClickHouse first; on an empty bounded window,
-        fill it from the lake (`equities.polygon_adjusted`) into CH and
-        re-query. Self-healing — works for ad-hoc symbols not in the
-        streaming universe, and the next call is hot.
+        fill it from the lake into CH and re-query. Self-healing — works
+        for ad-hoc symbols not in the streaming universe, and the next
+        call is hot. Futures roots (/ES, …) route to futures_ohlcv_1m +
+        the futures lake automatically; equities to ohlcv_1m + polygon.
       - 'clickhouse': hot cache only. Fast, may be partial. No S3 read.
       - 'lake': S3 ground truth only — complete split-adjusted history,
         resampled to `interval`. Does NOT write CH; use for deep history

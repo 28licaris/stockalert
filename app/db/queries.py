@@ -30,6 +30,12 @@ _INTRADAY_COLUMNS = [
 ]
 
 
+# Intraday 1-min bar tables that share the identical column shape +
+# ReplacingMergeTree(version) engine. Equities and futures live in
+# separate tables (different markets, calendars) but read identically.
+_INTRADAY_BAR_TABLES = {"ohlcv_1m", "futures_ohlcv_1m"}
+
+
 def _dedup_ohlc_intraday_subquery(source_table: str, where_sql: str) -> str:
     """
     Collapse ReplacingMergeTree(version) duplicates without ``FINAL``.
@@ -37,9 +43,15 @@ def _dedup_ohlc_intraday_subquery(source_table: str, where_sql: str) -> str:
     ``FINAL`` on the large ``ohlcv_1m`` table can exceed the server's memory
     limit (full merge-at-read). Grouping by the sort key and taking
     ``argMax(_, version)`` matches the engine's row-winner rule.
+
+    ``source_table`` is whitelisted (not interpolated freely) — it goes
+    straight into the FROM clause, so only known table names are allowed.
     """
-    if source_table != "ohlcv_1m":
-        raise ValueError(f"Unsupported source_table: {source_table!r}")
+    if source_table not in _INTRADAY_BAR_TABLES:
+        raise ValueError(
+            f"Unsupported source_table: {source_table!r} "
+            f"(allowed: {sorted(_INTRADAY_BAR_TABLES)})"
+        )
     return f"""
         SELECT
             symbol,
@@ -163,9 +175,11 @@ def fetch_bars(
     return df
 
 
-def list_bars_desc(symbol: str, limit: int) -> List[dict]:
+def list_bars_desc(
+    symbol: str, limit: int, *, source_table: str = "ohlcv_1m"
+) -> List[dict]:
     client = get_client()
-    inner = _dedup_ohlc_intraday_subquery("ohlcv_1m", "symbol = {sym:String}")
+    inner = _dedup_ohlc_intraday_subquery(source_table, "symbol = {sym:String}")
     result = client.query(
         f"""
         SELECT timestamp, open, high, low, close, volume
@@ -226,12 +240,15 @@ def list_bars_resampled(
       - close = `argMax(close, timestamp)` (last bar's close)
       - volume = `sum(volume)`
     """
-    if source_table != "ohlcv_1m":
-        raise ValueError(f"Unsupported source_table: {source_table!r} (only ohlcv_1m)")
+    if source_table not in _INTRADAY_BAR_TABLES:
+        raise ValueError(
+            f"Unsupported source_table: {source_table!r} "
+            f"(allowed: {sorted(_INTRADAY_BAR_TABLES)})"
+        )
     if interval not in SUPPORTED_INTERVALS:
         raise ValueError(f"Unsupported interval: {interval!r}")
     if interval == "1m" and start is None and end is None:
-        return list_bars_desc(symbol, limit)
+        return list_bars_desc(symbol, limit, source_table=source_table)
 
     where_parts = ["symbol = {sym:String}"]
     params: dict = {"sym": symbol.upper(), "lim": int(limit)}
@@ -401,23 +418,31 @@ async def latest_bar_per_symbol_async(symbols: List[str]) -> List[dict]:
     return await asyncio.to_thread(latest_bar_per_symbol, symbols)
 
 
-def coverage(symbol: str, start: datetime, end: datetime) -> dict:
+def coverage(
+    symbol: str, start: datetime, end: datetime, *, source_table: str = "ohlcv_1m"
+) -> dict:
     """
     Return min/max timestamp and bar count for `symbol` in `[start, end]`.
 
     Used by the backfill service to (a) short-circuit redundant fetches and
-    (b) compute the gap between requested and existing coverage.
+    (b) compute the gap between requested and existing coverage. ``source_table``
+    is whitelisted (``ohlcv_1m`` equities / ``futures_ohlcv_1m`` futures).
     """
+    if source_table not in _INTRADAY_BAR_TABLES:
+        raise ValueError(
+            f"Unsupported source_table: {source_table!r} "
+            f"(allowed: {sorted(_INTRADAY_BAR_TABLES)})"
+        )
     client = get_client()
     result = client.query(
-        """
+        f"""
         SELECT min(timestamp) AS earliest, max(timestamp) AS latest, count() AS bar_count
         FROM (
             SELECT timestamp
-            FROM ohlcv_1m
-            WHERE symbol = {sym:String}
-              AND timestamp >= {start:DateTime64(3)}
-              AND timestamp <= {end:DateTime64(3)}
+            FROM {source_table}
+            WHERE symbol = {{sym:String}}
+              AND timestamp >= {{start:DateTime64(3)}}
+              AND timestamp <= {{end:DateTime64(3)}}
             GROUP BY symbol, timestamp
         )
         """,
@@ -444,11 +469,13 @@ def coverage(symbol: str, start: datetime, end: datetime) -> dict:
     }
 
 
-async def coverage_async(symbol: str, start: datetime, end: datetime) -> dict:
-    return await asyncio.to_thread(coverage, symbol, start, end)
+async def coverage_async(
+    symbol: str, start: datetime, end: datetime, *, source_table: str = "ohlcv_1m"
+) -> dict:
+    return await asyncio.to_thread(coverage, symbol, start, end, source_table=source_table)
 
 
-def coverage_all(symbol: str) -> dict:
+def coverage_all(symbol: str, *, source_table: str = "ohlcv_1m") -> dict:
     """Full-history min/max timestamp + distinct-bar count for `symbol`
     in the ClickHouse hot cache — no time window.
 
@@ -459,15 +486,21 @@ def coverage_all(symbol: str) -> dict:
 
     Use this for "what's in the hot cache for this symbol?" — the
     ClickHouse peer of the lake-side `AdjustedOhlcvReader` coverage.
+    ``source_table`` is whitelisted (equities / futures).
     """
+    if source_table not in _INTRADAY_BAR_TABLES:
+        raise ValueError(
+            f"Unsupported source_table: {source_table!r} "
+            f"(allowed: {sorted(_INTRADAY_BAR_TABLES)})"
+        )
     client = get_client()
     result = client.query(
-        """
+        f"""
         SELECT min(timestamp) AS earliest,
                max(timestamp) AS latest,
                uniqExact(timestamp) AS bar_count
-        FROM ohlcv_1m
-        WHERE symbol = {sym:String}
+        FROM {source_table}
+        WHERE symbol = {{sym:String}}
         """,
         parameters={"sym": symbol.upper()},
     )
@@ -483,14 +516,14 @@ def coverage_all(symbol: str) -> dict:
     }
 
 
-async def coverage_all_async(symbol: str) -> dict:
-    return await asyncio.to_thread(coverage_all, symbol)
+async def coverage_all_async(symbol: str, *, source_table: str = "ohlcv_1m") -> dict:
+    return await asyncio.to_thread(coverage_all, symbol, source_table=source_table)
 
 
 # ---------- Gap detection ----------
 
 # Source-table → bar resolution in minutes. Used by `find_intraday_gaps`.
-_TABLE_STEP_MINUTES = {"ohlcv_1m": 1}
+_TABLE_STEP_MINUTES = {"ohlcv_1m": 1, "futures_ohlcv_1m": 1}
 
 
 def find_intraday_gaps(

@@ -189,7 +189,8 @@ def test_call_get_market_hours() -> None:
 
 
 def test_call_get_coverage_1m() -> None:
-    async def _fake_cov(symbol, start, end):
+    async def _fake_cov(symbol, start, end, *, source_table="ohlcv_1m"):
+        assert source_table == "ohlcv_1m"  # AAPL → equities table
         return {
             "symbol": symbol, "start": start, "end": end,
             "earliest": datetime(2024, 8, 1, 13, 30, tzinfo=timezone.utc),
@@ -211,14 +212,23 @@ def test_call_get_coverage_1m() -> None:
 
 
 def test_call_find_intraday_gaps() -> None:
-    async def _fake_gaps(symbol, start, end, *, min_gap_minutes=5):
+    # The query returns {prev_ts, next_ts, missing} (bars bracketing the
+    # hole + missing-bar count); the tool maps to [first_missing,
+    # last_missing] and post-filters by min_gap_minutes (default 5).
+    async def _fake_gaps(symbol, start, end, *, source_table="ohlcv_1m",
+                         session_boundary_minutes=240, max_results=5000):
+        assert source_table == "ohlcv_1m"  # AAPL → equities table
         return [
-            {"start": datetime(2024, 8, 1, 14, 30, tzinfo=timezone.utc),
-             "end":   datetime(2024, 8, 1, 14, 38, tzinfo=timezone.utc),
-             "minutes": 8},
-            {"start": datetime(2024, 8, 1, 16, 0, tzinfo=timezone.utc),
-             "end":   datetime(2024, 8, 1, 16, 5, tzinfo=timezone.utc),
-             "minutes": 5},
+            {"prev_ts": datetime(2024, 8, 1, 14, 29, tzinfo=timezone.utc),
+             "next_ts": datetime(2024, 8, 1, 14, 38, tzinfo=timezone.utc),
+             "missing": 8},
+            {"prev_ts": datetime(2024, 8, 1, 15, 59, tzinfo=timezone.utc),
+             "next_ts": datetime(2024, 8, 1, 16, 5, tzinfo=timezone.utc),
+             "missing": 5},
+            # Below min_gap_minutes=5 → must be filtered out.
+            {"prev_ts": datetime(2024, 8, 1, 17, 0, tzinfo=timezone.utc),
+             "next_ts": datetime(2024, 8, 1, 17, 3, tzinfo=timezone.utc),
+             "missing": 2},
         ]
     with patch("app.db.queries.find_intraday_gaps_async", side_effect=_fake_gaps):
         body = _unwrap(asyncio.run(mcp.call_tool("find_intraday_gaps", {
@@ -226,8 +236,11 @@ def test_call_find_intraday_gaps() -> None:
             "start": "2024-08-01T13:30:00Z",
             "end": "2024-08-01T20:00:00Z",
         })))
-    assert len(body["gaps"]) == 2
+    assert len(body["gaps"]) == 2  # the 2-min gap is filtered
     assert body["total_missing_minutes"] == 13
+    # First gap spans [14:30, 14:37] (prev_ts+1m .. next_ts-1m).
+    assert body["gaps"][0]["start"].startswith("2024-08-01T14:30")
+    assert body["gaps"][0]["minutes"] == 8
 
 
 def test_call_get_bronze_table_stats_handles_error() -> None:

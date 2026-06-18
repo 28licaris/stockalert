@@ -34,10 +34,24 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Optional
 
+from app.services.futures.symbols import ch_table_for, is_futures_symbol
 from app.services.readers.bar_reader import BarReader
 from app.services.readers.schemas import LiveBar
 
 logger = logging.getLogger(__name__)
+
+
+def _lake_fill_fn(symbol: str):
+    """The bounded-window lake→CH fill for a symbol's asset class.
+
+    Futures fill from ``futures.schwab_futures`` → ``stocks.futures_ohlcv_1m``;
+    equities from the polygon∪schwab union → ``stocks.ohlcv_1m``. Both share
+    the ``(symbol, start, end) -> rows_inserted`` signature."""
+    if is_futures_symbol(symbol):
+        from app.services.futures.lake_to_ch_fill import fill_ch_from_futures_lake_sync
+        return fill_ch_from_futures_lake_sync
+    from app.services.equities.lake_to_ch_fill import fill_ch_from_lake_sync
+    return fill_ch_from_lake_sync
 
 
 class BarSource(str, Enum):
@@ -104,9 +118,11 @@ def get_chart_bars(
     if source == BarSource.LAKE:
         return _from_lake(symbol, interval=interval, lookback_days=lookback_days, limit=limit)
 
+    table = ch_table_for(symbol)
     ch_reader = reader or BarReader.from_settings()
     bars = ch_reader.get_bars_for_chart(
         symbol, interval=interval, lookback_days=lookback_days, limit=limit,
+        source_table=table,
     )
 
     if source == BarSource.CLICKHOUSE:
@@ -125,9 +141,7 @@ def get_chart_bars(
         start = end - timedelta(days=lookback_days)
         if _ch_lacks_window(bars, start):
             try:
-                from app.services.equities.lake_to_ch_fill import fill_ch_from_lake_sync
-
-                inserted = fill_ch_from_lake_sync(symbol.upper(), start, end)
+                inserted = _lake_fill_fn(symbol)(symbol.upper(), start, end)
                 if inserted > 0:
                     logger.info(
                         "bars_gateway: lake-filled %s (%d rows, %dd window); re-querying CH",
@@ -136,6 +150,7 @@ def get_chart_bars(
                     bars = ch_reader.get_bars_for_chart(
                         symbol, interval=interval,
                         lookback_days=lookback_days, limit=limit,
+                        source_table=table,
                     )
             except Exception as exc:  # noqa: BLE001 — boundary; degrade to CH result
                 logger.warning("bars_gateway: lake fill for %s failed: %s", symbol, exc)
@@ -161,13 +176,14 @@ def get_range_bars(
     Every interval is resampled from ``ohlcv_1m``; AUTO fills (and re-queries)
     that table from the lake when CH doesn't reach back to ``start``.
     """
+    table = ch_table_for(symbol)
     ch_reader = reader or BarReader.from_settings()
     if start.tzinfo is None:
         start = start.replace(tzinfo=timezone.utc)
     if end.tzinfo is None:
         end = end.replace(tzinfo=timezone.utc)
 
-    kwargs = {"interval": interval}
+    kwargs = {"interval": interval, "source_table": table}
     if limit is not None:
         kwargs["limit"] = limit
     bars = ch_reader.get_bars_in_range(symbol, start, end, **kwargs)
@@ -181,9 +197,7 @@ def get_range_bars(
         and _ch_lacks_window(bars, start)
     ):
         try:
-            from app.services.equities.lake_to_ch_fill import fill_ch_from_lake_sync
-
-            inserted = fill_ch_from_lake_sync(symbol.upper(), start, end)
+            inserted = _lake_fill_fn(symbol)(symbol.upper(), start, end)
             if inserted > 0:
                 logger.info(
                     "bars_gateway: range lake-filled %s (%d rows, %dd); re-querying CH",
@@ -203,40 +217,78 @@ def _from_lake(
     lookback_days: Optional[int],
     limit: Optional[int],
 ) -> list[LiveBar]:
-    """Read 1m adjusted bars from the S3 lake and resample to `interval`.
+    """Read 1m bars from the S3 lake and resample to `interval`.
 
-    Ground-truth path — no CH read or write. Window defaults to the last
+    Ground-truth path — no CH read or write. Futures read from
+    ``futures.schwab_futures``; equities from the split-adjusted
+    ``equities.polygon_adjusted``. Window defaults to the last
     `lookback_days` (or 30d when omitted, to bound the scan).
     """
-    from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
-
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=lookback_days if lookback_days is not None else 30)
 
-    reader = AdjustedOhlcvReader.from_settings()
-    resp = reader.get_bars(symbol, start, end)
+    if is_futures_symbol(symbol):
+        one_min = _futures_one_min_from_lake(symbol, start, end)
+    else:
+        from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 
-    one_min = [
-        LiveBar(
-            symbol=b.symbol,
-            timestamp=b.timestamp,
-            open=b.open,
-            high=b.high,
-            low=b.low,
-            close=b.close,
-            volume=float(b.volume),
-            vwap=b.vwap,
-            trade_count=b.trade_count,
-            source="lake-polygon_adjusted",
-            interval="1m",
-        )
-        for b in resp.bars
-    ]
+        resp = AdjustedOhlcvReader.from_settings().get_bars(symbol, start, end)
+        one_min = [
+            LiveBar(
+                symbol=b.symbol,
+                timestamp=b.timestamp,
+                open=b.open,
+                high=b.high,
+                low=b.low,
+                close=b.close,
+                volume=float(b.volume),
+                vwap=b.vwap,
+                trade_count=b.trade_count,
+                source="lake-polygon_adjusted",
+                interval="1m",
+            )
+            for b in resp.bars
+        ]
 
     bars = _resample(one_min, interval)
     if limit is not None and len(bars) > limit:
         bars = bars[-limit:]  # newest-anchored, like the CH auto-limit
     return bars
+
+
+def _futures_one_min_from_lake(
+    symbol: str, start: datetime, end: datetime
+) -> list[LiveBar]:
+    """1-min ``LiveBar``s for a futures root from ``futures.schwab_futures``,
+    oldest-first. Empty list on no-data / lake error (logged upstream)."""
+    from app.services.futures.lake_to_ch_fill import _scan_futures_lake
+
+    arr = _scan_futures_lake(symbol.upper(), start, end)
+    if arr is None or arr.num_rows == 0:
+        return []
+
+    cols = arr.to_pydict()
+    out: list[LiveBar] = []
+    for i in range(arr.num_rows):
+        vwap = cols["vwap"][i]
+        tc = cols["trade_count"][i]
+        out.append(
+            LiveBar(
+                symbol=cols["symbol"][i],
+                timestamp=cols["timestamp"][i],
+                open=float(cols["open"][i]),
+                high=float(cols["high"][i]),
+                low=float(cols["low"][i]),
+                close=float(cols["close"][i]),
+                volume=float(cols["volume"][i]) if cols["volume"][i] is not None else 0.0,
+                vwap=float(vwap) if vwap not in (None, 0, 0.0) else None,
+                trade_count=int(tc) if tc not in (None, 0) else None,
+                source="lake-schwab_futures",
+                interval="1m",
+            )
+        )
+    out.sort(key=lambda b: b.timestamp)  # lake scan isn't guaranteed ordered
+    return out
 
 
 def _resample(bars: list[LiveBar], interval: str) -> list[LiveBar]:

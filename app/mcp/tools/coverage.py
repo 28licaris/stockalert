@@ -93,15 +93,24 @@ async def get_coverage(
     """
     with tool_call("get_coverage", symbol=symbol, interval=interval):
         from app.db import queries
+        from app.services.futures.symbols import ch_table_for, is_futures_symbol
 
-        # Coverage is measured against ohlcv_1m, the single stored resolution —
-        # all chart intervals (5m/1d/...) are resampled from it on read, so the
-        # 1m density IS the coverage. coverage_pct is only computed for 1m,
-        # where actual and expected are on the same resolution.
-        cov = await queries.coverage_async(symbol, start, end)
+        # Coverage is measured against the asset class's 1-min CH table
+        # (ohlcv_1m / futures_ohlcv_1m), the single stored resolution — all
+        # chart intervals (5m/1d/...) are resampled from it on read, so the
+        # 1m density IS the coverage. coverage_pct is only computed for 1m
+        # EQUITIES, where the regular-session expectation (390 bars/day) is
+        # well-defined; futures trade a ~23h Globex session, so we report
+        # actual_bars only (expected/pct=None) rather than a misleading %.
+        table = ch_table_for(symbol)
+        cov = await queries.coverage_async(symbol, start, end, source_table=table)
 
         actual = int(cov.get("bar_count", 0) or 0)
-        expected = _expected_bars("1m", start, end) if interval == "1m" else None
+        expected = (
+            _expected_bars("1m", start, end)
+            if interval == "1m" and not is_futures_symbol(symbol)
+            else None
+        )
         pct = None
         if expected and expected > 0:
             pct = round(actual / expected, 4)
@@ -147,17 +156,32 @@ async def find_intraday_gaps(
         Empty list = complete data.
     """
     with tool_call("find_intraday_gaps", symbol=symbol, min_gap_minutes=min_gap_minutes):
-        from app.db import queries
+        from datetime import timedelta
 
+        from app.db import queries
+        from app.services.futures.symbols import ch_table_for
+
+        # The query returns {prev_ts, next_ts, missing}: the bars bracketing
+        # each within-session hole + the count of missing minute-bars between
+        # them. Map to IntradayGap's [first_missing, last_missing] span, and
+        # apply `min_gap_minutes` as a post-filter (the query has no
+        # lower-bound param — its filter is the >table-step / <session-boundary
+        # band). source_table routes equities vs futures.
         raw_gaps = await queries.find_intraday_gaps_async(
-            symbol, start, end, min_gap_minutes=min_gap_minutes,
+            symbol, start, end, source_table=ch_table_for(symbol),
         )
-        gaps = [
-            IntradayGap(
-                start=g["start"], end=g["end"], minutes=int(g.get("minutes", 0) or 0),
-            )
-            for g in raw_gaps
-        ]
+        gaps: list[IntradayGap] = []
+        for g in raw_gaps:
+            missing = int(g.get("missing", 0) or 0)
+            if missing < min_gap_minutes:
+                continue
+            prev_ts = g["prev_ts"]
+            next_ts = g["next_ts"]
+            gaps.append(IntradayGap(
+                start=prev_ts + timedelta(minutes=1),
+                end=next_ts - timedelta(minutes=1),
+                minutes=missing,
+            ))
         total = sum(g.minutes for g in gaps)
         return GapReport(
             symbol=symbol.upper(),

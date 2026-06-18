@@ -103,19 +103,23 @@ class BarReader:
         """Production construction path; the CH client is managed elsewhere."""
         return cls()
 
-    def get_recent_bars(self, symbol: str, limit: int = 200) -> list[LiveBar]:
+    def get_recent_bars(
+        self, symbol: str, limit: int = 200, *, source_table: str = "ohlcv_1m"
+    ) -> list[LiveBar]:
         """
         Return the most recent `limit` 1-minute bars for `symbol`,
         sorted oldest-first. Wraps `queries.list_bars_desc` and reverses
         for ascending order (UIs and indicator code expect ASC).
 
-        Empty if `symbol` has no bars in CH.
+        `source_table` selects the asset-class CH table (`ohlcv_1m`
+        equities / `futures_ohlcv_1m` futures). Empty if `symbol` has no
+        bars in that table.
         """
         if limit <= 0:
             return []
         from app.db import queries  # lazy: avoids pulling CH client at import time
 
-        rows = queries.list_bars_desc(symbol, limit)
+        rows = queries.list_bars_desc(symbol, limit, source_table=source_table)
         if not rows:
             return []
         bars = [_row_to_live_bar(r, "1m", symbol=symbol) for r in rows]
@@ -130,6 +134,7 @@ class BarReader:
         *,
         interval: str = "1m",
         limit: int = _LIMIT_HARD_CAP,
+        source_table: str = "ohlcv_1m",
     ) -> list[LiveBar]:
         """
         Return bars for `symbol` in the half-open window `[start, end)`
@@ -157,7 +162,9 @@ class BarReader:
 
         from app.db import queries
 
-        rows = queries.list_bars_resampled(symbol, interval, start_utc, end_utc, limit)
+        rows = queries.list_bars_resampled(
+            symbol, interval, start_utc, end_utc, limit, source_table=source_table,
+        )
         if not rows:
             return []
         return [_row_to_live_bar(r, interval, symbol=symbol) for r in rows]
@@ -169,6 +176,7 @@ class BarReader:
         interval: str = "1m",
         lookback_days: Optional[int] = None,
         limit: Optional[int] = None,
+        source_table: str = "ohlcv_1m",
     ) -> list[LiveBar]:
         """
         Higher-level helper for chart endpoints. Owns the window +
@@ -217,6 +225,7 @@ class BarReader:
             end or datetime.now(timezone.utc),
             interval=interval,
             limit=limit,
+            source_table=source_table,
         )
 
     def get_latest_bar_per_symbol(self, symbols: list[str]) -> dict[str, LiveBar]:

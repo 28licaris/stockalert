@@ -102,19 +102,23 @@ def stub_bar_reader(monkeypatch):
     class _Stub:
         def __init__(self):
             self.calls: list[dict] = []
-        def get_recent_bars(self, symbol, limit=200):
-            self.calls.append({"method": "get_recent_bars", "symbol": symbol, "limit": limit})
+        def get_recent_bars(self, symbol, limit=200, *, source_table="ohlcv_1m"):
+            self.calls.append({
+                "method": "get_recent_bars", "symbol": symbol, "limit": limit,
+                "source_table": source_table,
+            })
             return [_live_bar(m) for m in range(3)]
-        def get_bars_in_range(self, symbol, start, end, *, interval="1m", limit=100_000, source_table=None):
+        def get_bars_in_range(self, symbol, start, end, *, interval="1m", limit=100_000, source_table="ohlcv_1m"):
             self.calls.append({
                 "method": "get_bars_in_range", "symbol": symbol,
                 "interval": interval, "source_table": source_table,
             })
             return [_live_bar(m, interval=interval) for m in range(2)]
-        def get_bars_for_chart(self, symbol, *, interval="1m", lookback_days=None, limit=None):
+        def get_bars_for_chart(self, symbol, *, interval="1m", lookback_days=None, limit=None, source_table="ohlcv_1m"):
             self.calls.append({
                 "method": "get_bars_for_chart", "symbol": symbol,
                 "interval": interval, "lookback_days": lookback_days, "limit": limit,
+                "source_table": source_table,
             })
             return [_live_bar(m, interval=interval) for m in range(4)]
         def get_latest_bar_per_symbol(self, symbols):

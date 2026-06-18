@@ -102,8 +102,9 @@ def test_bar_reader_inverted_window_returns_empty() -> None:
 
 
 def test_bar_reader_resampled_interval_reads_from_1m() -> None:
-    """Intraday intervals resample from ohlcv_1m via queries.list_bars_resampled
-    (no source_table override — there's only one source)."""
+    """Intraday intervals resample from ohlcv_1m via queries.list_bars_resampled.
+    The reader threads source_table explicitly (defaults to equities ohlcv_1m;
+    futures roots pass futures_ohlcv_1m via the bars gateway)."""
     rows = [
         {"ts": datetime(2024, 8, 1, 14, m * 15, tzinfo=timezone.utc),
          "open": 100, "high": 101, "low": 99, "close": 100.5, "volume": 1000}
@@ -118,7 +119,7 @@ def test_bar_reader_resampled_interval_reads_from_1m() -> None:
         )
     q.assert_called_once()
     assert q.call_args.args[1] == "15m"
-    assert "source_table" not in q.call_args.kwargs
+    assert q.call_args.kwargs["source_table"] == "ohlcv_1m"
     assert all(b.interval == "15m" for b in bars)
 
 
@@ -244,7 +245,7 @@ def test_get_bars_for_chart_1d_resamples_from_1m() -> None:
         bars = BarReader().get_bars_for_chart("AAPL", interval="1d", lookback_days=30)
     q.assert_called_once()
     assert q.call_args.args[1] == "1d"            # interval positional
-    assert "source_table" not in q.call_args.kwargs
+    assert q.call_args.kwargs["source_table"] == "ohlcv_1m"
     assert len(bars) == 3
     assert all(b.interval == "1d" for b in bars)
 
@@ -258,7 +259,7 @@ def test_get_bars_for_chart_every_interval_resamples_from_1m() -> None:
         q.assert_called_once()
         assert q.call_args.args[1] == interval
         # never forces a source table — always the default ohlcv_1m
-        assert "source_table" not in q.call_args.kwargs
+        assert q.call_args.kwargs["source_table"] == "ohlcv_1m"
 
 
 def test_get_bars_for_chart_auto_limit_scales_with_lookback() -> None:

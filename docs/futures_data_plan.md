@@ -29,6 +29,7 @@ What we built instead (mirrors the equities pipeline 1:1):
 | Post-close CH self-heal | `ch_reconcile` (equities) | **F3**: same loop, `reconcile_ch_from_futures` |
 | Session calendar | Mon-Fri (`equities.gaps`) | Sun-Fri / Sat-dark (`futures.gaps`) |
 | Adjustment tier | `polygon_adjusted` (splits/divs) | **none** — futures don't split (no `adj_factor`) |
+| Read surface | bars gateway + MCP + `/api/v1/bars` | **F4**: same surfaces; `/`-prefix routes to the futures table + lake automatically (`futures.symbols.is_futures_symbol`) |
 
 Symbology decision (operator-approved): **continuous roots only** (`/ES`,
 not `/ESM26`). Schwab's streamer + pricehistory both resolve the root to
