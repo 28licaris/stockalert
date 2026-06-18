@@ -68,7 +68,7 @@ Always `logger.exception()`. Inline comment if swallowed intentionally.
 ### 7. Preflight any > 5-min job
 
 Fail-fast checks (creds, tables, paths) at the top.
-Example: `scripts/preflight_silver_build.py`.
+Example: the preflight block in `scripts/lake_import_athena.py`.
 
 ### 8. Result objects > raises for predictable failures
 

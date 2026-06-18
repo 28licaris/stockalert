@@ -351,7 +351,7 @@ rather than SIGSEGV due to Apple runtime guard-page handling.
 
 ### Empirical bisection
 
-From [`scripts/repro_corp_actions_sigbus_2.py`](../scripts/repro_corp_actions_sigbus_2.py):
+From the bisection reproducer (since removed from the tree; the fix is `chunked_upsert`):
 
 | Slice size | Expression nodes (3-col id) | Result |
 |---|---|---|
@@ -396,8 +396,7 @@ PyIceberg version drift and identifier-column-count changes.
 
 - **File a PyIceberg upstream issue.** The fix upstream would be to
   switch the multi-column path to either `In(struct_field([(a,b,c)]))`
-  or to chunk internally. Minimal repro lives in
-  `scripts/repro_corp_actions_sigbus_2.py`.
+  or to chunk internally.
 - **A future agent should NEVER call `table.upsert(...)` directly**
   in app/scripts code. Always import `chunked_upsert`. This is
   codified in [`docs/standards/coding.md`](standards/coding.md) rule 9.

@@ -370,12 +370,15 @@ will include other providers).
 
 ---
 
-### ⑦ `bronze.*_minute` + `silver.corp_actions` → `silver.ohlcv_1m` (PLANNED, TA-5.1)
+### ⑦ `bronze.*_minute` + `silver.corp_actions` → `silver.ohlcv_1m` (SUPERSEDED by v2)
 
-**Status: NOT YET BUILT.** This is the next phase.
-
-**Trigger (planned):** Nightly at 02:00 ET via background task.
-On-demand via operator CLI (`scripts/run_silver_build.py`).
+**Status: SUPERSEDED.** The v1 "silver build" described below was never
+shipped; v2 replaced it with the whole-market Spark adjustment job
+(`scripts/spark/polygon_adjustment_job.py` → `equities.polygon_adjusted`)
+plus on-demand `equities.polygon_adjusted` → ClickHouse hydration
+(`scripts/hotload_ch_from_lake.py`, `app/services/equities/lake_to_ch_fill.py`).
+See [`docs/architecture_v2/`](architecture_v2/README.md). The planning
+notes below are retained for historical context only.
 
 **Code path (planned):**
 ```

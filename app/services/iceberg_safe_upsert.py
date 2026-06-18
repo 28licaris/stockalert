@@ -58,8 +58,7 @@ progress + totals, never silently. Zero-row inputs return cleanly
 WITHOUT calling ``.upsert()`` (the underlying PyIceberg call would
 no-op anyway but skipping it saves a wasted snapshot bump).
 
-Bisection + reproducer: ``scripts/repro_corp_actions_sigbus_2.py``.
-Root cause writeup: ``docs/iceberg_performance_findings.md``.
+Root cause + bisection writeup: ``docs/iceberg_performance_findings.md``.
 
 Usage
 =====

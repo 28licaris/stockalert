@@ -177,18 +177,20 @@ The 48-day-limit caveat (pre-TA-5.6) is communicated inline:
 ### Backstop for operators
 
 If a hot symbol that's not in the universe is needed RIGHT NOW (e.g.
-a news-driven spike on a non-seed name), the operator can manually
-materialize a slice:
+a news-driven spike on a non-seed name), v2 handles this automatically:
+the first chart request through `/api/v1/bars` (or the bars gateway)
+sees no ClickHouse coverage and fills the requested window on demand
+from `equities.polygon_adjusted` via
+`app/services/equities/lake_to_ch_fill.py`, then re-queries CH. To
+pre-warm a symbol manually instead:
 
 ```bash
-poetry run python scripts/run_silver_ohlcv_build.py \
-    --symbols ZYXI \
-    --since 2021-01-04
+poetry run python scripts/hotload_ch_from_lake.py --symbols ZYXI
 ```
 
-That builds the silver slice for one symbol (~10-30 sec since the
-bronze read is bounded). The dashboard immediately starts returning
-real bars on the next refresh.
+The on-demand fill is bounded to the requested window (~seconds). The
+dashboard returns real bars on the same request, and every subsequent
+load is served hot from ClickHouse.
 
 ## 6. Open questions / what this defers
 
