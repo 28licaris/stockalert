@@ -66,3 +66,35 @@ def ensure_schwab_futures(catalog: Catalog | None = None) -> Table:
         sort_order=FUTURES_OHLCV_SORT,
         properties={**_BASE_PROPERTIES, **_MOR_PROPERTIES},
     )
+
+
+FUTURES_DAILY_TABLE_NAME = "schwab_futures_daily"
+
+
+def ensure_schwab_futures_daily(catalog: Catalog | None = None) -> Table:
+    """Create `futures.schwab_futures_daily` if absent; return it.
+
+    Deep-history DAILY OHLCV for continuous roots, pulled directly from Schwab
+    (`frequencyType=daily`). Schwab caps *minute* history at ~48 days but serves
+    years of daily — so this is the tier that feeds daily consumers (charts,
+    Elliott Wave) beyond the 1-minute window. Same column shape as
+    `schwab_futures`; only the resolution + cadence differ."""
+    catalog = catalog or get_catalog()
+    _ensure_namespace(catalog)
+
+    table_id = futures_table_id(FUTURES_DAILY_TABLE_NAME)
+    try:
+        return catalog.load_table(table_id)
+    except NoSuchTableError:
+        pass
+
+    location = _futures_table_location(FUTURES_DAILY_TABLE_NAME)
+    log.info("Creating Iceberg table %s at %s", table_id, location)
+    return catalog.create_table(
+        identifier=table_id,
+        schema=FUTURES_OHLCV_SCHEMA,
+        location=location,
+        partition_spec=FUTURES_OHLCV_PARTITION,
+        sort_order=FUTURES_OHLCV_SORT,
+        properties={**_BASE_PROPERTIES, **_MOR_PROPERTIES},
+    )

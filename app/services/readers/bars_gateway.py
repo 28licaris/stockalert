@@ -118,6 +118,14 @@ def get_chart_bars(
     if source == BarSource.LAKE:
         return _from_lake(symbol, interval=interval, lookback_days=lookback_days, limit=limit)
 
+    # Futures daily is served from the deep daily lake tier for EVERY source —
+    # the 1-minute-derived CH/lake only covers ~48 days, so the CH path would
+    # hand back a stub. Falls through to CH only if the daily table is empty.
+    if is_futures_symbol(symbol) and interval == "1d":
+        daily = _from_lake(symbol, interval="1d", lookback_days=lookback_days, limit=limit)
+        if daily:
+            return daily
+
     table = ch_table_for(symbol)
     ch_reader = reader or BarReader.from_settings()
     bars = ch_reader.get_bars_for_chart(
@@ -228,6 +236,15 @@ def _from_lake(
     start = end - timedelta(days=lookback_days if lookback_days is not None else 30)
 
     if is_futures_symbol(symbol):
+        # Daily+ intervals: prefer the deep daily tier (futures.schwab_futures_daily,
+        # years of history) over resampling the ~48-day 1-minute window. Falls
+        # through to the 1m resample if the daily table is empty / not built yet.
+        if interval == "1d":
+            daily = _futures_daily_from_lake(symbol, start, end)
+            if daily:
+                if limit is not None and len(daily) > limit:
+                    daily = daily[-limit:]
+                return daily
         one_min = _futures_one_min_from_lake(symbol, start, end)
     else:
         from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
@@ -288,6 +305,62 @@ def _futures_one_min_from_lake(
             )
         )
     out.sort(key=lambda b: b.timestamp)  # lake scan isn't guaranteed ordered
+    return out
+
+
+def _futures_daily_from_lake(
+    symbol: str, start: datetime, end: datetime
+) -> list[LiveBar]:
+    """Daily ``LiveBar``s for a futures root from ``futures.schwab_futures_daily``,
+    oldest-first. Empty list when the table doesn't exist yet or on a read error
+    (so callers fall back to resampling the 1-minute lake)."""
+    from pyiceberg.exceptions import NoSuchTableError
+    from pyiceberg.expressions import And, EqualTo, GreaterThanOrEqual, LessThan
+
+    from app.services.futures.schemas import futures_table_id
+    from app.services.iceberg_catalog import get_catalog
+
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+
+    try:
+        table = get_catalog().load_table(futures_table_id("schwab_futures_daily"))
+        arr = table.scan(
+            row_filter=And(
+                EqualTo("symbol", symbol.upper()),
+                And(GreaterThanOrEqual("timestamp", start.isoformat()),
+                    LessThan("timestamp", end.isoformat())),
+            ),
+            selected_fields=("symbol", "timestamp", "open", "high", "low", "close",
+                             "volume", "vwap", "trade_count"),
+        ).to_arrow()
+    except NoSuchTableError:
+        return []
+    except Exception as exc:  # noqa: BLE001 — degrade to the 1m path
+        logger.warning("bars_gateway: futures daily lake read failed for %s: %s", symbol, exc)
+        return []
+
+    if arr is None or arr.num_rows == 0:
+        return []
+    cols = arr.to_pydict()
+    out: list[LiveBar] = []
+    for i in range(arr.num_rows):
+        vwap = cols["vwap"][i]
+        tc = cols["trade_count"][i]
+        out.append(
+            LiveBar(
+                symbol=cols["symbol"][i], timestamp=cols["timestamp"][i],
+                open=float(cols["open"][i]), high=float(cols["high"][i]),
+                low=float(cols["low"][i]), close=float(cols["close"][i]),
+                volume=float(cols["volume"][i]) if cols["volume"][i] is not None else 0.0,
+                vwap=float(vwap) if vwap not in (None, 0, 0.0) else None,
+                trade_count=int(tc) if tc not in (None, 0) else None,
+                source="lake-schwab_futures_daily", interval="1d",
+            )
+        )
+    out.sort(key=lambda b: b.timestamp)
     return out
 
 
