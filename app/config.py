@@ -103,6 +103,16 @@ class Settings(BaseModel):
     polygon_nightly_symbols: str = os.getenv("POLYGON_NIGHTLY_SYMBOLS", "all")
     polygon_nightly_kind: str = os.getenv("POLYGON_NIGHTLY_KIND", "minute").strip().lower()
 
+    # Nightly Elliott Wave recompute (EW-3). OFF by default — enabling it wires
+    # a daily background loop that labels `elliott_recompute_symbols` and appends
+    # to `<ns>.elliott_wave_labels`. Run hour is UTC; default 22:00 (after the
+    # equities session settles). Symbols is a comma-separated list (`/`-prefixed
+    # = futures); empty means the loop no-ops. See docs/elliott_wave_system_spec.md §4.
+    elliott_recompute_enabled: bool = os.getenv("ELLIOTT_RECOMPUTE_ENABLED", "false").lower() == "true"
+    elliott_recompute_run_hour_utc: int = int(os.getenv("ELLIOTT_RECOMPUTE_RUN_HOUR_UTC", "22"))
+    elliott_recompute_symbols: str = os.getenv("ELLIOTT_RECOMPUTE_SYMBOLS", "")
+    elliott_recompute_intervals: str = os.getenv("ELLIOTT_RECOMPUTE_INTERVALS", "1d")
+
     # Schwab REST pricehistory → equities.schwab_universe (see nightly_schwab_refresh).
     # 22:00 UTC = 3 PM Arizona; ~30 min after NYSE close.
     schwab_nightly_enabled: bool = os.getenv("SCHWAB_NIGHTLY_ENABLED", "false").lower() == "true"

@@ -406,6 +406,51 @@ async def lifespan(app: FastAPI):
                 exc,
             )
 
+    # Nightly Elliott Wave recompute (EW-3) — OFF unless ELLIOTT_RECOMPUTE_ENABLED.
+    nightly_elliott_task: asyncio.Task | None = None
+    if _settings.elliott_recompute_enabled and (_settings.stock_lake_bucket or "").strip():
+        try:
+            from app.services.elliott_store import (
+                run_elliott_recompute_loop,
+                run_now_recompute,
+            )
+
+            _ewt_symbols = [s.strip() for s in _settings.elliott_recompute_symbols.split(",") if s.strip()]
+            _ewt_intervals = tuple(i.strip() for i in _settings.elliott_recompute_intervals.split(",") if i.strip()) or ("1d",)
+
+            def _ewt_symbols_provider() -> list[str]:
+                return _ewt_symbols
+
+            async def _run_elliott_once() -> None:
+                await run_now_recompute(_ewt_symbols_provider, _ewt_intervals)
+
+            nightly_elliott_task = asyncio.create_task(
+                run_elliott_recompute_loop(
+                    _ewt_symbols_provider,
+                    run_hour_utc=_settings.elliott_recompute_run_hour_utc,
+                    intervals=_ewt_intervals,
+                ),
+                name="nightly_elliott_recompute",
+            )
+            app.state.nightly_elliott_task = nightly_elliott_task
+            job_registry.register(
+                name="nightly_elliott_recompute",
+                display_name="Nightly Elliott Wave recompute",
+                schedule=f"daily at {int(_settings.elliott_recompute_run_hour_utc):02d}:00 UTC",
+                setting_key="ELLIOTT_RECOMPUTE_RUN_HOUR_UTC",
+                run_now=_run_elliott_once,
+            )
+            logger.info(
+                "nightly_elliott_recompute: background loop started "
+                "(ELLIOTT_RECOMPUTE_RUN_HOUR_UTC=%s, symbols=%d)",
+                _settings.elliott_recompute_run_hour_utc, len(_ewt_symbols),
+            )
+        except Exception as exc:
+            logger.exception(
+                "✗ nightly_elliott_recompute failed to start: %s — continuing without it",
+                exc,
+            )
+
     # CH reconcile: post-close, push the authoritative lakes (schwab_universe
     # + schwab_futures) into CH so live-stream gaps self-heal. Runs after the
     # nightly refreshes.
