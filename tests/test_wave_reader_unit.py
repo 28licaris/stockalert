@@ -87,3 +87,10 @@ def test_http_history():
     r = _client().get("/api/v1/wave/AAPL/history")
     assert r.status_code == 200
     assert isinstance(r.json(), list)
+
+
+def test_norm_symbol_preserves_futures_slash():
+    from app.api.routes_wave import _norm_symbol
+    assert _norm_symbol("AAPL") == "AAPL"
+    assert _norm_symbol("/GC") == "/GC"      # futures root keeps its prefix
+    assert _norm_symbol("//GC") == "/GC"     # collapse accidental duplicate

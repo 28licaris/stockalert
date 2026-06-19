@@ -68,6 +68,13 @@ export interface WaveAlert {
 
 export type WaveBackend = "store" | "compute" | "auto";
 
+/** Encode a symbol into the URL path while preserving the futures "/" prefix
+ * (e.g. "/GC" → "/GC", so the backend's `{symbol:path}` route captures it).
+ * Each segment is still encoded; only the slash separators survive. */
+function symbolPath(symbol: string): string {
+  return symbol.split("/").map(encodeURIComponent).join("/");
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { headers: { Accept: "application/json" } });
   if (!res.ok) {
@@ -87,7 +94,7 @@ export function useWaveState(
     staleTime: 60_000,
     queryFn: () =>
       getJson<WaveStateResponse>(
-        `/api/v1/wave/${encodeURIComponent(symbol!)}?interval=${interval}&backend=${backend}`,
+        `/api/v1/wave/${symbolPath(symbol!)}?interval=${interval}&backend=${backend}`,
       ),
   });
 }
@@ -99,7 +106,7 @@ export function useWaveHistory(symbol: string | undefined, interval = "1d") {
     staleTime: 60_000,
     queryFn: () =>
       getJson<WaveStateResponse[]>(
-        `/api/v1/wave/${encodeURIComponent(symbol!)}/history?interval=${interval}`,
+        `/api/v1/wave/${symbolPath(symbol!)}/history?interval=${interval}`,
       ),
   });
 }

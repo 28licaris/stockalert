@@ -43,17 +43,18 @@ def get_wave_alerts(
                        min_risk_reward=min_risk_reward, reader=reader)
 
 
-@router.get("/wave/{symbol}", response_model=WaveStateResponse, tags=["Elliott Wave"])
-def get_wave_state(
-    symbol: str,
-    interval: str = Query("1d"),
-    backend: str = Query("auto", pattern="^(store|compute|auto)$"),
-    reader: WaveReader = Depends(get_wave_reader),
-) -> WaveStateResponse:
-    return reader.get_state(symbol, interval, backend=backend)  # type: ignore[arg-type]
+def _norm_symbol(symbol: str) -> str:
+    """Futures roots are `/`-prefixed (e.g. /GC). The frontend sends them as a
+    slash-preserving path (`/api/v1/wave//GC`), so a single leading slash here
+    is intentional — collapse any accidental duplicates, keep one."""
+    s = symbol.strip()
+    return "/" + s.lstrip("/") if s.startswith("/") else s
 
 
-@router.get("/wave/{symbol}/history", response_model=list[WaveStateResponse],
+# NOTE: `{symbol:path}` (not `{symbol}`) so futures roots like "/GC" route — a
+# bare path param can't contain a slash. The /history route is declared before
+# the bare one so the greedy `:path` doesn't swallow the "/history" suffix.
+@router.get("/wave/{symbol:path}/history", response_model=list[WaveStateResponse],
             tags=["Elliott Wave"])
 def get_wave_history(
     symbol: str,
@@ -62,4 +63,14 @@ def get_wave_history(
     end: Optional[date] = Query(None),
     reader: WaveReader = Depends(get_wave_reader),
 ) -> list[WaveStateResponse]:
-    return reader.get_history(symbol, interval, start=start, end=end)
+    return reader.get_history(_norm_symbol(symbol), interval, start=start, end=end)
+
+
+@router.get("/wave/{symbol:path}", response_model=WaveStateResponse, tags=["Elliott Wave"])
+def get_wave_state(
+    symbol: str,
+    interval: str = Query("1d"),
+    backend: str = Query("auto", pattern="^(store|compute|auto)$"),
+    reader: WaveReader = Depends(get_wave_reader),
+) -> WaveStateResponse:
+    return reader.get_state(_norm_symbol(symbol), interval, backend=backend)  # type: ignore[arg-type]
