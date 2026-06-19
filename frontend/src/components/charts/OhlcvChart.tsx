@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import {
   createChart,
   CrosshairMode,
+  TickMarkType,
   type IChartApi,
   type ISeriesApi,
   type CandlestickData,
@@ -17,6 +18,12 @@ interface OhlcvChartProps {
   bars: ReadonlyArray<Bar>;
   signals?: ReadonlyArray<Signal>;
   height?: number;
+  /**
+   * IANA timezone for the time axis + crosshair, or `undefined` for the
+   * viewer's local zone. Must stay in sync with the Recent Bars table so
+   * the two surfaces show the same clock. See lib/timezone.ts.
+   */
+  timezone?: string;
 }
 
 /**
@@ -34,7 +41,12 @@ interface OhlcvChartProps {
  * so they work with `<alpha-value>`. We translate at this boundary
  * via `hslToken`.
  */
-export function OhlcvChart({ bars, signals, height = 480 }: OhlcvChartProps) {
+export function OhlcvChart({
+  bars,
+  signals,
+  height = 480,
+  timezone,
+}: OhlcvChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -71,7 +83,16 @@ export function OhlcvChart({ bars, signals, height = 480 }: OhlcvChartProps) {
         horzLines: { color: palette.grid },
       },
       rightPriceScale: { borderColor: palette.grid },
-      timeScale: { borderColor: palette.grid, timeVisible: true, secondsVisible: false },
+      timeScale: {
+        borderColor: palette.grid,
+        timeVisible: true,
+        secondsVisible: false,
+        // LWC labels its axis in UTC by default; format in the selected
+        // zone instead. `timezone` is captured at create-time; the effect
+        // below re-applies on change without tearing down the chart.
+        tickMarkFormatter: makeTickFormatter(timezone),
+      },
+      localization: { timeFormatter: makeCrosshairFormatter(timezone) },
       crosshair: { mode: CrosshairMode.Normal },
     });
 
@@ -116,6 +137,9 @@ export function OhlcvChart({ bars, signals, height = 480 }: OhlcvChartProps) {
       volumeSeriesRef.current = null;
       paletteRef.current = null;
     };
+    // Create once. `timezone` is intentionally read at mount only; the
+    // dedicated effect below re-applies formatters on later changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Data updates — bars
@@ -164,6 +188,17 @@ export function OhlcvChart({ bars, signals, height = 480 }: OhlcvChartProps) {
     });
     candle.setMarkers(markers);
   }, [signals]);
+
+  // Re-label the axis + crosshair when the timezone setting changes.
+  // applyOptions keeps the existing series and pan/zoom state intact.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    chart.applyOptions({
+      timeScale: { tickMarkFormatter: makeTickFormatter(timezone) },
+      localization: { timeFormatter: makeCrosshairFormatter(timezone) },
+    });
+  }, [timezone]);
 
   return (
     <div
@@ -261,4 +296,60 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
 
 function toUnix(iso: string): UTCTimestamp {
   return Math.floor(new Date(iso).getTime() / 1000) as UTCTimestamp;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Timezone-aware axis formatting. Bar `time` values are UTC epoch
+// seconds (see toUnix); LWC would otherwise label the axis in UTC. We
+// format each instant in `zone` (an IANA name, or undefined = local).
+
+/** Axis tick labels: granularity comes from `tickMarkType`. */
+function makeTickFormatter(zone: string | undefined) {
+  const time = new Intl.DateTimeFormat(undefined, {
+    timeZone: zone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const day = new Intl.DateTimeFormat(undefined, {
+    timeZone: zone,
+    month: "short",
+    day: "numeric",
+  });
+  const month = new Intl.DateTimeFormat(undefined, {
+    timeZone: zone,
+    month: "short",
+    year: "2-digit",
+  });
+  const year = new Intl.DateTimeFormat(undefined, {
+    timeZone: zone,
+    year: "numeric",
+  });
+  return (time_: Time, tickMarkType: TickMarkType): string => {
+    const d = new Date((time_ as UTCTimestamp) * 1000);
+    switch (tickMarkType) {
+      case TickMarkType.Year:
+        return year.format(d);
+      case TickMarkType.Month:
+        return month.format(d);
+      case TickMarkType.DayOfMonth:
+        return day.format(d);
+      default:
+        return time.format(d);
+    }
+  };
+}
+
+/** Crosshair / tooltip label: full date + time in the selected zone. */
+function makeCrosshairFormatter(zone: string | undefined) {
+  const fmt = new Intl.DateTimeFormat(undefined, {
+    timeZone: zone,
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  return (time_: Time): string =>
+    fmt.format(new Date((time_ as UTCTimestamp) * 1000));
 }

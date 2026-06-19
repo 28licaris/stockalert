@@ -54,26 +54,38 @@ export function fmtAgo(iso: string | null | undefined, now = Date.now()): string
   return `${days}d ago`;
 }
 
-/** Short timestamp for table cells: "13:42:05". */
-export function fmtTime(iso: string | null | undefined): string {
+/**
+ * Short timestamp for table cells: "13:42:05".
+ *
+ * `timeZone` is an IANA zone (e.g. "America/New_York") or `undefined`
+ * for the viewer's local zone. Bar timestamps are UTC instants, so this
+ * is a pure display conversion. See lib/timezone.ts.
+ */
+export function fmtTime(
+  iso: string | null | undefined,
+  timeZone?: string,
+): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleTimeString();
+  return d.toLocaleTimeString(undefined, timeZone ? { timeZone } : undefined);
 }
 
 /**
- * Calendar date for a bar, rendered in US Eastern (the trading-day
- * timezone) so a daily bar stamped at midnight ET reads as the correct
- * session date regardless of the viewer's locale. Used for daily/1d bars
- * where a time-of-day label is meaningless.
+ * Calendar date for a bar. Used for daily/1d bars where a time-of-day
+ * label is meaningless. `timeZone` follows the same display setting as
+ * the chart axis (see lib/timezone.ts); `undefined` = viewer's local
+ * zone.
  */
-export function fmtDate(iso: string | null | undefined): string {
+export function fmtDate(
+  iso: string | null | undefined,
+  timeZone?: string,
+): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleDateString(undefined, {
-    timeZone: "America/New_York",
+    timeZone,
     year: "numeric",
     month: "short",
     day: "2-digit",

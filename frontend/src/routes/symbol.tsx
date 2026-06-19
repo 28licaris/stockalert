@@ -10,6 +10,12 @@ import {
   useSymbolSignals,
 } from "@/api/queries";
 import { useUserSetting } from "@/lib/storage";
+import {
+  DEFAULT_TZ,
+  resolveZone,
+  TZ_OPTIONS,
+  type TzSetting,
+} from "@/lib/timezone";
 import { fmtAgo, fmtPrice } from "@/lib/fmt";
 import { cn } from "@/lib/utils";
 
@@ -37,6 +43,9 @@ export function SymbolPage() {
     "symbol.interval",
     DEFAULT_INTERVAL,
   );
+  // Global display timezone for the chart axis + Recent Bars table.
+  const [tz, setTz] = useUserSetting<TzSetting>("chart.timezone", DEFAULT_TZ);
+  const zone = resolveZone(tz);
 
   const bars = useLakeBars(ticker || undefined, interval);
   const signals = useSymbolSignals(ticker || undefined, 100);
@@ -79,7 +88,10 @@ export function SymbolPage() {
             </span>
           </div>
         </div>
-        <IntervalPicker value={interval} onChange={setInterval} />
+        <div className="flex items-end gap-2">
+          <TimezonePicker value={tz} onChange={setTz} />
+          <IntervalPicker value={interval} onChange={setInterval} />
+        </div>
       </header>
 
       {bars.error ? <ApiErrorAlert error={bars.error} /> : null}
@@ -89,7 +101,11 @@ export function SymbolPage() {
           don't fight its lifecycle, then fall back to an explicit empty state
           when the fetch settles with no data (e.g. an unknown ticker). */}
       <div className="relative">
-        <OhlcvChart bars={bars.data ?? []} signals={signals.data ?? []} />
+        <OhlcvChart
+          bars={bars.data ?? []}
+          signals={signals.data ?? []}
+          timezone={zone}
+        />
         {!bars.data || bars.data.length === 0 ? (
           <div className="absolute inset-0 flex items-center justify-center rounded-md bg-bg-base/60 text-sm text-fg-muted backdrop-blur-[1px]">
             {bars.isLoading || bars.isFetching
@@ -105,7 +121,12 @@ export function SymbolPage() {
         </h2>
         {/* A compact "is it live?" snapshot — the chart is the main view, so we
             cap this to the latest ~20 bars rather than let it grow the page. */}
-        <BarsTable bars={bars.data ?? []} limit={20} interval={interval} />
+        <BarsTable
+          bars={bars.data ?? []}
+          limit={20}
+          interval={interval}
+          timeZone={zone}
+        />
       </section>
     </div>
   );
@@ -141,6 +162,40 @@ function IntervalPicker({
           )}
         >
           {i}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function TimezonePicker({
+  value,
+  onChange,
+}: {
+  value: TzSetting;
+  onChange: (next: TzSetting) => void;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label="Timezone"
+      className="inline-flex rounded-md border border-border bg-bg-subtle p-0.5"
+    >
+      {TZ_OPTIONS.map((tz) => (
+        <button
+          key={tz.value}
+          type="button"
+          role="tab"
+          aria-selected={value === tz.value}
+          onClick={() => onChange(tz.value)}
+          className={cn(
+            "rounded-sm px-2.5 py-1 font-mono text-xs",
+            value === tz.value
+              ? "bg-accent text-accent-fg"
+              : "text-fg-muted hover:bg-bg-muted hover:text-fg-base",
+          )}
+        >
+          {tz.label}
         </button>
       ))}
     </div>
