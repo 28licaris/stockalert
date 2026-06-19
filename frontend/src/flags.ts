@@ -18,6 +18,7 @@ const FLAGS: Record<string, FlagValue> = {
   // if you know the path — these aren't security boundaries).
   "page.status": true,
   "page.symbol": true, // enabled in FE-2
+  "page.ewt": true, // enabled in EW-5
   "page.screener": false,
   "page.backtest": false,
   "page.indicators": false,

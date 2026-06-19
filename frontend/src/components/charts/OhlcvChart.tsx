@@ -2,10 +2,13 @@ import { useEffect, useRef } from "react";
 import {
   createChart,
   CrosshairMode,
+  LineStyle,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type CandlestickData,
   type HistogramData,
+  type LineData,
   type SeriesMarker,
   type Time,
   type UTCTimestamp,
@@ -13,9 +16,29 @@ import {
 import type { Bar, Signal } from "@/api/queries";
 import { signalDirection } from "@/api/queries";
 
+/** One labeled swing point of a wave count (the engine's primary pivots). */
+export interface WavePivotPoint {
+  ts: string;
+  price: number;
+  label: string;
+}
+
+/** A horizontal level to draw (invalidation / Fib target). */
+export interface WavePriceLevel {
+  price: number;
+  title: string;
+  kind: "invalidation" | "target";
+}
+
+export interface WaveOverlay {
+  pivots: ReadonlyArray<WavePivotPoint>;
+  levels: ReadonlyArray<WavePriceLevel>;
+}
+
 interface OhlcvChartProps {
   bars: ReadonlyArray<Bar>;
   signals?: ReadonlyArray<Signal>;
+  wave?: WaveOverlay | null;
   height?: number;
 }
 
@@ -34,11 +57,13 @@ interface OhlcvChartProps {
  * so they work with `<alpha-value>`. We translate at this boundary
  * via `hslToken`.
  */
-export function OhlcvChart({ bars, signals, height = 480 }: OhlcvChartProps) {
+export function OhlcvChart({ bars, signals, wave, height = 480 }: OhlcvChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const waveSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const priceLinesRef = useRef<IPriceLine[]>([]);
   // Resolved palette captured at create-time so data effects don't
   // need to re-read the DOM on every render.
   const paletteRef = useRef<Palette | null>(null);
@@ -93,9 +118,18 @@ export function OhlcvChart({ bars, signals, height = 480 }: OhlcvChartProps) {
       scaleMargins: { top: 0.8, bottom: 0 },
     });
 
+    const waveLine = chart.addLineSeries({
+      color: palette.fg,
+      lineWidth: 2,
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+    });
+
     chartRef.current = chart;
     candleSeriesRef.current = candle;
     volumeSeriesRef.current = volume;
+    waveSeriesRef.current = waveLine;
 
     // Keep the chart sized to its container. Fires once with the real size
     // after layout settles (covers the SPA-navigation blank-chart case) and
@@ -114,6 +148,8 @@ export function OhlcvChart({ bars, signals, height = 480 }: OhlcvChartProps) {
       chartRef.current = null;
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
+      waveSeriesRef.current = null;
+      priceLinesRef.current = [];
       paletteRef.current = null;
     };
   }, []);
@@ -143,11 +179,24 @@ export function OhlcvChart({ bars, signals, height = 480 }: OhlcvChartProps) {
     volume.setData(volData);
   }, [bars]);
 
-  // Data updates — markers
+  // Data updates — markers (wave labels take precedence over signal markers)
   useEffect(() => {
     const candle = candleSeriesRef.current;
     const palette = paletteRef.current;
     if (!candle || !palette) return;
+
+    if (wave && wave.pivots.length > 0) {
+      const markers: SeriesMarker<Time>[] = wave.pivots.map((p) => ({
+        time: toUnix(p.ts),
+        position: p.label === "0" ? "belowBar" : "aboveBar",
+        shape: "circle",
+        color: palette.fg,
+        text: p.label,
+      }));
+      candle.setMarkers(markers);
+      return;
+    }
+
     if (!signals || signals.length === 0) {
       candle.setMarkers([]);
       return;
@@ -163,7 +212,42 @@ export function OhlcvChart({ bars, signals, height = 480 }: OhlcvChartProps) {
       };
     });
     candle.setMarkers(markers);
-  }, [signals]);
+  }, [signals, wave]);
+
+  // Data updates — wave path line + invalidation/target price lines
+  useEffect(() => {
+    const candle = candleSeriesRef.current;
+    const line = waveSeriesRef.current;
+    const palette = paletteRef.current;
+    if (!candle || !line || !palette) return;
+
+    for (const pl of priceLinesRef.current) candle.removePriceLine(pl);
+    priceLinesRef.current = [];
+
+    if (!wave) {
+      line.setData([]);
+      return;
+    }
+
+    const lineData: LineData<Time>[] = wave.pivots.map((p) => ({
+      time: toUnix(p.ts),
+      value: p.price,
+    }));
+    line.setData(lineData);
+
+    for (const lvl of wave.levels) {
+      priceLinesRef.current.push(
+        candle.createPriceLine({
+          price: lvl.price,
+          color: lvl.kind === "invalidation" ? palette.down : palette.up,
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: lvl.title,
+        }),
+      );
+    }
+  }, [wave]);
 
   return (
     <div

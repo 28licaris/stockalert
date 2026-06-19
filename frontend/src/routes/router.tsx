@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatusPage } from "./status";
 import { SymbolPage } from "./symbol";
+import { EwtPage } from "./ewt";
 import { WatchlistsPage } from "./watchlists";
 import { StreamPage } from "./stream";
 import { ClickHousePage } from "./clickhouse";
@@ -24,6 +25,8 @@ export const router = createBrowserRouter(
         { index: true, element: <StatusPage /> },
         { path: "symbol", element: <SymbolPage /> },
         { path: "symbol/:ticker", element: <SymbolPage /> },
+        { path: "ewt", element: <EwtPage /> },
+        { path: "ewt/:ticker", element: <EwtPage /> },
         { path: "watchlists", element: <WatchlistsPage /> },
         { path: "stream", element: <StreamPage /> },
         // Back-compat alias: the old /app/seed URL now redirects to /app/stream.
