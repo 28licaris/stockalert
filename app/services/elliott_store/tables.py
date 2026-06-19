@@ -40,6 +40,17 @@ def _ensure_namespace(catalog: Catalog, asset_class: str) -> None:
         pass
 
 
+def _evolve(table: Table) -> None:
+    """Idempotent forward schema evolution for tables created before a column
+    was added (e.g. `as_of_price`, EW-6). No-op once the column exists."""
+    from pyiceberg.types import DoubleType
+
+    have = set(table.schema().column_names)
+    with table.update_schema() as upd:
+        if "as_of_price" not in have:
+            upd.add_column("as_of_price", DoubleType(), required=False)
+
+
 def ensure_elliott_wave_labels(asset_class: str = "equity",
                                catalog: Catalog | None = None) -> Table:
     """Create `<ns>.elliott_wave_labels` if absent; return the table."""
@@ -48,7 +59,9 @@ def ensure_elliott_wave_labels(asset_class: str = "equity",
 
     table_id = label_table_id(asset_class)
     try:
-        return catalog.load_table(table_id)
+        table = catalog.load_table(table_id)
+        _evolve(table)
+        return table
     except NoSuchTableError:
         pass
 

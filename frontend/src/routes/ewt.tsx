@@ -7,7 +7,9 @@ import { SymbolSearchInput } from "@/components/symbol/SymbolSearchInput";
 import { useLakeBars } from "@/api/queries";
 import {
   useWaveState,
+  useWaveAlerts,
   waveLabel,
+  type WaveAlert,
   type WaveCountView,
 } from "@/api/wave";
 import { useUserSetting } from "@/lib/storage";
@@ -255,6 +257,64 @@ function WavePicker() {
           Analyze
         </Button>
       </div>
+
+      <ScanList onPick={go} />
     </div>
+  );
+}
+
+function ScanList({ onPick }: { onPick: (sym: string) => void }) {
+  const alerts = useWaveAlerts("1d");
+  return (
+    <section>
+      <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-fg-subtle">
+        Active setups · daily
+      </h2>
+      {alerts.isLoading ? (
+        <p className="text-sm text-fg-muted">Scanning…</p>
+      ) : !alerts.data || alerts.data.length === 0 ? (
+        <p className="text-sm text-fg-muted">
+          No high-probability setups right now (probability ≥ 60%, R:R ≥ 2).
+        </p>
+      ) : (
+        <ul className="space-y-1.5">
+          {alerts.data.map((a) => (
+            <AlertRow key={`${a.symbol}-${a.interval}`} alert={a} onPick={onPick} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function AlertRow({ alert, onPick }: { alert: WaveAlert; onPick: (s: string) => void }) {
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => onPick(alert.symbol)}
+        className="flex w-full items-center justify-between gap-3 rounded-md border border-border bg-bg-subtle px-3 py-2 text-left hover:bg-bg-muted"
+      >
+        <span className="flex items-center gap-2">
+          <span className="font-mono text-sm font-medium text-fg-base">{alert.symbol}</span>
+          <span
+            className={cn(
+              "rounded-sm px-1.5 py-0.5 text-[10px] uppercase",
+              alert.direction === "long" ? "bg-up/15 text-up" : "bg-down/15 text-down",
+            )}
+          >
+            {alert.direction} · w{alert.current_wave}
+          </span>
+          <span className="text-xs text-fg-subtle">{alert.trade_type}</span>
+        </span>
+        <span className="flex items-center gap-3 font-mono text-xs text-fg-muted">
+          <span>R:R {alert.risk_reward}</span>
+          <span>P {(alert.probability * 100).toFixed(0)}%</span>
+          <span className="text-fg-subtle">
+            {fmtPrice(alert.entry)}→{fmtPrice(alert.target_1)}
+          </span>
+        </span>
+      </button>
+    </li>
   );
 }

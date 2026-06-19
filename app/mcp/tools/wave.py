@@ -13,6 +13,7 @@ from functools import lru_cache
 
 from app.mcp.middleware import tool_call
 from app.mcp.server import mcp
+from app.services.alerts import WaveAlert, scan_alerts
 from app.services.readers.wave_reader import WaveReader, WaveStateResponse
 
 logger = logging.getLogger(__name__)
@@ -70,8 +71,29 @@ def evaluate_wave_targets(symbol: str, interval: str = "1d") -> dict:
             "direction": p.direction if p else None,
             "confidence": p.confidence if p else 0.0,
             "probability": p.probability if p else 0.0,
+            "entry": state.as_of_price,
             "stop_invalidation": p.invalidation if p else None,
             "targets": p.targets if p else {},
             "uncertainty": state.uncertainty,
             "engine_ver": state.engine_ver,
         }
+
+
+@mcp.tool()
+def list_wave_alerts(interval: str = "1d", min_probability: float = 0.6,
+                     min_risk_reward: float = 2.0) -> list[WaveAlert]:
+    """High-probability Elliott Wave trade setups across the tracked universe.
+
+    USE WHEN: an agent wants the current actionable wave setups — "what wave
+    trades look good today?". Each WaveAlert is a complete plan: entry, stop
+    (= count invalidation), Fib target(s), risk:reward, and a day/swing tag.
+    Only wave-3 / wave-5 impulse entries passing the gates are returned.
+
+    Args:
+        interval: '5m' | '15m' | '1h' | '1d'.
+        min_probability: minimum primary-count probability (default 0.6).
+        min_risk_reward: minimum reward:risk (default 2.0).
+    """
+    with tool_call("list_wave_alerts", interval=interval):
+        return scan_alerts(interval, min_probability=min_probability,
+                           min_risk_reward=min_risk_reward, reader=_reader())

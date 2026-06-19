@@ -48,6 +48,24 @@ export interface WaveStateResponse {
   source: string;
 }
 
+export interface WaveAlert {
+  symbol: string;
+  asset_class: string;
+  interval: string;
+  setup: string;
+  direction: "long" | "short";
+  trade_type: "day" | "swing";
+  probability: number;
+  entry: number;
+  stop: number;
+  target_1: number;
+  target_2: number | null;
+  risk_reward: number;
+  current_wave: string;
+  as_of_date: string | null;
+  rationale: string;
+}
+
 export type WaveBackend = "store" | "compute" | "auto";
 
 async function getJson<T>(url: string): Promise<T> {
@@ -83,6 +101,15 @@ export function useWaveHistory(symbol: string | undefined, interval = "1d") {
       getJson<WaveStateResponse[]>(
         `/api/v1/wave/${encodeURIComponent(symbol!)}/history?interval=${interval}`,
       ),
+  });
+}
+
+export function useWaveAlerts(interval = "1d") {
+  return useQuery({
+    queryKey: ["wave", "alerts", interval],
+    staleTime: 60_000,
+    queryFn: () =>
+      getJson<WaveAlert[]>(`/api/v1/wave/alerts?interval=${interval}`),
   });
 }
 

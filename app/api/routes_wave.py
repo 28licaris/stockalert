@@ -15,6 +15,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 
+from app.services.alerts import WaveAlert, scan_alerts
 from app.services.readers.wave_reader import WaveReader, WaveStateResponse
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,17 @@ def _build_reader() -> WaveReader:
 
 def get_wave_reader() -> WaveReader:
     return _build_reader()
+
+
+@router.get("/wave/alerts", response_model=list[WaveAlert], tags=["Elliott Wave"])
+def get_wave_alerts(
+    interval: str = Query("1d"),
+    min_probability: float = Query(0.6, ge=0, le=1),
+    min_risk_reward: float = Query(2.0, ge=0),
+    reader: WaveReader = Depends(get_wave_reader),
+) -> list[WaveAlert]:
+    return scan_alerts(interval, min_probability=min_probability,
+                       min_risk_reward=min_risk_reward, reader=reader)
 
 
 @router.get("/wave/{symbol}", response_model=WaveStateResponse, tags=["Elliott Wave"])

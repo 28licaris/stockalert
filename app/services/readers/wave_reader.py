@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from datetime import date, datetime
 from typing import Literal, Optional
 
@@ -46,6 +47,7 @@ class WaveStateResponse(BaseModel):
     asset_class: str
     as_of_date: Optional[date] = None
     as_of_ts: Optional[datetime] = None
+    as_of_price: Optional[float] = None
     primary: Optional[WaveCountView] = None
     secondary: Optional[WaveCountView] = None
     uncertainty: float = 1.0
@@ -65,25 +67,36 @@ def _from_labeling(lab: WaveLabeling, source: str) -> WaveStateResponse:
         )
     return WaveStateResponse(
         symbol=lab.symbol, interval=lab.interval, asset_class=asset_class_for(lab.symbol),
-        as_of_date=lab.as_of.date(), as_of_ts=lab.as_of,
+        as_of_date=lab.as_of.date(), as_of_ts=lab.as_of, as_of_price=lab.as_of_price,
         primary=view(lab.primary, True), secondary=view(lab.secondary, False),
         uncertainty=lab.uncertainty, engine_ver=lab.engine_ver, source=source,
     )
 
 
-def _view_from_row(row: dict, prefix: str, with_pivots: bool) -> Optional[WaveCountView]:
-    if not row.get(f"{prefix}_structure"):
+def _clean(v):
+    """pandas fills null cells with float('nan') (truthy!) — normalize to None."""
+    if v is None:
         return None
+    if isinstance(v, float) and math.isnan(v):
+        return None
+    return v
+
+
+def _view_from_row(row: dict, prefix: str, with_pivots: bool) -> Optional[WaveCountView]:
+    structure = _clean(row.get(f"{prefix}_structure"))
+    if not structure:
+        return None
+    degree = _clean(row.get(f"{prefix}_degree"))
     return WaveCountView(
-        structure=row[f"{prefix}_structure"], direction=row.get(f"{prefix}_direction") or "",
-        current_wave=row.get(f"{prefix}_current_wave") or "",
-        degree=row.get(f"{prefix}_degree"),
-        probability=row.get(f"{prefix}_probability") or 0.0,
-        confidence=row.get(f"{prefix}_confidence") or 0.0,
-        invalidation=row.get(f"{prefix}_invalidation"),
-        targets=json.loads(row.get(f"{prefix}_targets") or "{}"),
-        rationale=row.get(f"{prefix}_rationale") or "",
-        pivots=json.loads(row.get(f"{prefix}_pivots") or "[]") if with_pivots else [],
+        structure=structure, direction=_clean(row.get(f"{prefix}_direction")) or "",
+        current_wave=_clean(row.get(f"{prefix}_current_wave")) or "",
+        degree=int(degree) if degree is not None else None,
+        probability=_clean(row.get(f"{prefix}_probability")) or 0.0,
+        confidence=_clean(row.get(f"{prefix}_confidence")) or 0.0,
+        invalidation=_clean(row.get(f"{prefix}_invalidation")),
+        targets=json.loads(_clean(row.get(f"{prefix}_targets")) or "{}"),
+        rationale=_clean(row.get(f"{prefix}_rationale")) or "",
+        pivots=json.loads(_clean(row.get(f"{prefix}_pivots")) or "[]") if with_pivots else [],
     )
 
 
@@ -91,10 +104,11 @@ def _row_to_response(row: dict) -> WaveStateResponse:
     return WaveStateResponse(
         symbol=row["symbol"], interval=row["interval"],
         asset_class=row.get("asset_class") or asset_class_for(row["symbol"]),
-        as_of_date=row.get("as_of_date"), as_of_ts=row.get("as_of_ts"),
+        as_of_date=_clean(row.get("as_of_date")), as_of_ts=_clean(row.get("as_of_ts")),
+        as_of_price=_clean(row.get("as_of_price")),
         primary=_view_from_row(row, "p", True), secondary=_view_from_row(row, "s", False),
-        uncertainty=row.get("uncertainty") if row.get("uncertainty") is not None else 1.0,
-        engine_ver=row.get("engine_ver") or "", source="store",
+        uncertainty=_clean(row.get("uncertainty")) if _clean(row.get("uncertainty")) is not None else 1.0,
+        engine_ver=_clean(row.get("engine_ver")) or "", source="store",
     )
 
 
@@ -135,7 +149,31 @@ class WaveReader:
         df = df.groupby("as_of_date", as_index=False).last()
         return [_row_to_response(r) for r in df.to_dict("records")]
 
+    def list_latest(self, interval: str = "1d") -> list[WaveStateResponse]:
+        """Latest stored count per symbol across both namespaces (universe scan)."""
+        out: list[WaveStateResponse] = []
+        for asset_class in ("equity", "future"):
+            df = self._scan_all(asset_class, interval)
+            if df is None or df.empty:
+                continue
+            df = df.sort_values(["symbol", "as_of_date", "computed_at"])
+            latest = df.groupby("symbol", as_index=False).last()
+            out.extend(_row_to_response(r) for r in latest.to_dict("records"))
+        return out
+
     # -- store access -------------------------------------------------------
+    def _scan_all(self, asset_class: str, interval: str):
+        try:
+            table = get_catalog().load_table(label_table_id(asset_class))
+        except Exception as exc:
+            logger.info("wave_reader: store unavailable for %s: %s", asset_class, exc)
+            return None
+        try:
+            return table.scan(row_filter=EqualTo("interval", interval)).to_pandas()
+        except Exception as exc:
+            logger.warning("wave_reader: universe scan failed (%s): %s", asset_class, exc)
+            return None
+
     def _scan(self, symbol: str, interval: str, start, end):
         try:
             table = get_catalog().load_table(label_table_id(asset_class_for(symbol)))
