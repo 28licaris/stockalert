@@ -38,6 +38,7 @@ class WaveCountView(BaseModel):
     invalidation: Optional[float] = None
     targets: dict[str, float] = Field(default_factory=dict)
     rationale: str = ""
+    nesting_score: float = 1.0
     pivots: list[dict] = Field(default_factory=list)
 
 
@@ -63,6 +64,7 @@ def _from_labeling(lab: WaveLabeling, source: str) -> WaveStateResponse:
             structure=c.structure, direction=c.direction, current_wave=c.current_wave,
             degree=c.degree, probability=c.probability, confidence=c.confidence,
             invalidation=c.invalidation_price, targets=c.fib_targets, rationale=c.rationale,
+            nesting_score=c.nesting_score,
             pivots=[p.model_dump(mode="json") for p in c.pivots] if with_pivots else [],
         )
     return WaveStateResponse(

@@ -18,6 +18,7 @@ from typing import Optional
 
 from app.indicators.pivots import Pivot
 from app.signals.elliott import fib, rules
+from app.signals.elliott.nesting import apply_nesting
 from app.signals.elliott.schemas import WaveCandidate, WaveLabeling
 
 _IMPULSE_LABELS = ["0", "1", "2", "3", "4", "5"]
@@ -72,7 +73,7 @@ _ZIGZAG_PRIOR = 0.92
 
 
 class WaveEngine:
-    version = "ew2.0.0"
+    version = "ew3.1.0"  # V3-1: nesting + proportionality validation
 
     def __init__(self, top_k: int = 3, min_confidence: float = 0.5,
                  secondary_floor: float = 0.15) -> None:
@@ -102,6 +103,12 @@ class WaveEngine:
                 run = alt[start:]
                 cands.extend(self._impulse(run, last_price))
                 cands.extend(self._zigzag(run, last_price))
+
+        # V3-1 nesting: validate each candidate against its one-degree-finer
+        # subdivisions and fold the result into confidence BEFORE ranking, so a
+        # count whose waves don't subdivide (noisy pivots) is demoted.
+        for c in cands:
+            apply_nesting(c, by_degree)
 
         cands = _dedupe(cands)
         cands.sort(key=lambda c: (-c.confidence, tuple(p.index for p in c.pivots)))

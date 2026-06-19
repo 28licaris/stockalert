@@ -34,6 +34,10 @@ class WaveCandidate(BaseModel):
     invalidation_price: float
     fib_targets: dict[str, float] = Field(default_factory=dict)
     rationale: str = ""
+    # v3 nesting (V3-1): each wave validated against its subdivision one degree
+    # finer (motive→5, corrective→3). 1.0 = no finer degree to check / fully valid.
+    nesting_score: float = 1.0
+    subwaves: list[dict] = Field(default_factory=list)
 
 
 class WaveLabeling(BaseModel):
