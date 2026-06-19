@@ -64,3 +64,18 @@ def test_targets_helper_anchors_correctly():
     # wave-3 target = wave-2 low + 1.618 * |w1|, NOT 1.618 * price
     t = fib.impulse_targets([100.0, 120.0, 108.0], "up", 3)
     assert abs(t["w3=1.618xW1"] - (108 + 1.618 * 20)) < 0.01
+
+
+def test_room_factor_penalizes_near_price_stop():
+    from app.signals.elliott.engine import _room_factor
+    # stop 0.2% from price → heavy penalty; stop 20% away → full credit
+    assert _room_factor(100.0, 99.8) < 0.3
+    assert _room_factor(100.0, 80.0) == 1.0
+
+
+def test_in_progress_wave3_stop_is_not_penalized():
+    # a tight in-progress wave-3 stop is a GOOD entry, not a flaw — confidence
+    # should stay healthy even though the stop is below current price.
+    lab = _label("up")
+    assert lab.primary.current_wave == "3"
+    assert lab.primary.confidence >= 0.5

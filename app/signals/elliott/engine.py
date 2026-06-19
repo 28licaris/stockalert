@@ -54,6 +54,23 @@ def _structure_weight(m: int) -> float:
     return min(1.0, 0.40 + 0.13 * (m - 1))
 
 
+def _room_factor(price: float, stop: float, floor: float = 0.012) -> float:
+    """Penalise a *completed* structure whose stop sits almost on the current
+    price — that means price has retraced back to the structure's origin, so the
+    count is marginal/coincidental (e.g. a down-zigzag fully retraced). Full
+    credit once the stop is at least `floor` (1.2%) away. NOT applied to
+    in-progress trend waves, where a tight stop is a *good* entry, not a flaw."""
+    if price <= 0:
+        return 1.0
+    return min(1.0, abs(price - stop) / price / floor)
+
+
+# Mild structural prior: impulses are the tradeable trend structures; a
+# completed correction is a weaker standalone read. Keeps an impulse ahead of a
+# zigzag of otherwise-equal fit.
+_ZIGZAG_PRIOR = 0.92
+
+
 class WaveEngine:
     version = "ew2.0.0"
 
@@ -138,6 +155,8 @@ class WaveEngine:
         # (price - invalid) * s must be > 0. A wave-4-down at new highs is dead.
         if current != "complete" and (last_price - invalid) * s <= 0:
             return []
+        if current == "complete":
+            conf *= _room_factor(last_price, invalid)
 
         rat = _impulse_rationale(direction, current, prices, invalid, targets)
         return [WaveCandidate(
@@ -169,7 +188,7 @@ class WaveEngine:
         leg_ok = (letter == "complete") or _leg_ok(last_price, prices[-1], _expected_sign(s, wave_idx))
 
         fib_score = fib.score_zigzag(prices, direction)
-        conf = _structure_weight(m) * (0.40 + 0.55 * fib_score) * (1.0 if leg_ok else 0.4)
+        conf = _structure_weight(m) * (0.40 + 0.55 * fib_score) * (1.0 if leg_ok else 0.4) * _ZIGZAG_PRIOR
 
         a = abs(prices[1] - prices[0])
         targets: dict[str, float] = {}
@@ -184,6 +203,8 @@ class WaveEngine:
         # zigzag with price back above its origin is no longer a valid read).
         if (last_price - invalid) * s <= 0:
             return []
+        if letter == "complete":
+            conf *= _room_factor(last_price, invalid)
 
         art = "an" if direction == "up" else "a"
         if letter == "complete":
