@@ -23,7 +23,7 @@ from functools import lru_cache
 from importlib.resources import files
 from typing import Final
 
-_CURRENT_VERSION: Final[str] = "v1"
+_CURRENT_VERSION: Final[str] = "v2"
 
 
 @dataclass(frozen=True, slots=True)
