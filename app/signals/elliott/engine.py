@@ -114,8 +114,16 @@ class WaveEngine:
             secondary = rest[0] if rest else None
             alternates = rest[1:self.top_k]
 
-        _normalize_probabilities([c for c in (primary, secondary) if c])
-        surfaced = sum(c.probability for c in (primary, secondary) if c)
+        surfaced_counts = [c for c in (primary, secondary) if c]
+        _normalize_probabilities(surfaced_counts)
+        # Directional disagreement = genuine uncertainty: if the two surfaced
+        # counts point opposite ways, there is no directional edge — bleed
+        # probability back into the uncertainty bucket rather than implying ~0.9
+        # confidence split across contradictory reads.
+        if primary and secondary and primary.direction != secondary.direction:
+            for c in surfaced_counts:
+                c.probability = round(c.probability * 0.7, 3)
+        surfaced = sum(c.probability for c in surfaced_counts)
 
         return WaveLabeling(
             symbol=symbol, interval=interval, as_of=as_of, as_of_index=as_of_index,
@@ -157,6 +165,15 @@ class WaveEngine:
             return []
         if current == "complete":
             conf *= _room_factor(last_price, invalid)
+
+        # Forward-only targets for trend waves: a wave-3/5 whose projection price
+        # already sits behind the market is over-extended (extending wave, or
+        # the count is at the wrong degree) — drop the stale target and demote.
+        if current in ("3", "5"):
+            fwd = {k: v for k, v in targets.items() if (v - last_price) * s > 0}
+            if not fwd:
+                conf *= 0.5
+            targets = fwd
 
         rat = _impulse_rationale(direction, current, prices, invalid, targets)
         return [WaveCandidate(

@@ -79,3 +79,11 @@ def test_in_progress_wave3_stop_is_not_penalized():
     lab = _label("up")
     assert lab.primary.current_wave == "3"
     assert lab.primary.confidence >= 0.5
+
+
+def test_trend_wave_targets_are_forward_only():
+    # a wave-3/5 (up) must never advertise a target that sits behind the market
+    lab = _label("up")
+    if lab.primary and lab.primary.current_wave in ("3", "5"):
+        for v in lab.primary.fib_targets.values():
+            assert v > lab.as_of_price
