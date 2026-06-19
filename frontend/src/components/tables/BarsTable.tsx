@@ -7,6 +7,12 @@ interface BarsTableProps {
   limit?: number;
   /** Active interval; daily bars show a date instead of a time-of-day. */
   interval?: string;
+  /**
+   * IANA timezone for the Time column, or undefined for the viewer's
+   * local zone. Mirrors the chart's axis so both agree. See
+   * lib/timezone.ts.
+   */
+  timeZone?: string;
 }
 
 /**
@@ -16,7 +22,12 @@ interface BarsTableProps {
  * FE-3 will replace this hand-rolled table with TanStack Table once
  * sorting/virtualization is needed; for now N≤100 stays fast.
  */
-export function BarsTable({ bars, limit = 50, interval }: BarsTableProps) {
+export function BarsTable({
+  bars,
+  limit = 50,
+  interval,
+  timeZone,
+}: BarsTableProps) {
   const rows = [...bars].slice(-limit).reverse();
   const isDaily = interval === "1d";
   return (
@@ -48,7 +59,7 @@ export function BarsTable({ bars, limit = 50, interval }: BarsTableProps) {
             return (
               <tr key={b.ts} className="hover:bg-bg-muted/40">
                 <td className="px-3 py-1.5 text-fg-muted">
-                  {isDaily ? fmtDate(b.ts) : fmtTime(b.ts)}
+                  {isDaily ? fmtDate(b.ts, timeZone) : fmtTime(b.ts, timeZone)}
                 </td>
                 <td className="px-3 py-1.5 text-right text-fg-base">
                   {fmtPrice(b.open)}
