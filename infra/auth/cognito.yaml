@@ -81,6 +81,7 @@ Resources:
 
   UserPoolClient:
     Type: AWS::Cognito::UserPoolClient
+    DependsOn: GoogleIdentityProvider
     Properties:
       ClientName: !Sub stockalert-dashboard-${EnvironmentName}
       UserPoolId: !Ref UserPool
