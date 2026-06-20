@@ -46,7 +46,8 @@ docker compose --profile full up --build          # full stack
 ```
 app/api/             FastAPI routes (routes_*.py — one per domain)
 app/services/        Domain modules (see standards/service_modules.md)
-  identity/          Customer users/tenants/sessions; Pydantic contracts + PostgreSQL repository
+  identity/          Customer users/tenants/sessions; Pydantic contracts + PostgreSQL repository;
+                     tenant-scoped, CSRF-protected session management
   equities/          v2 lake: schemas + sink + tables + gaps + models
   futures/           v2 futures mirror: schemas/sink/tables/gaps +
                      universe + symbols (/-prefix routing) + lake_to_ch_fill

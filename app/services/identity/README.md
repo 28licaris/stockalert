@@ -31,6 +31,15 @@ Browser routes are `/auth/login`, `/auth/callback`, and `/auth/logout`.
 `/api/v1/admin/me` additionally requires the explicit `operator.access`
 permission and therefore denies ordinary tenant admins.
 
+Authenticated customers manage their own active application sessions through
+`GET /api/v1/customer/sessions`,
+`DELETE /api/v1/customer/sessions/{session_id}`, and
+`POST /api/v1/customer/sessions/revoke-others`. Session mutations require the
+double-submit CSRF token and repository queries always scope session IDs by the
+authenticated user and tenant. The current session is revoked only through the
+normal `/auth/logout` flow so cookies and the Cognito browser session are
+cleared together.
+
 ## Local database
 
 ```bash

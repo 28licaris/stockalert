@@ -108,6 +108,7 @@ class SessionRecord(BaseModel):
     tenant_id: UUID
     created_at: datetime
     expires_at: datetime
+    last_seen_at: datetime | None = None
     revoked_at: datetime | None = None
 
 
@@ -148,9 +149,32 @@ class Principal(BaseModel):
 
 
 class RevokeSessionResult(BaseModel):
-    status: Literal["revoked", "already_revoked", "not_found", "error"]
+    status: Literal["revoked", "already_revoked", "not_found", "denied", "error"]
     error_code: str | None = None
     message: str | None = None
+
+
+class RevokeSessionsResult(BaseModel):
+    status: Literal["revoked", "error"]
+    revoked_count: int = Field(default=0, ge=0)
+    error_code: str | None = None
+    message: str | None = None
+
+
+class SessionSummary(BaseModel):
+    id: UUID
+    created_at: datetime
+    expires_at: datetime
+    last_seen_at: datetime | None = None
+    is_current: bool
+
+
+class SessionListResponse(BaseModel):
+    sessions: tuple[SessionSummary, ...]
+
+
+class SessionRevocationResponse(BaseModel):
+    revoked_count: int = Field(ge=0)
 
 
 class CreateLoginTransactionCommand(BaseModel):

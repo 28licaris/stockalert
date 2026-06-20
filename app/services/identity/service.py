@@ -15,6 +15,9 @@ from app.services.identity.schemas import (
     ProvisionAccountCommand,
     ProvisionAccountResult,
     RevokeSessionResult,
+    RevokeSessionsResult,
+    SessionListResponse,
+    SessionSummary,
 )
 from app.services.identity.security import generate_session_token, hash_session_token
 
@@ -84,6 +87,49 @@ class IdentityService:
 
     def revoke_session(self, session_id: UUID) -> RevokeSessionResult:
         return self._repository.revoke_session(session_id, now=self._clock())
+
+    def list_sessions(self, principal: Principal) -> SessionListResponse:
+        records = self._repository.list_active_sessions(
+            user_id=principal.user_id,
+            tenant_id=principal.tenant_id,
+            now=self._clock(),
+        )
+        return SessionListResponse(
+            sessions=tuple(
+                SessionSummary(
+                    id=record.id,
+                    created_at=record.created_at,
+                    expires_at=record.expires_at,
+                    last_seen_at=record.last_seen_at,
+                    is_current=record.id == principal.session_id,
+                )
+                for record in records
+            )
+        )
+
+    def revoke_session_for_principal(
+        self, principal: Principal, session_id: UUID
+    ) -> RevokeSessionResult:
+        if session_id == principal.session_id:
+            return RevokeSessionResult(
+                status="denied",
+                error_code="current_session",
+                message="use sign out to revoke the current session",
+            )
+        return self._repository.revoke_user_session(
+            user_id=principal.user_id,
+            tenant_id=principal.tenant_id,
+            session_id=session_id,
+            now=self._clock(),
+        )
+
+    def revoke_other_sessions(self, principal: Principal) -> RevokeSessionsResult:
+        return self._repository.revoke_other_sessions(
+            user_id=principal.user_id,
+            tenant_id=principal.tenant_id,
+            current_session_id=principal.session_id,
+            now=self._clock(),
+        )
 
     def validate_csrf(self, session_id: UUID, csrf_token: str) -> bool:
         if not csrf_token:

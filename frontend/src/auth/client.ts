@@ -3,6 +3,9 @@ import type { Principal, Role } from "./principal";
 
 type CurrentUserDto = components["schemas"]["CurrentUserResponse"];
 type LogoutDto = components["schemas"]["LogoutResponse"];
+export type DashboardSession = components["schemas"]["SessionSummary"];
+type SessionListDto = components["schemas"]["SessionListResponse"];
+type SessionRevocationDto = components["schemas"]["SessionRevocationResponse"];
 
 export class AuthRequestError extends Error {
   constructor(
@@ -52,7 +55,10 @@ function readCookie(name: string): string | null {
   return match ? decodeURIComponent(match.slice(prefix.length)) : null;
 }
 
-export async function endSession(): Promise<string> {
+async function authenticatedMutation(
+  path: string,
+  method: "POST" | "DELETE",
+): Promise<Response> {
   const csrfToken = readCookie("stockalert_csrf");
   if (!csrfToken) {
     throw new AuthRequestError(
@@ -60,14 +66,18 @@ export async function endSession(): Promise<string> {
       403,
     );
   }
-  const response = await fetch("/auth/logout", {
-    method: "POST",
+  return fetch(path, {
+    method,
     credentials: "include",
     headers: {
       Accept: "application/json",
       "X-CSRF-Token": csrfToken,
     },
   });
+}
+
+export async function endSession(): Promise<string> {
+  const response = await authenticatedMutation("/auth/logout", "POST");
   if (!response.ok) {
     throw new AuthRequestError(
       "We couldn't sign you out. Please try again.",
@@ -75,6 +85,48 @@ export async function endSession(): Promise<string> {
     );
   }
   return ((await response.json()) as LogoutDto).redirect_url;
+}
+
+export async function fetchSessions(): Promise<DashboardSession[]> {
+  const response = await fetch("/api/v1/customer/sessions", {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new AuthRequestError(
+      "We couldn't load your active sessions.",
+      response.status,
+    );
+  }
+  return ((await response.json()) as SessionListDto).sessions;
+}
+
+export async function revokeSession(sessionId: string): Promise<number> {
+  const response = await authenticatedMutation(
+    `/api/v1/customer/sessions/${encodeURIComponent(sessionId)}`,
+    "DELETE",
+  );
+  if (!response.ok) {
+    throw new AuthRequestError(
+      "We couldn't revoke that session.",
+      response.status,
+    );
+  }
+  return ((await response.json()) as SessionRevocationDto).revoked_count;
+}
+
+export async function revokeOtherSessions(): Promise<number> {
+  const response = await authenticatedMutation(
+    "/api/v1/customer/sessions/revoke-others",
+    "POST",
+  );
+  if (!response.ok) {
+    throw new AuthRequestError(
+      "We couldn't revoke your other sessions.",
+      response.status,
+    );
+  }
+  return ((await response.json()) as SessionRevocationDto).revoked_count;
 }
 
 export function loginUrl(

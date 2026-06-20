@@ -17,8 +17,11 @@ from app.services.identity.schemas import (
     IssuedSession,
     Principal,
     RevokeSessionResult,
+    RevokeSessionsResult,
     Role,
     SessionRecord,
+    SessionListResponse,
+    SessionSummary,
 )
 
 
@@ -95,6 +98,34 @@ class FakeIdentityService:
             permissions=principal.permissions,
             entitlements=principal.entitlements,
         )
+
+    def list_sessions(self, principal: Principal) -> SessionListResponse:
+        return SessionListResponse(
+            sessions=(
+                SessionSummary(
+                    id=principal.session_id,
+                    created_at=NOW,
+                    expires_at=NOW + timedelta(hours=8),
+                    is_current=True,
+                ),
+                SessionSummary(
+                    id=UUID("00000000-0000-0000-0000-000000000002"),
+                    created_at=NOW - timedelta(hours=1),
+                    expires_at=NOW + timedelta(hours=7),
+                    is_current=False,
+                ),
+            )
+        )
+
+    def revoke_session_for_principal(
+        self, principal: Principal, session_id: UUID
+    ) -> RevokeSessionResult:
+        if session_id == principal.session_id:
+            return RevokeSessionResult(status="denied", error_code="current_session")
+        return RevokeSessionResult(status="revoked")
+
+    def revoke_other_sessions(self, principal: Principal) -> RevokeSessionsResult:
+        return RevokeSessionsResult(status="revoked", revoked_count=1)
 
 
 def _principal(*, operator: bool = False) -> Principal:
@@ -233,5 +264,46 @@ def test_logout_requires_matching_csrf_and_revokes_session(monkeypatch) -> None:
         assert response.status_code == 200
         assert response.json()["redirect_url"] == "https://cognito.example/logout"
         assert fake_auth.revoked == principal.session_id
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_customer_can_list_and_revoke_owned_sessions_with_csrf(monkeypatch) -> None:
+    principal = _principal()
+    _configure_auth(monkeypatch, principal)
+    other_id = UUID("00000000-0000-0000-0000-000000000002")
+    try:
+        client = TestClient(app)
+        client.cookies.set("stockalert_session", "session-token")
+        client.cookies.set("stockalert_csrf", "csrf-token")
+
+        listed = client.get("/api/v1/customer/sessions")
+        denied_without_csrf = client.delete(
+            f"/api/v1/customer/sessions/{other_id}"
+        )
+        revoked = client.delete(
+            f"/api/v1/customer/sessions/{other_id}",
+            headers={"X-CSRF-Token": "csrf-token"},
+        )
+        current = client.delete(
+            f"/api/v1/customer/sessions/{principal.session_id}",
+            headers={"X-CSRF-Token": "csrf-token"},
+        )
+        others = client.post(
+            "/api/v1/customer/sessions/revoke-others",
+            headers={"X-CSRF-Token": "csrf-token"},
+        )
+
+        assert listed.status_code == 200
+        assert [item["is_current"] for item in listed.json()["sessions"]] == [
+            True,
+            False,
+        ]
+        assert denied_without_csrf.status_code == 403
+        assert revoked.status_code == 200
+        assert revoked.json() == {"revoked_count": 1}
+        assert current.status_code == 409
+        assert others.status_code == 200
+        assert others.json() == {"revoked_count": 1}
     finally:
         app.dependency_overrides.clear()

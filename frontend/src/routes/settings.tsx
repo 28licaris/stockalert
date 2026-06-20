@@ -1,15 +1,26 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
+  Clock3,
   KeyRound,
+  LoaderCircle,
   LogOut,
   Mail,
+  MonitorSmartphone,
   ShieldCheck,
   Smartphone,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { loginUrl, passwordResetUrl } from "@/auth/client";
+import {
+  fetchSessions,
+  loginUrl,
+  passwordResetUrl,
+  revokeOtherSessions,
+  revokeSession,
+} from "@/auth/client";
 import { useAuth } from "@/auth/auth-context";
 import { useCurrentUser } from "@/auth/useCurrentUser";
 
@@ -126,8 +137,148 @@ export function SettingsPage() {
           </div>
         </aside>
       </section>
+
+      <SessionsPanel />
     </div>
   );
+}
+
+const sessionsQueryKey = ["auth", "sessions"] as const;
+
+function SessionsPanel() {
+  const queryClient = useQueryClient();
+  const sessionsQuery = useQuery({
+    queryKey: sessionsQueryKey,
+    queryFn: fetchSessions,
+  });
+  const refresh = () =>
+    queryClient.invalidateQueries({ queryKey: sessionsQueryKey });
+  const revokeOne = useMutation({
+    mutationFn: revokeSession,
+    onSuccess: refresh,
+  });
+  const revokeOthers = useMutation({
+    mutationFn: revokeOtherSessions,
+    onSuccess: refresh,
+  });
+  const sessions = sessionsQuery.data ?? [];
+  const otherSessionCount = sessions.filter(
+    (session) => !session.is_current,
+  ).length;
+  const mutationError = revokeOne.error ?? revokeOthers.error;
+
+  return (
+    <section className="overflow-hidden rounded-3xl border border-border bg-bg-subtle shadow-2xl shadow-black/10">
+      <header className="flex flex-wrap items-center justify-between gap-4 border-b border-border px-6 py-5">
+        <div className="flex items-start gap-3">
+          <div className="grid h-10 w-10 place-items-center rounded-2xl bg-accent/10 text-accent">
+            <MonitorSmartphone className="h-5 w-5" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-fg-base">Active sessions</h2>
+            <p className="mt-1 text-sm text-fg-muted">
+              Review dashboard access and remove devices you no longer use.
+            </p>
+          </div>
+        </div>
+        <Button
+          variant="outline"
+          disabled={otherSessionCount === 0 || revokeOthers.isPending}
+          onClick={() => revokeOthers.mutate()}
+        >
+          {revokeOthers.isPending ? (
+            <LoaderCircle className="h-4 w-4 animate-spin" />
+          ) : (
+            <Trash2 className="h-4 w-4" />
+          )}
+          Sign out other sessions
+        </Button>
+      </header>
+
+      <div className="p-6">
+        {sessionsQuery.isPending ? (
+          <div className="flex items-center gap-3 rounded-2xl border border-border bg-bg-base px-4 py-5 text-sm text-fg-muted">
+            <LoaderCircle className="h-4 w-4 animate-spin text-accent" />
+            Checking your active sessions…
+          </div>
+        ) : sessionsQuery.isError ? (
+          <div className="rounded-2xl border border-danger/20 bg-danger/5 px-4 py-4 text-sm text-danger">
+            {sessionsQuery.error.message}
+            <Button
+              className="ml-3"
+              size="sm"
+              variant="outline"
+              onClick={() => void sessionsQuery.refetch()}
+            >
+              Retry
+            </Button>
+          </div>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2">
+            {sessions.map((session) => (
+              <article
+                key={session.id}
+                className="rounded-2xl border border-border bg-bg-base p-4"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="grid h-9 w-9 place-items-center rounded-xl bg-bg-elevated text-fg-muted">
+                      <MonitorSmartphone className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-medium text-fg-base">
+                          Dashboard session
+                        </h3>
+                        {session.is_current ? (
+                          <span className="rounded-full bg-success/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-success">
+                            This device
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="mt-1 font-mono text-[11px] text-fg-subtle">
+                        {session.id.slice(0, 8)}
+                      </p>
+                    </div>
+                  </div>
+                  {!session.is_current ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={revokeOne.isPending}
+                      onClick={() => revokeOne.mutate(session.id)}
+                    >
+                      Revoke
+                    </Button>
+                  ) : null}
+                </div>
+                <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-xs text-fg-muted">
+                  <span className="inline-flex items-center gap-1.5">
+                    <Clock3 className="h-3.5 w-3.5" />
+                    Started {formatSessionDate(session.created_at)}
+                  </span>
+                  <span>Expires {formatSessionDate(session.expires_at)}</span>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+
+        {mutationError ? (
+          <p className="mt-4 rounded-2xl border border-danger/20 bg-danger/5 px-4 py-3 text-sm text-danger">
+            {mutationError.message}
+          </p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function formatSessionDate(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
 }
 
 function ActionCard({

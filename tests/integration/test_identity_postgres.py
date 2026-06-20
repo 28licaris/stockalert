@@ -116,6 +116,74 @@ def test_session_authentication_and_revocation(
     assert identity_repository.get_principal_by_token_hash(token_hash, now=now) is None
 
 
+def test_session_management_is_user_and_tenant_scoped(
+    identity_repository: PostgresIdentityRepository,
+) -> None:
+    first = identity_repository.provision_personal_account(
+        ProvisionAccountCommand(
+            identity=_claim(subject="managed-1", email="managed-1@example.com")
+        )
+    )
+    second = identity_repository.provision_personal_account(
+        ProvisionAccountCommand(
+            identity=_claim(subject="managed-2", email="managed-2@example.com")
+        )
+    )
+    assert first.account is not None
+    assert second.account is not None
+    now = datetime.now(timezone.utc)
+
+    def create(account, suffix: str):
+        result = identity_repository.create_session(
+            CreateSessionCommand(
+                user_id=account.user_id,
+                tenant_id=account.tenant_id,
+                token_hash=hash_session_token(f"managed-token-{suffix}"),
+                csrf_token_hash=hash_session_token(f"managed-csrf-{suffix}"),
+                expires_at=now + timedelta(hours=1),
+            )
+        )
+        assert result.session is not None
+        return result.session
+
+    current = create(first.account, "current")
+    other = create(first.account, "other")
+    foreign = create(second.account, "foreign")
+
+    listed = identity_repository.list_active_sessions(
+        user_id=first.account.user_id,
+        tenant_id=first.account.tenant_id,
+        now=now,
+    )
+    denied_foreign = identity_repository.revoke_user_session(
+        user_id=first.account.user_id,
+        tenant_id=first.account.tenant_id,
+        session_id=foreign.id,
+        now=now,
+    )
+    bulk = identity_repository.revoke_other_sessions(
+        user_id=first.account.user_id,
+        tenant_id=first.account.tenant_id,
+        current_session_id=current.id,
+        now=now,
+    )
+
+    assert {session.id for session in listed} == {current.id, other.id}
+    assert denied_foreign.status == "not_found"
+    assert bulk.status == "revoked"
+    assert bulk.revoked_count == 1
+    remaining = identity_repository.list_active_sessions(
+        user_id=first.account.user_id,
+        tenant_id=first.account.tenant_id,
+        now=now,
+    )
+    assert [session.id for session in remaining] == [current.id]
+    foreign_principal = identity_repository.get_principal_by_token_hash(
+        hash_session_token("managed-token-foreign"), now=now
+    )
+    assert foreign_principal is not None
+
+
 def test_login_transaction_is_single_use(
     identity_repository: PostgresIdentityRepository,
 ) -> None:

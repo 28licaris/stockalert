@@ -19,6 +19,7 @@ from app.services.identity.schemas import (
     ProvisionAccountCommand,
     ProvisionAccountResult,
     RevokeSessionResult,
+    RevokeSessionsResult,
     Role,
     SessionRecord,
 )
@@ -35,6 +36,9 @@ class FakeIdentityRepository:
         self.lookup_hash: str | None = None
         self.principal: Principal | None = None
         self.csrf_hash: str | None = None
+        self.sessions: tuple[SessionRecord, ...] = ()
+        self.revoked_user_session: UUID | None = None
+        self.revoked_other_current: UUID | None = None
 
     def provision_personal_account(
         self, command: ProvisionAccountCommand
@@ -67,6 +71,36 @@ class FakeIdentityRepository:
     def revoke_session(self, session_id: UUID, *, now: datetime) -> RevokeSessionResult:
         assert now == NOW
         return RevokeSessionResult(status="revoked")
+
+    def list_active_sessions(
+        self, *, user_id: UUID, tenant_id: UUID, now: datetime
+    ) -> tuple[SessionRecord, ...]:
+        assert now == NOW
+        return self.sessions
+
+    def revoke_user_session(
+        self,
+        *,
+        user_id: UUID,
+        tenant_id: UUID,
+        session_id: UUID,
+        now: datetime,
+    ) -> RevokeSessionResult:
+        assert now == NOW
+        self.revoked_user_session = session_id
+        return RevokeSessionResult(status="revoked")
+
+    def revoke_other_sessions(
+        self,
+        *,
+        user_id: UUID,
+        tenant_id: UUID,
+        current_session_id: UUID,
+        now: datetime,
+    ) -> RevokeSessionsResult:
+        assert now == NOW
+        self.revoked_other_current = current_session_id
+        return RevokeSessionsResult(status="revoked", revoked_count=2)
 
     def create_login_transaction(
         self, command: CreateLoginTransactionCommand
@@ -174,3 +208,47 @@ def test_validate_csrf_hashes_browser_token() -> None:
     session_id = uuid4()
     assert service.validate_csrf(session_id, "csrf-token") is True
     assert repo.csrf_hash == hash_session_token("csrf-token")
+
+
+def test_session_management_marks_current_and_scopes_mutations() -> None:
+    repo = FakeIdentityRepository()
+    current_id = uuid4()
+    other_id = uuid4()
+    user_id = uuid4()
+    tenant_id = uuid4()
+    repo.sessions = (
+        SessionRecord(
+            id=current_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            created_at=NOW,
+            expires_at=NOW + timedelta(hours=8),
+        ),
+        SessionRecord(
+            id=other_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            created_at=NOW - timedelta(hours=1),
+            expires_at=NOW + timedelta(hours=7),
+        ),
+    )
+    principal = Principal(
+        user_id=user_id,
+        tenant_id=tenant_id,
+        session_id=current_id,
+        roles=frozenset({Role.OWNER}),
+    )
+    service = IdentityService(repository=repo, clock=lambda: NOW)
+
+    listed = service.list_sessions(principal)
+    denied = service.revoke_session_for_principal(principal, current_id)
+    revoked = service.revoke_session_for_principal(principal, other_id)
+    revoked_others = service.revoke_other_sessions(principal)
+
+    assert [session.is_current for session in listed.sessions] == [True, False]
+    assert denied.status == "denied"
+    assert denied.error_code == "current_session"
+    assert revoked.status == "revoked"
+    assert repo.revoked_user_session == other_id
+    assert revoked_others.revoked_count == 2
+    assert repo.revoked_other_current == current_id

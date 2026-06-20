@@ -18,6 +18,9 @@ from app.services.identity.schemas import (
     ProvisionAccountCommand,
     ProvisionAccountResult,
     RevokeSessionResult,
+    RevokeSessionsResult,
+    SessionListResponse,
+    SessionRecord,
 )
 
 
@@ -44,6 +47,28 @@ class IdentityRepository(Protocol):
     ) -> Principal | None: ...
 
     def revoke_session(self, session_id: UUID, *, now: datetime) -> RevokeSessionResult: ...
+
+    def list_active_sessions(
+        self, *, user_id: UUID, tenant_id: UUID, now: datetime
+    ) -> tuple[SessionRecord, ...]: ...
+
+    def revoke_user_session(
+        self,
+        *,
+        user_id: UUID,
+        tenant_id: UUID,
+        session_id: UUID,
+        now: datetime,
+    ) -> RevokeSessionResult: ...
+
+    def revoke_other_sessions(
+        self,
+        *,
+        user_id: UUID,
+        tenant_id: UUID,
+        current_session_id: UUID,
+        now: datetime,
+    ) -> RevokeSessionsResult: ...
 
     def create_login_transaction(
         self, command: CreateLoginTransactionCommand
@@ -103,6 +128,14 @@ class IdentityServiceProtocol(Protocol):
     def authenticate_session(self, token: str) -> Principal | None: ...
 
     def revoke_session(self, session_id: UUID) -> RevokeSessionResult: ...
+
+    def list_sessions(self, principal: Principal) -> SessionListResponse: ...
+
+    def revoke_session_for_principal(
+        self, principal: Principal, session_id: UUID
+    ) -> RevokeSessionResult: ...
+
+    def revoke_other_sessions(self, principal: Principal) -> RevokeSessionsResult: ...
 
     def validate_csrf(self, session_id: UUID, csrf_token: str) -> bool: ...
 

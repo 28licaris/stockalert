@@ -29,6 +29,7 @@ from app.services.identity.schemas import (
     ProvisionAccountCommand,
     ProvisionAccountResult,
     RevokeSessionResult,
+    RevokeSessionsResult,
     LoginTransaction,
     Role,
     SessionRecord,
@@ -215,6 +216,89 @@ class PostgresIdentityRepository:
                 )
             return RevokeSessionResult(status="revoked")
 
+    def list_active_sessions(
+        self, *, user_id: UUID, tenant_id: UUID, now: datetime
+    ) -> tuple[SessionRecord, ...]:
+        with self._session_factory() as db:
+            models = db.scalars(
+                select(SessionModel)
+                .where(
+                    SessionModel.user_id == user_id,
+                    SessionModel.tenant_id == tenant_id,
+                    SessionModel.revoked_at.is_(None),
+                    SessionModel.expires_at > now,
+                )
+                .order_by(SessionModel.created_at.desc(), SessionModel.id)
+            ).all()
+            return tuple(self._session_record(model) for model in models)
+
+    def revoke_user_session(
+        self,
+        *,
+        user_id: UUID,
+        tenant_id: UUID,
+        session_id: UUID,
+        now: datetime,
+    ) -> RevokeSessionResult:
+        with self._session_factory() as db:
+            model = db.scalar(
+                select(SessionModel).where(
+                    SessionModel.id == session_id,
+                    SessionModel.user_id == user_id,
+                    SessionModel.tenant_id == tenant_id,
+                )
+            )
+            if model is None:
+                return RevokeSessionResult(status="not_found")
+            if model.revoked_at is not None:
+                return RevokeSessionResult(status="already_revoked")
+            model.revoked_at = now
+            try:
+                db.commit()
+            except SQLAlchemyError:
+                db.rollback()
+                logger.exception("managed identity session revocation database error")
+                return RevokeSessionResult(
+                    status="error",
+                    error_code="database_error",
+                    message="session revocation failed",
+                )
+            return RevokeSessionResult(status="revoked")
+
+    def revoke_other_sessions(
+        self,
+        *,
+        user_id: UUID,
+        tenant_id: UUID,
+        current_session_id: UUID,
+        now: datetime,
+    ) -> RevokeSessionsResult:
+        with self._session_factory() as db:
+            try:
+                result = db.execute(
+                    update(SessionModel)
+                    .where(
+                        SessionModel.user_id == user_id,
+                        SessionModel.tenant_id == tenant_id,
+                        SessionModel.id != current_session_id,
+                        SessionModel.revoked_at.is_(None),
+                        SessionModel.expires_at > now,
+                    )
+                    .values(revoked_at=now)
+                )
+                db.commit()
+            except SQLAlchemyError:
+                db.rollback()
+                logger.exception("bulk identity session revocation database error")
+                return RevokeSessionsResult(
+                    status="error",
+                    error_code="database_error",
+                    message="sessions could not be revoked",
+                )
+            return RevokeSessionsResult(
+                status="revoked", revoked_count=max(result.rowcount or 0, 0)
+            )
+
     def create_login_transaction(
         self, command: CreateLoginTransactionCommand
     ) -> CreateLoginTransactionResult:
@@ -343,5 +427,6 @@ class PostgresIdentityRepository:
             tenant_id=model.tenant_id,
             created_at=model.created_at,
             expires_at=model.expires_at,
+            last_seen_at=model.last_seen_at,
             revoked_at=model.revoked_at,
         )
