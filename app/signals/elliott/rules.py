@@ -58,6 +58,88 @@ def evaluate_impulse(prices: list[float], direction: Direction) -> dict[str, boo
     return out
 
 
+def evaluate_flat(prices: list[float], direction: Direction) -> dict[str, bool]:
+    """Flat A-B-C correction. Distinguishing rule: wave B retraces ≥90% of wave A.
+
+    In a zigzag B retraces 38–79%; in a flat B retraces 90%+ (regular flat
+    ≈100%, expanded flat >100%). Both A and C move in the same direction.
+
+        down-flat prices = [H0, LA, HB, LC]  — A down, B up ≥90%, C down
+        up-flat   prices = [L0, HA, LB, HC]  — A up, B down ≥90%, C up
+    """
+    out: dict[str, bool] = {}
+    if len(prices) >= 3:
+        a = abs(prices[1] - prices[0])
+        b_ret = abs(prices[2] - prices[1]) / a if a > 0 else 0.0
+        out["flat_b_gte_90pct"] = b_ret >= 0.90
+    return out
+
+
+def evaluate_triangle(prices: list[float], direction: Direction) -> dict[str, bool]:
+    """Contracting triangle A-B-C-D-E: converging trendlines, all corrective.
+
+    Each successive wave falls short of the previous wave's extreme — the highs
+    get lower and the lows get higher (for a down-first triangle). B must not
+    exceed A's origin; C must not reach A's extreme; D must not exceed B; E must
+    not reach C's extreme.
+
+        down-triangle prices = [H0, LA, HB, LC, HD, LE]
+        up-triangle   prices = [L0, HA, LB, HC, LD, HE]
+    `direction` = direction of first wave A (same convention as zigzag/flat).
+
+    NOTE: triangles do NOT have a wave-4/wave-1 overlap rule — that belongs to
+    diagonals. Triangles are corrective; all internal waves are 3-wave structures.
+    """
+    s = _sign(direction)
+    out: dict[str, bool] = {}
+    if len(prices) >= 4:
+        # B must not exceed A's origin (trendline convergence on A's side)
+        out["tri_b_within_origin"] = (prices[2] - prices[0]) * s > 0
+        # C must not reach A's extreme (trendline convergence on the other side)
+        out["tri_c_converges"] = (prices[3] - prices[1]) * s < 0
+    if len(prices) >= 5:
+        # D must not exceed B (upper trendline continues contracting)
+        out["tri_d_within_b"] = (prices[4] - prices[2]) * s > 0
+    if len(prices) >= 6:
+        # E must not reach C's extreme (lower trendline continues contracting)
+        out["tri_e_converges"] = (prices[5] - prices[3]) * s < 0
+    return out
+
+
+def evaluate_diagonal(prices: list[float], direction: Direction) -> dict[str, bool]:
+    """Contracting diagonal: 5-wave motive structure where wave 4 overlaps wave 1.
+
+    This is the EWT exception to rule 3. Unlike impulses (w4 never in w1 territory)
+    a diagonal REQUIRES that overlap — it is the defining structural feature.
+    All sub-waves are 3-wave corrective structures internally. The wave sizes
+    must contract: w3 < w1, w4 < w2, w5 < w3 (converging wedge).
+
+    Rule 1 (w2 never fully retraces w1) still holds.
+
+        up-diagonal   prices = [L0, H1, L2, H3, L4, H5]  — w4 (L4) overlaps w1 (H1)
+        down-diagonal prices = [H0, L1, H2, L3, H4, L5]  — w4 (H4) overlaps w1 (L1)
+    """
+    s = _sign(direction)
+    out: dict[str, bool] = {}
+    if len(prices) >= 3:
+        out["diag_rule1_w2_no_full_retrace"] = rule1_wave2_no_full_retrace(prices, direction)
+    if len(prices) >= 4:
+        w1 = abs(prices[1] - prices[0])
+        w3 = abs(prices[3] - prices[2])
+        out["diag_w3_lt_w1"] = (w3 < w1) if w1 > 0 else False
+    if len(prices) >= 5:
+        # REQUIRED: w4 MUST overlap w1 — this is what makes it a diagonal
+        out["diag_w4_overlaps_w1"] = (prices[4] - prices[1]) * s < 0
+        w2 = abs(prices[2] - prices[1])
+        w4 = abs(prices[4] - prices[3])
+        out["diag_w4_lt_w2"] = (w4 < w2) if w2 > 0 else False
+    if len(prices) >= 6:
+        w3 = abs(prices[3] - prices[2])
+        w5 = abs(prices[5] - prices[4])
+        out["diag_w5_lt_w3"] = (w5 < w3) if w3 > 0 else False
+    return out
+
+
 def evaluate_zigzag(prices: list[float], direction: Direction) -> dict[str, bool]:
     """Zigzag A-B-C. The structural constraint we enforce: wave B does not
     retrace beyond the origin of wave A (else it is not a zigzag).

@@ -85,6 +85,73 @@ def score_zigzag(prices: list[float], direction: Direction) -> float:
     return round(sum(parts) / len(parts), 4) if parts else 0.0
 
 
+def score_flat(prices: list[float], direction: Direction) -> float:
+    """0..1 Fibonacci-fit for a flat correction (A-B-C, 3-3-5 internal).
+
+    B ideally retraces ~100% of A (regular flat) or 105-138% (expanded flat).
+    C ideally equals A (100%) or extends to 1.618×A.
+    """
+    parts: list[float] = []
+    a = abs(prices[1] - prices[0]) if len(prices) >= 2 else 0.0
+    if len(prices) >= 3 and a:
+        b_ret = abs(prices[2] - prices[1]) / a
+        # Regular flat: B ≈ 0.90-1.05; expanded flat: B 1.05-1.382
+        parts.append(max(_band(b_ret, 0.90, 1.05, 1.00),
+                         _band(b_ret, 1.05, 1.382, 1.236, width=0.20)))
+    if len(prices) >= 4 and a:
+        c = abs(prices[3] - prices[2]) / a
+        # C ≈ 1.0×A (regular) or 1.618×A (extended)
+        parts.append(max(_band(c, 0.85, 1.15, 1.00),
+                         _band(c, 1.40, 1.80, 1.618)))
+    return round(sum(parts) / len(parts), 4) if parts else 0.0
+
+
+def score_triangle(prices: list[float], direction: Direction) -> float:
+    """0..1 Fibonacci-fit for a contracting triangle (A-B-C-D-E).
+
+    Each successive leg contracts toward the apex. The ideal contraction ratio
+    is 0.618 (golden ratio) — each leg ≈ 0.618× the leg before it.
+    """
+    parts: list[float] = []
+    legs = [abs(prices[i + 1] - prices[i]) for i in range(len(prices) - 1)]
+    for i in range(1, len(legs)):
+        if legs[i - 1] > 0:
+            ratio = legs[i] / legs[i - 1]
+            # Ideal: each leg ≈ 0.618× previous; real triangles: 0.50-0.85
+            parts.append(_band(ratio, 0.40, 0.90, 0.618, width=0.25))
+    return round(sum(parts) / len(parts), 4) if parts else 0.0
+
+
+def score_diagonal(prices: list[float], direction: Direction) -> float:
+    """0..1 Fibonacci-fit for a contracting diagonal (wedge).
+
+    Waves contract: w3 ideally 0.618×w1, w5 ideally 0.618×w3.
+    Corrective waves (w2, w4) retrace deeply: 0.618-0.786 of the preceding
+    motive wave, creating the overlap with the prior motive wave.
+    """
+    parts: list[float] = []
+    w1 = abs(prices[1] - prices[0]) if len(prices) >= 2 else 0.0
+    if len(prices) >= 3 and w1:
+        w2r = abs(prices[2] - prices[1]) / w1
+        # W2 retraces 0.618-0.786 of W1 (deep, typical of diagonal)
+        parts.append(_band(w2r, 0.618, 0.90, 0.786, width=0.20))
+    if len(prices) >= 4 and w1:
+        w3 = abs(prices[3] - prices[2]) / w1
+        # W3 ≈ 0.618×W1 (shorter than W1 — defines contracting diagonal)
+        parts.append(_band(w3, 0.40, 0.85, 0.618, width=0.20))
+    if len(prices) >= 5:
+        w3_abs = abs(prices[3] - prices[2])
+        if w3_abs:
+            w4r = abs(prices[4] - prices[3]) / w3_abs
+            # W4 retraces 0.618-0.786 of W3 (deep, creates W1 overlap)
+            parts.append(_band(w4r, 0.618, 0.90, 0.786, width=0.20))
+    if len(prices) >= 6 and w1:
+        w5 = abs(prices[5] - prices[4]) / w1
+        # W5 ≈ 0.618×W1 or shorter (continuing contraction)
+        parts.append(_band(w5, 0.30, 0.75, 0.618, width=0.20))
+    return round(sum(parts) / len(parts), 4) if parts else 0.0
+
+
 def personality_bonus(prices: list[float], direction: Direction,
                       last_price: float, current_wave: str) -> float:
     """Bonus score [0, 1] for how far the open wave has confirmed itself.

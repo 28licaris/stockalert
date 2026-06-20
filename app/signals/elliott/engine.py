@@ -23,7 +23,14 @@ from app.signals.elliott.nesting import apply_nesting
 from app.signals.elliott.schemas import WaveCandidate, WaveLabeling, WaveScenario
 
 _IMPULSE_LABELS = ["0", "1", "2", "3", "4", "5"]
-_ZIGZAG_LABELS = ["0", "A", "B", "C"]
+_ZIGZAG_LABELS  = ["0", "A", "B", "C"]
+_FLAT_LABELS     = ["0", "A", "B", "C"]       # same shape as zigzag
+_TRIANGLE_LABELS = ["0", "A", "B", "C", "D", "E"]
+_DIAGONAL_LABELS = ["0", "1", "2", "3", "4", "5"]  # motive, same as impulse
+
+# Discount applied to diagonal candidates: valid but less common and harder to
+# validate without sub-wave detail.
+_DIAGONAL_PRIOR = 0.88
 
 
 def alternate(pivots: list[Pivot]) -> list[Pivot]:
@@ -74,7 +81,7 @@ _ZIGZAG_PRIOR = 0.92
 
 
 class WaveEngine:
-    version = "ew3.8.0"  # V3-3: labeled alternates + hard-gate scenario output
+    version = "ew3.9.0"  # V3-5: structure catalog — flat, triangle, diagonal, truncation
 
     def __init__(self, top_k: int = 3, min_confidence: float = 0.5,
                  secondary_floor: float = 0.15) -> None:
@@ -104,6 +111,9 @@ class WaveEngine:
                 run = alt[start:]
                 cands.extend(self._impulse(run, last_price))
                 cands.extend(self._zigzag(run, last_price))
+                cands.extend(self._flat(run, last_price))
+                cands.extend(self._triangle(run, last_price))
+                cands.extend(self._diagonal(run, last_price))
 
         # V3-1/V3-6: nesting (subdivision validation + proportionality) and
         # degree coherence (recency + wave-size relativity) — applied before
@@ -197,7 +207,16 @@ class WaveEngine:
                 conf *= 0.5
             targets = fwd
 
-        rat = _impulse_rationale(direction, current, prices, invalid, targets)
+        # V3-5: truncation — wave 5 fails to exceed wave 3's price level.
+        # Valid count, slightly penalised; signals exhaustion of the trend.
+        is_truncated = False
+        if current == "complete" and len(prices) == 6:
+            is_truncated = (prices[5] - prices[3]) * s < 0
+            if is_truncated:
+                conf *= 0.88
+
+        rat = _impulse_rationale(direction, current, prices, invalid, targets,
+                                 is_truncated=is_truncated)
         forward = project_forward(prices, direction, "impulse", current) or {}
         return [WaveCandidate(
             structure="impulse", direction=direction, current_wave=current,
@@ -205,6 +224,191 @@ class WaveEngine:
             rules_passed=passed, rule_score=1.0, fib_score=fib_score,
             confidence=round(conf, 3), invalidation_price=invalid,
             fib_targets=targets, rationale=rat, forward=forward,
+            is_truncated=is_truncated,
+        )]
+
+    def _flat(self, run: list[Pivot], last_price: float) -> list[WaveCandidate]:
+        """V3-5: flat A-B-C correction (B retraces ≥90% of A).
+
+        Same 3–4 pivot shape as zigzag, but B comes back near or past the
+        origin (regular flat ≈100%, expanded flat >100%). Fib scoring
+        distinguishes them in ranking: a true flat scores near-zero on
+        score_zigzag and high on score_flat, and vice-versa.
+        """
+        m = len(run)
+        if m < 3 or m > 4:
+            return []
+        direction = "up" if run[0].kind == "low" else "down"
+        s = 1 if direction == "up" else -1
+        prices = [p.price for p in run]
+
+        passed = rules.evaluate_flat(prices, direction)
+        if not passed or not all(passed.values()):
+            return []
+
+        letter = {3: "C", 4: "complete"}.get(m, "C")
+        wave_idx = {"A": 1, "B": 2, "C": 3}.get(letter, 3)
+        leg_ok = (letter == "complete") or _leg_ok(last_price, prices[-1],
+                                                    _expected_sign(s, wave_idx))
+
+        fib_score = fib.score_flat(prices, direction)
+        conf = (_structure_weight(m) * (0.40 + 0.55 * fib_score)
+                * (1.0 if leg_ok else 0.4) * _ZIGZAG_PRIOR)
+
+        a = abs(prices[1] - prices[0])
+        targets: dict[str, float] = {}
+        invalid = round(prices[0], 2)
+        if letter == "C" and a:
+            anchor = prices[2]  # project C from B's end
+            targets = {"C=1.0xA": round(anchor + s * a, 2),
+                       "C=1.618xA": round(anchor + s * 1.618 * a, 2)}
+            invalid = round(prices[2], 2)  # stop: beyond B's termination
+
+        if (last_price - invalid) * s <= 0:
+            return []
+        if letter == "complete":
+            conf *= _room_factor(last_price, invalid)
+
+        art = "an" if direction == "up" else "a"
+        flat_type = "expanded " if a and abs(prices[2] - prices[1]) / a > 1.05 else ""
+        if letter == "complete":
+            rat = (f"{art.capitalize()} {direction} {flat_type}flat (A-B-C) appears complete — "
+                   f"the correction may be ending. Stop {invalid}.")
+        else:
+            rat = (f"In wave {letter} of {art} {direction} {flat_type}flat (A-B-C). "
+                   f"Stop {invalid}."
+                   + (f" Target {next(iter(targets.values()))}." if targets else ""))
+        return [WaveCandidate(
+            structure="flat", direction=direction, current_wave=letter,
+            degree=run[0].degree, pivots=run, labels=_FLAT_LABELS[:m],
+            rules_passed=passed, rule_score=1.0, fib_score=fib_score,
+            confidence=round(conf, 3), invalidation_price=invalid,
+            fib_targets=targets, rationale=rat,
+        )]
+
+    def _triangle(self, run: list[Pivot], last_price: float) -> list[WaveCandidate]:
+        """V3-5: contracting triangle A-B-C-D-E (corrective, converging trendlines).
+
+        Appears in wave-4, wave-B, or wave-X positions. All internal waves are
+        3-wave structures. Post-triangle thrust ≈ |A|, in the OPPOSITE direction
+        to the triangle's first wave (the trend resumes after E completes).
+        """
+        m = len(run)
+        if m < 4 or m > 6:
+            return []
+        direction = "up" if run[0].kind == "low" else "down"
+        s = 1 if direction == "up" else -1
+        prices = [p.price for p in run]
+
+        passed = rules.evaluate_triangle(prices, direction)
+        if not passed or not all(passed.values()):
+            return []
+
+        current_map = {4: "D", 5: "E", 6: "complete"}
+        current = current_map.get(m, "E")
+        wave_letter_to_num = {"A": 1, "B": 2, "C": 3, "D": 4, "E": 5}
+        wave_num = wave_letter_to_num.get(current, 5) if current != "complete" else 5
+        leg_ok = (current == "complete") or _leg_ok(last_price, prices[-1],
+                                                     _expected_sign(s, wave_num))
+
+        fib_score = fib.score_triangle(prices, direction)
+        conf = (_structure_weight(m) * (0.40 + 0.55 * fib_score)
+                * (1.0 if leg_ok else 0.4) * _ZIGZAG_PRIOR)
+
+        a_size = abs(prices[1] - prices[0])
+        targets: dict[str, float] = {}
+        # Invalidation: origin (prices[0]) — a break back through the origin
+        # means the sideways consolidation is not a triangle.
+        invalid = round(prices[0], 2)
+
+        # Post-triangle thrust target: from E's anchor, project |A| in the
+        # OPPOSITE direction (the trend that resumes after the triangle).
+        if current in ("E", "complete") and a_size:
+            anchor = prices[-1]
+            thrust = round(anchor - s * a_size, 2)   # -s = opposite of triangle direction
+            fwd = (thrust - last_price) * (-s) > 0   # is it still forward?
+            if fwd:
+                targets = {"thrust=1.0xA": thrust}
+
+        if (last_price - invalid) * s <= 0:
+            return []
+        if current == "complete":
+            conf *= _room_factor(last_price, invalid)
+
+        rat_parts = []
+        if current == "complete":
+            rat_parts.append(f"Contracting triangle (A-B-C-D-E) appears complete.")
+        else:
+            rat_parts.append(f"In wave {current} of a contracting triangle (A-B-C-D-E).")
+        rat_parts.append(f"Stop {invalid}.")
+        if targets:
+            rat_parts.append(f"Post-triangle thrust target {next(iter(targets.values()))}.")
+        return [WaveCandidate(
+            structure="triangle", direction=direction, current_wave=current,
+            degree=run[0].degree, pivots=run, labels=_TRIANGLE_LABELS[:m],
+            rules_passed=passed, rule_score=1.0, fib_score=fib_score,
+            confidence=round(conf, 3), invalidation_price=invalid,
+            fib_targets=targets, rationale=" ".join(rat_parts),
+        )]
+
+    def _diagonal(self, run: list[Pivot], last_price: float) -> list[WaveCandidate]:
+        """V3-5: contracting diagonal (ending or leading, wedge shape).
+
+        A 5-wave MOTIVE structure where wave 4 overlaps wave 1 — the EWT
+        exception to rule 3. Waves contract: w3 < w1, w5 < w3, w4 < w2.
+        Signals exhaustion when appearing as wave 5 (ending diagonal).
+        Rule 1 (w2 no full retrace) still holds.
+        """
+        m = len(run)
+        if m < 5 or m > 6:
+            return []
+        direction = "up" if run[0].kind == "low" else "down"
+        s = 1 if direction == "up" else -1
+        prices = [p.price for p in run]
+
+        passed = rules.evaluate_diagonal(prices, direction)
+        if not passed or not all(passed.values()):
+            return []
+
+        ow = m if m <= 5 else 6
+        current = str(ow) if ow <= 5 else "complete"
+        leg_ok = (ow > 5) or _leg_ok(last_price, prices[-1], _expected_sign(s, ow))
+
+        fib_score = fib.score_diagonal(prices, direction)
+        conf = (_structure_weight(m) * (0.40 + 0.55 * fib_score)
+                * (1.0 if leg_ok else 0.4) * _DIAGONAL_PRIOR)
+
+        wave_int = ow if ow <= 5 else 5
+        targets = fib.impulse_targets(prices, direction, wave_int)
+        invalid = fib.impulse_invalidation(prices, direction, wave_int)
+
+        if current != "complete" and (last_price - invalid) * s <= 0:
+            return []
+        if current == "complete":
+            conf *= _room_factor(last_price, invalid)
+
+        # Forward-only targets (same logic as impulse wave-5)
+        if current == "5":
+            fwd = {k: v for k, v in targets.items() if (v - last_price) * s > 0}
+            if not fwd:
+                conf *= 0.5
+            targets = fwd
+
+        art = "an" if direction == "up" else "a"
+        if current == "complete":
+            rat = (f"{art.capitalize()} {direction} contracting diagonal appears complete — "
+                   f"expect reversal. Structural stop {invalid}.")
+        else:
+            rat = (f"In wave {current} of {art} {direction} contracting diagonal. "
+                   f"Wave 4 overlaps wave 1 — wedging structure. "
+                   f"Stop {invalid}."
+                   + (f" Target {next(iter(targets.values()))}." if targets else ""))
+        return [WaveCandidate(
+            structure="diagonal", direction=direction, current_wave=current,
+            degree=run[0].degree, pivots=run, labels=_DIAGONAL_LABELS[:m],
+            rules_passed=passed, rule_score=1.0, fib_score=fib_score,
+            confidence=round(conf, 3), invalidation_price=invalid,
+            fib_targets=targets, rationale=rat, is_diagonal=True,
         )]
 
     def _zigzag(self, run: list[Pivot], last_price: float) -> list[WaveCandidate]:
@@ -322,11 +526,16 @@ def _build_scenarios(ranked: list[WaveCandidate]) -> list[WaveScenario]:
 
 
 def _impulse_rationale(direction: str, current: str, prices: list[float],
-                       invalid: float, targets: dict[str, float]) -> str:
+                       invalid: float, targets: dict[str, float],
+                       is_truncated: bool = False) -> str:
     art = "an" if direction == "up" else "a"
     if current == "complete":
-        return (f"Five-wave {direction} impulse appears complete — expect an "
+        base = (f"Five-wave {direction} impulse appears complete — expect an "
                 f"A-B-C correction. Structural stop {invalid}.")
+        if is_truncated:
+            reversal_side = "downside" if direction == "up" else "upside"
+            base += f" Wave 5 truncated (failed to exceed wave 3) — {reversal_side} reversal risk elevated."
+        return base
     bits = [f"In wave {current} of {art} {direction} impulse."]
     if current == "3" and len(prices) >= 3 and (prices[1] - prices[0]):
         w2r = abs(prices[1] - prices[2]) / abs(prices[1] - prices[0])
