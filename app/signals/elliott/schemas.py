@@ -38,6 +38,9 @@ class WaveCandidate(BaseModel):
     # finer (motive→5, corrective→3). 1.0 = no finer degree to check / fully valid.
     nesting_score: float = 1.0
     subwaves: list[dict] = Field(default_factory=list)
+    # v3 forward plan (V3-2): the projection of the wave being moved INTO
+    # (in wave 4 → wave 5), as a confluence zone + invalidation.
+    forward: dict = Field(default_factory=dict)
 
 
 class WaveLabeling(BaseModel):

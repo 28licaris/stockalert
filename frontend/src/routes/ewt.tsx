@@ -157,6 +157,19 @@ function CountCard({
               <Row key={k} label={k} value={fmtPrice(v)} />
             ))}
           </dl>
+          {count.forward?.next_move ? (
+            <div className="mt-2 rounded-sm border border-accent/40 bg-accent/5 px-2 py-1.5">
+              <div className="text-[10px] uppercase tracking-wider text-fg-subtle">
+                Next move
+              </div>
+              <div className="font-mono text-xs text-fg-base">{count.forward.next_move}</div>
+              {count.forward.target_low != null ? (
+                <div className="font-mono text-xs text-fg-muted">
+                  → {fmtPrice(count.forward.target_low)}–{fmtPrice(count.forward.target_high)}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {count.rationale ? (
             <p className="mt-2 text-xs leading-relaxed text-fg-subtle">{count.rationale}</p>
           ) : null}

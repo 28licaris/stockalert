@@ -43,12 +43,16 @@ def _ensure_namespace(catalog: Catalog, asset_class: str) -> None:
 def _evolve(table: Table) -> None:
     """Idempotent forward schema evolution for tables created before a column
     was added (e.g. `as_of_price`, EW-6). No-op once the column exists."""
-    from pyiceberg.types import DoubleType
+    from pyiceberg.types import DoubleType, StringType
 
     have = set(table.schema().column_names)
     with table.update_schema() as upd:
         if "as_of_price" not in have:
             upd.add_column("as_of_price", DoubleType(), required=False)
+        if "p_nesting_score" not in have:        # V3-1
+            upd.add_column("p_nesting_score", DoubleType(), required=False)
+        if "p_forward" not in have:              # V3-2 (JSON)
+            upd.add_column("p_forward", StringType(), required=False)
 
 
 def ensure_elliott_wave_labels(asset_class: str = "equity",

@@ -18,6 +18,7 @@ from typing import Optional
 
 from app.indicators.pivots import Pivot
 from app.signals.elliott import fib, rules
+from app.signals.elliott.forward import project_forward
 from app.signals.elliott.nesting import apply_nesting
 from app.signals.elliott.schemas import WaveCandidate, WaveLabeling
 
@@ -183,12 +184,13 @@ class WaveEngine:
             targets = fwd
 
         rat = _impulse_rationale(direction, current, prices, invalid, targets)
+        forward = project_forward(prices, direction, "impulse", current) or {}
         return [WaveCandidate(
             structure="impulse", direction=direction, current_wave=current,
             degree=run[0].degree, pivots=run, labels=_IMPULSE_LABELS[:m],
             rules_passed=passed, rule_score=1.0, fib_score=fib_score,
             confidence=round(conf, 3), invalidation_price=invalid,
-            fib_targets=targets, rationale=rat,
+            fib_targets=targets, rationale=rat, forward=forward,
         )]
 
     def _zigzag(self, run: list[Pivot], last_price: float) -> list[WaveCandidate]:

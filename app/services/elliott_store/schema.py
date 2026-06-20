@@ -53,6 +53,8 @@ ELLIOTT_WAVE_LABELS_SCHEMA = Schema(
     NestedField(13, "p_targets", StringType(), required=False),
     NestedField(14, "p_pivots", StringType(), required=False),
     NestedField(15, "p_rationale", StringType(), required=False),
+    NestedField(29, "p_nesting_score", DoubleType(), required=False),
+    NestedField(30, "p_forward", StringType(), required=False),
     # secondary count
     NestedField(16, "s_structure", StringType(), required=False),
     NestedField(17, "s_direction", StringType(), required=False),
@@ -101,6 +103,8 @@ ELLIOTT_WAVE_LABELS_ARROW = pa.schema([
     pa.field("p_targets", pa.string(), nullable=True),
     pa.field("p_pivots", pa.string(), nullable=True),
     pa.field("p_rationale", pa.string(), nullable=True),
+    pa.field("p_nesting_score", pa.float64(), nullable=True),
+    pa.field("p_forward", pa.string(), nullable=True),
     pa.field("s_structure", pa.string(), nullable=True),
     pa.field("s_direction", pa.string(), nullable=True),
     pa.field("s_current_wave", pa.string(), nullable=True),
@@ -157,6 +161,8 @@ def _candidate_cols(c: Optional[WaveCandidate], prefix: str, *, full: bool) -> d
     if full:
         out[f"{prefix}_degree"] = c.degree
         out[f"{prefix}_pivots"] = json.dumps([p.model_dump(mode="json") for p in c.pivots])
+        out[f"{prefix}_nesting_score"] = c.nesting_score
+        out[f"{prefix}_forward"] = json.dumps(c.forward)
     return out
 
 

@@ -39,6 +39,7 @@ class WaveCountView(BaseModel):
     targets: dict[str, float] = Field(default_factory=dict)
     rationale: str = ""
     nesting_score: float = 1.0
+    forward: dict = Field(default_factory=dict)
     pivots: list[dict] = Field(default_factory=list)
 
 
@@ -64,7 +65,7 @@ def _from_labeling(lab: WaveLabeling, source: str) -> WaveStateResponse:
             structure=c.structure, direction=c.direction, current_wave=c.current_wave,
             degree=c.degree, probability=c.probability, confidence=c.confidence,
             invalidation=c.invalidation_price, targets=c.fib_targets, rationale=c.rationale,
-            nesting_score=c.nesting_score,
+            nesting_score=c.nesting_score, forward=c.forward,
             pivots=[p.model_dump(mode="json") for p in c.pivots] if with_pivots else [],
         )
     return WaveStateResponse(
@@ -98,6 +99,8 @@ def _view_from_row(row: dict, prefix: str, with_pivots: bool) -> Optional[WaveCo
         invalidation=_clean(row.get(f"{prefix}_invalidation")),
         targets=json.loads(_clean(row.get(f"{prefix}_targets")) or "{}"),
         rationale=_clean(row.get(f"{prefix}_rationale")) or "",
+        nesting_score=_clean(row.get(f"{prefix}_nesting_score")) or 1.0,
+        forward=json.loads(_clean(row.get(f"{prefix}_forward")) or "{}"),
         pivots=json.loads(_clean(row.get(f"{prefix}_pivots")) or "[]") if with_pivots else [],
     )
 

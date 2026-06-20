@@ -22,6 +22,14 @@ export interface WavePivotRow {
   confirmed_at_index: number;
 }
 
+export interface WaveForward {
+  next_move?: string;
+  target_low?: number;
+  target_high?: number;
+  target_basis?: string[];
+  invalidation?: number;
+}
+
 export interface WaveCountView {
   structure: string;
   direction: string;
@@ -32,6 +40,8 @@ export interface WaveCountView {
   invalidation: number | null;
   targets: Record<string, number>;
   rationale: string;
+  nesting_score: number;
+  forward: WaveForward;
   pivots: WavePivotRow[];
 }
 
