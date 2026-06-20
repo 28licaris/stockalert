@@ -20,7 +20,7 @@ from app.indicators.pivots import Pivot
 from app.signals.elliott import fib, rules
 from app.signals.elliott.forward import project_forward
 from app.signals.elliott.nesting import apply_nesting
-from app.signals.elliott.schemas import WaveCandidate, WaveLabeling
+from app.signals.elliott.schemas import WaveCandidate, WaveLabeling, WaveScenario
 
 _IMPULSE_LABELS = ["0", "1", "2", "3", "4", "5"]
 _ZIGZAG_LABELS = ["0", "A", "B", "C"]
@@ -74,7 +74,7 @@ _ZIGZAG_PRIOR = 0.92
 
 
 class WaveEngine:
-    version = "ew3.7.0"  # V3-7: personality bonus (in-progress wave extension)
+    version = "ew3.8.0"  # V3-3: labeled alternates + hard-gate scenario output
 
     def __init__(self, top_k: int = 3, min_confidence: float = 0.5,
                  secondary_floor: float = 0.15) -> None:
@@ -134,6 +134,10 @@ class WaveEngine:
                 c.probability = round(c.probability * 0.7, 3)
         surfaced = sum(c.probability for c in surfaced_counts)
 
+        # V3-3: build scenario list and populate confirms_at / scenario_label
+        ranked_all = [c for c in [primary, secondary] + alternates if c is not None]
+        scenarios = _build_scenarios(ranked_all)
+
         return WaveLabeling(
             symbol=symbol, interval=interval, as_of=as_of, as_of_index=as_of_index,
             as_of_price=last_price, n_confirmed_swings=n_swings,
@@ -142,6 +146,7 @@ class WaveEngine:
             confidence=primary.confidence if primary else 0.0,
             uncertainty=round(max(0.0, 1.0 - surfaced), 3),
             engine_ver=self.version,
+            scenarios=scenarios,
         )
 
     # -- candidate builders -------------------------------------------------
@@ -274,6 +279,46 @@ def _normalize_probabilities(counts: list[WaveCandidate]) -> None:
     s = sum(c.confidence for c in counts)
     for c in counts:
         c.probability = round(c.confidence * (0.9 / s), 3) if s > 0.9 else round(c.confidence, 3)
+
+
+def _build_scenarios(ranked: list[WaveCandidate]) -> list[WaveScenario]:
+    """Build V3-3 scenario list and stamp confirms_at / scenario_label on each candidate."""
+    scenarios: list[WaveScenario] = []
+    for i, c in enumerate(ranked):
+        rank = i + 1
+        label = {1: "Primary", 2: "Secondary"}.get(rank, f"Alternate {rank - 2}")
+
+        if rank == 1:
+            confirms_at = None
+            what_confirms = "Currently primary — in effect now."
+        else:
+            prev = ranked[i - 1]
+            s_prev = 1 if prev.direction == "up" else -1
+            side = "below" if s_prev > 0 else "above"
+            confirms_at = prev.invalidation_price
+            what_confirms = (
+                f"Primary count ({prev.direction} {prev.structure}, "
+                f"wave {prev.current_wave}) invalidated — price {side} {prev.invalidation_price}."
+            )
+
+        s = 1 if c.direction == "up" else -1
+        inv_side = "below" if s > 0 else "above"
+        what_invalidates = f"Price {inv_side} {c.invalidation_price}."
+
+        next_target = next(iter(c.fib_targets.values()), None) if c.fib_targets else None
+
+        # Stamp candidate in-place for downstream consumers
+        c.confirms_at = confirms_at
+        c.scenario_label = label
+
+        scenarios.append(WaveScenario(
+            rank=rank, label=label, structure=c.structure, direction=c.direction,
+            current_wave=c.current_wave, probability=c.probability,
+            invalidation=c.invalidation_price, confirms_at=confirms_at,
+            next_target=next_target, what_confirms=what_confirms,
+            what_invalidates=what_invalidates, rationale=c.rationale,
+        ))
+    return scenarios
 
 
 def _impulse_rationale(direction: str, current: str, prices: list[float],

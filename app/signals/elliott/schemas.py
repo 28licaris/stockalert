@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from app.indicators.pivots import Pivot  # re-exported for consumers
 
-__all__ = ["Pivot", "WaveCandidate", "WaveLabeling"]
+__all__ = ["Pivot", "WaveCandidate", "WaveLabeling", "WaveScenario"]
 
 
 class WaveCandidate(BaseModel):
@@ -41,6 +41,34 @@ class WaveCandidate(BaseModel):
     # v3 forward plan (V3-2): the projection of the wave being moved INTO
     # (in wave 4 → wave 5), as a confluence zone + invalidation.
     forward: dict = Field(default_factory=dict)
+    # v3 labeled alternates (V3-3): scenario-level fields.
+    # confirms_at: the price that "flips" to this count (= previous count's
+    #   invalidation_price). None for the primary — it's already in effect.
+    # scenario_label: "Primary" | "Secondary" | "Alternate 1" | …
+    confirms_at: Optional[float] = None
+    scenario_label: str = ""
+
+
+class WaveScenario(BaseModel):
+    """Trader-facing scenario summary for one count.
+
+    V3-3 (R5): each surfaced count — primary + secondary + alternates — is
+    packaged as a tradeable scenario with explicit gate prices. A count "flips"
+    to the next when the current count's `invalidation` is breached.
+    """
+
+    rank: int                   # 1 = primary, 2 = secondary, 3+ = alternates
+    label: str                  # "Primary", "Secondary", "Alternate 1", …
+    structure: str
+    direction: str
+    current_wave: str
+    probability: float
+    invalidation: float         # hard gate — the stop price
+    confirms_at: Optional[float]  # None for primary; prev count's invalidation for others
+    next_target: Optional[float]  # first fib_target, if any
+    what_confirms: str          # human text — what causes this count to become active
+    what_invalidates: str       # human text — what kills this count
+    rationale: str
 
 
 class WaveLabeling(BaseModel):
@@ -49,6 +77,9 @@ class WaveLabeling(BaseModel):
     `primary`/`secondary` are the two surfaced paths; `alternates` holds any
     further valid counts the engine produced. `uncertainty` is the probability
     mass left over after primary+secondary — the honest "no clear count" signal.
+
+    V3-3: `scenarios` is the ordered trader-facing list — primary first, then
+    secondary, then alternates, each with confirms_at/what_confirms/what_invalidates.
     """
 
     symbol: str
@@ -64,3 +95,5 @@ class WaveLabeling(BaseModel):
     confidence: float = 0.0
     uncertainty: float = 1.0
     engine_ver: str
+    # V3-3: ordered scenario list (primary → secondary → alternates)
+    scenarios: list[WaveScenario] = Field(default_factory=list)
