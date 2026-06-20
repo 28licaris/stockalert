@@ -29,6 +29,21 @@ from app.signals.elliott.schemas import WaveLabeling
 
 logger = logging.getLogger(__name__)
 
+# Per-interval bar lookback. Intraday bars are dense — pulling 400 days of 5m
+# bars produces ~30k rows, most of which are irrelevant noise for EWT and slow
+# pivot detection. These windows give roughly the same *swing count* across
+# timeframes as 400 daily bars.
+_INTERVAL_LOOKBACK: dict[str, int] = {
+    "1d":  400,
+    "4h":  120,
+    "1h":   90,
+    "30m":  30,
+    "15m":  20,
+    "5m":   10,
+    "1m":    3,
+}
+_DEFAULT_LOOKBACK = 400
+
 
 def current_git_sha() -> str:
     """Best-effort git SHA for reproducibility; empty on failure."""
@@ -50,10 +65,16 @@ def _load_bars(symbol: str, interval: str, lookback_days: int) -> Optional[pd.Da
     return df.sort_values("timestamp").set_index("timestamp")
 
 
-def compute_labeling(symbol: str, interval: str = "1d", *, lookback_days: int = 400,
+def compute_labeling(symbol: str, interval: str = "1d", *, lookback_days: Optional[int] = None,
                      base_k: int = 4) -> Optional[WaveLabeling]:
-    """Label the latest bar of `symbol`@`interval`. None if no usable bars."""
-    df = _load_bars(symbol, interval, lookback_days)
+    """Label the latest bar of `symbol`@`interval`. None if no usable bars.
+
+    `lookback_days` defaults to `_INTERVAL_LOOKBACK[interval]` so callers that
+    only pass a symbol+interval get the right window automatically.  Pass an
+    explicit value to override (e.g. CLI deep-history runs).
+    """
+    days = lookback_days if lookback_days is not None else _INTERVAL_LOOKBACK.get(interval, _DEFAULT_LOOKBACK)
+    df = _load_bars(symbol, interval, days)
     if df is None or len(df) < 2 * base_k + 5:
         return None
     close, high, low = df["close"], df["high"], df["low"]
