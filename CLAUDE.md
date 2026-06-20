@@ -116,6 +116,8 @@ deleted 2026-05-21 (CV18).
 
 AWS only. Glue + S3 (Iceberg warehouse), CodeBuild for long backfills
 (`scripts/codebuild/`), EMR Serverless for the weekly Spark adjustment
-job. No CDK / Terraform. Self-hosted ClickHouse.
+job. Terraform for deploy infra (dev/staging/prod — see
+[`docs/aws_deployment_plan.md`](docs/aws_deployment_plan.md)); no CDK.
+Self-hosted ClickHouse.
 Secrets via `.env` (gitignored; template in `.env.example`, docs in
 `CONFIG.md`).
