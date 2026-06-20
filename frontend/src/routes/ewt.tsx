@@ -8,9 +8,11 @@ import { useLakeBars } from "@/api/queries";
 import {
   useWaveState,
   useWaveAlerts,
+  useIntradayWaveAlerts,
   waveLabel,
   type WaveAlert,
   type WaveCountView,
+  type WaveScenario,
 } from "@/api/wave";
 import { useUserSetting } from "@/lib/storage";
 import { fmtPrice } from "@/lib/fmt";
@@ -19,18 +21,27 @@ import { cn } from "@/lib/utils";
 const INTERVALS = ["1d", "1h", "15m", "5m"] as const;
 type Interval = (typeof INTERVALS)[number];
 
+const SCAN_INTERVALS = ["1d", "1h", "15m", "5m"] as const;
+type ScanInterval = (typeof SCAN_INTERVALS)[number];
+
 /**
- * Elliott Wave analysis page (EW-5).
+ * Elliott Wave analysis page (EW-5 / V3-3).
  *
- * The wave overlay (primary count path + invalidation/target price lines) sits
- * on the shared OhlcvChart; the side panel shows the primary + secondary counts
- * with probabilities and the honest "uncertainty" remainder. Counts come from
- * `/api/v1/wave` (backend=auto: stored nightly row, else a live recompute).
+ * Detail view (ticker selected):
+ *   - Wave overlay on the chart (primary count path + price levels).
+ *   - Aside panel with two tabs: "Counts" (primary/secondary/uncertainty) and
+ *     "Scenarios" (V3-3: full ordered list with gate prices and plain-English
+ *     confirms/invalidates text).
+ *
+ * Picker view (no ticker):
+ *   - Symbol search.
+ *   - Scan list with interval tabs: Daily / 1h / 15m / 5m.
  */
 export function EwtPage() {
   const params = useParams();
   const ticker = (params.ticker ?? "").toUpperCase();
   const [interval, setInterval] = useUserSetting<Interval>("ewt.interval", "1d");
+  const [asideTab, setAsideTab] = useState<"counts" | "scenarios">("counts");
 
   const bars = useLakeBars(ticker || undefined, interval);
   const wave = useWaveState(ticker || undefined, interval);
@@ -40,6 +51,7 @@ export function EwtPage() {
   const primary = wave.data?.primary ?? null;
   const overlay = buildOverlay(primary);
   const latest = bars.data?.at(-1);
+  const scenarios = wave.data?.scenarios ?? [];
 
   return (
     <div className="flex h-full flex-col gap-4 p-4 md:p-6">
@@ -74,20 +86,141 @@ export function EwtPage() {
         </div>
 
         <aside className="space-y-3">
+          {/* Tab switcher */}
+          <div
+            role="tablist"
+            aria-label="Analysis view"
+            className="inline-flex w-full rounded-md border border-border bg-bg-subtle p-0.5"
+          >
+            {(["counts", "scenarios"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                role="tab"
+                aria-selected={asideTab === t}
+                onClick={() => setAsideTab(t)}
+                className={cn(
+                  "flex-1 rounded-sm py-1 text-xs font-medium capitalize",
+                  asideTab === t
+                    ? "bg-accent text-accent-fg"
+                    : "text-fg-muted hover:bg-bg-muted hover:text-fg-base",
+                )}
+              >
+                {t}
+                {t === "scenarios" && scenarios.length > 0 ? (
+                  <span className="ml-1 font-mono opacity-60">({scenarios.length})</span>
+                ) : null}
+              </button>
+            ))}
+          </div>
+
           {wave.isLoading || wave.isFetching ? (
             <p className="text-sm text-fg-muted">Computing wave count…</p>
-          ) : (
+          ) : asideTab === "counts" ? (
             <>
               <CountCard title="Primary" count={primary} accent />
               <CountCard title="Secondary" count={wave.data?.secondary ?? null} />
               <UncertaintyBar value={wave.data?.uncertainty ?? 1} />
             </>
+          ) : (
+            <ScenariosPanel scenarios={scenarios} />
           )}
         </aside>
       </div>
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Scenario panel (V3-3)
+// ---------------------------------------------------------------------------
+
+function ScenariosPanel({ scenarios }: { scenarios: WaveScenario[] }) {
+  if (scenarios.length === 0) {
+    return (
+      <p className="text-sm text-fg-muted">No scenarios — recompute at a finer interval.</p>
+    );
+  }
+  return (
+    <div className="space-y-2.5">
+      {scenarios.map((s) => (
+        <ScenarioCard key={s.rank} scenario={s} />
+      ))}
+    </div>
+  );
+}
+
+function ScenarioCard({ scenario: s }: { scenario: WaveScenario }) {
+  const isPrimary = s.rank === 1;
+  return (
+    <div
+      className={cn(
+        "rounded-md border bg-bg-subtle p-3",
+        isPrimary ? "border-accent/50" : "border-border",
+      )}
+    >
+      {/* Header row */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <span
+            className={cn(
+              "rounded-sm px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+              isPrimary ? "bg-accent/20 text-accent" : "bg-bg-muted text-fg-muted",
+            )}
+          >
+            {s.label}
+          </span>
+          <span
+            className={cn(
+              "rounded-sm px-1.5 py-0.5 text-[10px] uppercase",
+              s.direction === "up" ? "bg-up/15 text-up" : "bg-down/15 text-down",
+            )}
+          >
+            {s.direction} · w{s.current_wave}
+          </span>
+        </div>
+        <span className="font-mono text-xs text-fg-muted">
+          P {(s.probability * 100).toFixed(0)}%
+        </span>
+      </div>
+
+      {/* Structure */}
+      <div className="mt-1 font-mono text-xs text-fg-base capitalize">{s.structure}</div>
+
+      {/* Gate prices */}
+      <dl className="mt-2 space-y-0.5 text-xs text-fg-muted">
+        <Row label="Stop" value={fmtPrice(s.invalidation)} />
+        {s.next_target != null ? (
+          <Row label="Target" value={fmtPrice(s.next_target)} />
+        ) : null}
+        {s.confirms_at != null ? (
+          <Row label="Active above" value={fmtPrice(s.confirms_at)} />
+        ) : (
+          <div className="flex items-center gap-1 text-[10px] text-fg-subtle">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />
+            Active now
+          </div>
+        )}
+      </dl>
+
+      {/* Plain-English gate text */}
+      <div className="mt-2 space-y-1">
+        {s.what_confirms && !isPrimary ? (
+          <p className="text-[10px] leading-relaxed text-fg-subtle">
+            <span className="font-medium text-up">Confirms:</span> {s.what_confirms}
+          </p>
+        ) : null}
+        <p className="text-[10px] leading-relaxed text-fg-subtle">
+          <span className="font-medium text-down">Invalidates:</span> {s.what_invalidates}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
 
 function buildOverlay(primary: WaveCountView | null): WaveOverlay | null {
   if (!primary) return null;
@@ -241,6 +374,10 @@ function IntervalPicker({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Picker (no ticker selected)
+// ---------------------------------------------------------------------------
+
 function WavePicker() {
   const navigate = useNavigate();
   const [input, setInput] = useState("");
@@ -276,23 +413,61 @@ function WavePicker() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Scan list — daily + intraday tabs (EW-7)
+// ---------------------------------------------------------------------------
+
 function ScanList({ onPick }: { onPick: (sym: string) => void }) {
-  const alerts = useWaveAlerts("1d");
+  const [scanInterval, setScanInterval] = useUserSetting<ScanInterval>(
+    "ewt.scan_interval",
+    "1d",
+  );
+  const isIntraday = scanInterval !== "1d";
+  const daily = useWaveAlerts("1d");
+  const intraday = useIntradayWaveAlerts(scanInterval, undefined, isIntraday);
+  const q = isIntraday ? intraday : daily;
+
   return (
     <section>
-      <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-fg-subtle">
-        Active setups · daily
-      </h2>
-      {alerts.isLoading ? (
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
+          Active setups
+        </h2>
+        <div
+          role="tablist"
+          aria-label="Scan interval"
+          className="inline-flex rounded-md border border-border bg-bg-subtle p-0.5"
+        >
+          {SCAN_INTERVALS.map((i) => (
+            <button
+              key={i}
+              type="button"
+              role="tab"
+              aria-selected={scanInterval === i}
+              onClick={() => setScanInterval(i)}
+              className={cn(
+                "rounded-sm px-2 py-0.5 font-mono text-[10px]",
+                scanInterval === i
+                  ? "bg-accent text-accent-fg"
+                  : "text-fg-muted hover:bg-bg-muted hover:text-fg-base",
+              )}
+            >
+              {i}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {q.isLoading || q.isFetching ? (
         <p className="text-sm text-fg-muted">Scanning…</p>
-      ) : !alerts.data || alerts.data.length === 0 ? (
+      ) : !q.data || q.data.length === 0 ? (
         <p className="text-sm text-fg-muted">
           No high-probability setups right now (probability ≥ 60%, R:R ≥ 2).
         </p>
       ) : (
         <ul className="space-y-1.5">
-          {alerts.data.map((a) => (
-            <AlertRow key={`${a.symbol}-${a.interval}`} alert={a} onPick={onPick} />
+          {q.data.map((a) => (
+            <AlertRow key={`${a.symbol}-${a.interval}-${a.setup}`} alert={a} onPick={onPick} />
           ))}
         </ul>
       )}

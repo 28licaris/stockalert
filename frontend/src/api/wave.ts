@@ -56,6 +56,24 @@ export interface WaveStateResponse {
   uncertainty: number;
   engine_ver: string;
   source: string;
+  /** V3-3: ordered trader-facing scenarios (primary → secondary → alternates). */
+  scenarios: WaveScenario[];
+}
+
+/** V3-3: trader-facing scenario — one per surfaced count. */
+export interface WaveScenario {
+  rank: number;
+  label: string;              // "Primary" | "Secondary" | "Alternate 1" | …
+  structure: string;
+  direction: string;
+  current_wave: string;
+  probability: number;
+  invalidation: number;
+  confirms_at: number | null; // null for primary (already active)
+  next_target: number | null;
+  what_confirms: string;
+  what_invalidates: string;
+  rationale: string;
 }
 
 export interface WaveAlert {
@@ -127,6 +145,22 @@ export function useWaveAlerts(interval = "1d") {
     staleTime: 60_000,
     queryFn: () =>
       getJson<WaveAlert[]>(`/api/v1/wave/alerts?interval=${interval}`),
+  });
+}
+
+/** EW-7: on-demand intraday wave alert scan. Symbols defaults to the backend's universe. */
+export function useIntradayWaveAlerts(
+  interval: string,
+  symbols?: string[],
+  enabled = true,
+) {
+  const sym = symbols && symbols.length > 0 ? `&symbols=${symbols.join(",")}` : "";
+  return useQuery({
+    queryKey: ["wave", "alerts", "intraday", interval, symbols],
+    enabled,
+    staleTime: 30_000,
+    queryFn: () =>
+      getJson<WaveAlert[]>(`/api/v1/wave/alerts/intraday?interval=${interval}${sym}`),
   });
 }
 

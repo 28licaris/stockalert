@@ -21,7 +21,7 @@ from pyiceberg.expressions import And, EqualTo, GreaterThanOrEqual, LessThanOrEq
 
 from app.services.elliott_store.schema import asset_class_for, label_table_id
 from app.services.iceberg_catalog import get_catalog
-from app.signals.elliott.schemas import WaveLabeling
+from app.signals.elliott.schemas import WaveLabeling, WaveScenario
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,8 @@ class WaveStateResponse(BaseModel):
     uncertainty: float = 1.0
     engine_ver: str = ""
     source: str = ""  # 'store' | 'compute'
+    # V3-3: ordered trader-facing scenarios (primary → secondary → alternates)
+    scenarios: list[WaveScenario] = Field(default_factory=list)
 
 
 def _from_labeling(lab: WaveLabeling, source: str) -> WaveStateResponse:
@@ -73,6 +75,7 @@ def _from_labeling(lab: WaveLabeling, source: str) -> WaveStateResponse:
         as_of_date=lab.as_of.date(), as_of_ts=lab.as_of, as_of_price=lab.as_of_price,
         primary=view(lab.primary, True), secondary=view(lab.secondary, False),
         uncertainty=lab.uncertainty, engine_ver=lab.engine_ver, source=source,
+        scenarios=lab.scenarios,
     )
 
 
