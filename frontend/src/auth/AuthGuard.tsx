@@ -61,7 +61,7 @@ export function AuthGuard() {
   if (auth.status === "error")
     return <SessionError message={auth.error} retry={auth.refresh} />;
   if (auth.status === "unauthenticated") {
-    const returnTo = `${location.pathname}${location.search}${location.hash}`;
+    const returnTo = `/app${location.pathname}${location.search}${location.hash}`;
     return (
       <Navigate
         to={`/login?return_to=${encodeURIComponent(returnTo)}`}

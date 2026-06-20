@@ -76,6 +76,7 @@ Resources:
         authorize_scopes: openid email profile
       AttributeMapping:
         email: email
+        email_verified: email_verified
         name: name
         username: sub
 
