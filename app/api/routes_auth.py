@@ -14,7 +14,7 @@ from app.api.auth_dependencies import (
     require_csrf,
 )
 from app.services.identity.auth_service import OAuthAuthenticationService
-from app.services.identity.schemas import LogoutResponse, Principal
+from app.services.identity.schemas import LogoutResponse, Principal, SecurityEventType
 from app.services.identity.service import IdentityService
 
 
@@ -104,6 +104,11 @@ async def logout(
 
     require_csrf(request, principal, identity_service)
     await asyncio.to_thread(auth.revoke_session, principal.session_id)
+    await asyncio.to_thread(
+        identity_service.record_security_event,
+        principal,
+        SecurityEventType.LOGOUT_SUCCEEDED,
+    )
     response = JSONResponse(
         LogoutResponse(redirect_url=auth.logout_url()).model_dump(mode="json")
     )

@@ -152,6 +152,21 @@ class SessionModel(IdentityBase):
     )
 
 
+class SecurityEventModel(IdentityBase):
+    __tablename__ = "security_events"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    session_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_security_events_user_tenant_created", "user_id", "tenant_id", "created_at"),
+    )
+
+
 class AuthTransactionModel(IdentityBase):
     __tablename__ = "auth_transactions"
 

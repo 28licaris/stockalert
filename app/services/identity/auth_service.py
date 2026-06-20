@@ -17,7 +17,9 @@ from app.services.identity.schemas import (
     CreateLoginTransactionCommand,
     CreateSessionResult,
     ProvisionAccountCommand,
+    Principal,
     RevokeSessionResult,
+    SecurityEventType,
 )
 from app.services.identity.security import (
     generate_oauth_nonce,
@@ -139,6 +141,21 @@ class OAuthAuthenticationService:
         )
         if isinstance(issued, CreateSessionResult):
             return CompleteLoginResult(status="error", error_code=issued.error_code)
+        audit = await asyncio.to_thread(
+            self._identity_service.record_security_event,
+            Principal(
+                user_id=provisioned.account.user_id,
+                tenant_id=provisioned.account.tenant_id,
+                session_id=issued.session.id,
+                roles=frozenset({provisioned.account.role}),
+            ),
+            SecurityEventType.LOGIN_SUCCEEDED,
+        )
+        if audit.status != "created":
+            await asyncio.to_thread(
+                self._identity_service.revoke_session, issued.session.id
+            )
+            return CompleteLoginResult(status="error", error_code="audit_unavailable")
         return CompleteLoginResult(
             status="ok",
             issued_session=issued,

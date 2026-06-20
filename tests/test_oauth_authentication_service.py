@@ -15,6 +15,8 @@ from app.services.identity.schemas import (
     CreateLoginTransactionResult,
     CreateSessionCommand,
     CreateSessionResult,
+    CreateSecurityEventCommand,
+    CreateSecurityEventResult,
     CurrentUserResponse,
     ExternalIdentityClaim,
     LoginTransaction,
@@ -24,6 +26,7 @@ from app.services.identity.schemas import (
     RevokeSessionResult,
     Role,
     SessionRecord,
+    SecurityEventRecord,
 )
 from app.services.identity.security import hash_session_token
 from app.services.identity.service import IdentityService
@@ -115,6 +118,21 @@ class FakeRepository:
 
     def revoke_session(self, session_id: UUID, *, now: datetime) -> RevokeSessionResult:
         return RevokeSessionResult(status="revoked")
+
+    def create_security_event(
+        self, command: CreateSecurityEventCommand
+    ) -> CreateSecurityEventResult:
+        return CreateSecurityEventResult(
+            status="created",
+            event=SecurityEventRecord(
+                id=uuid4(), created_at=NOW, **command.model_dump(mode="python")
+            ),
+        )
+
+    def list_security_events(
+        self, *, user_id: UUID, tenant_id: UUID, limit: int
+    ) -> tuple[SecurityEventRecord, ...]:
+        return ()
 
     def session_matches_csrf(self, session_id: UUID, csrf_token_hash: str) -> bool:
         return True

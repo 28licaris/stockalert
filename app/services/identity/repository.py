@@ -14,11 +14,14 @@ from app.services.identity.models import (
     ExternalIdentityModel,
     MembershipModel,
     SessionModel,
+    SecurityEventModel,
     TenantModel,
     UserModel,
 )
 from app.services.identity.schemas import (
     AccountRef,
+    CreateSecurityEventCommand,
+    CreateSecurityEventResult,
     ConsumeLoginTransactionResult,
     CreateLoginTransactionCommand,
     CreateLoginTransactionResult,
@@ -33,6 +36,7 @@ from app.services.identity.schemas import (
     LoginTransaction,
     Role,
     SessionRecord,
+    SecurityEventRecord,
 )
 
 logger = logging.getLogger(__name__)
@@ -401,6 +405,36 @@ class PostgresIdentityRepository:
                 entitlements=principal.entitlements,
             )
 
+    def create_security_event(
+        self, command: CreateSecurityEventCommand
+    ) -> CreateSecurityEventResult:
+        model = SecurityEventModel(**command.model_dump(mode="python"))
+        with self._session_factory() as db:
+            try:
+                db.add(model)
+                db.commit()
+                db.refresh(model)
+            except SQLAlchemyError:
+                db.rollback()
+                logger.exception("security event persistence failed")
+                return CreateSecurityEventResult(status="error", error_code="database_error")
+        return CreateSecurityEventResult(status="created", event=self._security_event(model))
+
+    def list_security_events(
+        self, *, user_id: UUID, tenant_id: UUID, limit: int
+    ) -> tuple[SecurityEventRecord, ...]:
+        with self._session_factory() as db:
+            models = db.scalars(
+                select(SecurityEventModel)
+                .where(
+                    SecurityEventModel.user_id == user_id,
+                    SecurityEventModel.tenant_id == tenant_id,
+                )
+                .order_by(SecurityEventModel.created_at.desc(), SecurityEventModel.id.desc())
+                .limit(limit)
+            ).all()
+            return tuple(self._security_event(model) for model in models)
+
     @staticmethod
     def _find_account(db: Session, provider: str, subject: str) -> AccountRef | None:
         row = db.execute(
@@ -429,4 +463,15 @@ class PostgresIdentityRepository:
             expires_at=model.expires_at,
             last_seen_at=model.last_seen_at,
             revoked_at=model.revoked_at,
+        )
+
+    @staticmethod
+    def _security_event(model: SecurityEventModel) -> SecurityEventRecord:
+        return SecurityEventRecord(
+            id=model.id,
+            user_id=model.user_id,
+            tenant_id=model.tenant_id,
+            session_id=model.session_id,
+            event_type=model.event_type,
+            created_at=model.created_at,
         )

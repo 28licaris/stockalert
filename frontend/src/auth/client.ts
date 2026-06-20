@@ -4,6 +4,7 @@ import type { Principal, Role } from "./principal";
 type CurrentUserDto = components["schemas"]["CurrentUserResponse"];
 type LogoutDto = components["schemas"]["LogoutResponse"];
 export type DashboardSession = components["schemas"]["SessionSummary"];
+export type SecurityEvent = components["schemas"]["SecurityEventRecord"];
 type SessionListDto = components["schemas"]["SessionListResponse"];
 type SessionRevocationDto = components["schemas"]["SessionRevocationResponse"];
 
@@ -99,6 +100,23 @@ export async function fetchSessions(): Promise<DashboardSession[]> {
     );
   }
   return ((await response.json()) as SessionListDto).sessions;
+}
+
+export async function fetchSecurityEvents(): Promise<SecurityEvent[]> {
+  const response = await fetch("/api/v1/customer/security-events", {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new AuthRequestError(
+      "We couldn't load security activity.",
+      response.status,
+    );
+  }
+  const payload = (await response.json()) as {
+    events: SecurityEvent[];
+  };
+  return payload.events;
 }
 
 export async function revokeSession(sessionId: string): Promise<number> {

@@ -7,6 +7,8 @@ from uuid import UUID
 
 from app.services.identity.schemas import (
     CognitoTokenSet,
+    CreateSecurityEventCommand,
+    CreateSecurityEventResult,
     CurrentUserResponse,
     ConsumeLoginTransactionResult,
     CreateLoginTransactionCommand,
@@ -21,6 +23,9 @@ from app.services.identity.schemas import (
     RevokeSessionsResult,
     SessionListResponse,
     SessionRecord,
+    SecurityEventListResponse,
+    SecurityEventRecord,
+    SecurityEventType,
 )
 
 
@@ -84,6 +89,14 @@ class IdentityRepository(Protocol):
 
     def get_current_user(self, principal: Principal) -> CurrentUserResponse | None: ...
 
+    def create_security_event(
+        self, command: CreateSecurityEventCommand
+    ) -> CreateSecurityEventResult: ...
+
+    def list_security_events(
+        self, *, user_id: UUID, tenant_id: UUID, limit: int
+    ) -> tuple[SecurityEventRecord, ...]: ...
+
 
 @runtime_checkable
 class IdentityProvider(Protocol):
@@ -140,3 +153,13 @@ class IdentityServiceProtocol(Protocol):
     def validate_csrf(self, session_id: UUID, csrf_token: str) -> bool: ...
 
     def get_current_user(self, principal: Principal) -> CurrentUserResponse | None: ...
+
+    def list_security_events(self, principal: Principal) -> SecurityEventListResponse: ...
+
+    def record_security_event(
+        self,
+        principal: Principal,
+        event_type: SecurityEventType,
+        *,
+        session_id: UUID | None = None,
+    ) -> CreateSecurityEventResult: ...

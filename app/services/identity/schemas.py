@@ -177,6 +177,43 @@ class SessionRevocationResponse(BaseModel):
     revoked_count: int = Field(ge=0)
 
 
+class SecurityEventType(StrEnum):
+    LOGIN_SUCCEEDED = "login_succeeded"
+    LOGOUT_SUCCEEDED = "logout_succeeded"
+    SESSION_REVOKED = "session_revoked"
+    OTHER_SESSIONS_REVOKED = "other_sessions_revoked"
+
+
+class CreateSecurityEventCommand(BaseModel):
+    user_id: UUID
+    tenant_id: UUID
+    session_id: UUID | None = None
+    event_type: SecurityEventType
+
+
+class SecurityEventRecord(CreateSecurityEventCommand):
+    id: UUID
+    created_at: datetime
+
+
+class CreateSecurityEventResult(BaseModel):
+    status: Literal["created", "error"]
+    event: SecurityEventRecord | None = None
+    error_code: str | None = None
+
+    @model_validator(mode="after")
+    def validate_result_shape(self) -> "CreateSecurityEventResult":
+        if self.status == "created" and self.event is None:
+            raise ValueError("created security event result requires event")
+        if self.status == "error" and not self.error_code:
+            raise ValueError("failed security event result requires error_code")
+        return self
+
+
+class SecurityEventListResponse(BaseModel):
+    events: tuple[SecurityEventRecord, ...]
+
+
 class CreateLoginTransactionCommand(BaseModel):
     state_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     nonce: SecretStr = Field(repr=False, min_length=32)

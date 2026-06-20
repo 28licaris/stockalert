@@ -40,6 +40,12 @@ authenticated user and tenant. The current session is revoked only through the
 normal `/auth/logout` flow so cookies and the Cognito browser session are
 cleared together.
 
+Security-sensitive account activity is stored in PostgreSQL and exposed only
+to the owning user and tenant at `GET /api/v1/customer/security-events`.
+Successful login, logout, and session-revocation events contain opaque IDs and
+timestamps only; credentials, tokens, IP addresses, and provider payloads are
+never written to the audit trail.
+
 ## Local database
 
 ```bash

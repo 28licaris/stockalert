@@ -1361,6 +1361,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/customer/security-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Security Events */
+        get: operations["list_security_events_api_v1_customer_security_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/customer/sessions/{session_id}": {
         parameters: {
             query?: never;
@@ -3283,6 +3300,42 @@ export interface components {
              */
             limit: number;
         };
+        /** SecurityEventListResponse */
+        SecurityEventListResponse: {
+            /** Events */
+            events: components["schemas"]["SecurityEventRecord"][];
+        };
+        /** SecurityEventRecord */
+        SecurityEventRecord: {
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+            /**
+             * Tenant Id
+             * Format: uuid
+             */
+            tenant_id: string;
+            /** Session Id */
+            session_id?: string | null;
+            event_type: components["schemas"]["SecurityEventType"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * SecurityEventType
+         * @enum {string}
+         */
+        SecurityEventType: "login_succeeded" | "logout_succeeded" | "session_revoked" | "other_sessions_revoked";
         /**
          * SeedEntry
          * @description One symbol in the operator's seed universe.
@@ -5961,6 +6014,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionListResponse"];
+                };
+            };
+        };
+    };
+    list_security_events_api_v1_customer_security_events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityEventListResponse"];
                 };
             };
         };

@@ -8,6 +8,8 @@ from uuid import UUID
 from app.services.identity.contract import IdentityRepository
 from app.services.identity.schemas import (
     CurrentUserResponse,
+    CreateSecurityEventCommand,
+    CreateSecurityEventResult,
     CreateSessionCommand,
     CreateSessionResult,
     IssuedSession,
@@ -18,6 +20,8 @@ from app.services.identity.schemas import (
     RevokeSessionsResult,
     SessionListResponse,
     SessionSummary,
+    SecurityEventListResponse,
+    SecurityEventType,
 )
 from app.services.identity.security import generate_session_token, hash_session_token
 
@@ -116,19 +120,52 @@ class IdentityService:
                 error_code="current_session",
                 message="use sign out to revoke the current session",
             )
-        return self._repository.revoke_user_session(
+        result = self._repository.revoke_user_session(
             user_id=principal.user_id,
             tenant_id=principal.tenant_id,
             session_id=session_id,
             now=self._clock(),
         )
+        if result.status == "revoked":
+            self.record_security_event(
+                principal, SecurityEventType.SESSION_REVOKED, session_id=session_id
+            )
+        return result
 
     def revoke_other_sessions(self, principal: Principal) -> RevokeSessionsResult:
-        return self._repository.revoke_other_sessions(
+        result = self._repository.revoke_other_sessions(
             user_id=principal.user_id,
             tenant_id=principal.tenant_id,
             current_session_id=principal.session_id,
             now=self._clock(),
+        )
+        if result.status == "revoked" and result.revoked_count:
+            self.record_security_event(
+                principal, SecurityEventType.OTHER_SESSIONS_REVOKED
+            )
+        return result
+
+    def record_security_event(
+        self,
+        principal: Principal,
+        event_type: SecurityEventType,
+        *,
+        session_id: UUID | None = None,
+    ) -> CreateSecurityEventResult:
+        return self._repository.create_security_event(
+            CreateSecurityEventCommand(
+                user_id=principal.user_id,
+                tenant_id=principal.tenant_id,
+                session_id=session_id or principal.session_id,
+                event_type=event_type,
+            )
+        )
+
+    def list_security_events(self, principal: Principal) -> SecurityEventListResponse:
+        return SecurityEventListResponse(
+            events=self._repository.list_security_events(
+                user_id=principal.user_id, tenant_id=principal.tenant_id, limit=20
+            )
         )
 
     def validate_csrf(self, session_id: UUID, csrf_token: str) -> bool:

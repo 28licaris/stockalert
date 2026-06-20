@@ -13,6 +13,7 @@ from app.services.identity.schemas import (
     Principal,
     SessionListResponse,
     SessionRevocationResponse,
+    SecurityEventListResponse,
 )
 
 
@@ -36,6 +37,14 @@ async def list_sessions(
     identity_service: IdentityService = Depends(get_identity_service),
 ) -> SessionListResponse:
     return await asyncio.to_thread(identity_service.list_sessions, principal)
+
+
+@router.get("/security-events", response_model=SecurityEventListResponse)
+async def list_security_events(
+    principal: Principal = Depends(get_principal),
+    identity_service: IdentityService = Depends(get_identity_service),
+) -> SecurityEventListResponse:
+    return await asyncio.to_thread(identity_service.list_security_events, principal)
 
 
 @router.delete("/sessions/{session_id}", response_model=SessionRevocationResponse)

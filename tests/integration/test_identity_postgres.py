@@ -20,8 +20,10 @@ from app.services.identity.repository import PostgresIdentityRepository
 from app.services.identity.schemas import (
     CreateLoginTransactionCommand,
     CreateSessionCommand,
+    CreateSecurityEventCommand,
     ExternalIdentityClaim,
     ProvisionAccountCommand,
+    SecurityEventType,
 )
 from app.services.identity.security import hash_session_token
 
@@ -182,6 +184,24 @@ def test_session_management_is_user_and_tenant_scoped(
         hash_session_token("managed-token-foreign"), now=now
     )
     assert foreign_principal is not None
+
+    recorded = identity_repository.create_security_event(
+        CreateSecurityEventCommand(
+            user_id=first.account.user_id,
+            tenant_id=first.account.tenant_id,
+            session_id=current.id,
+            event_type=SecurityEventType.LOGIN_SUCCEEDED,
+        )
+    )
+    events = identity_repository.list_security_events(
+        user_id=first.account.user_id,
+        tenant_id=first.account.tenant_id,
+        limit=20,
+    )
+    assert recorded.status == "created"
+    assert [event.event_type for event in events] == [
+        SecurityEventType.LOGIN_SUCCEEDED
+    ]
 
 
 def test_login_transaction_is_single_use(

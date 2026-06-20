@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
+  Activity,
   Clock3,
   KeyRound,
   LoaderCircle,
@@ -16,6 +17,7 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   fetchSessions,
+  fetchSecurityEvents,
   loginUrl,
   passwordResetUrl,
   revokeOtherSessions,
@@ -139,7 +141,75 @@ export function SettingsPage() {
       </section>
 
       <SessionsPanel />
+      <SecurityActivityPanel />
     </div>
+  );
+}
+
+const securityEventsQueryKey = ["auth", "security-events"] as const;
+
+function SecurityActivityPanel() {
+  const eventsQuery = useQuery({
+    queryKey: securityEventsQueryKey,
+    queryFn: fetchSecurityEvents,
+  });
+
+  return (
+    <section className="rounded-3xl border border-border bg-bg-subtle p-6 shadow-2xl shadow-black/10">
+      <div className="flex items-start gap-3">
+        <div className="grid h-10 w-10 place-items-center rounded-2xl bg-accent/10 text-accent">
+          <Activity className="h-5 w-5" />
+        </div>
+        <div>
+          <h2 className="font-semibold text-fg-base">
+            Recent security activity
+          </h2>
+          <p className="mt-1 text-sm text-fg-muted">
+            Successful authentication and session changes recorded for your
+            account.
+          </p>
+        </div>
+      </div>
+      <div className="mt-5 space-y-2">
+        {eventsQuery.isPending ? (
+          <p className="text-sm text-fg-muted">Loading security activity…</p>
+        ) : eventsQuery.isError ? (
+          <p className="text-sm text-danger">{eventsQuery.error.message}</p>
+        ) : eventsQuery.data.length === 0 ? (
+          <p className="rounded-2xl border border-border bg-bg-base px-4 py-4 text-sm text-fg-muted">
+            No security activity has been recorded yet.
+          </p>
+        ) : (
+          eventsQuery.data.map((event) => (
+            <div
+              key={event.id}
+              className="flex items-center justify-between gap-4 rounded-2xl border border-border bg-bg-base px-4 py-3"
+            >
+              <div className="flex items-center gap-3">
+                <ShieldCheck className="h-4 w-4 text-success" />
+                <span className="text-sm font-medium text-fg-base">
+                  {securityEventLabel(event.event_type)}
+                </span>
+              </div>
+              <time className="text-xs text-fg-muted">
+                {formatSessionDate(event.created_at)}
+              </time>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function securityEventLabel(eventType: string): string {
+  return (
+    {
+      login_succeeded: "Signed in",
+      logout_succeeded: "Signed out",
+      session_revoked: "Session revoked",
+      other_sessions_revoked: "Other sessions revoked",
+    }[eventType] ?? "Account security updated"
   );
 }
 
@@ -152,7 +222,10 @@ function SessionsPanel() {
     queryFn: fetchSessions,
   });
   const refresh = () =>
-    queryClient.invalidateQueries({ queryKey: sessionsQueryKey });
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: sessionsQueryKey }),
+      queryClient.invalidateQueries({ queryKey: securityEventsQueryKey }),
+    ]);
   const revokeOne = useMutation({
     mutationFn: revokeSession,
     onSuccess: refresh,

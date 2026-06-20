@@ -22,6 +22,9 @@ from app.services.identity.schemas import (
     SessionRecord,
     SessionListResponse,
     SessionSummary,
+    CreateSecurityEventResult,
+    SecurityEventListResponse,
+    SecurityEventType,
 )
 
 
@@ -126,6 +129,14 @@ class FakeIdentityService:
 
     def revoke_other_sessions(self, principal: Principal) -> RevokeSessionsResult:
         return RevokeSessionsResult(status="revoked", revoked_count=1)
+
+    def record_security_event(
+        self, principal: Principal, event_type: SecurityEventType, *, session_id=None
+    ) -> CreateSecurityEventResult:
+        return CreateSecurityEventResult(status="error", error_code="test_stub")
+
+    def list_security_events(self, principal: Principal) -> SecurityEventListResponse:
+        return SecurityEventListResponse(events=())
 
 
 def _principal(*, operator: bool = False) -> Principal:
@@ -278,6 +289,7 @@ def test_customer_can_list_and_revoke_owned_sessions_with_csrf(monkeypatch) -> N
         client.cookies.set("stockalert_csrf", "csrf-token")
 
         listed = client.get("/api/v1/customer/sessions")
+        activity = client.get("/api/v1/customer/security-events")
         denied_without_csrf = client.delete(
             f"/api/v1/customer/sessions/{other_id}"
         )
@@ -295,6 +307,8 @@ def test_customer_can_list_and_revoke_owned_sessions_with_csrf(monkeypatch) -> N
         )
 
         assert listed.status_code == 200
+        assert activity.status_code == 200
+        assert activity.json() == {"events": []}
         assert [item["is_current"] for item in listed.json()["sessions"]] == [
             True,
             False,

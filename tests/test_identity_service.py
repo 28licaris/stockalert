@@ -9,6 +9,8 @@ from app.services.identity.schemas import (
     AccountRef,
     CreateSessionCommand,
     CreateSessionResult,
+    CreateSecurityEventCommand,
+    CreateSecurityEventResult,
     CurrentUserResponse,
     ConsumeLoginTransactionResult,
     CreateLoginTransactionCommand,
@@ -22,6 +24,7 @@ from app.services.identity.schemas import (
     RevokeSessionsResult,
     Role,
     SessionRecord,
+    SecurityEventRecord,
 )
 from app.services.identity.security import hash_session_token
 from app.services.identity.service import IdentityService
@@ -39,6 +42,7 @@ class FakeIdentityRepository:
         self.sessions: tuple[SessionRecord, ...] = ()
         self.revoked_user_session: UUID | None = None
         self.revoked_other_current: UUID | None = None
+        self.security_events: list[SecurityEventRecord] = []
 
     def provision_personal_account(
         self, command: ProvisionAccountCommand
@@ -101,6 +105,20 @@ class FakeIdentityRepository:
         assert now == NOW
         self.revoked_other_current = current_session_id
         return RevokeSessionsResult(status="revoked", revoked_count=2)
+
+    def create_security_event(
+        self, command: CreateSecurityEventCommand
+    ) -> CreateSecurityEventResult:
+        event = SecurityEventRecord(
+            id=uuid4(), created_at=NOW, **command.model_dump(mode="python")
+        )
+        self.security_events.append(event)
+        return CreateSecurityEventResult(status="created", event=event)
+
+    def list_security_events(
+        self, *, user_id: UUID, tenant_id: UUID, limit: int
+    ) -> tuple[SecurityEventRecord, ...]:
+        return tuple(self.security_events[:limit])
 
     def create_login_transaction(
         self, command: CreateLoginTransactionCommand
