@@ -85,6 +85,51 @@ def score_zigzag(prices: list[float], direction: Direction) -> float:
     return round(sum(parts) / len(parts), 4) if parts else 0.0
 
 
+def personality_bonus(prices: list[float], direction: Direction,
+                      last_price: float, current_wave: str) -> float:
+    """Bonus score [0, 1] for how far the open wave has confirmed itself.
+
+    `score_impulse` can only measure *completed* legs (pivot-to-pivot ratios).
+    It has no signal from the current partial wave — a wave-3 that's already
+    extended 1.74× wave-1 deserves more credit than one that's barely started,
+    but both look the same to `score_impulse` before that 4th pivot is confirmed.
+
+    Wave 3 in progress:
+      Reward extension ratio (w3_so_far / w1) via a band centred at 1.618.
+      Below 0.618 → small credit; 0.618–2.618 → high credit; above → decays.
+    Wave 5 in progress:
+      Wave 5 ideally equals wave-1 (or a 0.618/1.618 multiple).
+
+    Returns 0.0 when the wave hasn't made forward progress or the wave is not
+    an in-progress trend wave (complete, A, B, C, wave-2, wave-4).
+    """
+    s = _sign(direction)
+    w1 = abs(prices[1] - prices[0]) if len(prices) >= 2 else 0.0
+    if w1 <= 0:
+        return 0.0
+
+    if current_wave == "3" and len(prices) >= 3:
+        w3_so_far = (last_price - prices[2]) * s   # positive if moving in trend direction
+        if w3_so_far <= 0:
+            return 0.0
+        ratio = w3_so_far / w1
+        # Below 0.618: early, declining credit; 0.618–2.618: confirmed extension zone
+        return round(_band(ratio, 0.618, 2.618, 1.618, width=0.6), 4)
+
+    if current_wave == "5" and len(prices) >= 5:
+        w5_so_far = (last_price - prices[4]) * s
+        if w5_so_far <= 0:
+            return 0.0
+        ratio = w5_so_far / w1
+        # Wave 5 ≈ wave 1 (equality), also valid at 0.618 or 1.618
+        return round(max(
+            _band(ratio, 0.50, 1.20, 1.00, width=0.30),
+            _band(ratio, 1.40, 2.00, 1.618, width=0.30),
+        ), 4)
+
+    return 0.0
+
+
 def impulse_targets(prices: list[float], direction: Direction, wave: int) -> dict[str, float]:
     """Anchored forward price targets for the wave currently in progress."""
     s = _sign(direction)

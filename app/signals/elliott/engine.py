@@ -74,7 +74,7 @@ _ZIGZAG_PRIOR = 0.92
 
 
 class WaveEngine:
-    version = "ew3.6.0"  # V3-6: degree coherence (recency + wave-size relativity)
+    version = "ew3.7.0"  # V3-7: personality bonus (in-progress wave extension)
 
     def __init__(self, top_k: int = 3, min_confidence: float = 0.5,
                  secondary_floor: float = 0.15) -> None:
@@ -162,6 +162,14 @@ class WaveEngine:
         leg_ok = (ow > 5) or _leg_ok(last_price, prices[-1], _expected_sign(s, ow))
 
         fib_score = fib.score_impulse(prices, direction)
+        # V3-4: personality bonus — how far has the current open wave confirmed
+        # itself by price action? A wave-3 already 1.7× wave-1 in size is more
+        # trustworthy than one barely started, yet both look identical to
+        # score_impulse (which only sees completed pivot-to-pivot legs).
+        if current in ("3", "5"):
+            pers = fib.personality_bonus(prices, direction, last_price, current)
+            if pers > 0:
+                fib_score = round(min(1.0, 0.80 * fib_score + 0.20 * pers), 4)
         conf = _structure_weight(m) * (0.45 + 0.55 * fib_score) * (1.0 if leg_ok else 0.4)
         wave_int = ow if ow <= 5 else 5
         targets = fib.impulse_targets(prices, direction, wave_int)
