@@ -106,6 +106,24 @@ def test_password_reset_url_targets_managed_reset_page() -> None:
     assert query["redirect_uri"] == ["http://localhost:8000/auth/callback"]
 
 
+def test_logout_url_targets_allowed_signout_page() -> None:
+    provider = CognitoIdentityProvider(
+        config=CognitoOAuthConfig(
+            domain=DOMAIN, issuer_url=ISSUER, client_id=CLIENT_ID
+        )
+    )
+
+    url = provider.logout_url(logout_uri="http://localhost:8000/app/login")
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query)
+
+    assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == f"{DOMAIN}/logout"
+    assert query == {
+        "client_id": [CLIENT_ID],
+        "logout_uri": ["http://localhost:8000/app/login"],
+    }
+
+
 @pytest.mark.asyncio
 async def test_exchange_code_validates_jwt_and_returns_identity() -> None:
     private_key, public_jwk = _key_material()
