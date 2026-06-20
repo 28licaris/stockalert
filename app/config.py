@@ -250,7 +250,7 @@ class Settings(BaseModel):
         "COGNITO_REDIRECT_URI", "http://localhost:8000/auth/callback"
     )
     cognito_logout_uri: str = os.getenv(
-        "COGNITO_LOGOUT_URI", "http://localhost:5173/app/login"
+        "COGNITO_LOGOUT_URI", "http://localhost:8000/app/login"
     )
     auth_session_hours: int = int(os.getenv("AUTH_SESSION_HOURS", "8"))
     auth_login_transaction_minutes: int = int(

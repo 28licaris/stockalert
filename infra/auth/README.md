@@ -16,7 +16,7 @@ aws cloudformation deploy \
     EnvironmentName=dev \
     DomainPrefix=stockalert-yourname-dev \
     CallbackUrls=http://localhost:8000/auth/callback \
-    LogoutUrls=http://localhost:5173/app/login
+    LogoutUrls=http://localhost:8000/app/login
 ```
 
 The app client is confidential. Retrieve its secret after deployment and store it in a local secret file or AWS Secrets Manager; never commit it:

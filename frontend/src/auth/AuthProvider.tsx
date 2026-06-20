@@ -69,6 +69,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     try {
       const redirectUrl = await endSession();
+      setUser(null);
+      setStatus("unauthenticated");
       window.location.assign(redirectUrl);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Sign out failed.");
