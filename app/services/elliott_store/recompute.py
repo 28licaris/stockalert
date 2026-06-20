@@ -55,9 +55,10 @@ def current_git_sha() -> str:
         return ""
 
 
-def _load_bars(symbol: str, interval: str, lookback_days: int) -> Optional[pd.DataFrame]:
+def _load_bars(symbol: str, interval: str, lookback_days: int,
+               source: BarSource = BarSource.LAKE) -> Optional[pd.DataFrame]:
     bars = get_chart_bars(symbol, interval=interval, lookback_days=lookback_days,
-                          source=BarSource.LAKE)
+                          source=source)
     if not bars:
         return None
     df = pd.DataFrame([{"timestamp": b.timestamp, "high": b.high, "low": b.low,
@@ -66,15 +67,16 @@ def _load_bars(symbol: str, interval: str, lookback_days: int) -> Optional[pd.Da
 
 
 def compute_labeling(symbol: str, interval: str = "1d", *, lookback_days: Optional[int] = None,
+                     source: BarSource = BarSource.LAKE,
                      base_k: int = 4) -> Optional[WaveLabeling]:
     """Label the latest bar of `symbol`@`interval`. None if no usable bars.
 
-    `lookback_days` defaults to `_INTERVAL_LOOKBACK[interval]` so callers that
-    only pass a symbol+interval get the right window automatically.  Pass an
-    explicit value to override (e.g. CLI deep-history runs).
+    `lookback_days` defaults to `_INTERVAL_LOOKBACK[interval]`.
+    `source` controls where bars come from: LAKE (default, nightly job) or AUTO
+    (CH-first with lake fallback — use this for intraday live reads).
     """
     days = lookback_days if lookback_days is not None else _INTERVAL_LOOKBACK.get(interval, _DEFAULT_LOOKBACK)
-    df = _load_bars(symbol, interval, days)
+    df = _load_bars(symbol, interval, days, source)
     if df is None or len(df) < 2 * base_k + 5:
         return None
     close, high, low = df["close"], df["high"], df["low"]

@@ -15,7 +15,8 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 
-from app.services.alerts import WaveAlert, scan_alerts
+from app.services.alerts import WaveAlert, scan_alerts, scan_intraday_alerts
+from app.services.alerts.intraday import INTRADAY_INTERVALS
 from app.services.readers.wave_reader import WaveReader, WaveStateResponse
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,25 @@ def get_wave_alerts(
 ) -> list[WaveAlert]:
     return scan_alerts(interval, min_probability=min_probability,
                        min_risk_reward=min_risk_reward, reader=reader)
+
+
+@router.get("/wave/alerts/intraday", response_model=list[WaveAlert], tags=["Elliott Wave"])
+def get_intraday_wave_alerts(
+    symbols: str = Query(..., description="Comma-separated symbols, e.g. AAPL,TSLA,/GC"),
+    interval: str = Query("5m", pattern="^(1m|5m|15m|30m|1h)$"),
+    min_probability: float = Query(0.6, ge=0, le=1),
+    min_risk_reward: float = Query(2.0, ge=0),
+) -> list[WaveAlert]:
+    """EW-7: On-demand intraday wave alert scan.
+
+    Bars are pulled from ClickHouse (hot cache) — sub-100ms per symbol.
+    Returns alerts where the primary count is in an impulse wave 3 or 5,
+    probability >= min_probability, and R:R >= min_risk_reward.
+    """
+    sym_list = [s.strip() for s in symbols.split(",") if s.strip()]
+    return scan_intraday_alerts(sym_list, interval,
+                                min_probability=min_probability,
+                                min_risk_reward=min_risk_reward)
 
 
 def _norm_symbol(symbol: str) -> str:

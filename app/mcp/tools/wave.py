@@ -13,7 +13,7 @@ from functools import lru_cache
 
 from app.mcp.middleware import tool_call
 from app.mcp.server import mcp
-from app.services.alerts import WaveAlert, scan_alerts
+from app.services.alerts import WaveAlert, scan_alerts, scan_intraday_alerts
 from app.services.readers.wave_reader import WaveReader, WaveStateResponse
 
 logger = logging.getLogger(__name__)
@@ -97,3 +97,33 @@ def list_wave_alerts(interval: str = "1d", min_probability: float = 0.6,
     with tool_call("list_wave_alerts", interval=interval):
         return scan_alerts(interval, min_probability=min_probability,
                            min_risk_reward=min_risk_reward, reader=_reader())
+
+
+@mcp.tool()
+def scan_intraday_wave_alerts(
+    symbols: str,
+    interval: str = "5m",
+    min_probability: float = 0.6,
+    min_risk_reward: float = 2.0,
+) -> list[WaveAlert]:
+    """EW-7: On-demand intraday Elliott Wave alert scan from live ClickHouse bars.
+
+    USE WHEN: an agent wants fresh intraday wave setups — "are there any 5-minute
+    wave-3 entries forming on AAPL or TSLA right now?". Unlike list_wave_alerts
+    (which reads the nightly-updated store), this recomputes counts live from
+    ClickHouse so the answer reflects the current bar.
+
+    Returns alerts where the primary count is in an impulse wave 3 or 5,
+    probability >= min_probability, and R:R >= min_risk_reward.
+
+    Args:
+        symbols: Comma-separated tickers, e.g. "AAPL,TSLA,/GC".
+        interval: '1m' | '5m' | '15m' | '30m' | '1h'.
+        min_probability: minimum primary-count probability (default 0.6).
+        min_risk_reward: minimum reward:risk (default 2.0).
+    """
+    with tool_call("scan_intraday_wave_alerts", symbols=symbols, interval=interval):
+        sym_list = [s.strip() for s in symbols.split(",") if s.strip()]
+        return scan_intraday_alerts(sym_list, interval,
+                                    min_probability=min_probability,
+                                    min_risk_reward=min_risk_reward)

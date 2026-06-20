@@ -9,5 +9,7 @@ from __future__ import annotations
 
 from app.services.alerts.schemas import WaveAlert
 from app.services.alerts.service import build_alert, scan_alerts
+from app.services.alerts.intraday import IntradayWaveScanner, scan_intraday_alerts
 
-__all__ = ["WaveAlert", "build_alert", "scan_alerts"]
+__all__ = ["WaveAlert", "build_alert", "scan_alerts",
+           "IntradayWaveScanner", "scan_intraday_alerts"]
