@@ -452,6 +452,46 @@ async def lifespan(app: FastAPI):
                 exc,
             )
 
+    # EW-7 live path: IntradayWaveScanner wired into MonitorManager. Fires wave
+    # alerts through the existing WebSocket broadcast on each incoming bar.
+    # Gated by ELLIOTT_LIVE_SCANNER_ENABLED; empty SYMBOLS list → no-op.
+    if _settings.elliott_live_scanner_enabled:
+        _scan_symbols = [
+            s.strip() for s in _settings.elliott_live_scanner_symbols.split(",")
+            if s.strip()
+        ]
+        if _scan_symbols:
+            try:
+                # Lazy wrapper: reads app.state.broadcast_signal at call time so
+                # we can start the scanner before broadcast_signal is defined below.
+                async def _wave_broadcast(alert) -> None:
+                    cb = getattr(app.state, "broadcast_signal", None)
+                    if cb:
+                        await cb(alert.model_dump())
+
+                result = monitor_manager.start_wave_scanner(
+                    symbols=_scan_symbols,
+                    interval=_settings.elliott_live_scanner_interval,
+                    broadcast_cb=_wave_broadcast,
+                )
+                app.state.wave_scanner_symbols = _scan_symbols
+                app.state.wave_scanner_interval = _settings.elliott_live_scanner_interval
+                logger.info(
+                    "✅ Elliott live wave scanner started "
+                    "(interval=%s, symbols=%d, result=%s)",
+                    _settings.elliott_live_scanner_interval, len(_scan_symbols),
+                    result.get("status"),
+                )
+            except Exception as exc:
+                logger.exception(
+                    "✗ Elliott live wave scanner failed to start: %s — continuing without it",
+                    exc,
+                )
+        else:
+            logger.info("ℹ️  Elliott live scanner enabled but ELLIOTT_LIVE_SCANNER_SYMBOLS is empty")
+    else:
+        logger.info("ℹ️  Elliott live scanner disabled (ELLIOTT_LIVE_SCANNER_ENABLED=false)")
+
     # CH reconcile: post-close, push the authoritative lakes (schwab_universe
     # + schwab_futures) into CH so live-stream gaps self-heal. Runs after the
     # nightly refreshes.

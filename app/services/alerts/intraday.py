@@ -15,6 +15,8 @@ Two complementary paths:
 """
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
 from typing import Callable, Optional
 
@@ -99,12 +101,18 @@ class IntradayWaveScanner:
         self._last_fired: dict[str, tuple[str, str]] = {}
 
     async def on_bar(self, bar) -> None:
-        """Async callback — wire into provider.subscribe_bars()."""
-        symbol = bar.symbol
+        """Async callback — wire into provider.subscribe_bars().
+
+        compute_labeling() does ClickHouse IO so we run it in a thread pool
+        to avoid blocking the event loop.
+        """
+        symbol = getattr(bar, "symbol", None) or getattr(bar, "ticker", None)
         if symbol not in self.symbols:
             return
         try:
-            lab = compute_labeling(symbol, self.interval, source=BarSource.AUTO)
+            lab = await asyncio.to_thread(
+                compute_labeling, symbol, self.interval, source=BarSource.AUTO,
+            )
         except Exception:
             logger.exception("IntradayWaveScanner: compute_labeling failed for %s", symbol)
             return
@@ -127,7 +135,9 @@ class IntradayWaveScanner:
         logger.info("IntradayWaveScanner: alert %s %s@%s wave%s R:R=%.1f",
                     alert.direction, symbol, self.interval, alert.current_wave, alert.risk_reward)
         if self.broadcast_cb:
-            self.broadcast_cb(alert)
+            result = self.broadcast_cb(alert)
+            if inspect.isawaitable(result):
+                await result
 
 
 # ---------------------------------------------------------------------------

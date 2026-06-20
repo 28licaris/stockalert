@@ -113,6 +113,17 @@ class Settings(BaseModel):
     elliott_recompute_symbols: str = os.getenv("ELLIOTT_RECOMPUTE_SYMBOLS", "")
     elliott_recompute_intervals: str = os.getenv("ELLIOTT_RECOMPUTE_INTERVALS", "1d")
 
+    # Live intraday Elliott Wave scanner (EW-7 live path).  Fires wave alerts
+    # on each incoming bar by re-running compute_labeling(source=AUTO) and
+    # broadcasting via the WebSocket signal multiplex.  OFF by default.
+    # ELLIOTT_LIVE_SCANNER_SYMBOLS: comma-separated list, e.g. "AAPL,TSLA,/ES"
+    # ELLIOTT_LIVE_SCANNER_INTERVAL: bar interval to scan (default "5m")
+    elliott_live_scanner_enabled: bool = (
+        os.getenv("ELLIOTT_LIVE_SCANNER_ENABLED", "false").lower() == "true"
+    )
+    elliott_live_scanner_symbols: str = os.getenv("ELLIOTT_LIVE_SCANNER_SYMBOLS", "")
+    elliott_live_scanner_interval: str = os.getenv("ELLIOTT_LIVE_SCANNER_INTERVAL", "5m")
+
     # Schwab REST pricehistory → equities.schwab_universe (see nightly_schwab_refresh).
     # 22:00 UTC = 3 PM Arizona; ~30 min after NYSE close.
     schwab_nightly_enabled: bool = os.getenv("SCHWAB_NIGHTLY_ENABLED", "false").lower() == "true"
