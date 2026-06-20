@@ -21,6 +21,7 @@ export interface WavePivotPoint {
   ts: string;
   price: number;
   label: string;
+  kind?: "high" | "low";
 }
 
 /** A horizontal level to draw (invalidation / Fib target). */
@@ -30,9 +31,25 @@ export interface WavePriceLevel {
   kind: "invalidation" | "target";
 }
 
+/** Dotted forward projection line + optional target zone. */
+export interface WaveProjection {
+  fromTs: string;
+  fromPrice: number;
+  toTs: string;
+  toPrice: number;
+  targetLow?: number;
+  targetHigh?: number;
+}
+
 export interface WaveOverlay {
   pivots: ReadonlyArray<WavePivotPoint>;
   levels: ReadonlyArray<WavePriceLevel>;
+  /** Latest bar timestamp used for the "in-progress" extension segment. */
+  asOfTs?: string;
+  /** Latest bar price used for the extension segment endpoint. */
+  asOfPrice?: number;
+  /** Forward projection to the next-move target zone. */
+  projection?: WaveProjection;
 }
 
 interface OhlcvChartProps {
@@ -63,6 +80,10 @@ export function OhlcvChart({ bars, signals, wave, height = 480 }: OhlcvChartProp
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const waveSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  /** Dashed line: last confirmed pivot → current price (in-progress wave). */
+  const extensionSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  /** Dotted line: current price → forward target midpoint. */
+  const projectionSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   // Resolved palette captured at create-time so data effects don't
   // need to re-read the DOM on every render.
@@ -126,10 +147,30 @@ export function OhlcvChart({ bars, signals, wave, height = 480 }: OhlcvChartProp
       crosshairMarkerVisible: false,
     });
 
+    const extensionLine = chart.addLineSeries({
+      color: palette.fg,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+    });
+
+    const projectionLine = chart.addLineSeries({
+      color: palette.fg,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dotted,
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+    });
+
     chartRef.current = chart;
     candleSeriesRef.current = candle;
     volumeSeriesRef.current = volume;
     waveSeriesRef.current = waveLine;
+    extensionSeriesRef.current = extensionLine;
+    projectionSeriesRef.current = projectionLine;
 
     // Keep the chart sized to its container. Fires once with the real size
     // after layout settles (covers the SPA-navigation blank-chart case) and
@@ -149,6 +190,8 @@ export function OhlcvChart({ bars, signals, wave, height = 480 }: OhlcvChartProp
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
       waveSeriesRef.current = null;
+      extensionSeriesRef.current = null;
+      projectionSeriesRef.current = null;
       priceLinesRef.current = [];
       paletteRef.current = null;
     };
@@ -188,9 +231,16 @@ export function OhlcvChart({ bars, signals, wave, height = 480 }: OhlcvChartProp
     if (wave && wave.pivots.length > 0) {
       const markers: SeriesMarker<Time>[] = wave.pivots.map((p) => ({
         time: toUnix(p.ts),
-        position: p.label === "0" ? "belowBar" : "aboveBar",
+        position:
+          p.kind === "high" ? "aboveBar"
+          : p.kind === "low" ? "belowBar"
+          : p.label === "0" ? "belowBar"
+          : "aboveBar",
         shape: "circle",
-        color: palette.fg,
+        color:
+          p.kind === "high" ? palette.up
+          : p.kind === "low" ? palette.down
+          : palette.fg,
         text: p.label,
       }));
       candle.setMarkers(markers);
@@ -218,23 +268,61 @@ export function OhlcvChart({ bars, signals, wave, height = 480 }: OhlcvChartProp
   useEffect(() => {
     const candle = candleSeriesRef.current;
     const line = waveSeriesRef.current;
+    const ext = extensionSeriesRef.current;
+    const proj = projectionSeriesRef.current;
     const palette = paletteRef.current;
-    if (!candle || !line || !palette) return;
+    if (!candle || !line || !ext || !proj || !palette) return;
 
     for (const pl of priceLinesRef.current) candle.removePriceLine(pl);
     priceLinesRef.current = [];
 
     if (!wave) {
       line.setData([]);
+      ext.setData([]);
+      proj.setData([]);
       return;
     }
 
-    const lineData: LineData<Time>[] = wave.pivots.map((p) => ({
-      time: toUnix(p.ts),
-      value: p.price,
-    }));
+    // Confirmed pivot path — each segment colored by direction.
+    // LWC applies the color on point[i] to the segment ending at point[i].
+    const lineData: LineData<Time>[] = wave.pivots.map((p, i) => {
+      let color: string | undefined;
+      if (i > 0) {
+        color = p.price > wave.pivots[i - 1].price ? palette.up : palette.down;
+      } else if (wave.pivots.length > 1) {
+        color = wave.pivots[1].price > p.price ? palette.up : palette.down;
+      }
+      return { time: toUnix(p.ts), value: p.price, color };
+    });
     line.setData(lineData);
 
+    // Extension: dashed line from last confirmed pivot → current bar price.
+    const lastPivot = wave.pivots.at(-1);
+    if (lastPivot && wave.asOfTs && wave.asOfPrice != null) {
+      const extUp = wave.asOfPrice > lastPivot.price;
+      const extColor = extUp ? palette.up : palette.down;
+      ext.setData([
+        { time: toUnix(lastPivot.ts), value: lastPivot.price, color: extColor },
+        { time: toUnix(wave.asOfTs), value: wave.asOfPrice, color: extColor },
+      ]);
+    } else {
+      ext.setData([]);
+    }
+
+    // Projection: dotted line from current price → target midpoint.
+    if (wave.projection) {
+      const p = wave.projection;
+      const projUp = p.toPrice > p.fromPrice;
+      const projColor = projUp ? palette.upAlpha : palette.downAlpha;
+      proj.setData([
+        { time: toUnix(p.fromTs), value: p.fromPrice, color: projColor },
+        { time: toUnix(p.toTs), value: p.toPrice, color: projColor },
+      ]);
+    } else {
+      proj.setData([]);
+    }
+
+    // Invalidation + Fib target price lines
     for (const lvl of wave.levels) {
       priceLinesRef.current.push(
         candle.createPriceLine({

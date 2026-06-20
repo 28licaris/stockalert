@@ -13,11 +13,11 @@ Data-tier model:
     only holds what's been streamed or filled. Not authoritative.
 
 Sources (the `source` selector):
-  - ``auto`` (default): CH-first. On an empty result for a bounded
-    window, fill that window from the lake into CH and re-query CH.
-    Self-healing cache — the second identical request is hot. This is
-    effectively "CH plus S3 for whatever's missing."
-  - ``clickhouse``: CH only. Fast, may be partial. Never touches S3.
+  - ``auto`` (default): CH-first. Returns CH bars immediately. When CH
+    doesn't cover the requested window, schedules a background fill
+    (gap_fill_worker) and returns what CH has now — the caller gets a
+    response in <100ms and the next identical request will be hot.
+  - ``clickhouse``: CH only. Fast, always partial. Never touches S3.
     Use when you explicitly want "only what's hot."
   - ``lake``: S3 ground truth only. Reads 1-minute adjusted bars from
     `equities.polygon_adjusted` and resamples to `interval` in-process.
@@ -136,11 +136,10 @@ def get_chart_bars(
     if source == BarSource.CLICKHOUSE:
         return bars
 
-    # AUTO: CH-first; fill from the lake when CH doesn't cover the window —
-    # empty OR lacking depth (CH loaded 3mo but the agent asked for 1yr).
-    # The depth check catches the partial-coverage case the old empty-only
-    # trigger missed. Mid-window holes in *today's* session aren't fillable
-    # here (the lake is nightly-fed) — those are the reconcile job's domain.
+    # AUTO: CH-first. If CH doesn't cover the window, schedule a background
+    # fill and return what CH has immediately. The fill lands asynchronously;
+    # the next request (after the fill completes) will see the full window.
+    # Mid-session holes aren't fillable here — ch_reconcile handles those.
     if (
         lookback_days is not None
         and lookback_days <= _MAX_FILL_LOOKBACK_DAYS
@@ -148,20 +147,12 @@ def get_chart_bars(
         end = datetime.now(timezone.utc)
         start = end - timedelta(days=lookback_days)
         if _ch_lacks_window(bars, start):
-            try:
-                inserted = _lake_fill_fn(symbol)(symbol.upper(), start, end)
-                if inserted > 0:
-                    logger.info(
-                        "bars_gateway: lake-filled %s (%d rows, %dd window); re-querying CH",
-                        symbol, inserted, lookback_days,
-                    )
-                    bars = ch_reader.get_bars_for_chart(
-                        symbol, interval=interval,
-                        lookback_days=lookback_days, limit=limit,
-                        source_table=table,
-                    )
-            except Exception as exc:  # noqa: BLE001 — boundary; degrade to CH result
-                logger.warning("bars_gateway: lake fill for %s failed: %s", symbol, exc)
+            from app.services.live.gap_fill_worker import schedule_gap_fill
+            schedule_gap_fill(symbol, start, end)
+            logger.info(
+                "bars_gateway: CH lacks window for %s (%dd); gap fill scheduled",
+                symbol, lookback_days,
+            )
 
     return bars
 
@@ -204,16 +195,12 @@ def get_range_bars(
         and 0 < window_days <= _MAX_FILL_LOOKBACK_DAYS
         and _ch_lacks_window(bars, start)
     ):
-        try:
-            inserted = _lake_fill_fn(symbol)(symbol.upper(), start, end)
-            if inserted > 0:
-                logger.info(
-                    "bars_gateway: range lake-filled %s (%d rows, %dd); re-querying CH",
-                    symbol, inserted, window_days,
-                )
-                bars = ch_reader.get_bars_in_range(symbol, start, end, **kwargs)
-        except Exception as exc:  # noqa: BLE001 — boundary; degrade to CH result
-            logger.warning("bars_gateway: range lake fill for %s failed: %s", symbol, exc)
+        from app.services.live.gap_fill_worker import schedule_gap_fill
+        schedule_gap_fill(symbol, start, end)
+        logger.info(
+            "bars_gateway: CH lacks window for %s (%dd); gap fill scheduled",
+            symbol, window_days,
+        )
 
     return bars
 

@@ -1,10 +1,10 @@
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { useState } from "react";
-import { OhlcvChart, type WaveOverlay } from "@/components/charts/OhlcvChart";
+import { useState, useEffect } from "react";
+import { OhlcvChart, type WaveOverlay, type WaveProjection } from "@/components/charts/OhlcvChart";
 import { Button } from "@/components/ui/button";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
 import { SymbolSearchInput } from "@/components/symbol/SymbolSearchInput";
-import { useLakeBars } from "@/api/queries";
+import { useLakeBars, type Bar } from "@/api/queries";
 import {
   useWaveState,
   useWaveAlerts,
@@ -13,6 +13,7 @@ import {
   type WaveAlert,
   type WaveCountView,
   type WaveScenario,
+  type WaveStateResponse,
 } from "@/api/wave";
 import { useUserSetting } from "@/lib/storage";
 import { fmtPrice } from "@/lib/fmt";
@@ -42,14 +43,22 @@ export function EwtPage() {
   const ticker = (params.ticker ?? "").toUpperCase();
   const [interval, setInterval] = useUserSetting<Interval>("ewt.interval", "1d");
   const [asideTab, setAsideTab] = useState<"counts" | "scenarios">("counts");
+  const [activeCount, setActiveCount] = useState<"primary" | "secondary">("primary");
 
   const bars = useLakeBars(ticker || undefined, interval);
   const wave = useWaveState(ticker || undefined, interval);
 
+  // Reset to primary when the symbol or interval changes
+  useEffect(() => {
+    setActiveCount("primary");
+  }, [ticker, interval]);
+
   if (!ticker) return <WavePicker />;
 
   const primary = wave.data?.primary ?? null;
-  const overlay = buildOverlay(primary);
+  const secondary = wave.data?.secondary ?? null;
+  const count = activeCount === "secondary" && secondary ? secondary : primary;
+  const overlay = buildOverlay(count, wave.data, bars.data ?? []);
   const latest = bars.data?.at(-1);
   const scenarios = wave.data?.scenarios ?? [];
 
@@ -118,8 +127,18 @@ export function EwtPage() {
             <p className="text-sm text-fg-muted">Computing wave count…</p>
           ) : asideTab === "counts" ? (
             <>
-              <CountCard title="Primary" count={primary} accent />
-              <CountCard title="Secondary" count={wave.data?.secondary ?? null} />
+              <CountCard
+                title="Primary"
+                count={primary}
+                active={activeCount === "primary"}
+                onSelect={() => setActiveCount("primary")}
+              />
+              <CountCard
+                title="Secondary"
+                count={secondary}
+                active={activeCount === "secondary"}
+                onSelect={secondary ? () => setActiveCount("secondary") : undefined}
+              />
               <UncertaintyBar value={wave.data?.uncertainty ?? 1} />
             </>
           ) : (
@@ -222,47 +241,94 @@ function ScenarioCard({ scenario: s }: { scenario: WaveScenario }) {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-function buildOverlay(primary: WaveCountView | null): WaveOverlay | null {
-  if (!primary) return null;
-  return {
-    pivots: primary.pivots.map((p, i) => ({
-      ts: p.timestamp,
-      price: p.price,
-      label: waveLabel(primary.structure, i),
-    })),
-    levels: [
-      ...(primary.invalidation != null
-        ? [{ price: primary.invalidation, title: "stop", kind: "invalidation" as const }]
-        : []),
-      ...Object.entries(primary.targets).map(([k, v]) => ({
-        price: v,
-        title: k,
-        kind: "target" as const,
-      })),
-    ],
-  };
+function buildOverlay(
+  count: WaveCountView | null,
+  state: WaveStateResponse | null | undefined,
+  bars: ReadonlyArray<Bar>,
+): WaveOverlay | null {
+  if (!count) return null;
+
+  const asOfTs = state?.as_of_ts ?? undefined;
+  const asOfPrice = state?.as_of_price ?? undefined;
+
+  const pivots = count.pivots.map((p, i) => ({
+    ts: p.timestamp,
+    price: p.price,
+    label: waveLabel(count.structure, i),
+    kind: p.kind,
+  }));
+
+  // Only the stop line on the chart — targets are already in the sidebar.
+  const levels = count.invalidation != null
+    ? [{ price: count.invalidation, title: "stop", kind: "invalidation" as const }]
+    : [];
+
+  // Forward projection: estimate the target time from wave span + bar cadence.
+  let projection: WaveProjection | undefined;
+  const fwd = count.forward;
+  if (fwd?.target_low != null && fwd?.target_high != null && asOfTs && asOfPrice != null) {
+    const targetMid = (fwd.target_low + fwd.target_high) / 2;
+    const asOfMs = new Date(asOfTs).getTime();
+
+    // Estimate how far ahead the target is by taking the greater of:
+    //   (a) 20% of the wave span so far, or
+    //   (b) 8 bars of estimated cadence.
+    const firstPivotMs = count.pivots.length > 0
+      ? new Date(count.pivots[0].timestamp).getTime()
+      : asOfMs;
+    const span = asOfMs - firstPivotMs;
+    const barMs = bars.length >= 2
+      ? new Date(bars.at(-1)!.ts).getTime() - new Date(bars.at(-2)!.ts).getTime()
+      : 86_400_000;
+    const horizonMs = Math.max(span * 0.2, barMs * 8);
+
+    projection = {
+      fromTs: asOfTs,
+      fromPrice: asOfPrice,
+      toTs: new Date(asOfMs + horizonMs).toISOString(),
+      toPrice: targetMid,
+      targetLow: fwd.target_low,
+      targetHigh: fwd.target_high,
+    };
+  }
+
+  return { pivots, levels, asOfTs, asOfPrice, projection };
 }
 
 function CountCard({
   title,
   count,
-  accent = false,
+  active = false,
+  onSelect,
 }: {
   title: string;
   count: WaveCountView | null;
-  accent?: boolean;
+  active?: boolean;
+  onSelect?: () => void;
 }) {
   return (
     <div
+      role={onSelect ? "button" : undefined}
+      tabIndex={onSelect ? 0 : undefined}
+      onClick={onSelect}
+      onKeyDown={onSelect ? (e) => e.key === "Enter" && onSelect() : undefined}
       className={cn(
-        "rounded-md border bg-bg-subtle p-3",
-        accent ? "border-accent/50" : "border-border",
+        "rounded-md border bg-bg-subtle p-3 transition-colors",
+        active ? "border-accent/60 ring-1 ring-accent/30" : "border-border",
+        onSelect && !active ? "cursor-pointer hover:border-border-hover" : undefined,
       )}
     >
       <div className="mb-1 flex items-center justify-between">
-        <span className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
-          {title}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
+            {title}
+          </span>
+          {active && (
+            <span className="rounded-sm bg-accent/20 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-accent">
+              chart
+            </span>
+          )}
+        </div>
         {count ? (
           <span className="font-mono text-xs text-fg-muted">
             P {(count.probability * 100).toFixed(0)}%

@@ -303,24 +303,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("gap sweeper arming failed: %s", e)
 
-    # Kick a one-shot sweep shortly after startup so any holes that opened up
-    # while the app was down (or while a provider switch was in flight) get
-    # repaired immediately instead of waiting until the next 06:00 UTC sweep.
-    # The per-symbol `gap_fill` throttle (6h cooldown) makes this a free no-op
-    # if a sweep already ran recently, so rapid restarts don't hammer the
-    # provider.
-    async def _initial_gap_sweep_after_warmup() -> None:
-        # Let the watchlist subscribe + a couple of live bars land before we
-        # scan. 30s is well inside the user's "Refresh" loop and outside the
-        # tightest WS-handshake window.
-        try:
-            await asyncio.sleep(30.0)
-            result = backfill_service.sweep_now()
-            logger.info("✅ Initial gap sweep complete: %s", result)
-        except Exception as e:
-            logger.warning("Initial gap sweep failed: %s", e)
-    asyncio.create_task(_initial_gap_sweep_after_warmup(),
-                        name="backfill_initial_sweep")
+    # Startup gap sweep removed 2026-06-20: nightly ch_reconcile (23:00 UTC)
+    # is the correct mechanism for healing lake→CH gaps. A startup sweep
+    # hammers the history provider on every restart for all streaming symbols.
 
     # Journal sync is Schwab-only — gate it behind both an explicit toggle and
     # the presence of Schwab credentials so users running on other providers

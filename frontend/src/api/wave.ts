@@ -51,6 +51,7 @@ export interface WaveStateResponse {
   asset_class: string;
   as_of_date: string | null;
   as_of_ts: string | null;
+  as_of_price: number | null;
   primary: WaveCountView | null;
   secondary: WaveCountView | null;
   uncertainty: number;
@@ -96,11 +97,14 @@ export interface WaveAlert {
 
 export type WaveBackend = "store" | "compute" | "auto";
 
-/** Encode a symbol into the URL path while preserving the futures "/" prefix
- * (e.g. "/GC" → "/GC", so the backend's `{symbol:path}` route captures it).
- * Each segment is still encoded; only the slash separators survive. */
+/** Encode a symbol for use in the wave route path.
+ * Futures symbols start with "/" (e.g. "/ES"). We encode the whole symbol with
+ * encodeURIComponent so "/ES" → "%2FES", producing "/api/v1/wave/%2FES".
+ * Splitting on "/" and preserving the separator produces a double-slash
+ * ("//ES") which Vite's proxy normalizes to "/ES", routing to the equity
+ * ticker "ES" instead of the futures contract "/ES". */
 function symbolPath(symbol: string): string {
-  return symbol.split("/").map(encodeURIComponent).join("/");
+  return encodeURIComponent(symbol);
 }
 
 async function getJson<T>(url: string): Promise<T> {

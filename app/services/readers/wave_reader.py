@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import time
 from datetime import date, datetime
 from typing import Literal, Optional
 
@@ -73,7 +74,7 @@ def _from_labeling(lab: WaveLabeling, source: str) -> WaveStateResponse:
     return WaveStateResponse(
         symbol=lab.symbol, interval=lab.interval, asset_class=asset_class_for(lab.symbol),
         as_of_date=lab.as_of.date(), as_of_ts=lab.as_of, as_of_price=lab.as_of_price,
-        primary=view(lab.primary, True), secondary=view(lab.secondary, False),
+        primary=view(lab.primary, True), secondary=view(lab.secondary, True),
         uncertainty=lab.uncertainty, engine_ver=lab.engine_ver, source=source,
         scenarios=lab.scenarios,
     )
@@ -120,6 +121,36 @@ def _row_to_response(row: dict) -> WaveStateResponse:
     )
 
 
+# ---------------------------------------------------------------------------
+# In-process compute cache (2-minute TTL) — avoids recomputing the same
+# symbol/interval pair on rapid re-requests (e.g. interval tab switches).
+# The cache is keyed (symbol, interval); entries store (result, expiry_ts).
+# ---------------------------------------------------------------------------
+_COMPUTE_CACHE: dict[tuple[str, str], tuple[object, float]] = {}
+_COMPUTE_TTL = 120.0  # seconds
+
+
+def _cached_compute(symbol: str, interval: str):
+    """Compute or return a cached WaveLabeling.
+
+    Uses BarSource.CLICKHOUSE — avoids triggering the lake→CH fill side effect
+    in the hot path. For symbols that lack full lookback in CH, the engine gets
+    whatever CH has (still many hundreds of bars, enough for pivot detection).
+    The lake fill is the nightly-job's domain; here we just need fast reads.
+    """
+    from app.services.elliott_store.recompute import compute_labeling
+    from app.services.readers.bars_gateway import BarSource
+
+    key = (symbol, interval)
+    cached_val, expiry = _COMPUTE_CACHE.get(key, (None, 0.0))
+    if cached_val is not None and time.monotonic() < expiry:
+        return cached_val
+
+    result = compute_labeling(symbol, interval, source=BarSource.CLICKHOUSE)
+    _COMPUTE_CACHE[key] = (result, time.monotonic() + _COMPUTE_TTL)
+    return result
+
+
 class WaveReader:
     """Read Elliott Wave state for a symbol/interval. Cheap to construct."""
 
@@ -137,9 +168,10 @@ class WaveReader:
             if backend == "store":
                 return WaveStateResponse(symbol=symbol, interval=interval,
                                          asset_class=asset_class_for(symbol), source="store")
-        # compute (or auto-fallback)
-        from app.services.elliott_store.recompute import compute_labeling
-        lab = compute_labeling(symbol, interval)
+        # compute (or auto-fallback) — _cached_compute uses AUTO bar source
+        # (ClickHouse-first) and caches results for 2 min to avoid repeated
+        # recomputes when multiple UI requests arrive in a short window.
+        lab = _cached_compute(symbol, interval)
         if lab is None:
             return WaveStateResponse(symbol=symbol, interval=interval,
                                      asset_class=asset_class_for(symbol), source="compute")
