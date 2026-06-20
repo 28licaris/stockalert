@@ -27,10 +27,22 @@ NOW = datetime(2026, 6, 19, 12, 0, tzinfo=timezone.utc)
 
 class FakeAuthenticationService:
     revoked: UUID | None = None
+    begin_login_kwargs: dict[str, object] | None = None
 
     async def begin_login(
-        self, *, return_to: str | None, identity_provider: str | None = None
+        self,
+        *,
+        return_to: str | None,
+        identity_provider: str | None = None,
+        screen_hint: str | None = None,
+        prompt: str | None = None,
     ) -> BeginLoginResult:
+        self.begin_login_kwargs = {
+            "return_to": return_to,
+            "identity_provider": identity_provider,
+            "screen_hint": screen_hint,
+            "prompt": prompt,
+        }
         return BeginLoginResult(
             status="ok", authorization_url="https://cognito.example/authorize"
         )
@@ -54,6 +66,9 @@ class FakeAuthenticationService:
 
     def logout_url(self) -> str:
         return "https://cognito.example/logout"
+
+    def password_reset_url(self) -> str:
+        return "https://cognito.example/forgotPassword"
 
     def revoke_session(self, session_id: UUID) -> RevokeSessionResult:
         self.revoked = session_id
@@ -130,6 +145,36 @@ def test_login_redirects_to_provider(monkeypatch) -> None:
         response = TestClient(app).get("/auth/login", follow_redirects=False)
         assert response.status_code == 302
         assert response.headers["location"] == "https://cognito.example/authorize"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_signup_redirects_to_provider_with_signup_hint(monkeypatch) -> None:
+    fake_auth = _configure_auth(monkeypatch, None)
+    try:
+        response = TestClient(app).get(
+            "/auth/login",
+            params={"mode": "signup"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+        assert response.headers["location"] == "https://cognito.example/authorize"
+        assert fake_auth.begin_login_kwargs == {
+            "return_to": None,
+            "identity_provider": None,
+            "screen_hint": "signup",
+            "prompt": None,
+        }
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_password_reset_redirects_to_provider(monkeypatch) -> None:
+    _configure_auth(monkeypatch, None)
+    try:
+        response = TestClient(app).get("/auth/password-reset", follow_redirects=False)
+        assert response.status_code == 302
+        assert response.headers["location"] == "https://cognito.example/forgotPassword"
     finally:
         app.dependency_overrides.clear()
 

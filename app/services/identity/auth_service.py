@@ -59,7 +59,12 @@ class OAuthAuthenticationService:
         self._verifier_factory = verifier_factory
 
     async def begin_login(
-        self, *, return_to: str | None, identity_provider: str | None = None
+        self,
+        *,
+        return_to: str | None,
+        identity_provider: str | None = None,
+        screen_hint: str | None = None,
+        prompt: str | None = None,
     ) -> BeginLoginResult:
         state = self._state_factory()
         nonce = self._nonce_factory()
@@ -84,6 +89,8 @@ class OAuthAuthenticationService:
                 code_challenge=pkce_s256_challenge(verifier),
                 redirect_uri=self._redirect_uri,
                 identity_provider=identity_provider,
+                screen_hint=screen_hint,
+                prompt=prompt,
             ),
         )
 
@@ -140,6 +147,9 @@ class OAuthAuthenticationService:
 
     def logout_url(self) -> str:
         return self._provider.logout_url(logout_uri=self._logout_uri)
+
+    def password_reset_url(self) -> str:
+        return self._provider.password_reset_url(redirect_uri=self._redirect_uri)
 
     def revoke_session(self, session_id: UUID) -> RevokeSessionResult:
         return self._identity_service.revoke_session(session_id)

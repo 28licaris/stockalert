@@ -30,7 +30,7 @@ const FLAGS: Record<string, FlagValue> = {
   "page.seed": true, // enabled in FE-CONTRACTS-4
   "page.clickhouse": true, // enabled in FE-CONTRACTS-6a
   "page.mcp": false,
-  "page.settings": false,
+  "page.settings": true,
 
   // Capability gates. False = no-op / hidden control.
   "feature.backtest.runner": false,

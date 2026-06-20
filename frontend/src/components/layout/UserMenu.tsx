@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, LogOut, ShieldCheck } from "lucide-react";
+import { Link } from "react-router-dom";
+import { ChevronDown, LogOut, Settings, ShieldCheck } from "lucide-react";
 import { useAuth } from "@/auth/auth-context";
 import { useCurrentUser } from "@/auth/useCurrentUser";
 import { cn } from "@/lib/utils";
@@ -92,6 +93,16 @@ export function UserMenu() {
           {error ? (
             <p className="px-3 py-2 text-xs leading-5 text-danger">{error}</p>
           ) : null}
+
+          <Link
+            to="/settings"
+            role="menuitem"
+            onClick={() => setOpen(false)}
+            className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-fg-muted transition hover:bg-bg-muted hover:text-fg-base"
+          >
+            <Settings className="h-4 w-4" />
+            Security settings
+          </Link>
 
           <button
             type="button"

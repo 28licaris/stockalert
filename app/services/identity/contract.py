@@ -72,6 +72,8 @@ class IdentityProvider(Protocol):
         code_challenge: str,
         redirect_uri: str,
         identity_provider: str | None = None,
+        screen_hint: str | None = None,
+        prompt: str | None = None,
     ) -> str: ...
 
     async def exchange_code(
@@ -82,6 +84,8 @@ class IdentityProvider(Protocol):
         code_verifier: str,
         expected_nonce: str,
     ) -> CognitoTokenSet: ...
+
+    def password_reset_url(self, *, redirect_uri: str) -> str: ...
 
     def logout_url(self, *, logout_uri: str) -> str: ...
 

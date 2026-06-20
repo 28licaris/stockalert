@@ -77,8 +77,16 @@ export async function endSession(): Promise<string> {
   return ((await response.json()) as LogoutDto).redirect_url;
 }
 
-export function loginUrl(returnTo: string, provider?: "Google"): string {
-  const query = new URLSearchParams({ return_to: returnTo });
+export function loginUrl(
+  returnTo: string,
+  provider?: "Google",
+  mode: "login" | "signup" = "login",
+): string {
+  const query = new URLSearchParams({ return_to: returnTo, mode });
   if (provider) query.set("provider", provider);
   return `/auth/login?${query.toString()}`;
+}
+
+export function passwordResetUrl(): string {
+  return "/auth/password-reset";
 }

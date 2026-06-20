@@ -60,6 +60,8 @@ class CognitoIdentityProvider:
         code_challenge: str,
         redirect_uri: str,
         identity_provider: str | None = None,
+        screen_hint: str | None = None,
+        prompt: str | None = None,
     ) -> str:
         params = {
                 "response_type": "code",
@@ -73,8 +75,23 @@ class CognitoIdentityProvider:
         }
         if identity_provider:
             params["identity_provider"] = identity_provider
+        if screen_hint:
+            params["screen_hint"] = screen_hint
+        if prompt:
+            params["prompt"] = prompt
         query = urlencode(params)
         return f"{self._config.domain}/oauth2/authorize?{query}"
+
+    def password_reset_url(self, *, redirect_uri: str) -> str:
+        query = urlencode(
+            {
+                "client_id": self._config.client_id,
+                "response_type": "code",
+                "scope": " ".join(self._config.scopes),
+                "redirect_uri": redirect_uri,
+            }
+        )
+        return f"{self._config.domain}/forgotPassword?{query}"
 
     async def exchange_code(
         self,

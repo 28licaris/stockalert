@@ -7,6 +7,7 @@ import { StreamPage } from "./stream";
 import { ClickHousePage } from "./clickhouse";
 import { NotFoundPage } from "./not-found";
 import { LoginPage } from "./login";
+import { SettingsPage } from "./settings";
 import { AuthGuard } from "@/auth/AuthGuard";
 
 /**
@@ -34,6 +35,7 @@ export const router = createBrowserRouter(
             { path: "stream", element: <StreamPage /> },
             { path: "seed", element: <Navigate to="/stream" replace /> },
             { path: "clickhouse", element: <ClickHousePage /> },
+            { path: "settings", element: <SettingsPage /> },
             { path: "*", element: <NotFoundPage /> },
           ],
         },

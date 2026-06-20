@@ -69,6 +69,43 @@ def test_authorization_url_uses_code_pkce_state_and_nonce() -> None:
     assert query["nonce"] == ["nonce-value"]
 
 
+def test_authorization_url_supports_signup_hint_and_prompt() -> None:
+    provider = CognitoIdentityProvider(
+        config=CognitoOAuthConfig(
+            domain=DOMAIN, issuer_url=ISSUER, client_id=CLIENT_ID
+        )
+    )
+    url = provider.authorization_url(
+        state="state-value",
+        nonce="nonce-value",
+        code_challenge="challenge-value",
+        redirect_uri="http://localhost:8000/auth/callback",
+        screen_hint="signup",
+        prompt="login",
+    )
+    query = parse_qs(urlparse(url).query)
+    assert query["screen_hint"] == ["signup"]
+    assert query["prompt"] == ["login"]
+
+
+def test_password_reset_url_targets_managed_reset_page() -> None:
+    provider = CognitoIdentityProvider(
+        config=CognitoOAuthConfig(
+            domain=DOMAIN, issuer_url=ISSUER, client_id=CLIENT_ID
+        )
+    )
+    url = provider.password_reset_url(
+        redirect_uri="http://localhost:8000/auth/callback"
+    )
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query)
+    assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == (
+        f"{DOMAIN}/forgotPassword"
+    )
+    assert query["client_id"] == [CLIENT_ID]
+    assert query["redirect_uri"] == ["http://localhost:8000/auth/callback"]
+
+
 @pytest.mark.asyncio
 async def test_exchange_code_validates_jwt_and_returns_identity() -> None:
     private_key, public_jwk = _key_material()

@@ -25,10 +25,14 @@ router = APIRouter(prefix="/auth")
 async def login(
     return_to: str | None = Query(default=None, max_length=500),
     provider: Literal["Google"] | None = Query(default=None),
+    mode: Literal["login", "signup"] = Query(default="login"),
     auth: OAuthAuthenticationService = Depends(get_authentication_service),
 ) -> RedirectResponse:
     result = await auth.begin_login(
-        return_to=return_to, identity_provider=provider
+        return_to=return_to,
+        identity_provider=provider,
+        screen_hint="signup" if mode == "signup" else None,
+        prompt="login" if mode == "login" else None,
     )
     if result.status != "ok" or result.authorization_url is None:
         raise HTTPException(
@@ -37,6 +41,13 @@ async def login(
             headers={"X-Error-Code": result.error_code or "auth_start_failed"},
         )
     return RedirectResponse(result.authorization_url, status_code=302)
+
+
+@router.get("/password-reset", include_in_schema=False)
+async def password_reset(
+    auth: OAuthAuthenticationService = Depends(get_authentication_service),
+) -> RedirectResponse:
+    return RedirectResponse(auth.password_reset_url(), status_code=302)
 
 
 @router.get("/callback", include_in_schema=False)

@@ -3,6 +3,7 @@ import {
   ArrowRight,
   BellRing,
   CheckCircle2,
+  KeyRound,
   LockKeyhole,
   Mail,
   ShieldCheck,
@@ -11,7 +12,7 @@ import {
 } from "lucide-react";
 import { Navigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/auth/auth-context";
-import { loginUrl } from "@/auth/client";
+import { loginUrl, passwordResetUrl } from "@/auth/client";
 import { branding } from "@/branding";
 
 function GoogleMark() {
@@ -242,6 +243,23 @@ export function LoginPage() {
                 </a>
               </div>
 
+              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                <a
+                  href={loginUrl(returnTo, undefined, "signup")}
+                  className="group flex h-11 items-center justify-center gap-2 rounded-xl border border-white/12 bg-white/[0.03] px-4 text-sm font-medium text-white/80 transition hover:-translate-y-0.5 hover:border-violet-300/30 hover:bg-violet-300/[0.07]"
+                >
+                  Create account
+                  <ArrowRight className="h-4 w-4 text-white/25 transition-transform group-hover:translate-x-0.5" />
+                </a>
+                <a
+                  href={passwordResetUrl()}
+                  className="group flex h-11 items-center justify-center gap-2 rounded-xl border border-white/12 bg-white/[0.03] px-4 text-sm font-medium text-white/80 transition hover:-translate-y-0.5 hover:border-violet-300/30 hover:bg-violet-300/[0.07]"
+                >
+                  <KeyRound className="h-4 w-4 text-white/45" />
+                  Reset password
+                </a>
+              </div>
+
               <div className="my-6 flex items-center gap-3 text-[10px] uppercase tracking-[0.18em] text-white/25">
                 <div className="h-px flex-1 bg-white/10" /> Production-grade
                 security <div className="h-px flex-1 bg-white/10" />
@@ -256,6 +274,18 @@ export function LoginPage() {
                     </p>
                     <p className="mt-0.5 text-[10px] leading-4 text-white/35">
                       Credentials never reach StockAlert
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-2.5 rounded-xl bg-black/15 p-3">
+                  <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-300" />
+                  <div>
+                    <p className="text-[11px] font-medium text-white/75">
+                      MFA ready
+                    </p>
+                    <p className="mt-0.5 text-[10px] leading-4 text-white/35">
+                      TOTP can be enrolled from the security center after
+                      sign-in
                     </p>
                   </div>
                 </div>
