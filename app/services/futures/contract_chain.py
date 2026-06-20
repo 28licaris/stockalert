@@ -94,6 +94,13 @@ def discover_contracts(
                 continue
             seen.add(ticker)
 
+            # Skip spread / calendar-spread contracts (contain '-').
+            # They interleave alphabetically with outright contracts and have
+            # non-standard date ranges that break the front-month window logic.
+            if "-" in ticker:
+                logger.debug("discover_contracts: %s is a spread, skip", ticker)
+                continue
+
             ftd = _parse_date(getattr(fc, "first_trade_date", None))
             ltd = _parse_date(getattr(fc, "last_trade_date", None))
             if ftd is None or ltd is None:
@@ -110,7 +117,10 @@ def discover_contracts(
         logger.error("discover_contracts: %s — API error: %s", product_code, exc)
         raise
 
-    contracts.sort(key=lambda c: c.ticker)
+    # Sort by expiry date, not ticker name.  Alphabetical ticker sort groups
+    # by delivery month (H4, H5, H6, M4, M5, M6 …) which is NOT chronological.
+    # Sorting by last_trade_date gives the correct sequential front-month chain.
+    contracts.sort(key=lambda c: c.last_trade_date)
     logger.info(
         "discover_contracts: %s → %d contracts (%s → %s)",
         product_code,
