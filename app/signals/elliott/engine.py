@@ -74,7 +74,7 @@ _ZIGZAG_PRIOR = 0.92
 
 
 class WaveEngine:
-    version = "ew3.1.0"  # V3-1: nesting + proportionality validation
+    version = "ew3.6.0"  # V3-6: degree coherence (recency + wave-size relativity)
 
     def __init__(self, top_k: int = 3, min_confidence: float = 0.5,
                  secondary_floor: float = 0.15) -> None:
@@ -105,11 +105,12 @@ class WaveEngine:
                 cands.extend(self._impulse(run, last_price))
                 cands.extend(self._zigzag(run, last_price))
 
-        # V3-1 nesting: validate each candidate against its one-degree-finer
-        # subdivisions and fold the result into confidence BEFORE ranking, so a
-        # count whose waves don't subdivide (noisy pivots) is demoted.
+        # V3-1/V3-6: nesting (subdivision validation + proportionality) and
+        # degree coherence (recency + wave-size relativity) — applied before
+        # ranking so a historically-anchored macro count loses to a recent
+        # finer-degree count of similar raw Fibonacci fit.
         for c in cands:
-            apply_nesting(c, by_degree)
+            apply_nesting(c, by_degree, last_price, as_of_index)
 
         cands = _dedupe(cands)
         cands.sort(key=lambda c: (-c.confidence, tuple(p.index for p in c.pivots)))
