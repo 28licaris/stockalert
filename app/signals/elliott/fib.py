@@ -16,7 +16,11 @@ from __future__ import annotations
 from typing import Literal
 
 Direction = Literal["up", "down"]
-FIB = (0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.272, 1.618, 2.618)
+# Canonical Fibonacci ratios used throughout EWT.
+# Added 0.764, 0.854 (deep wave-2/B retracements), 1.236 (C/B extensions),
+# 2.0 (wave-3 double extension), 3.236 (wave-3 triple) per Elliott Wave
+# Forecast reference — fills the gaps between prior 0.786 and 1.618 entries.
+FIB = (0.236, 0.382, 0.5, 0.618, 0.764, 0.786, 0.854, 1.0, 1.236, 1.272, 1.618, 2.0, 2.618, 3.236)
 
 
 def _sign(direction: Direction) -> int:
@@ -51,15 +55,18 @@ def score_impulse(prices: list[float], direction: Direction) -> float:
 
     if len(prices) >= 3 and w1:
         w2r = abs(prices[1] - prices[2]) / w1               # wave-2 retrace of wave-1
-        parts.append(_band(w2r, 0.382, 0.786, 0.618))
+        # EWT guidelines: 50%, 61.8%, 76.4%, 85.4% are all valid W2 retracements
+        parts.append(_band(w2r, 0.382, 0.854, 0.618))
     if len(prices) >= 4 and w1:
         w3e = abs(prices[3] - prices[2]) / w1               # wave-3 extension of wave-1
-        parts.append(_band(w3e, 1.0, 2.8, 1.618, width=0.6))
+        # EWT: 161.8%, 200%, 261.8%, 323.6% are all valid W3 extensions
+        parts.append(_band(w3e, 1.0, 3.236, 1.618, width=0.7))
     if len(prices) >= 5:
         w3 = abs(prices[3] - prices[2])
         if w3:
             w4r = abs(prices[3] - prices[4]) / w3           # wave-4 retrace of wave-3
-            parts.append(_band(w4r, 0.236, 0.5, 0.382))
+            # EWT: 14.6%, 23.6%, 38.2% valid; max ~50%
+            parts.append(_band(w4r, 0.146, 0.5, 0.382))
         # alternation: wave 2 and wave 4 should differ in depth
         if w1:
             w2r = abs(prices[1] - prices[2]) / w1
@@ -73,36 +80,46 @@ def score_impulse(prices: list[float], direction: Direction) -> float:
 
 
 def score_zigzag(prices: list[float], direction: Direction) -> float:
-    """0..1 fit for a zigzag: B retraces A by .382–.786; C ≈ A or 1.618·A."""
+    """0..1 fit for a zigzag: B retraces A by 38.2–85.4%; C = 61.8%, 100%, or 123.6% of A."""
     parts: list[float] = []
     a = abs(prices[1] - prices[0]) if len(prices) >= 2 else 0.0
     if len(prices) >= 3 and a:
         br = abs(prices[1] - prices[2]) / a
-        parts.append(_band(br, 0.382, 0.786, 0.5))
+        # EWT: B = 50%, 61.8%, 76.4%, 85.4% of A — center at 0.618
+        parts.append(_band(br, 0.382, 0.854, 0.618))
     if len(prices) >= 4 and a:
         c = abs(prices[3] - prices[2]) / a
-        parts.append(max(_band(c, 0.8, 1.2, 1.0), _band(c, 1.5, 1.8, 1.618)))
+        # EWT: C = 61.8%, 100%, or 123.6% of A
+        parts.append(max(_band(c, 0.5, 1.2, 1.0), _band(c, 1.1, 1.5, 1.236)))
     return round(sum(parts) / len(parts), 4) if parts else 0.0
 
 
 def score_flat(prices: list[float], direction: Direction) -> float:
     """0..1 Fibonacci-fit for a flat correction (A-B-C, 3-3-5 internal).
 
-    B ideally retraces ~100% of A (regular flat) or 105-138% (expanded flat).
-    C ideally equals A (100%) or extends to 1.618×A.
+    Three subtypes, all scored here (highest wins in engine ranking):
+
+      Regular flat   — B ≈ 90–105% of A;  C ≈ 61.8–123.6% of AB combined
+      Expanded flat  — B ≈ 105–138% (123.6% ideal);  C ≈ 100–161.8% of AB
+      Running flat   — B ≈ 105–138% (same as expanded);  C ≈ 61.8–100% of AB
+                        (C falls short of A's endpoint — the "running" signature)
+
+    B scores the same for expanded and running (both need deep B); the C
+    band differentiates them: expanded C > regular C > running C (short C).
     """
     parts: list[float] = []
     a = abs(prices[1] - prices[0]) if len(prices) >= 2 else 0.0
     if len(prices) >= 3 and a:
         b_ret = abs(prices[2] - prices[1]) / a
-        # Regular flat: B ≈ 0.90-1.05; expanded flat: B 1.05-1.382
+        # Regular: B ≈ 90–105%; expanded/running: B ≈ 105–138% (123.6% ideal)
         parts.append(max(_band(b_ret, 0.90, 1.05, 1.00),
                          _band(b_ret, 1.05, 1.382, 1.236, width=0.20)))
     if len(prices) >= 4 and a:
         c = abs(prices[3] - prices[2]) / a
-        # C ≈ 1.0×A (regular) or 1.618×A (extended)
+        # Regular: C ≈ 100–123.6% of A; expanded: C ≈ 123.6–161.8%; running: C ≈ 61.8–100%
         parts.append(max(_band(c, 0.85, 1.15, 1.00),
-                         _band(c, 1.40, 1.80, 1.618)))
+                         _band(c, 1.15, 1.80, 1.236),
+                         _band(c, 0.50, 1.00, 0.618, width=0.20)))
     return round(sum(parts) / len(parts), 4) if parts else 0.0
 
 

@@ -61,8 +61,12 @@ def evaluate_impulse(prices: list[float], direction: Direction) -> dict[str, boo
 def evaluate_flat(prices: list[float], direction: Direction) -> dict[str, bool]:
     """Flat A-B-C correction. Distinguishing rule: wave B retraces ≥90% of wave A.
 
-    In a zigzag B retraces 38–79%; in a flat B retraces 90%+ (regular flat
-    ≈100%, expanded flat >100%). Both A and C move in the same direction.
+    Three subtypes (all share the ≥90% B-retrace rule; subtype is Fib-scored):
+      Regular flat   — B ≈ 90–105% of A; C ends slightly beyond A
+      Expanded flat  — B > 105% of A (123.6% typical); C ends substantially beyond A
+      Running flat   — B > 105% of A; C falls SHORT of A's endpoint (bullish/bearish bias)
+
+    In a zigzag B retraces 38–85%; in any flat B retraces 90%+.
 
         down-flat prices = [H0, LA, HB, LC]  — A down, B up ≥90%, C down
         up-flat   prices = [L0, HA, LB, HC]  — A up, B down ≥90%, C up

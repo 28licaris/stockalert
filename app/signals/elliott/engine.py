@@ -394,13 +394,20 @@ class WaveEngine:
                 conf *= 0.5
             targets = fwd
 
+        # Diagonal type: "ending" (wave 5/C — exhaustion reversal signal, most common)
+        # vs "leading" (wave 1/A — first wave of a new impulse, less common).
+        # Without multi-degree context we default to "ending"; the engine will
+        # emit "leading" in a future pass when it can see the parent wave position.
+        diag_type = "ending"
+
         art = "an" if direction == "up" else "a"
         if current == "complete":
-            rat = (f"{art.capitalize()} {direction} contracting diagonal appears complete — "
-                   f"expect reversal. Structural stop {invalid}.")
+            rat = (f"{art.capitalize()} {direction} ending diagonal appears complete — "
+                   f"expect sharp reversal opposite to trend. Structural stop {invalid}.")
         else:
-            rat = (f"In wave {current} of {art} {direction} contracting diagonal. "
-                   f"Wave 4 overlaps wave 1 — wedging structure. "
+            rat = (f"In wave {current} of {art} {direction} contracting diagonal "
+                   f"(likely ending — wave 5 or C position). "
+                   f"Wave 4 overlaps wave 1, wedging. "
                    f"Stop {invalid}."
                    + (f" Target {next(iter(targets.values()))}." if targets else ""))
         return [WaveCandidate(
@@ -409,6 +416,7 @@ class WaveEngine:
             rules_passed=passed, rule_score=1.0, fib_score=fib_score,
             confidence=round(conf, 3), invalidation_price=invalid,
             fib_targets=targets, rationale=rat, is_diagonal=True,
+            diagonal_type=diag_type,
         )]
 
     def _zigzag(self, run: list[Pivot], last_price: float) -> list[WaveCandidate]:

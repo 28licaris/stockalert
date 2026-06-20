@@ -42,8 +42,9 @@ class WaveCandidate(BaseModel):
     # (in wave 4 → wave 5), as a confluence zone + invalidation.
     forward: dict = Field(default_factory=dict)
     # v3 structure catalog (V3-5): per-candidate flags for special structures.
-    is_truncated: bool = False   # wave 5 failed to exceed wave 3 (impulse only)
-    is_diagonal: bool = False    # wave 4 overlaps wave 1 (contracting diagonal)
+    is_truncated: bool = False      # wave 5 failed to exceed wave 3 (impulse only)
+    is_diagonal: bool = False       # wave 4 overlaps wave 1 (contracting diagonal)
+    diagonal_type: str = ""         # "leading" (wave 1/A position) or "ending" (wave 5/C position)
     # v3 labeled alternates (V3-3): scenario-level fields.
     # confirms_at: the price that "flips" to this count (= previous count's
     #   invalidation_price). None for the primary — it's already in effect.

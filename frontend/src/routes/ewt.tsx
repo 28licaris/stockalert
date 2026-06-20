@@ -1,4 +1,4 @@
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, Link } from "react-router-dom";
 import { useState } from "react";
 import { OhlcvChart, type WaveOverlay } from "@/components/charts/OhlcvChart";
 import { Button } from "@/components/ui/button";
@@ -387,12 +387,20 @@ function WavePicker() {
   };
   return (
     <div className="mx-auto max-w-xl space-y-6 p-8">
-      <header>
-        <h1 className="text-2xl font-semibold text-fg-base">Elliott Wave</h1>
-        <p className="mt-1 text-sm text-fg-muted">
-          Search a ticker to see its primary + secondary wave count, invalidation,
-          and Fibonacci targets.
-        </p>
+      <header className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-fg-base">Elliott Wave</h1>
+          <p className="mt-1 text-sm text-fg-muted">
+            Search a ticker to see its primary + secondary wave count, invalidation,
+            and Fibonacci targets.
+          </p>
+        </div>
+        <Link
+          to="/ewt/guide"
+          className="shrink-0 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-fg-muted hover:border-accent hover:text-accent"
+        >
+          EWT Guide →
+        </Link>
       </header>
       <div className="flex gap-2">
         <SymbolSearchInput
