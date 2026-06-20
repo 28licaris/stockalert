@@ -28,6 +28,14 @@ Start ClickHouse only (profile `ch`):
 docker compose --profile ch up -d
 ```
 
+Start the lightweight customer-identity PostgreSQL container and apply its
+schema (identity/auth development only):
+
+```bash
+docker compose --profile identity up -d postgres
+poetry run alembic upgrade head
+```
+
 ## Run locally (two servers)
 
 **Backend API** — uvicorn on `:8000`:
@@ -66,7 +74,7 @@ cd frontend && npm run build
 
 When the backend's API types change, regenerate the typed client: `npm run codegen` (needs the backend running on `:8000`).
 
-## Docker (API + ClickHouse)
+## Docker (API + ClickHouse + PostgreSQL)
 
 Build and run both services (profile `full`; requires `.env` with provider keys as in compose):
 
@@ -79,6 +87,15 @@ docker compose --profile full up --build
 ```bash
 poetry run pytest                        # all
 poetry run pytest -m "not integration"   # unit only (fast)
+```
+
+Identity repository integration tests use a separate disposable PostgreSQL
+container:
+
+```bash
+docker compose --profile identity-test up -d postgres-test
+TEST_IDENTITY_DATABASE_URL=postgresql+psycopg://stockalert:stockalert_test@localhost:5433/stockalert_identity_test \
+  poetry run pytest tests/integration/test_identity_postgres.py
 ```
 
 ## Schwab one-off scripts

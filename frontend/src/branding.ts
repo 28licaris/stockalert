@@ -9,7 +9,7 @@
 
 export const branding = {
   productName: "StockAlert",
-  productTagline: "Developer cockpit",
+  productTagline: "Trading intelligence",
   // Single-character glyph used in the sidebar collapse state. Replace
   // with a logo SVG when we have one.
   shortMark: "S",

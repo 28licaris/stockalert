@@ -1,4 +1,43 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: stockalert_identity_postgres
+    environment:
+      POSTGRES_DB: stockalert_identity
+      POSTGRES_USER: stockalert
+      POSTGRES_PASSWORD: stockalert_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stockalert -d stockalert_identity"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    profiles:
+      - identity
+      - full
+
+  postgres-test:
+    image: postgres:17-alpine
+    container_name: stockalert_identity_postgres_test
+    environment:
+      POSTGRES_DB: stockalert_identity_test
+      POSTGRES_USER: stockalert
+      POSTGRES_PASSWORD: stockalert_test
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stockalert -d stockalert_identity_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+    profiles:
+      - identity-test
+
   clickhouse:
     image: clickhouse/clickhouse-server:24.8
     container_name: stockalert_clickhouse
@@ -30,6 +69,7 @@ services:
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
       CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-stocks}
+      IDENTITY_DATABASE_URL: ${IDENTITY_DATABASE_URL:-postgresql+psycopg://stockalert:stockalert_dev@postgres:5432/stockalert_identity}
       DATA_SOURCE_TAG: ${DATA_PROVIDER:-alpaca}
       USE_TREND_FILTER: ${USE_TREND_FILTER:-true}
       EMA_PERIOD: ${EMA_PERIOD:-50}
@@ -45,7 +85,11 @@ services:
     profiles:
       - full
     depends_on:
-      - clickhouse
+      clickhouse:
+        condition: service_started
+      postgres:
+        condition: service_healthy
 
 volumes:
   chdata:
+  pgdata:

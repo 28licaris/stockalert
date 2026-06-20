@@ -37,6 +37,7 @@ poetry run pytest -m "not integration"            # unit only (fast)
 poetry run pytest -m integration                  # live-service
 poetry run pytest tests/test_foo.py::test_bar     # single test
 docker compose --profile ch up -d                 # local ClickHouse
+docker compose --profile identity up -d postgres  # local identity PostgreSQL
 docker compose --profile full up --build          # full stack
 ```
 
@@ -45,6 +46,7 @@ docker compose --profile full up --build          # full stack
 ```
 app/api/             FastAPI routes (routes_*.py — one per domain)
 app/services/        Domain modules (see standards/service_modules.md)
+  identity/          Customer users/tenants/sessions; Pydantic contracts + PostgreSQL repository
   equities/          v2 lake: schemas + sink + tables + gaps + models
   futures/           v2 futures mirror: schemas/sink/tables/gaps +
                      universe + symbols (/-prefix routing) + lake_to_ch_fill
@@ -56,7 +58,7 @@ app/services/        Domain modules (see standards/service_modules.md)
   live/              Live-tier orchestration (stream, watchlist)
   sim/               Backtest (see standards/trading_subsystem.md)
   journal/  screener/  universe/  legacy/
-app/db/              ClickHouse client + schemas
+app/db/              ClickHouse client + schemas; PostgreSQL engine wiring
 app/providers/       base.py + alpaca/polygon/schwab
 app/indicators/      Pure math, registry pattern
 app/signals/         Pattern detectors (pure fns)

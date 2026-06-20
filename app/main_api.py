@@ -19,6 +19,7 @@ from app.api.schemas import ErrorResponse
 
 from app.db import (
     close_client,
+    close_identity_engine,
     get_bar_batcher,
     get_futures_bar_batcher,
     init_schema,
@@ -47,6 +48,9 @@ from app.api import (
     routes_screener,
     routes_seed,
     routes_adjusted,
+    routes_admin_auth,
+    routes_auth,
+    routes_customer_auth,
     routes_stream,
     routes_watchlist,
 )
@@ -551,6 +555,8 @@ async def lifespan(app: FastAPI):
 
     close_client()
     logger.info("✅ ClickHouse client closed")
+    close_identity_engine()
+    logger.info("✅ Identity PostgreSQL engine closed")
     logger.info("✅ Shutdown complete")
 
 
@@ -670,6 +676,9 @@ app.include_router(routes_seed.router, prefix=_V1, tags=["Seed"])
 app.include_router(routes_stream.router, prefix=_V1, tags=["Stream"])
 app.include_router(routes_jobs.router, prefix=_V1, tags=["Jobs"])
 app.include_router(routes_clickhouse.router, prefix=_V1, tags=["ClickHouse"])
+app.include_router(routes_customer_auth.router, prefix=_V1, tags=["CustomerAuth"])
+app.include_router(routes_admin_auth.router, prefix=_V1, tags=["AdminAuth"])
+app.include_router(routes_auth.router, tags=["Auth"])
 
 try:
     from app.api import routes_signals

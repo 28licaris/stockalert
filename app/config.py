@@ -234,6 +234,35 @@ class Settings(BaseModel):
     clickhouse_user: str = os.getenv("CLICKHOUSE_USER", "default")
     clickhouse_password: str = os.getenv("CLICKHOUSE_PASSWORD", "")
     clickhouse_database: str = os.getenv("CLICKHOUSE_DATABASE", "stocks")
+
+    # Customer identity / subscription operational database. This remains
+    # separate from ClickHouse by design: PostgreSQL owns accounts, tenants,
+    # sessions, and billing state; ClickHouse owns market/alert analytics.
+    # Empty by default so existing developer-cockpit deployments do not
+    # accidentally connect to a relational database before auth is enabled.
+    identity_database_url: str = os.getenv("IDENTITY_DATABASE_URL", "")
+    auth_enabled: bool = os.getenv("AUTH_ENABLED", "false").lower() == "true"
+    cognito_domain: str = os.getenv("COGNITO_DOMAIN", "").rstrip("/")
+    cognito_issuer_url: str = os.getenv("COGNITO_ISSUER_URL", "").rstrip("/")
+    cognito_client_id: str = os.getenv("COGNITO_CLIENT_ID", "")
+    cognito_client_secret: str = os.getenv("COGNITO_CLIENT_SECRET", "")
+    cognito_redirect_uri: str = os.getenv(
+        "COGNITO_REDIRECT_URI", "http://localhost:8000/auth/callback"
+    )
+    cognito_logout_uri: str = os.getenv(
+        "COGNITO_LOGOUT_URI", "http://localhost:5173/app/login"
+    )
+    auth_session_hours: int = int(os.getenv("AUTH_SESSION_HOURS", "8"))
+    auth_login_transaction_minutes: int = int(
+        os.getenv("AUTH_LOGIN_TRANSACTION_MINUTES", "10")
+    )
+    auth_cookie_name: str = os.getenv("AUTH_COOKIE_NAME", "stockalert_session")
+    auth_csrf_cookie_name: str = os.getenv(
+        "AUTH_CSRF_COOKIE_NAME", "stockalert_csrf"
+    )
+    auth_cookie_secure: bool = (
+        os.getenv("AUTH_COOKIE_SECURE", "true").lower() == "true"
+    )
     # Optional tag stored on OHLCV rows (e.g. matches DATA_PROVIDER)
     data_source_tag: str = os.getenv("DATA_SOURCE_TAG", "")
     # Comma-separated symbols for the dashboard tape. Uses liquid ETFs that

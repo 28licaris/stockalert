@@ -9,6 +9,13 @@
 **Scope:** Production customer identity, authentication, authorization,
 subscriptions, and separation from the StockAlert operator cockpit
 
+**Implementation status:** Foundation slice started on `codex/dashboard-auth`:
+Pydantic identity contracts, provider/repository Protocols, SQLAlchemy models,
+Alembic schema, opaque session primitives, and lightweight PostgreSQL Docker
+configuration. The next slice adds Cognito OAuth/PKCE, validated callback,
+opaque cookies, CSRF-protected logout, current-user contract, and deny-by-
+default customer/operator dependencies. Stripe remains unimplemented.
+
 This document defines the initial system contract. It is a plan, not
 authorization to implement it. Requirements will evolve, but implementations
 must preserve the security and service boundaries defined here unless this

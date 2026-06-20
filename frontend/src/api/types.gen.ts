@@ -95,52 +95,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/backfill/daily": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Backfill Daily
-         * @description Enqueue a DAILY backfill (native daily candles from the provider, stored
-         *     in `ohlcv_daily`). Schwab serves 20+ years of daily history per call so
-         *     this is fast even for long windows. Throttled to once-per-day unless
-         *     `force=true`.
-         */
-        post: operations["backfill_daily_api_v1_backfill_daily_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/backfill/intraday": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Backfill Intraday
-         * @description Enqueue an INTRADAY backfill: 5-minute candles, stored in `ohlcv_5m`.
-         *     Schwab caps 1-min bars at ~48 days; this populates ~270 days of
-         *     medium-resolution history so 5m/15m/30m/1h/4h charts can stretch
-         *     further back than 48 days. Throttled to once-per-day unless `force=true`.
-         */
-        post: operations["backfill_intraday_api_v1_backfill_intraday_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/backfill/gaps": {
         parameters: {
             query?: never;
@@ -258,12 +212,17 @@ export interface paths {
          * Lookup Instruments
          * @description Batch metadata lookup for a known set of symbols.
          *
-         *     Used by the cockpit to enrich watchlist member rows with company
-         *     descriptions in one round-trip instead of N. Symbols are looked up
-         *     individually against the provider's `search_instruments` (with the
-         *     symbol itself as the prefix), then matched against the exact symbol
-         *     in the returned list. Results are cached using the same key the
-         *     autocomplete uses so prefix-typed → list-render flows are warm.
+         *     Used by the cockpit to enrich Stream Service / watchlist rows with
+         *     company descriptions in one round-trip.
+         *
+         *     Strategy:
+         *       1. Check the in-memory per-symbol cache (60s TTL, shared with the
+         *          autocomplete route so prefix-typed -> list-render flows are warm).
+         *       2. For uncached symbols, issue a SINGLE Schwab batch /instruments
+         *          call with `projection=symbol-search`. Previously this loop did
+         *          one HTTP round-trip per symbol — ~450ms each, ~46s for 103
+         *          symbols cold. The batch call is one round-trip.
+         *       3. Stitch cache hits + fresh results back into the requested order.
          */
         get: operations["lookup_instruments_api_v1_instruments_lookup_get"];
         put?: never;
@@ -492,6 +451,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lake/snapshots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Lake Snapshots
+         * @description Recent Iceberg snapshots across the v2 equities tables.
+         *
+         *     Use this to answer:
+         *       - When did the nightly cron last run? (most-recent snapshot's
+         *         committed_at on polygon_raw / schwab_universe)
+         *       - What did the last polygon_adjustment_job add? (most-recent
+         *         polygon_adjusted snapshot's `added_records`)
+         *       - I want a deterministic backtest — what snapshot_id should I
+         *         pin? (any snapshot_id from this list)
+         *       - Bad data in latest commit — what's the previous good snapshot?
+         *         (parent_snapshot_id, walked back)
+         *
+         *     Returns merged-and-sorted snapshots (DESC by committed_at) across
+         *     all requested tables. A table that fails to load is logged + its
+         *     snapshots excluded; the rest still flow through. Does NOT scan
+         *     data files — metadata-only read.
+         */
+        get: operations["list_lake_snapshots_api_v1_lake_snapshots_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/indicators/series": {
         parameters: {
             query?: never;
@@ -592,9 +586,9 @@ export interface paths {
          * Get Corp Actions
          * @description Return corp-action events for `symbol`.
          *
-         *     Reads from `silver.corp_actions` (provider-precedence-resolved
-         *     canonical view). Returns empty `actions` if silver hasn't been
-         *     built yet OR if no events match — never raises.
+         *     Reads from `equities.market_corp_actions` (provider-precedence-
+         *     resolved canonical view). Returns empty `actions` if the table
+         *     hasn't been populated yet OR if no events match — never raises.
          */
         get: operations["get_corp_actions_api_v1_corp_actions__symbol__get"];
         put?: never;
@@ -605,7 +599,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/silver/bars/{symbol}": {
+    "/api/v1/adjusted/bars/{symbol}": {
         parameters: {
             query?: never;
             header?: never;
@@ -613,21 +607,32 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Silver Bars
-         * @description Return 1-minute silver bars for `symbol` in `[start, end)`.
+         * Get Adjusted Bars
+         * @description Return 1-minute split-adjusted bars for `symbol` in `[start, end)`.
          *
-         *     Reads `silver.ohlcv_1m` — the canonical, provider-merged,
-         *     corp-action-adjusted view. Every row carries BOTH `_raw` and
-         *     `_adj` columns; consumers choose which to read.
+         *     Default (`include_live=false`) reads `equities.polygon_adjusted`
+         *     only — the canonical adjusted store, built whole-market weekly by
+         *     the Spark `polygon_adjustment_job`. Each row carries the cumulative
+         *     future-splits factor as `adj_factor`; multiply back to recover raw.
+         *
+         *     With `include_live=true` the response also includes rows from
+         *     `equities.schwab_universe` (live + tip-fill, also pre-adjusted with
+         *     `adj_factor=1.0`). Polygon rows win duplicates on
+         *     (symbol, timestamp); the result is the smooth deep-history-to-today
+         *     series charts and ML training sets actually want.
          *
          *     Snapshot-pinned: the `snapshot_id` in the response lets callers
-         *     replay against the same lake state for deterministic results.
+         *     replay against the same lake state for deterministic results. When
+         *     `include_live=true`, snapshot_id reflects the polygon side (the
+         *     canonical adjusted source).
          *
          *     Returns empty `bars` if:
-         *       - silver.ohlcv_1m hasn't been built yet (cold start), or
+         *       - equities.polygon_adjusted hasn't been populated yet (cold
+         *         start before the first whole-market Spark run) AND
+         *         `include_live=false`, or
          *       - no bars match the window.
          */
-        get: operations["get_silver_bars_api_v1_silver_bars__symbol__get"];
+        get: operations["get_adjusted_bars_api_v1_adjusted_bars__symbol__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -636,7 +641,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/silver/bar-quality/{symbol}": {
+    "/api/v1/adjusted/symbols/{symbol}/coverage": {
         parameters: {
             query?: never;
             header?: never;
@@ -644,15 +649,99 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Silver Bar Quality
-         * @description Return per-(symbol, date) bar-quality audit rows.
+         * Get Symbol Coverage
+         * @description Coverage stats for `symbol` across the three data stores.
          *
-         *     Reads `silver.bar_quality` — the audit ledger silver_ohlcv_build
-         *     produces alongside silver.ohlcv_1m. Surface for operators inspecting
-         *     nightly-build health and agents asking "any silent gaps in my
-         *     training set?".
+         *     Returns per-store row counts and earliest/latest timestamps for:
+         *       - `stocks.ohlcv_1m`           — ClickHouse hot cache (what's
+         *         queryable now; live-stream fresh)
+         *       - `equities.polygon_adjusted` — deep adjusted history (weekly Spark)
+         *       - `equities.schwab_universe`  — recent universe window (nightly)
+         *
+         *     Use this to answer:
+         *       - "Is NVDA ready to chart? How far back?" → clickhouse.earliest_timestamp
+         *       - "What's the durable lake history?" → polygon_adjusted.earliest_timestamp
+         *       - "How current is today's data?" → clickhouse.latest_timestamp
+         *       - "Cold-start before first Spark run?" → polygon_adjusted.row_count == 0
+         *
+         *     Selected stores are queried concurrently. Each independently
+         *     degrades to row_count=0 / None timestamps when empty or its query
+         *     fails — the endpoint never 500s on transient issues. ClickHouse is
+         *     sub-100ms; the lake stores use Athena aggregate pushdown (~2-3s
+         *     each, exact). Pass `?sources=clickhouse` for the fast path.
          */
-        get: operations["get_silver_bar_quality_api_v1_silver_bar_quality__symbol__get"];
+        get: operations["get_symbol_coverage_api_v1_adjusted_symbols__symbol__coverage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/adjusted/symbols/{symbol}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Cross Provider Diff
+         * @description Surface close-price disagreements between
+         *     `equities.polygon_adjusted` and `equities.schwab_universe` for
+         *     `symbol` in `[start, end)`.
+         *
+         *     Inner-joins on (symbol, timestamp); single-sided rows are NOT
+         *     surfaced (use /coverage for that question). `compared_count` is
+         *     the denominator — `count` is the disagreement numerator.
+         *
+         *     `pct_diff = (polygon.close - schwab.close) / polygon.close` —
+         *     polygon is the canonical adjusted source; sign convention is
+         *     polygon-minus-schwab so callers can compare against directional
+         *     tolerances.
+         *
+         *     Use this to answer:
+         *       - Did a corp-action correction land in polygon but not schwab?
+         *       - Is a strategy's bad day a data bug or a real signal?
+         *       - Should I trust today's close for this symbol?
+         */
+        get: operations["get_cross_provider_diff_api_v1_adjusted_symbols__symbol__diff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/adjusted/symbols": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Adjusted Symbols
+         * @description Distinct tickers present in the v2 adjusted-OHLCV sources.
+         *
+         *     UNION of `equities.polygon_adjusted` ∪ `equities.schwab_universe`
+         *     by default. Pass `?sources=polygon_adjusted` (or
+         *     `?sources=schwab_universe`) for source-specific scans.
+         *
+         *     Used for universe discovery — screeners walking the v2 universe,
+         *     cockpit "what can I chart?" picker, ops "what's actually in the
+         *     lake right now?"
+         *
+         *     Returns sorted (alphabetical), optionally truncated. Per-source
+         *     coverage details (date ranges, row counts) go through the
+         *     /adjusted/symbols/{symbol}/coverage endpoint.
+         *
+         *     Sources that fail to load or scan are logged and excluded from
+         *     `sources_scanned` — the partial result still flows through.
+         */
+        get: operations["list_adjusted_symbols_api_v1_adjusted_symbols_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -982,6 +1071,208 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Stream Universe
+         * @description List the active stream universe.
+         *
+         *     On first read after the CH table is created, bootstraps from
+         *     `SEED_SYMBOLS ∪ active-watchlist members` so the cockpit doesn't
+         *     show an empty list out of the box.
+         */
+        get: operations["list_stream_universe_api_v1_stream_get"];
+        put?: never;
+        /**
+         * Add To Stream
+         * @description Promote one symbol into the stream universe. Subscribes Schwab
+         *     immediately + queues a silver-derived warmup (if enabled).
+         *
+         *     Idempotent: re-adding an already-active symbol returns `changed=[]`.
+         */
+        post: operations["add_to_stream_api_v1_stream_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stream/futures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Futures Universe
+         * @description List the active futures universe (continuous roots streamed via
+         *     CHART_FUTURES). Separate CH table from the equities stream universe;
+         *     bootstraps from FUTURES_SEED_ROOTS on first read so the cockpit shows
+         *     the standard contracts out of the box.
+         */
+        get: operations["list_futures_universe_api_v1_stream_futures_get"];
+        put?: never;
+        /**
+         * Add Futures
+         * @description Add a continuous futures root (/ES, /MES, …) to the futures universe +
+         *     subscribe CHART_FUTURES immediately. Idempotent.
+         */
+        post: operations["add_futures_api_v1_stream_futures_post"];
+        /**
+         * Remove Futures
+         * @description Remove a futures root from the futures universe + unsubscribe. `symbol`
+         *     is a query param (not a path segment) so the leading '/' needs no
+         *     awkward path encoding.
+         */
+        delete: operations["remove_futures_api_v1_stream_futures_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stream/futures/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Futures Catalog
+         * @description Known continuous futures roots (symbol + human name) for the cockpit's
+         *     'add futures' autocomplete. Static catalog — broader than what's currently
+         *     streaming.
+         */
+        get: operations["futures_catalog_api_v1_stream_futures_catalog_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stream/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Status
+         * @description Live subscription state. Polled by the cockpit's status tile.
+         */
+        get: operations["stream_status_api_v1_stream_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stream/{symbol}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove From Stream
+         * @description Remove a symbol from the stream universe + unsubscribe Schwab.
+         *
+         *     This is the ONLY API path that strips a symbol from the live stream;
+         *     watchlist deletes are sticky (do not affect streaming).
+         */
+        delete: operations["remove_from_stream_api_v1_stream__symbol__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stream/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Stream
+         * @description Bulk-import symbols into the stream universe. Idempotent.
+         */
+        post: operations["import_stream_api_v1_stream_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Jobs
+         * @description Catalog of background jobs + last-run state.
+         *
+         *     Joins the in-memory registry with `ingestion_runs` for the
+         *     last_success / last_run_at / last_status fields. Polled by the
+         *     cockpit's Status page at the same cadence as health/services.
+         */
+        get: operations["list_jobs_api_v1_jobs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{name}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Job
+         * @description Trigger a manual run for the named job.
+         *
+         *     Returns immediately with `status='started'` (the job runs in the
+         *     background — poll GET /jobs for completion), or a structured
+         *     refusal:
+         *
+         *       - `status='not_found'`         -> 404
+         *       - `status='not_runnable'`      -> 409 (registered but no run_now callable)
+         *       - `status='already_running'`   -> 409
+         */
+        post: operations["run_job_api_v1_jobs__name__run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/clickhouse/schema": {
         parameters: {
             query?: never;
@@ -1036,6 +1327,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/customer/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current User */
+        get: operations["current_user_api_v1_customer_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current Operator */
+        get: operations["current_operator_api_v1_admin_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Logout */
+        post: operations["logout_auth_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/signals": {
         parameters: {
             query?: never;
@@ -1066,14 +1408,140 @@ export interface paths {
         };
         /**
          * List Bars
-         * @description Return OHLCV bars for `symbol` at `interval`. All source-table
-         *     selection, fallback, and auto-limit logic lives in
-         *     `BarReader.get_bars_for_chart`; this route validates input, calls
-         *     the reader, and reshapes the response for the dashboard.
+         * @description Return OHLCV bars for `symbol` at `interval`, routed across the
+         *     ClickHouse hot cache and the S3 lake by `source` (see param). The
+         *     CH-vs-S3 routing lives in `bars_gateway.get_chart_bars` so this
+         *     route and the MCP `get_bars_for_chart` tool behave identically.
+         *
+         *     Default `auto` is CH-first with on-demand lake fill, then a live
+         *     Schwab REST pull when both stored tiers miss (e.g. an out-of-universe
+         *     symbol never in the frozen Polygon snapshot): ad-hoc and universe
+         *     symbols both chart correctly, and CH warms for subsequent requests.
+         *     `lake` reads ground truth without writing CH; neither `lake` nor
+         *     `clickhouse` triggers the live Schwab tier.
          */
         get: operations["list_bars_api_v1_bars_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/bars/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Bars
+         * @description Latest streamed 1-minute bar per symbol from ClickHouse (`last` = close).
+         *
+         *     A single fast query (~tens of ms) for tables that show a "last" column over
+         *     many symbols — e.g. the stream-universe page. Reads only the hot tier and
+         *     makes **no live-provider call**, so it stays sub-100ms regardless of symbol
+         *     count and never blocks on Schwab. Symbols with no CH bars are simply absent
+         *     from `items` (the caller renders them as "—").
+         */
+        get: operations["latest_bars_api_v1_bars_latest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cockpit/assistant/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Conversations
+         * @description List conversations owned by the current principal.
+         */
+        get: operations["list_conversations_cockpit_assistant_conversations_get"];
+        put?: never;
+        /**
+         * Start Conversation
+         * @description Start a new conversation and return its metadata.
+         */
+        post: operations["start_conversation_cockpit_assistant_conversations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cockpit/assistant/conversations/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Load Conversation
+         * @description Load conversation header and full turn history.
+         */
+        get: operations["load_conversation_cockpit_assistant_conversations__conversation_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Cancel Conversation
+         * @description Cancel any in-flight turn for this conversation.
+         */
+        delete: operations["cancel_conversation_cockpit_assistant_conversations__conversation_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cockpit/assistant/conversations/{conversation_id}/turn": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Continue Conversation
+         * @description Stream one assistant turn as SSE.
+         *
+         *     Response is `text/event-stream`. Each SSE event is:
+         *         data: {"type": "<StreamEventType>", "payload": {...}}
+         *
+         *     The stream ends when the client receives a `done` event.
+         */
+        post: operations["continue_conversation_cockpit_assistant_conversations__conversation_id__turn_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cockpit/assistant/conversations/{conversation_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm Tool Call
+         * @description Confirm or deny a pending write-tool call (wired in AS-2).
+         */
+        post: operations["confirm_tool_call_cockpit_assistant_conversations__conversation_id__confirm_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1133,6 +1601,57 @@ export interface components {
             /** Notes */
             notes?: string | null;
         };
+        /**
+         * AddStreamRequest
+         * @description Body for `POST /api/v1/stream` — promote one symbol into the stream universe.
+         */
+        AddStreamRequest: {
+            /** Symbol */
+            symbol: string;
+            /** Asset Type */
+            asset_type?: string | null;
+            /** Notes */
+            notes?: string | null;
+        };
+        /**
+         * AdjustedSymbolsResponse
+         * @description Universe discovery for v2 adjusted-OHLCV sources (CV28).
+         *
+         *     Returns the UNION of distinct tickers seen in
+         *     `equities.polygon_adjusted` AND/OR `equities.schwab_universe`
+         *     within the time window. Sorted alphabetically.
+         *
+         *     Used by:
+         *       - Screeners walking the v2 universe.
+         *       - Cockpit "what symbols can I chart?" picker.
+         *       - Ops asking "what's actually in the lake right now?"
+         *
+         *     The scan is bounded by `since` (default 30d back) because
+         *     polygon_adjusted holds 5y × 12K symbols × 60 months of partition
+         *     metadata — an unbounded distinct-scan would read too much. Tune
+         *     `since` lower for "what's been live recently?", higher for "what
+         *     do we have at all?" — but the deeper you go the slower it gets.
+         */
+        AdjustedSymbolsResponse: {
+            /**
+             * Sources Scanned
+             * @description Which v2 tables contributed to the response. Echoed so consumers caching this list don't have to guess. Default request scans both: ['equities.polygon_adjusted', 'equities.schwab_universe'].
+             */
+            sources_scanned: string[];
+            /**
+             * Since
+             * Format: date-time
+             * @description Lower bound on `timestamp` for the underlying scan. Default is 30 days back if the caller doesn't specify.
+             */
+            since: string;
+            /** Symbols */
+            symbols: string[];
+            /**
+             * Count
+             * @description len(symbols).
+             */
+            count: number;
+        };
         /** BackfillQueueSummary */
         BackfillQueueSummary: {
             /**
@@ -1160,7 +1679,7 @@ export interface components {
             symbols: string[];
             /**
              * Days
-             * @description Lookback window in days
+             * @description Lookback window in days. Max 7500 (~20.5y) — Schwab's /pricehistory practical ceiling for daily bars on long-listed symbols. For symbols listed less than 20y ago, Schwab will just return data from listing date forward.
              * @default 30
              */
             days: number;
@@ -1266,104 +1785,22 @@ export interface components {
             source?: string | null;
         };
         /**
-         * BarQualityResponse
-         * @description Response wrapper for a windowed bar-quality query.
+         * BarSource
+         * @description Where chart bars come from. String-valued so it round-trips as a
+         *     query param / MCP arg without custom coercion.
+         * @enum {string}
          */
-        BarQualityResponse: {
-            /** Symbol */
-            symbol: string;
-            /**
-             * Since
-             * @description Lower bound on `date` (inclusive). None = all history.
-             */
-            since?: string | null;
-            /**
-             * Until
-             * @description Upper bound on `date` (inclusive). None = through today.
-             */
-            until?: string | null;
-            /**
-             * Snapshot Id
-             * @description Iceberg snapshot pinned by the read. None if silver.bar_quality doesn't exist yet.
-             */
-            snapshot_id?: string | null;
-            /** Rows */
-            rows: components["schemas"]["BarQualityRow"][];
-            /** Count */
-            count: number;
-        };
-        /**
-         * BarQualityRow
-         * @description One row from `silver.bar_quality` — the per-(symbol, date) audit
-         *     ledger produced alongside silver.ohlcv_1m.
-         *
-         *     Used by:
-         *       - Operators inspecting nightly silver-build health.
-         *       - Agents asking "did my training set have any silent gaps on day X?"
-         *       - The dashboard's data-quality panel.
-         */
-        BarQualityRow: {
-            /** Symbol */
-            symbol: string;
-            /**
-             * Date
-             * Format: date
-             */
-            date: string;
-            /**
-             * Expected Bars
-             * @description RTH minutes for the trading day (390 by default). Per-symbol override possible for ETFs / ADRs with non-standard hours.
-             */
-            expected_bars?: number | null;
-            /**
-             * Actual Bars
-             * @description Distinct minute timestamps observed in silver.
-             */
-            actual_bars?: number | null;
-            /**
-             * Gap Count
-             * @description Number of contiguous missing-minute runs within the day. Each absent block counts as one gap regardless of length.
-             */
-            gap_count?: number | null;
-            /**
-             * Max Gap Minutes
-             * @description Length of the longest single gap (in minutes).
-             */
-            max_gap_minutes?: number | null;
-            /**
-             * Providers Seen
-             * @description Providers that contributed at least one bar this day.
-             */
-            providers_seen?: string[];
-            /**
-             * Disagreement Count
-             * @description Number of minutes where two or more providers' close prices disagreed beyond the tolerance (50¢ OR 0.5%).
-             */
-            disagreement_count?: number | null;
-            /**
-             * Backfill Attempts
-             * @description Re-tries the orchestrator performed for this slice. 0 for a clean first-shot build; rises when nightly retries kick in.
-             */
-            backfill_attempts?: number | null;
-            /**
-             * Ingestion Ts
-             * @description When silver_ohlcv_build wrote this row (UTC).
-             */
-            ingestion_ts?: string | null;
-            /**
-             * Ingestion Run Id
-             * @description Run ID linking this row to the silver-build invocation.
-             */
-            ingestion_run_id?: string | null;
-        };
+        BarSource: "auto" | "clickhouse" | "lake";
         /**
          * BronzeBar
-         * @description One row from `stock_lake.{provider}_minute`.
+         * @description One row from a v2 equities OHLCV table (post-CV14: polygon_raw
+         *     or schwab_universe; class name preserved through CV14 for caller
+         *     compatibility, will rename to LakeBar in a follow-up).
          *
-         *     Mirrors the canonical bronze schema (see
-         *     `app/services/bronze/schemas.py`). `vwap` and `trade_count` are
-         *     optional because Schwab's pricehistory doesn't provide them — silver
-         *     is where providers get reconciled into a single canonical shape.
+         *     Mirrors the canonical column shape used by both v2 lake tables.
+         *     `vwap` and `trade_count` are optional because Schwab's
+         *     pricehistory doesn't provide them — the v2 schwab_universe rows
+         *     have NULL there; polygon_raw / polygon_adjusted populate them.
          */
         BronzeBar: {
             /** Symbol */
@@ -1618,6 +2055,50 @@ export interface components {
             cached: boolean;
         };
         /**
+         * ConfirmRequest
+         * @description Body of POST /cockpit/assistant/conversations/{id}/confirm.
+         *
+         *     Resumes a turn that paused on a pending_confirm write-tool call.
+         */
+        ConfirmRequest: {
+            /** Tool Call Id */
+            tool_call_id: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "confirm" | "deny";
+            /**
+             * Reason
+             * @description Optional user-supplied note (esp. for deny).
+             */
+            reason?: string | null;
+        };
+        /**
+         * ContinueRequest
+         * @description Body of POST /cockpit/assistant/conversations/{id}/turn.
+         */
+        ContinueRequest: {
+            /** User Msg */
+            user_msg: string;
+            /**
+             * Model
+             * @description Optional override; None → ModelRegistry default (Sonnet 4.6).
+             */
+            model?: string | null;
+            /**
+             * Use Extended Thinking
+             * @description If true, switches the turn to Opus 4.7 with a thinking budget.
+             * @default false
+             */
+            use_extended_thinking: boolean;
+            /**
+             * Client Request Id
+             * @description Idempotency key. Re-POSTing with the same id while a turn is in flight re-attaches to the existing stream instead of starting a new turn.
+             */
+            client_request_id?: string | null;
+        };
+        /**
          * CorpAction
          * @description One corporate-action event for one symbol on one ex-date.
          *
@@ -1646,7 +2127,7 @@ export interface components {
             factor?: number | null;
             /**
              * Cash Amount
-             * @description Dividend per share in USD. NULL for splits. For special dividends in foreign currencies, converted to USD at the announcement-date FX rate (TODO — placeholder behavior is to preserve the original currency value; treat with care).
+             * @description Dividend per share in USD. NULL for splits.
              */
             cash_amount?: number | null;
             /**
@@ -1662,12 +2143,12 @@ export interface components {
             source_provider: string;
             /**
              * Ingestion Ts
-             * @description When this silver row was written (UTC).
+             * @description When this row was written into equities.market_corp_actions (UTC).
              */
             ingestion_ts?: string | null;
             /**
              * Ingestion Run Id
-             * @description Run ID linking this row to a CH `ingestion_runs` audit row. Lets operators answer 'which ingest job produced this corp-action?'
+             * @description Run ID linking this row to an ingest invocation. Lets operators answer 'which ingest job produced this corp-action?'
              */
             ingestion_run_id?: string | null;
         };
@@ -1675,10 +2156,10 @@ export interface components {
          * CorpActionsResponse
          * @description Response wrapper for a windowed corp-actions query.
          *
-         *     Reads from `silver.corp_actions` — the canonical consumer surface
-         *     per the medallion contract. Callers never read bronze corp-actions
-         *     directly; silver build merges providers with precedence and
-         *     publishes here.
+         *     Surfaces `equities.market_corp_actions` (v2 canonical store, CV9/CV10).
+         *     The v1 silver/bronze split for corp-actions was retired in CV14 —
+         *     there's now one ingest path (Polygon REST → `market_corp_actions`)
+         *     and one consumer surface.
          */
         CorpActionsResponse: {
             /** Symbol */
@@ -1731,6 +2212,107 @@ export interface components {
             description: string;
         };
         /**
+         * CrossProviderDiffResponse
+         * @description Per-(symbol, timestamp) close-price disagreements between
+         *     `equities.polygon_adjusted` and `equities.schwab_universe` in
+         *     `[start, end)`, filtered to rows whose abs_pct_diff exceeds
+         *     `tolerance` (CV27).
+         *
+         *     Use this to answer:
+         *       - "Did a corp-action correction land in polygon but not schwab yet?"
+         *       - "Is my strategy's bad day a data bug or a real signal?"
+         *       - "Should I trust today's close for this symbol?"
+         *
+         *     Only timestamps present in BOTH sources are compared — single-
+         *     sided rows are by construction not disagreements. The matched
+         *     timestamp count is reported via `compared_count` so the consumer
+         *     can tell "no disagreements vs nothing compared".
+         *
+         *     Polygon is the canonical adjusted source; sign convention on
+         *     `pct_diff` is polygon-minus-schwab so callers can compare
+         *     against directional tolerances.
+         */
+        CrossProviderDiffResponse: {
+            /** Symbol */
+            symbol: string;
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+            /**
+             * End
+             * Format: date-time
+             */
+            end: string;
+            /**
+             * Tolerance
+             * @description Caller's threshold on |pct_diff|. Rows are surfaced only when abs(pct_diff) > tolerance. Typical: 0.005 (50bps).
+             */
+            tolerance: number;
+            /**
+             * Compared Count
+             * @description Number of (symbol, timestamp) pairs present in BOTH sources. The denominator for any QA conclusion.
+             */
+            compared_count: number;
+            /** Disagreements */
+            disagreements: components["schemas"]["CrossProviderDiffRow"][];
+            /**
+             * Count
+             * @description len(disagreements) — convenience.
+             */
+            count: number;
+        };
+        /**
+         * CrossProviderDiffRow
+         * @description One (symbol, timestamp) point where the two adjusted sources
+         *     disagree beyond the caller's tolerance (CV27).
+         */
+        CrossProviderDiffRow: {
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp: string;
+            /** Polygon Close */
+            polygon_close: number;
+            /** Schwab Close */
+            schwab_close: number;
+            /**
+             * Abs Diff
+             * @description abs(polygon_close - schwab_close)
+             */
+            abs_diff: number;
+            /**
+             * Pct Diff
+             * @description (polygon_close - schwab_close) / polygon_close. Positive: polygon is higher. Caller compares against their tolerance to decide whether to surface.
+             */
+            pct_diff: number;
+        };
+        /** CurrentUserResponse */
+        CurrentUserResponse: {
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+            /**
+             * Tenant Id
+             * Format: uuid
+             */
+            tenant_id: string;
+            /** Email */
+            email: string;
+            /** Display Name */
+            display_name: string;
+            /** Roles */
+            roles: components["schemas"]["Role"][];
+            /** Permissions */
+            permissions: string[];
+            /** Entitlements */
+            entitlements: string[];
+        };
+        /**
          * DeleteWatchlistResponse
          * @description Response for `DELETE /api/v1/watchlists/{name}`.
          */
@@ -1752,7 +2334,7 @@ export interface components {
             days: number | null;
             /**
              * Source
-             * @description Source table to scan for gaps. One of: ohlcv_1m, ohlcv_5m
+             * @description Source table to scan for gaps. Only ohlcv_1m.
              * @default ohlcv_1m
              */
             source: string;
@@ -1782,6 +2364,7 @@ export interface components {
             services: components["schemas"]["ServiceHealth"][];
             backfill: components["schemas"]["BackfillQueueSummary"];
             monitors: components["schemas"]["MonitorSummary"];
+            stream?: components["schemas"]["StreamSummary"];
         };
         /**
          * ImportSeedRequest
@@ -1791,6 +2374,19 @@ export interface components {
             /**
              * Symbols
              * @description Symbols to add to the seed universe (idempotent).
+             */
+            symbols: string[];
+            /** Notes */
+            notes?: string | null;
+        };
+        /**
+         * ImportStreamRequest
+         * @description Body for `POST /api/v1/stream/import` — bulk add. Idempotent.
+         */
+        ImportStreamRequest: {
+            /**
+             * Symbols
+             * @description Symbols to add to the stream universe.
              */
             symbols: string[];
             /** Notes */
@@ -2016,6 +2612,99 @@ export interface components {
             cached: boolean;
         };
         /**
+         * JobListing
+         * @description Result of `JobRegistry.list()` — what GET /api/v1/jobs returns.
+         */
+        JobListing: {
+            /** Jobs */
+            jobs: components["schemas"]["JobMetadata"][];
+        };
+        /**
+         * JobMetadata
+         * @description One scheduled background job as seen by the Status page.
+         */
+        JobMetadata: {
+            /**
+             * Name
+             * @description Stable identifier used as the `ingestion_runs.job_name` key. Operator-facing strings live in `display_name`.
+             */
+            name: string;
+            /**
+             * Display Name
+             * @description Human-friendly name for the UI.
+             */
+            display_name: string;
+            /**
+             * Schedule
+             * @description Human-readable cadence (e.g. 'daily at 07:00 UTC', 'every 5 min'). Operators tune via env vars.
+             */
+            schedule: string;
+            /**
+             * Setting Key
+             * @description Env var name controlling the schedule, shown as a tooltip (e.g. 'POLYGON_NIGHTLY_RUN_HOUR_UTC'). None = not configurable.
+             */
+            setting_key?: string | null;
+            /**
+             * Runnable
+             * @description True iff a manual `run_now` callable was registered. Surface gates the play button on the UI.
+             */
+            runnable: boolean;
+            /**
+             * Last Success
+             * @description ISO 8601 (UTC, with `Z`) of the most recent `status='ok'` run, or None if no successful run has been recorded.
+             */
+            last_success?: string | null;
+            /**
+             * Last Run At
+             * @description ISO 8601 of the most recent run regardless of outcome.
+             */
+            last_run_at?: string | null;
+            /**
+             * Last Status
+             * @description Outcome of the most recent run.
+             * @default idle
+             * @enum {string}
+             */
+            last_status: "idle" | "running" | "ok" | "error" | "unknown";
+            /**
+             * Last Error
+             * @description Short error message from the most recent failed run (truncated to 500 chars). None when last run succeeded.
+             */
+            last_error?: string | null;
+            /**
+             * Running
+             * @description True iff a run is currently in flight for this job.
+             * @default false
+             */
+            running: boolean;
+        };
+        /**
+         * JobRunResult
+         * @description Response for POST /api/v1/jobs/{name}/run.
+         */
+        JobRunResult: {
+            /**
+             * Job
+             * @description Job name that was triggered.
+             */
+            job: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "started" | "already_running" | "not_found" | "not_runnable";
+            /**
+             * Started At
+             * @description Set when `status='started'`. The job runs in the background; poll GET /api/v1/jobs for completion.
+             */
+            started_at?: string | null;
+            /**
+             * Detail
+             * @description Human message (e.g. 'job already running').
+             */
+            detail?: string | null;
+        };
+        /**
          * LakeLatestDayResponse
          * @description Response for `latest_trading_day` — the most recent trading day
          *     (ET basis) that has at least one bar in bronze. Used by gap
@@ -2030,6 +2719,80 @@ export interface components {
              * @description ET-basis trading day with at least one row in the bronze table. Null if no rows in the lookback window. Why ET, not UTC: after-hours bars cross midnight UTC, so UTC date misclassifies them and would advance the counter early.
              */
             latest_trading_day: string | null;
+        };
+        /**
+         * LakeSnapshot
+         * @description One Iceberg snapshot from one equities table (CV29).
+         *
+         *     Iceberg snapshots are commit points — each table-mutation
+         *     operation (append, overwrite, delete) creates a new snapshot
+         *     that captures the table state. Snapshots are pinnable for
+         *     deterministic reads via `table.scan(snapshot_id=X)`.
+         */
+        LakeSnapshot: {
+            /**
+             * Table Name
+             * @description Fully-qualified Iceberg table id (e.g. 'equities.polygon_adjusted').
+             */
+            table_name: string;
+            /**
+             * Snapshot Id
+             * @description Iceberg snapshot id. Pass back to a reader's scan(snapshot_id=...) call for time-travel queries.
+             */
+            snapshot_id: number;
+            /**
+             * Committed At
+             * Format: date-time
+             * @description When the snapshot was committed (UTC, from Iceberg metadata).
+             */
+            committed_at: string;
+            /**
+             * Operation
+             * @description Iceberg snapshot operation type: 'append', 'overwrite', 'delete', 'replace'. None when metadata-only commits don't tag the operation.
+             */
+            operation?: string | null;
+            /**
+             * Total Records
+             * @description Total rows in the table AT this snapshot (from Iceberg's summary block). None when the writer didn't populate it.
+             */
+            total_records?: number | null;
+            /**
+             * Added Records
+             * @description Rows ADDED in this snapshot (delta vs the parent). None when the writer didn't populate it. The audit trail for 'what did this commit do'.
+             */
+            added_records?: number | null;
+            /**
+             * Parent Snapshot Id
+             * @description The snapshot this one was committed against. None for the table's first snapshot. Lets consumers walk back the commit chain.
+             */
+            parent_snapshot_id?: number | null;
+        };
+        /**
+         * LakeSnapshotsResponse
+         * @description Recent Iceberg snapshots across the equities tables (CV29).
+         *
+         *     Used for:
+         *       - Time-travel queries: pick a snapshot_id, pass it back to a
+         *         reader's scan(snapshot_id=...) for reproducibility.
+         *       - Audit: "did the nightly cron run? what did it add?"
+         *       - DR: "how far back can I roll if the latest snapshot is bad?"
+         */
+        LakeSnapshotsResponse: {
+            /**
+             * Requested Tables
+             * @description The fully-qualified table ids the caller asked about, echoed for cache-keying. Default = all four equities tables.
+             */
+            requested_tables: string[];
+            /**
+             * Snapshots
+             * @description Snapshots sorted by committed_at DESC (most recent first). Truncated per-table by `limit`.
+             */
+            snapshots: components["schemas"]["LakeSnapshot"][];
+            /**
+             * Count
+             * @description len(snapshots).
+             */
+            count: number;
         };
         /**
          * LakeSymbolsResponse
@@ -2071,6 +2834,11 @@ export interface components {
              * @description Full active member list of the default watchlist after the mutation.
              */
             symbols: string[];
+        };
+        /** LogoutResponse */
+        LogoutResponse: {
+            /** Redirect Url */
+            redirect_url: string;
         };
         /**
          * MarketBannerResponse
@@ -2326,6 +3094,11 @@ export interface components {
             /** New Name */
             new_name: string;
         };
+        /**
+         * Role
+         * @enum {string}
+         */
+        Role: "owner" | "admin" | "member" | "viewer" | "support" | "developer";
         /**
          * ScreenerResult
          * @description Output of a screener scan. Returned by both the HTTP route and
@@ -2622,25 +3395,21 @@ export interface components {
         };
         /**
          * SilverBar
-         * @description One canonical 1-minute OHLCV bar in silver.
+         * @description One canonical 1-minute split-adjusted OHLCV bar.
          *
-         *     Silver stores **split-adjusted** OHLCV. That's the canonical
-         *     consumer view — what chart, indicators, backtests, screener, and
-         *     ML all need (continuous lines across split events, no fake gaps).
+         *     Post-CV11/CV14: sourced from `equities.polygon_adjusted` (built by
+         *     the weekly Spark adjustment job) or `equities.schwab_universe`
+         *     (live + tip-fill). Both stores are pre-adjusted; consumers see one
+         *     set of split-adjusted OHLCV columns — what chart, indicators,
+         *     backtests, screener, and ML all need (continuous lines across
+         *     split events, no fake gaps).
          *
-         *     The build pipeline takes per-provider bronze (Polygon = raw,
-         *     Schwab = already split-adjusted) and normalizes everyone to the
-         *     split-adjusted frame via the cumulative-factor math in
-         *     `app/services/silver/ohlcv/normalize.py`.
-         *
-         *     **If a consumer needs raw prices** (trade-tape replay, "what was
-         *     the actual fill?"), recompute via:
-         *         raw_value = silver_value × F(symbol, bar_date)
-         *         F = product of split.factor for silver.corp_actions rows
-         *             where action_type='split' AND ex_date > date(bar_ts)
-         *     See `cumulative_factor_after` in normalize.py for reference.
-         *     Silver intentionally does NOT carry redundant `_raw` columns —
-         *     they're derived from the canonical `_adj` plus `silver.corp_actions`.
+         *     **If a consumer needs raw prices** (trade-tape replay, fill
+         *     reconciliation): multiply the adjusted value by the bar's
+         *     `adj_factor` (stored on every polygon_adjusted row in CV1's
+         *     schema, defaults to 1.0 on schwab_universe rows). The reader
+         *     surfaces adj_factor only when explicitly asked — the default
+         *     SilverBar carries the adjusted view.
          */
         SilverBar: {
             /** Symbol */
@@ -2666,35 +3435,34 @@ export interface components {
             trade_count?: number | null;
             /**
              * Source Provider
-             * @description Provider whose bronze row was selected after provider-precedence merge. The other providers that ALSO had a row for this (symbol, ts) are in `sources_seen` for QA.
+             * @description Provider source tag for this bar. Examples: 'polygon-adjusted' for rows from equities.polygon_adjusted (the Spark adjustment job's output); 'schwab-rest' / 'schwab-live' for rows from equities.schwab_universe.
              */
             source_provider: string;
             /**
              * Sources Seen
-             * @description Every provider that had a row for this (symbol, ts).
+             * @description v1-silver multi-provider artifact; in v2 the equities tables are single-provider per row so this stays empty. Preserved on the contract for backwards compatibility.
              */
             sources_seen?: string[];
             /**
              * Ingestion Ts
-             * @description When silver_build wrote this row (UTC).
+             * @description When the underlying lake row was written (UTC).
              */
             ingestion_ts?: string | null;
             /**
              * Ingestion Run Id
-             * @description silver_build run that produced this row.
+             * @description Ingest/build run that produced the row.
              */
             ingestion_run_id?: string | null;
         };
         /**
          * SilverBarsResponse
-         * @description Response wrapper for a windowed silver-OHLCV query.
+         * @description Response wrapper for a windowed adjusted-OHLCV query.
          *
-         *     Reads `silver.ohlcv_1m`. Every row carries BOTH `_raw` (what the
-         *     provider sent) and `_adj` (split + cash-dividend back-adjusted)
-         *     columns — consumers pick which they want per the
-         *     [silver_layer_plan consumer contract](../../../docs/silver_layer_plan.md).
-         *     Default consumption is `_adj` (chart, screener, indicators,
-         *     backtest, ML); `_raw` is for replay-accuracy / trade-tape reconstruction.
+         *     Sources from `equities.polygon_adjusted` (deep history, split-adjusted
+         *     by the Spark adjustment job); optionally UNION'd with the live tier
+         *     `equities.schwab_universe` for fresh bars. The `SilverBars` name is
+         *     a v1 carry-over kept for API stability — see the section header
+         *     above for the rationale.
          *
          *     `snapshot_id` is the Iceberg snapshot pinned by the read.
          *     Recording this lets callers replay against the exact lake state.
@@ -2714,7 +3482,7 @@ export interface components {
             end: string;
             /**
              * Snapshot Id
-             * @description Iceberg snapshot pinned by the read. None if the silver table doesn't exist yet (cold-start before first build).
+             * @description Iceberg snapshot pinned by the read. None if the target table doesn't exist yet (cold-start before first Spark run).
              */
             snapshot_id?: string | null;
             /** Bars */
@@ -2724,6 +3492,228 @@ export interface components {
              * @description len(bars). Echoed for cheap client-side checks.
              */
             count: number;
+        };
+        /**
+         * SourceCoverage
+         * @description Per-table coverage stats for one symbol (CV26).
+         *
+         *     Returned twice in a SymbolCoverageResponse — once for
+         *     `equities.polygon_adjusted` and once for `equities.schwab_universe`
+         *     — so consumers can see which source has which window.
+         */
+        SourceCoverage: {
+            /**
+             * Table Name
+             * @description Fully-qualified Iceberg table id (e.g. 'equities.polygon_adjusted'). Echoed so consumers caching this response don't have to guess where the numbers came from.
+             */
+            table_name: string;
+            /**
+             * Row Count
+             * @description Total rows for this (symbol, table). 0 = symbol absent.
+             */
+            row_count: number;
+            /**
+             * Earliest Timestamp
+             * @description Min(timestamp) UTC over all rows for this symbol in the table. None when row_count=0.
+             */
+            earliest_timestamp?: string | null;
+            /**
+             * Latest Timestamp
+             * @description Max(timestamp) UTC. None when row_count=0. The lag between this and 'now' is the staleness gauge for this source — polygon_adjusted lags by up to one weekly Spark run; schwab_universe is live-cadence.
+             */
+            latest_timestamp?: string | null;
+            /**
+             * Snapshot Id
+             * @description Iceberg snapshot pinned by the scan. Lets a follow-up call replay against the exact lake state. None when the table doesn't exist yet (cold-start).
+             */
+            snapshot_id?: string | null;
+        };
+        /**
+         * StreamMutationResponse
+         * @description Response shape for add / remove / import.
+         */
+        StreamMutationResponse: {
+            /**
+             * Operation
+             * @description 'add' | 'remove' | 'import'.
+             */
+            operation: string;
+            /**
+             * Changed
+             * @description Symbols actually affected. Empty when the mutation was idempotent.
+             */
+            changed?: string[];
+            /**
+             * Items
+             * @description Full active stream universe after the mutation.
+             */
+            items?: components["schemas"]["StreamUniverseEntry"][];
+            /**
+             * Count
+             * @description Count after the mutation.
+             */
+            count: number;
+        };
+        /**
+         * StreamStatusResponse
+         * @description Live snapshot of stream subscription state — drives the cockpit
+         *     `/app/status` streaming tile.
+         * @example {
+         *       "provider": "schwab",
+         *       "provider_ready": true,
+         *       "started": true,
+         *       "streaming_count": 103,
+         *       "streaming_symbols": [
+         *         "AAPL",
+         *         "ABBV",
+         *         "ABT"
+         *       ],
+         *       "universe_count": 103
+         *     }
+         */
+        StreamStatusResponse: {
+            /**
+             * Started
+             * @description Whether StreamService.start() has completed.
+             */
+            started: boolean;
+            /**
+             * Provider
+             * @description Effective stream provider (e.g. 'schwab').
+             */
+            provider: string;
+            /**
+             * Provider Ready
+             * @description True iff the streaming provider is initialized and ready.
+             */
+            provider_ready: boolean;
+            /**
+             * Provider Error
+             * @description Set when the provider failed to initialize; surfaced to the operator.
+             */
+            provider_error?: string | null;
+            /**
+             * Streaming Count
+             * @description Number of symbols currently subscribed to the live Schwab stream.
+             */
+            streaming_count: number;
+            /**
+             * Streaming Symbols
+             * @description Sorted list of currently-subscribed symbols.
+             */
+            streaming_symbols?: string[];
+            /**
+             * Universe Count
+             * @description Number of active rows in the stream_universe CH table.
+             */
+            universe_count: number;
+        };
+        /**
+         * StreamSummary
+         * @description Live Schwab subscription state — drives the cockpit's streaming tile.
+         */
+        StreamSummary: {
+            /**
+             * Started
+             * @default false
+             */
+            started: boolean;
+            /**
+             * Provider
+             * @default
+             */
+            provider: string;
+            /**
+             * Provider Ready
+             * @default false
+             */
+            provider_ready: boolean;
+            /** Provider Error */
+            provider_error?: string | null;
+            /**
+             * Streaming Count
+             * @default 0
+             */
+            streaming_count: number;
+            /**
+             * Universe Count
+             * @default 0
+             */
+            universe_count: number;
+        };
+        /**
+         * StreamUniverseEntry
+         * @description One symbol in the stream universe.
+         */
+        StreamUniverseEntry: {
+            /** Symbol */
+            symbol: string;
+            /**
+             * Asset Type
+             * @description Free-form upstream asset-type string ('EQUITY', 'FUTURE', 'INDEX', etc.).
+             * @default
+             */
+            asset_type: string;
+            /**
+             * Added At
+             * @description ISO 8601 with `Z` suffix. When this symbol was promoted into the stream universe.
+             */
+            added_at: string;
+            /**
+             * Added By
+             * @description Principal.userId of the operator (or 'bootstrap'/'auto-added by watchlist:<name>').
+             * @default
+             */
+            added_by: string;
+            /**
+             * Notes
+             * @description Operator-supplied freeform note.
+             * @default
+             */
+            notes: string;
+            /**
+             * Description
+             * @description Human-readable instrument name (e.g. futures root '/ES' → 'E-mini S&P 500'). Empty for equities.
+             * @default
+             */
+            description: string;
+        };
+        /**
+         * StreamUniverseResponse
+         * @description The active stream universe + a bit of side-effect context.
+         */
+        StreamUniverseResponse: {
+            /** Items */
+            items: components["schemas"]["StreamUniverseEntry"][];
+            /**
+             * Count
+             * @description Number of active stream universe members.
+             */
+            count: number;
+            /**
+             * Bootstrapped
+             * @description True iff this read triggered a one-time bootstrap.
+             */
+            bootstrapped: boolean;
+        };
+        /**
+         * SymbolCoverageResponse
+         * @description What the v2 lake knows about `symbol` (CV26).
+         *
+         *     Operator + agent surface for the most common investigation
+         *     question: "do we have data for AAPL, how far back, and how
+         *     current?" Returns coverage for both v2 adjusted-OHLCV sources;
+         *     the consumer decides which one matters for their use case
+         *     (deep history → polygon_adjusted; live + tip-fill →
+         *     schwab_universe).
+         */
+        SymbolCoverageResponse: {
+            /** Symbol */
+            symbol: string;
+            polygon_adjusted: components["schemas"]["SourceCoverage"];
+            schwab_universe: components["schemas"]["SourceCoverage"];
+            /** @description Coverage in the ClickHouse hot cache (stocks.ohlcv_1m) — what's queryable RIGHT NOW for charts/agents, vs the two durable S3 lake sources above. `latest_timestamp` here reflects live-stream freshness (seconds), not the lake's nightly/weekly cadence. `snapshot_id` is always None (CH has no Iceberg snapshots). */
+            clickhouse?: components["schemas"]["SourceCoverage"];
         };
         /**
          * SymbolsRequest
@@ -3031,72 +4021,6 @@ export interface operations {
         };
     };
     backfill_deep_api_v1_backfill_deep_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BackfillRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    backfill_daily_api_v1_backfill_daily_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BackfillRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    backfill_intraday_api_v1_backfill_intraday_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -3634,6 +4558,40 @@ export interface operations {
             };
         };
     };
+    list_lake_snapshots_api_v1_lake_snapshots_get: {
+        parameters: {
+            query?: {
+                /** @description Comma-separated subset of ['polygon_raw', 'polygon_adjusted', 'schwab_universe', 'market_corp_actions']. Omit for all four. */
+                tables?: string | null;
+                /** @description Per-table cap on returned snapshots (most recent first). Default 20 covers ~3 weeks of nightly commits or ~100 min of the 5-min live writer. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LakeSnapshotsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_indicator_series_api_v1_indicators_series_get: {
         parameters: {
             query: {
@@ -3783,13 +4741,15 @@ export interface operations {
             };
         };
     };
-    get_silver_bars_api_v1_silver_bars__symbol__get: {
+    get_adjusted_bars_api_v1_adjusted_bars__symbol__get: {
         parameters: {
             query: {
                 /** @description Lower bound on `timestamp` (inclusive). UTC. Use an ISO-8601 timestamp with TZ, e.g. '2024-06-10T13:30:00Z'. */
                 start: string;
                 /** @description Upper bound on `timestamp` (exclusive). UTC. Half-open [start, end) interval mirrors slicing semantics. */
                 end: string;
+                /** @description When true, UNION equities.polygon_adjusted with equities.schwab_universe (the live + tip-fill source) so the response covers polygon's adjusted history AND today's live bars in one call. Use this for charts/queries whose window extends past polygon_adjusted's latest weekly Spark snapshot (typically <7 days stale). Polygon wins duplicates on (symbol, timestamp). */
+                include_live?: boolean;
             };
             header?: never;
             path: {
@@ -3820,13 +4780,11 @@ export interface operations {
             };
         };
     };
-    get_silver_bar_quality_api_v1_silver_bar_quality__symbol__get: {
+    get_symbol_coverage_api_v1_adjusted_symbols__symbol__coverage_get: {
         parameters: {
             query?: {
-                /** @description Lower bound on `date` (inclusive). Omit for all history. */
-                since?: string | null;
-                /** @description Upper bound on `date` (inclusive). Omit for through-today. */
-                until?: string | null;
+                /** @description Comma-separated subset of ['clickhouse','polygon_adjusted','schwab_universe'] to query. Omit for all three. Query just 'clickhouse' for the fast (~tens of ms) hot-cache answer; the two lake sources cost ~2-3s each (Athena). Un-requested sources come back as empty (row_count=0) placeholders. */
+                sources?: string | null;
             };
             header?: never;
             path: {
@@ -3843,7 +4801,82 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BarQualityResponse"];
+                    "application/json": components["schemas"]["SymbolCoverageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_cross_provider_diff_api_v1_adjusted_symbols__symbol__diff_get: {
+        parameters: {
+            query: {
+                /** @description Window start (inclusive), UTC ISO-8601. */
+                start: string;
+                /** @description Window end (exclusive), UTC ISO-8601. */
+                end: string;
+                /** @description Surface rows where abs(pct_diff) > tolerance. Default 0.005 (50bps) filters sub-cent rounding while catching real corp-action / data-correction divergences. */
+                tolerance?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Ticker (case-insensitive). */
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CrossProviderDiffResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_adjusted_symbols_api_v1_adjusted_symbols_get: {
+        parameters: {
+            query?: {
+                /** @description Lower bound on bar timestamp (inclusive). UTC. Defaults to 30 days back to keep the distinct-scan tractable against 5y of polygon_adjusted metadata. */
+                since?: string | null;
+                /** @description Comma-separated subset of ['polygon_adjusted','schwab_universe']. Omit for the UNION (both). Tag mismatches are logged and ignored. */
+                sources?: string | null;
+                /** @description Cap on number of symbols returned. Sorted alphabetically before truncation so re-querying with a smaller limit returns the same prefix. */
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdjustedSymbolsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4462,6 +5495,300 @@ export interface operations {
             };
         };
     };
+    list_stream_universe_api_v1_stream_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StreamUniverseResponse"];
+                };
+            };
+        };
+    };
+    add_to_stream_api_v1_stream_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddStreamRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StreamMutationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_futures_universe_api_v1_stream_futures_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StreamUniverseResponse"];
+                };
+            };
+        };
+    };
+    add_futures_api_v1_stream_futures_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddStreamRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StreamMutationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_futures_api_v1_stream_futures_delete: {
+        parameters: {
+            query: {
+                symbol: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StreamMutationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    futures_catalog_api_v1_stream_futures_catalog_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    stream_status_api_v1_stream_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StreamStatusResponse"];
+                };
+            };
+        };
+    };
+    remove_from_stream_api_v1_stream__symbol__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StreamMutationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_stream_api_v1_stream_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportStreamRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StreamMutationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_jobs_api_v1_jobs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobListing"];
+                };
+            };
+        };
+    };
+    run_job_api_v1_jobs__name__run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRunResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_clickhouse_schema_api_v1_clickhouse_schema_get: {
         parameters: {
             query?: never;
@@ -4515,6 +5842,66 @@ export interface operations {
             };
         };
     };
+    current_user_api_v1_customer_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentUserResponse"];
+                };
+            };
+        };
+    };
+    current_operator_api_v1_admin_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentUserResponse"];
+                };
+            };
+        };
+    };
+    logout_auth_logout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogoutResponse"];
+                };
+            };
+        };
+    };
     list_signals_api_v1_signals_get: {
         parameters: {
             query?: {
@@ -4557,6 +5944,8 @@ export interface operations {
                 interval?: string;
                 /** @description Restrict to bars in the last N days (server-side window). */
                 lookback_days?: number | null;
+                /** @description Data tier. 'auto' (default): ClickHouse first, fill the window from the S3 lake on a miss, re-query CH. 'clickhouse': hot cache only (fast, may be partial). 'lake': S3 ground truth only (complete history; no CH write). */
+                source?: components["schemas"]["BarSource"];
             };
             header?: never;
             path?: never;
@@ -4571,6 +5960,235 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Bar"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    latest_bars_api_v1_bars_latest_get: {
+        parameters: {
+            query: {
+                /** @description Comma-separated tickers, e.g. 'AAPL,MSFT,NVDA'. */
+                symbols: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_conversations_cockpit_assistant_conversations_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                include_deleted?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_conversation_cockpit_assistant_conversations_post: {
+        parameters: {
+            query?: {
+                title?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    load_conversation_cockpit_assistant_conversations__conversation_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_conversation_cockpit_assistant_conversations__conversation_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    continue_conversation_cockpit_assistant_conversations__conversation_id__turn_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContinueRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_tool_call_cockpit_assistant_conversations__conversation_id__confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

@@ -6,6 +6,8 @@ import { WatchlistsPage } from "./watchlists";
 import { StreamPage } from "./stream";
 import { ClickHousePage } from "./clickhouse";
 import { NotFoundPage } from "./not-found";
+import { LoginPage } from "./login";
+import { AuthGuard } from "@/auth/AuthGuard";
 
 /**
  * Single source of truth for routing. As new pages land they get
@@ -17,20 +19,24 @@ import { NotFoundPage } from "./not-found";
  */
 export const router = createBrowserRouter(
   [
+    { path: "/login", element: <LoginPage /> },
     {
-      path: "/",
-      element: <AppShell />,
+      element: <AuthGuard />,
       children: [
-        { index: true, element: <StatusPage /> },
-        { path: "symbol", element: <SymbolPage /> },
-        { path: "symbol/:ticker", element: <SymbolPage /> },
-        { path: "watchlists", element: <WatchlistsPage /> },
-        { path: "stream", element: <StreamPage /> },
-        // Back-compat alias: the old /app/seed URL now redirects to /app/stream.
-        // The page was renamed in FE-CONTRACTS-4 finalisation.
-        { path: "seed", element: <Navigate to="/stream" replace /> },
-        { path: "clickhouse", element: <ClickHousePage /> },
-        { path: "*", element: <NotFoundPage /> },
+        {
+          path: "/",
+          element: <AppShell />,
+          children: [
+            { index: true, element: <StatusPage /> },
+            { path: "symbol", element: <SymbolPage /> },
+            { path: "symbol/:ticker", element: <SymbolPage /> },
+            { path: "watchlists", element: <WatchlistsPage /> },
+            { path: "stream", element: <StreamPage /> },
+            { path: "seed", element: <Navigate to="/stream" replace /> },
+            { path: "clickhouse", element: <ClickHousePage /> },
+            { path: "*", element: <NotFoundPage /> },
+          ],
+        },
       ],
     },
   ],
