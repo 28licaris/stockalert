@@ -25,6 +25,9 @@ from app.services.identity.schemas import (
     CreateSecurityEventResult,
     SecurityEventListResponse,
     SecurityEventType,
+    MfaEnrollmentResponse,
+    MfaStatusResponse,
+    MfaVerificationResponse,
 )
 
 
@@ -101,7 +104,6 @@ class FakeIdentityService:
             permissions=principal.permissions,
             entitlements=principal.entitlements,
         )
-
     def list_sessions(self, principal: Principal) -> SessionListResponse:
         return SessionListResponse(
             sessions=(
@@ -139,6 +141,25 @@ class FakeIdentityService:
         return SecurityEventListResponse(events=())
 
 
+class FakeMfaService:
+    verified_code: str | None = None
+
+    def status(self, principal: Principal) -> MfaStatusResponse:
+        return MfaStatusResponse(supported=True, enabled=False, preferred=False)
+
+    def begin_enrollment(self, principal: Principal) -> MfaEnrollmentResponse:
+        return MfaEnrollmentResponse(
+            secret_code="ABCDEFGHIJKLMNOP",
+            otpauth_uri="otpauth://totp/StockAlert?secret=ABCDEFGHIJKLMNOP",
+        )
+
+    def verify_enrollment(
+        self, principal: Principal, code: str
+    ) -> MfaVerificationResponse:
+        self.verified_code = code
+        return MfaVerificationResponse(enabled=True)
+
+
 def _principal(*, operator: bool = False) -> Principal:
     return Principal(
         user_id=uuid4(),
@@ -161,6 +182,7 @@ def _configure_auth(monkeypatch, principal: Principal | None) -> FakeAuthenticat
     fake_identity = FakeIdentityService(principal)
     app.dependency_overrides[get_authentication_service] = lambda: fake_auth
     app.dependency_overrides[auth_dependencies.get_identity_service] = lambda: fake_identity
+    app.dependency_overrides[auth_dependencies.get_mfa_service] = lambda: FakeMfaService()
     return fake_auth
 
 
@@ -319,5 +341,40 @@ def test_customer_can_list_and_revoke_owned_sessions_with_csrf(monkeypatch) -> N
         assert current.status_code == 409
         assert others.status_code == 200
         assert others.json() == {"revoked_count": 1}
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_customer_mfa_enrollment_requires_csrf_and_valid_code(monkeypatch) -> None:
+    principal = _principal()
+    _configure_auth(monkeypatch, principal)
+    fake_mfa = FakeMfaService()
+    app.dependency_overrides[auth_dependencies.get_mfa_service] = lambda: fake_mfa
+    try:
+        client = TestClient(app)
+        client.cookies.set("stockalert_session", "session-token")
+        client.cookies.set("stockalert_csrf", "csrf-token")
+        status_response = client.get("/api/v1/customer/mfa")
+        denied = client.post("/api/v1/customer/mfa/enrollment")
+        started = client.post(
+            "/api/v1/customer/mfa/enrollment",
+            headers={"X-CSRF-Token": "csrf-token"},
+        )
+        verified = client.post(
+            "/api/v1/customer/mfa/enrollment/verify",
+            headers={"X-CSRF-Token": "csrf-token"},
+            json={"code": "123456"},
+        )
+        invalid = client.post(
+            "/api/v1/customer/mfa/enrollment/verify",
+            headers={"X-CSRF-Token": "csrf-token"},
+            json={"code": "123"},
+        )
+        assert status_response.status_code == 200
+        assert denied.status_code == 403
+        assert started.json()["secret_code"] == "ABCDEFGHIJKLMNOP"
+        assert verified.json() == {"enabled": True}
+        assert fake_mfa.verified_code == "123456"
+        assert invalid.status_code == 422
     finally:
         app.dependency_overrides.clear()

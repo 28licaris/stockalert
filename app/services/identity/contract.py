@@ -89,6 +89,8 @@ class IdentityRepository(Protocol):
 
     def get_current_user(self, principal: Principal) -> CurrentUserResponse | None: ...
 
+    def get_provider_session_ciphertext(self, principal: Principal) -> bytes | None: ...
+
     def create_security_event(
         self, command: CreateSecurityEventCommand
     ) -> CreateSecurityEventResult: ...
@@ -127,6 +129,12 @@ class IdentityProvider(Protocol):
 
     def logout_url(self, *, logout_uri: str) -> str: ...
 
+    def get_mfa_status(self, *, access_token: str) -> tuple[bool, bool]: ...
+
+    def associate_software_token(self, *, access_token: str) -> str: ...
+
+    def verify_software_token(self, *, access_token: str, code: str) -> bool: ...
+
 
 @runtime_checkable
 class IdentityServiceProtocol(Protocol):
@@ -135,7 +143,12 @@ class IdentityServiceProtocol(Protocol):
     ) -> ProvisionAccountResult: ...
 
     def issue_session(
-        self, *, user_id: UUID, tenant_id: UUID, expires_at: datetime
+        self,
+        *,
+        user_id: UUID,
+        tenant_id: UUID,
+        expires_at: datetime,
+        provider_session_ciphertext: bytes | None = None,
     ) -> IssuedSession | CreateSessionResult: ...
 
     def authenticate_session(self, token: str) -> Principal | None: ...

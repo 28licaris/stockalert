@@ -598,6 +598,30 @@ must not weaken the boundaries established by earlier phases.
 - The measured threshold for RDS Proxy, Aurora, read replicas, or a durable
   queue.
 
+## 15a. Backlog / TODO
+
+- **Rebrand the hosted auth screens (Managed Login).** Classic Hosted UI looks
+  off-brand vs the React app — affects sign-in, sign-up, the **MFA code
+  challenge**, password reset, and email verification. Switch the
+  `UserPoolDomain` to `ManagedLoginVersion: 2` and add an
+  `AWS::Cognito::ManagedLoginBranding` resource themed to the app's dark palette
+  (`--bg-base` ≈ `#0F1115`, `--accent` ≈ `#6467F2`, `--fg-base` ≈ `#EEF0F3`).
+  Needs a logo asset (the app mark is currently an inline lucide icon, not a
+  file). No extra cost — branding is included in the existing ESSENTIALS tier.
+  Recommended workflow: design in the console branding editor, export the
+  settings/assets JSON, commit it to `cognito.yaml`, deploy via change set.
+  Limitation: theme-level, not a pixel-perfect clone; copy (e.g. the MFA prompt
+  wording) is only partly editable.
+- **Re-evaluate the auth provider (build-vs-buy) for the non-broker scope.**
+  StockAlert is a subscription SaaS with no real-money/KYC (see product scope),
+  so the credential-liability case is softer than for a brokerage. Decision is
+  NOT "Cognito vs hand-roll" (hand-rolling password storage/MFA/reset/federation
+  is rarely worth it) but "keep Cognito vs switch to a higher-DX managed provider
+  (Clerk / Auth0 / Supabase / WorkOS)" if hosted-UI control is the main pain.
+  Does not block Stripe (billing keys off the local `user_id`/email regardless of
+  provider). Bias: keep the working, MFA-verified Cognito setup and brand it
+  unless a concrete reason to migrate emerges.
+
 ## 16. Authoritative references
 
 These external references support the initial technology decisions. Recheck

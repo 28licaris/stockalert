@@ -50,6 +50,7 @@ from app.api import (
     routes_adjusted,
     routes_admin_auth,
     routes_auth,
+    routes_billing,
     routes_customer_auth,
     routes_stream,
     routes_watchlist,
@@ -677,6 +678,7 @@ app.include_router(routes_stream.router, prefix=_V1, tags=["Stream"])
 app.include_router(routes_jobs.router, prefix=_V1, tags=["Jobs"])
 app.include_router(routes_clickhouse.router, prefix=_V1, tags=["ClickHouse"])
 app.include_router(routes_customer_auth.router, prefix=_V1, tags=["CustomerAuth"])
+app.include_router(routes_billing.router, prefix=_V1, tags=["Billing"])
 app.include_router(routes_admin_auth.router, prefix=_V1, tags=["AdminAuth"])
 app.include_router(routes_auth.router, tags=["Auth"])
 

@@ -182,6 +182,7 @@ class SecurityEventType(StrEnum):
     LOGOUT_SUCCEEDED = "logout_succeeded"
     SESSION_REVOKED = "session_revoked"
     OTHER_SESSIONS_REVOKED = "other_sessions_revoked"
+    MFA_ENABLED = "mfa_enabled"
 
 
 class CreateSecurityEventCommand(BaseModel):
@@ -212,6 +213,26 @@ class CreateSecurityEventResult(BaseModel):
 
 class SecurityEventListResponse(BaseModel):
     events: tuple[SecurityEventRecord, ...]
+
+
+class MfaStatusResponse(BaseModel):
+    supported: bool
+    enabled: bool
+    preferred: bool
+    reauthentication_required: bool = False
+
+
+class MfaEnrollmentResponse(BaseModel):
+    secret_code: str = Field(min_length=16, repr=False)
+    otpauth_uri: str
+
+
+class VerifyMfaEnrollmentRequest(BaseModel):
+    code: str = Field(pattern=r"^[0-9]{6}$")
+
+
+class MfaVerificationResponse(BaseModel):
+    enabled: bool
 
 
 class CreateLoginTransactionCommand(BaseModel):
@@ -257,6 +278,7 @@ class CognitoTokenSet(BaseModel):
     id_token: SecretStr = Field(repr=False)
     refresh_token: SecretStr | None = Field(default=None, repr=False)
     expires_in: int = Field(gt=0)
+    source_provider: str = "cognito"
 
 
 class CognitoOAuthConfig(BaseModel):
@@ -266,7 +288,12 @@ class CognitoOAuthConfig(BaseModel):
     issuer_url: str
     client_id: str = Field(min_length=1)
     client_secret: SecretStr | None = Field(default=None, repr=False)
-    scopes: tuple[str, ...] = ("openid", "email", "profile")
+    scopes: tuple[str, ...] = (
+        "openid",
+        "email",
+        "profile",
+        "aws.cognito.signin.user.admin",
+    )
 
     @field_validator("domain", "issuer_url")
     @classmethod

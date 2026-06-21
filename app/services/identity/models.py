@@ -9,6 +9,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -123,6 +124,40 @@ class MembershipModel(IdentityBase):
         ),
         CheckConstraint("status IN ('active', 'disabled')", name="ck_memberships_status"),
         Index("ix_memberships_tenant_id", "tenant_id"),
+    )
+
+
+class SubscriptionModel(TimestampMixin, IdentityBase):
+    """Current Stripe billing state for a tenant (one row per tenant).
+
+    Webhooks are the source of truth; this row is upserted from Stripe events.
+    Entitlements are derived from (status, price_id), never stored here, so plan
+    changes are config, not schema.
+    """
+
+    __tablename__ = "subscriptions"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    stripe_customer_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Stripe subscription status: active, trialing, past_due, canceled,
+    # incomplete, incomplete_expired, unpaid, paused — or 'none' (customer only).
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="none")
+    price_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    current_period_end: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cancel_at_period_end: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", name="uq_subscriptions_tenant"),
+        UniqueConstraint("stripe_customer_id", name="uq_subscriptions_customer"),
+        Index("ix_subscriptions_stripe_subscription_id", "stripe_subscription_id"),
     )
 
 

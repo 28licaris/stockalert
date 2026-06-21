@@ -31,5 +31,6 @@ export COGNITO_CLIENT_SECRET
 export COGNITO_REDIRECT_URI="${COGNITO_REDIRECT_URI:-http://localhost:8000/auth/callback}"
 export COGNITO_LOGOUT_URI="${COGNITO_LOGOUT_URI:-http://localhost:8000/app/login}"
 export AUTH_COOKIE_SECURE="${AUTH_COOKIE_SECURE:-false}"
+export AUTH_PROVIDER_TOKEN_CIPHER="${AUTH_PROVIDER_TOKEN_CIPHER:-local}"
 
 exec .venv/bin/uvicorn app.main_api:app --host 127.0.0.1 --port 8000

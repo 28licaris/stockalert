@@ -263,6 +263,29 @@ class Settings(BaseModel):
     auth_cookie_secure: bool = (
         os.getenv("AUTH_COOKIE_SECURE", "true").lower() == "true"
     )
+    auth_provider_token_cipher: str = os.getenv(
+        "AUTH_PROVIDER_TOKEN_CIPHER", "disabled"
+    ).lower()
+    auth_provider_token_kms_key_id: str = os.getenv(
+        "AUTH_PROVIDER_TOKEN_KMS_KEY_ID", ""
+    )
+    auth_provider_token_kms_region: str = os.getenv(
+        "AUTH_PROVIDER_TOKEN_KMS_REGION", "us-east-1"
+    )
+    # Stripe subscription billing (test-mode values during development).
+    # Secret key drives all server-side calls; webhook secret verifies event
+    # signatures; publishable key is only needed for embedded card fields.
+    stripe_secret_key: str = os.getenv("STRIPE_SECRET_KEY", "")
+    stripe_publishable_key: str = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+    stripe_webhook_secret: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    # Offered Pro prices (test/live IDs differ; price IDs are not secret).
+    stripe_price_pro_monthly: str = os.getenv("STRIPE_PRICE_PRO_MONTHLY", "")
+    stripe_price_pro_annual: str = os.getenv("STRIPE_PRICE_PRO_ANNUAL", "")
+    stripe_trial_days: int = int(os.getenv("STRIPE_TRIAL_DAYS", "14"))
+    # Where Stripe redirects after hosted Checkout / Customer Portal.
+    stripe_billing_return_url: str = os.getenv(
+        "STRIPE_BILLING_RETURN_URL", "http://localhost:8000/app/settings"
+    )
     # Optional tag stored on OHLCV rows (e.g. matches DATA_PROVIDER)
     data_source_tag: str = os.getenv("DATA_SOURCE_TAG", "")
     # Comma-separated symbols for the dashboard tape. Uses liquid ETFs that

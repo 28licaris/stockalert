@@ -30,6 +30,10 @@ from app.services.identity.security import (
     safe_return_path,
 )
 from app.services.identity.service import IdentityService
+from app.services.identity.provider_session import (
+    ProviderSessionCipher,
+    ProviderSessionMaterial,
+)
 
 
 class OAuthAuthenticationService:
@@ -39,6 +43,7 @@ class OAuthAuthenticationService:
         provider: IdentityProvider,
         repository: IdentityRepository,
         identity_service: IdentityService,
+        provider_session_cipher: ProviderSessionCipher,
         redirect_uri: str,
         logout_uri: str,
         session_ttl: timedelta,
@@ -51,6 +56,7 @@ class OAuthAuthenticationService:
         self._provider = provider
         self._repository = repository
         self._identity_service = identity_service
+        self._provider_session_cipher = provider_session_cipher
         self._redirect_uri = redirect_uri
         self._logout_uri = logout_uri
         self._session_ttl = session_ttl
@@ -133,11 +139,21 @@ class OAuthAuthenticationService:
         if provisioned.account is None:
             return CompleteLoginResult(status="error", error_code=provisioned.error_code)
 
+        now = self._clock()
+        provider_ciphertext = await asyncio.to_thread(
+            self._provider_session_cipher.encrypt,
+            ProviderSessionMaterial(
+                access_token=token_set.access_token,
+                expires_at=now + timedelta(seconds=token_set.expires_in),
+                source_provider=token_set.source_provider,
+            ),
+        )
         issued = await asyncio.to_thread(
             self._identity_service.issue_session,
             user_id=provisioned.account.user_id,
             tenant_id=provisioned.account.tenant_id,
-            expires_at=self._clock() + self._session_ttl,
+            expires_at=now + self._session_ttl,
+            provider_session_ciphertext=provider_ciphertext,
         )
         if isinstance(issued, CreateSessionResult):
             return CompleteLoginResult(status="error", error_code=issued.error_code)

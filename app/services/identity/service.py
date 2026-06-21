@@ -54,7 +54,12 @@ class IdentityService:
         return self._repository.provision_personal_account(command)
 
     def issue_session(
-        self, *, user_id: UUID, tenant_id: UUID, expires_at: datetime
+        self,
+        *,
+        user_id: UUID,
+        tenant_id: UUID,
+        expires_at: datetime,
+        provider_session_ciphertext: bytes | None = None,
     ) -> IssuedSession | CreateSessionResult:
         now = self._clock()
         if expires_at <= now:
@@ -72,6 +77,7 @@ class IdentityService:
                 token_hash=hash_session_token(token),
                 csrf_token_hash=hash_session_token(csrf_token),
                 expires_at=expires_at,
+                provider_session_ciphertext=provider_session_ciphertext,
             )
         )
         if result.status != "created" or result.session is None:

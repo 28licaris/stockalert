@@ -3335,7 +3335,73 @@ export interface components {
          * SecurityEventType
          * @enum {string}
          */
-        SecurityEventType: "login_succeeded" | "logout_succeeded" | "session_revoked" | "other_sessions_revoked";
+        SecurityEventType: "login_succeeded" | "logout_succeeded" | "session_revoked" | "other_sessions_revoked" | "mfa_enabled";
+        /** MfaStatusResponse */
+        MfaStatusResponse: {
+            /** Supported */
+            supported: boolean;
+            /** Enabled */
+            enabled: boolean;
+            /** Preferred */
+            preferred: boolean;
+            /**
+             * Reauthentication Required
+             * @default false
+             */
+            reauthentication_required: boolean;
+        };
+        /** MfaEnrollmentResponse */
+        MfaEnrollmentResponse: {
+            /** Secret Code */
+            secret_code: string;
+            /** Otpauth Uri */
+            otpauth_uri: string;
+        };
+        /** MfaVerificationResponse */
+        MfaVerificationResponse: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /** VerifyMfaEnrollmentRequest */
+        VerifyMfaEnrollmentRequest: {
+            /** Code */
+            code: string;
+        };
+        /** SubscriptionStatusResponse */
+        SubscriptionStatusResponse: {
+            /** Status */
+            status: string;
+            /** Active */
+            active: boolean;
+            /** Plan */
+            plan?: string | null;
+            /** Price Id */
+            price_id?: string | null;
+            /** Current Period End */
+            current_period_end?: string | null;
+            /**
+             * Cancel At Period End
+             * @default false
+             */
+            cancel_at_period_end: boolean;
+            /** Entitlements */
+            entitlements?: string[];
+        };
+        /** CheckoutRequest */
+        CheckoutRequest: {
+            /** Plan */
+            plan: string;
+        };
+        /** CheckoutSessionResponse */
+        CheckoutSessionResponse: {
+            /** Url */
+            url: string;
+        };
+        /** PortalSessionResponse */
+        PortalSessionResponse: {
+            /** Url */
+            url: string;
+        };
         /**
          * SeedEntry
          * @description One symbol in the operator's seed universe.

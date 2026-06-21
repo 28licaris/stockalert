@@ -9,12 +9,14 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.services.identity.entitlements import entitlements_for
 from app.services.identity.models import (
     AuthTransactionModel,
     ExternalIdentityModel,
     MembershipModel,
     SessionModel,
     SecurityEventModel,
+    SubscriptionModel,
     TenantModel,
     UserModel,
 )
@@ -173,7 +175,7 @@ class PostgresIdentityRepository:
     ) -> Principal | None:
         with self._session_factory() as db:
             row = db.execute(
-                select(SessionModel, MembershipModel)
+                select(SessionModel, MembershipModel, SubscriptionModel)
                 .join(
                     MembershipModel,
                     (MembershipModel.user_id == SessionModel.user_id)
@@ -181,6 +183,10 @@ class PostgresIdentityRepository:
                 )
                 .join(UserModel, UserModel.id == SessionModel.user_id)
                 .join(TenantModel, TenantModel.id == SessionModel.tenant_id)
+                .outerjoin(
+                    SubscriptionModel,
+                    SubscriptionModel.tenant_id == SessionModel.tenant_id,
+                )
                 .where(
                     SessionModel.token_hash == token_hash,
                     SessionModel.revoked_at.is_(None),
@@ -192,12 +198,15 @@ class PostgresIdentityRepository:
             ).one_or_none()
             if row is None:
                 return None
-            session, membership = row
+            session, membership, subscription = row
+            status = subscription.status if subscription is not None else "none"
+            price_id = subscription.price_id if subscription is not None else None
             return Principal(
                 user_id=session.user_id,
                 tenant_id=session.tenant_id,
                 session_id=session.id,
                 roles=frozenset({Role(membership.role)}),
+                entitlements=entitlements_for(status, price_id),
             )
 
     def revoke_session(self, session_id: UUID, *, now: datetime) -> RevokeSessionResult:
@@ -403,6 +412,17 @@ class PostgresIdentityRepository:
                 roles=principal.roles,
                 permissions=principal.permissions,
                 entitlements=principal.entitlements,
+            )
+
+    def get_provider_session_ciphertext(self, principal: Principal) -> bytes | None:
+        with self._session_factory() as db:
+            return db.scalar(
+                select(SessionModel.provider_session_ciphertext).where(
+                    SessionModel.id == principal.session_id,
+                    SessionModel.user_id == principal.user_id,
+                    SessionModel.tenant_id == principal.tenant_id,
+                    SessionModel.revoked_at.is_(None),
+                )
             )
 
     def create_security_event(

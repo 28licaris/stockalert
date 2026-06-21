@@ -12,6 +12,33 @@ from app.services.identity.cognito import CognitoIdentityProvider
 from app.services.identity.schemas import Principal
 from app.services.identity.repository import PostgresIdentityRepository
 from app.services.identity.service import IdentityService
+from app.services.identity.provider_session import (
+    KmsProviderSessionCipher,
+    LocalAesGcmProviderSessionCipher,
+    ProviderSessionCipher,
+)
+from app.services.identity.mfa_service import MfaService
+from app.services.billing.service import BillingService
+from app.services.billing.repository import SubscriptionRepository
+from app.services.billing.gateway import StripeApiGateway
+
+
+@lru_cache(maxsize=1)
+def get_provider_session_cipher() -> ProviderSessionCipher:
+    from app.config import settings
+
+    if settings.auth_provider_token_cipher == "local":
+        return LocalAesGcmProviderSessionCipher(settings.cognito_client_secret)
+    if settings.auth_provider_token_cipher == "kms":
+        return KmsProviderSessionCipher(
+            key_id=settings.auth_provider_token_kms_key_id,
+            region=settings.auth_provider_token_kms_region,
+        )
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Provider token encryption is not configured.",
+        headers={"X-Error-Code": "provider_cipher_not_configured"},
+    )
 
 
 @lru_cache(maxsize=1)
@@ -63,12 +90,63 @@ def get_authentication_service() -> OAuthAuthenticationService:
         provider=CognitoIdentityProvider.from_settings(),
         repository=repository,
         identity_service=identity_service,
+        provider_session_cipher=get_provider_session_cipher(),
         redirect_uri=settings.cognito_redirect_uri,
         logout_uri=settings.cognito_logout_uri,
         session_ttl=timedelta(hours=settings.auth_session_hours),
         transaction_ttl=timedelta(
             minutes=settings.auth_login_transaction_minutes
         ),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_mfa_service() -> MfaService:
+    from app.config import settings
+
+    if not settings.auth_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Customer authentication is disabled.",
+            headers={"X-Error-Code": "auth_disabled"},
+        )
+    if not settings.identity_database_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Customer authentication is not configured.",
+            headers={"X-Error-Code": "auth_not_configured"},
+        )
+    repository = PostgresIdentityRepository.from_settings()
+    identity_service = IdentityService(repository=repository)
+    return MfaService(
+        repository=repository,
+        provider=CognitoIdentityProvider.from_settings(),
+        cipher=get_provider_session_cipher(),
+        identity_service=identity_service,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_billing_service() -> BillingService:
+    from app.config import settings
+
+    if not settings.stripe_secret_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Billing is not configured.",
+            headers={"X-Error-Code": "billing_not_configured"},
+        )
+    gateway = StripeApiGateway(
+        api_key=settings.stripe_secret_key,
+        webhook_secret=settings.stripe_webhook_secret,
+    )
+    return BillingService(
+        gateway=gateway,
+        repository=SubscriptionRepository.from_settings(),
+        price_monthly=settings.stripe_price_pro_monthly,
+        price_annual=settings.stripe_price_pro_annual,
+        trial_days=settings.stripe_trial_days,
+        return_url=settings.stripe_billing_return_url,
     )
 
 
@@ -153,3 +231,6 @@ def clear_auth_dependency_caches() -> None:
     """Test/process-reset hook; closes are owned by app lifecycle later."""
     get_authentication_service.cache_clear()
     get_identity_service.cache_clear()
+    get_provider_session_cipher.cache_clear()
+    get_mfa_service.cache_clear()
+    get_billing_service.cache_clear()
