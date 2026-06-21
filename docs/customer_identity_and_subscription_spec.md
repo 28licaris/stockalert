@@ -622,6 +622,34 @@ must not weaken the boundaries established by earlier phases.
   provider). Bias: keep the working, MFA-verified Cognito setup and brand it
   unless a concrete reason to migrate emerges.
 
+## 15b. Production-readiness follow-ups
+
+MFA and Stripe billing are built and verified **end-to-end locally** (real
+Cognito + Stripe test mode + PostgreSQL) as of 2026-06-21. What remains before
+any of it is genuinely production-ready — these were deliberately deferred:
+
+- **Deploy the application** (host + domain + HTTPS). Nothing is deployed yet;
+  the dev server binds to `localhost:8000`, which is why it is unreachable from
+  a phone or any other device. This is the single biggest remaining lever and a
+  prerequisite for everything below. No CDK/Terraform in this repo — follow the
+  existing infra conventions (Glue/CodeBuild/EMR; CloudFormation for Cognito).
+- **Switch Cognito + Stripe to production**: live keys/secrets, and update the
+  redirect/callback/return URLs from `localhost` to the deployed domain
+  (Cognito `CallbackURLs`/`LogoutURLs`, Stripe Checkout success/cancel +
+  portal return).
+- **Register a production Stripe webhook endpoint** (Dashboard → Webhooks → the
+  deployed `/api/v1/customer/billing/webhook` URL) and put its signing secret in
+  the prod secret store. Local dev uses the Stripe CLI (`stripe listen`).
+- **Exercise the `kms` provider-session cipher** in a real environment. Only the
+  `local` AES-GCM path has run; set `AUTH_PROVIDER_TOKEN_CIPHER=kms` with a
+  customer-managed key and grant the app role `kms:Encrypt`/`kms:Decrypt` plus
+  the four `cognito-idp:*` MFA permissions (see `app/services/identity/README.md`).
+- **Managed Login branding** for the hosted Cognito screens — see §15a.
+- **Confirm finalized pricing/tiers.** v1 ships placeholder test prices
+  ($29/mo, $290/yr) and a binary free/pro entitlement map; extend the
+  `price_id → entitlements` map in `app/services/identity/entitlements.py` once
+  real tiers are decided (config change, not schema).
+
 ## 16. Authoritative references
 
 These external references support the initial technology decisions. Recheck
