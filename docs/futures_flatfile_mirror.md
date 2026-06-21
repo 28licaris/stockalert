@@ -25,14 +25,24 @@ files verbatim first (immune to every bug above), then derive curated tables
 ## Verified facts (Polygon `flatfiles` bucket, us-east-1)
 
 Futures = 4 exchanges (`us_futures_{cme,cbot,comex,nymex}`), each with 4
-datasets. Full history `2017-04-03 → present`.
+datasets. Files are *listed* back to `2017-04-03`, but **GetObject is entitled
+only for a rolling trailing ~5-year window** — older files return **403**
+(listable, not readable). Probed boundary on 2026-06-21 was exactly
+`2021-06-21` (today − 5 years); it rolls forward daily, so the obtainable
+history shrinks over time. **Capture now.** The mirror script probes this floor
+at runtime and only attempts entitled files.
 
-| Dataset | Files | Size | Captured? |
+(This also explains the earlier continuous-root backfill's 2021 floor — it was
+the subscription boundary, not only the REST contract-history limit.)
+
+Full-listing sizes (2017–present) vs the ~5-yr entitled slice we can actually pull:
+
+| Dataset | Listed files / size | Entitled (~5 yr) | Captured? |
 |---|---|---|---|
-| `minute_aggs_v1` | 9,508 | 7.42 GB | ✅ Phase 1 |
-| `session_aggs_v1` | 9,472 | 0.13 GB | ✅ Phase 1 |
-| `trades_v1` | 9,508 | 123.6 GB | ✅ Phase 1 (raw only) |
-| `quotes_v1` | 11,174 | 5.77 TB | ❌ deferred (storage cost) |
+| `minute_aggs_v1` | 9,508 / 7.42 GB | ~5,200 / ~4 GB | ✅ Phase 1 |
+| `session_aggs_v1` | 9,472 / 0.13 GB | ~5,200 / ~0.07 GB | ✅ Phase 1 |
+| `trades_v1` | 9,508 / 123.6 GB | ~5,200 / ~67 GB | ✅ Phase 1 (raw only) |
+| `quotes_v1` | 11,174 / 5.77 TB | — | ❌ deferred (storage cost) |
 
 ## Architecture (mirrors the equities pattern)
 

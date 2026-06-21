@@ -48,7 +48,9 @@ env:
     MIRROR_DATASETS: "minute_aggs_v1 session_aggs_v1 trades_v1"
     MIRROR_START_YEAR: "2017"
     MIRROR_END_YEAR: "2026"
-    MIRROR_WORKERS: "48"
+    # 12 workers: higher rates (e.g. 48) trip Polygon's 429 rate limit. The
+    # script also retries 429/5xx with backoff, but low concurrency avoids them.
+    MIRROR_WORKERS: "12"
     MIRROR_DRY_RUN: ""
   secrets-manager:
     POLYGON_S3_ACCESS_KEY_ID: "polygon/flatfiles:access_key_id"

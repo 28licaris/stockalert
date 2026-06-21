@@ -85,6 +85,7 @@ class GroupResult:
     copied: int = 0
     copied_bytes: int = 0
     skipped: int = 0
+    forbidden: int = 0  # 403 — outside subscription window (not a failure)
     failures: list[tuple[str, str]] = field(default_factory=list)  # (key, reason)
     # Filled during post-run reconciliation.
     missing_in_dest: list[str] = field(default_factory=list)
@@ -99,12 +100,21 @@ class GroupResult:
         )
 
 
+class ForbiddenError(Exception):
+    """GetObject returned 403 — the object is outside our subscription window."""
+
+
+def _err_code(exc) -> str:
+    return getattr(exc, "response", {}).get("Error", {}).get("Code", "")
+
+
 def _make_clients(settings):
     import boto3
     from botocore.config import Config
 
+    # Adaptive retries handle most 429/5xx; we also retry explicitly in copy_one.
     cfg = Config(
-        retries={"max_attempts": 8, "mode": "adaptive"},
+        retries={"max_attempts": 10, "mode": "adaptive"},
         max_pool_connections=64,
     )
     src = boto3.client(
@@ -119,26 +129,77 @@ def _make_clients(settings):
     return src, dst
 
 
-def _year_of(key: str) -> int | None:
-    """Extract YYYY from .../{YYYY}/{MM}/{YYYY-MM-DD}.csv.gz; None if unparseable."""
-    parts = key.split("/")
-    for p in parts:
-        if len(p) == 4 and p.isdigit():
-            return int(p)
+def _date_of(key: str):
+    """Extract a date from .../{YYYY-MM-DD}.csv.gz; None if unparseable."""
+    from datetime import date as _date
+
+    base = key.rsplit("/", 1)[-1].split(".")[0]  # YYYY-MM-DD
+    parts = base.split("-")
+    if len(parts) == 3 and all(p.isdigit() for p in parts):
+        try:
+            return _date(int(parts[0]), int(parts[1]), int(parts[2]))
+        except ValueError:
+            return None
     return None
 
 
-def list_source(src, bucket, exchange, dataset, start_year, end_year) -> dict[str, int]:
-    """Return {key: size} for one (exchange, dataset) within the year range."""
+def probe_entitlement_floor(src, bucket, exchange, dataset):
+    """Binary-search the earliest date our subscription can GET (vs 403).
+
+    The Polygon futures subscription grants a *rolling* trailing window
+    (~5 years); older flat files are listable but GetObject returns 403.
+    Returns the earliest accessible date, or None if everything is accessible.
+    """
+    keys = sorted(list_source_all(src, bucket, exchange, dataset).keys())
+    dated = [(k, _date_of(k)) for k in keys]
+    dated = [(k, d) for k, d in dated if d is not None]
+    if not dated:
+        return None
+
+    def can_get(key) -> bool:
+        try:
+            src.get_object(Bucket=bucket, Key=key, Range="bytes=0-0")
+            return True
+        except Exception as exc:
+            if _err_code(exc) in ("403", "AccessDenied"):
+                return False
+            raise  # a real error (429/5xx) — surface it, don't misread as floor
+
+    if can_get(dated[0][0]):
+        return dated[0][1]  # full history accessible
+    if not can_get(dated[-1][0]):
+        raise RuntimeError(
+            f"[{exchange}/{dataset}] newest file is 403 — check subscription/creds"
+        )
+    lo, hi = 0, len(dated) - 1  # dated[lo]=403, dated[hi]=200
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if can_get(dated[mid][0]):
+            hi = mid
+        else:
+            lo = mid
+    return dated[hi][1]
+
+
+def list_source_all(src, bucket, exchange, dataset) -> dict[str, int]:
+    """Return {key: size} for ALL objects of one (exchange, dataset)."""
     prefix = f"{exchange}/{dataset}/"
     manifest: dict[str, int] = {}
     paginator = src.get_paginator("list_objects_v2")
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         for o in page.get("Contents", []):
-            y = _year_of(o["Key"])
-            if y is None or y < start_year or y > end_year:
-                continue
             manifest[o["Key"]] = o["Size"]
+    return manifest
+
+
+def list_source(src, bucket, exchange, dataset, floor_date) -> dict[str, int]:
+    """Return {key: size} for entitled objects (date >= floor_date)."""
+    manifest: dict[str, int] = {}
+    for k, sz in list_source_all(src, bucket, exchange, dataset).items():
+        d = _date_of(k)
+        if d is None or (floor_date and d < floor_date):
+            continue
+        manifest[k] = sz
     return manifest
 
 
@@ -154,46 +215,65 @@ def list_dest(dst, bucket, dest_prefix, exchange, dataset) -> dict[str, int]:
     return out
 
 
-def copy_one(src, dst, src_bucket, dst_bucket, dest_prefix, key, expected_size) -> int:
+_RETRYABLE = {"429", "TooManyRequests", "SlowDown", "503", "500",
+              "ServiceUnavailable", "InternalError", "RequestTimeout"}
+
+
+def copy_one(src, dst, src_bucket, dst_bucket, dest_prefix, key, expected_size,
+             max_attempts=6) -> int:
     """Stream one object src -> dst and verify size. Returns bytes copied.
 
-    Raises on any failure so the caller records it; never swallows errors.
+    Retries 429/5xx with exponential backoff + jitter. Raises ForbiddenError on
+    403 (outside subscription window — caller classifies, does not retry).
+    Raises on any other failure so the caller records it; never swallows errors.
     """
     from boto3.s3.transfer import TransferConfig
 
     dest_key = f"{dest_prefix}/{key}"
-    obj = src.get_object(Bucket=src_bucket, Key=key)
-    body = obj["Body"]
-    # Sequential multipart works with a non-seekable streaming body.
     tcfg = TransferConfig(multipart_threshold=16 * 1024 * 1024,
                           multipart_chunksize=16 * 1024 * 1024,
                           use_threads=False)
-    dst.upload_fileobj(body, dst_bucket, dest_key, Config=tcfg)
-    head = dst.head_object(Bucket=dst_bucket, Key=dest_key)
-    got = head["ContentLength"]
-    if got != expected_size:
-        raise ValueError(
-            f"size mismatch after PUT: expected {expected_size}, got {got}"
-        )
-    return got
+    last_exc = None
+    for attempt in range(max_attempts):
+        try:
+            obj = src.get_object(Bucket=src_bucket, Key=key)
+            dst.upload_fileobj(obj["Body"], dst_bucket, dest_key, Config=tcfg)
+            head = dst.head_object(Bucket=dst_bucket, Key=dest_key)
+            got = head["ContentLength"]
+            if got != expected_size:
+                raise ValueError(
+                    f"size mismatch after PUT: expected {expected_size}, got {got}"
+                )
+            return got
+        except Exception as exc:
+            code = _err_code(exc)
+            if code in ("403", "AccessDenied"):
+                raise ForbiddenError(key) from exc
+            if code in _RETRYABLE and attempt < max_attempts - 1:
+                # 0.5,1,2,4,8s + per-key jitter (deterministic, no global RNG).
+                jitter = (hash(key) % 250) / 1000.0
+                time.sleep(min(8.0, 0.5 * (2 ** attempt)) + jitter)
+                last_exc = exc
+                continue
+            raise
+    raise last_exc  # exhausted retries
 
 
 def mirror_group(
     src, dst, settings, dest_prefix, exchange, dataset,
-    start_year, end_year, workers, dry_run,
+    floor_date, workers, dry_run,
 ) -> GroupResult:
     res = GroupResult(exchange=exchange, dataset=dataset)
     src_bucket = settings.polygon_s3_bucket
     dst_bucket = settings.stock_lake_bucket
 
     logger.info("[%s/%s] listing source…", exchange, dataset)
-    source = list_source(src, src_bucket, exchange, dataset, start_year, end_year)
+    source = list_source(src, src_bucket, exchange, dataset, floor_date)
     res.source_files = len(source)
     res.source_bytes = sum(source.values())
     logger.info(
-        "[%s/%s] source: %d files, %.3f GB (%d–%d)",
-        exchange, dataset, res.source_files, res.source_bytes / 1e9,
-        start_year, end_year,
+        "[%s/%s] source (entitled, >= %s): %d files, %.3f GB",
+        exchange, dataset, floor_date, res.source_files, res.source_bytes / 1e9,
     )
     if res.source_files == 0:
         logger.warning("[%s/%s] NO source files in range — nothing to mirror",
@@ -241,6 +321,10 @@ def mirror_group(
                     res.copied += 1
                     res.copied_bytes += n
                     done += 1
+            except ForbiddenError:  # outside subscription window — expected, skip
+                with lock:
+                    res.forbidden += 1
+                    done += 1
             except Exception as exc:  # record, never swallow
                 with lock:
                     res.failures.append((key, str(exc)))
@@ -249,25 +333,26 @@ def mirror_group(
             if done % 250 == 0:
                 el = time.time() - t0
                 logger.info(
-                    "[%s/%s] %d/%d copied (%.2f GB, %.0fs, %d failed)",
+                    "[%s/%s] %d/%d copied (%.2f GB, %.0fs, %d forbidden, %d failed)",
                     exchange, dataset, res.copied, len(todo),
-                    res.copied_bytes / 1e9, el, len(res.failures),
+                    res.copied_bytes / 1e9, el, res.forbidden, len(res.failures),
                 )
 
     logger.info(
-        "[%s/%s] copy phase done: copied=%d skipped=%d failed=%d (%.2f GB, %.0fs)",
-        exchange, dataset, res.copied, res.skipped, len(res.failures),
-        res.copied_bytes / 1e9, time.time() - t0,
+        "[%s/%s] copy phase done: copied=%d skipped=%d forbidden=%d failed=%d "
+        "(%.2f GB, %.0fs)",
+        exchange, dataset, res.copied, res.skipped, res.forbidden,
+        len(res.failures), res.copied_bytes / 1e9, time.time() - t0,
     )
     return res
 
 
 def reconcile_group(src, dst, settings, dest_prefix, res: GroupResult,
-                    start_year, end_year) -> None:
+                    floor_date) -> None:
+    """Cross-side verify entitled files only (date >= floor_date)."""
     src_bucket = settings.polygon_s3_bucket
     dst_bucket = settings.stock_lake_bucket
-    source = list_source(src, src_bucket, res.exchange, res.dataset,
-                         start_year, end_year)
+    source = list_source(src, src_bucket, res.exchange, res.dataset, floor_date)
     dest = list_dest(dst, dst_bucket, dest_prefix, res.exchange, res.dataset)
     for k, sz in source.items():
         if k not in dest:
@@ -275,7 +360,7 @@ def reconcile_group(src, dst, settings, dest_prefix, res: GroupResult,
         elif dest[k] != sz:
             res.size_mismatch.append(k)
     logger.info(
-        "[%s/%s] RECONCILE: source=%d dest=%d missing=%d size_mismatch=%d -> %s",
+        "[%s/%s] RECONCILE: entitled=%d dest=%d missing=%d size_mismatch=%d -> %s",
         res.exchange, res.dataset, len(source), len(dest),
         len(res.missing_in_dest), len(res.size_mismatch),
         "OK" if res.ok else "FAIL",
@@ -288,9 +373,11 @@ def main() -> int:
                     choices=ALL_EXCHANGES)
     ap.add_argument("--datasets", nargs="+", default=ALL_DATASETS,
                     choices=ALL_DATASETS)
+    # History is bounded by a rolling ~5-year subscription entitlement, probed
+    # at runtime; --start-year only caps the *upper* edge of what we attempt.
     ap.add_argument("--start-year", type=int, default=2017)
     ap.add_argument("--end-year", type=int, default=2026)
-    ap.add_argument("--workers", type=int, default=32)
+    ap.add_argument("--workers", type=int, default=12)
     ap.add_argument("--dest-prefix", default=DEFAULT_DEST_PREFIX)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -300,13 +387,22 @@ def main() -> int:
     src, dst = _make_clients(settings)
 
     logger.info(
-        "=== Polygon futures flat-file mirror %d–%d %s===",
-        args.start_year, args.end_year, "| DRY RUN " if args.dry_run else "",
+        "=== Polygon futures flat-file mirror %s===",
+        "| DRY RUN " if args.dry_run else "",
     )
     logger.info("  source : s3://%s/{exchange}/{dataset}/", settings.polygon_s3_bucket)
     logger.info("  dest   : s3://%s/%s/", settings.stock_lake_bucket, args.dest_prefix)
     logger.info("  exchanges: %s", " ".join(args.exchanges))
     logger.info("  datasets : %s", " ".join(args.datasets))
+    logger.info("  workers  : %d", args.workers)
+
+    # Probe the subscription entitlement floor once (account-level, uniform
+    # across exchanges/datasets). Only files on/after this date are attempted.
+    logger.info("Probing subscription entitlement floor…")
+    floor_date = probe_entitlement_floor(
+        src, settings.polygon_s3_bucket, args.exchanges[0], args.datasets[0]
+    )
+    logger.info("  entitlement floor: %s (earliest GET-accessible date)", floor_date)
 
     results: list[GroupResult] = []
     t0 = time.time()
@@ -314,34 +410,36 @@ def main() -> int:
         for exchange in args.exchanges:
             res = mirror_group(
                 src, dst, settings, args.dest_prefix, exchange, dataset,
-                args.start_year, args.end_year, args.workers, args.dry_run,
+                floor_date, args.workers, args.dry_run,
             )
             if not args.dry_run:
-                reconcile_group(src, dst, settings, args.dest_prefix, res,
-                                args.start_year, args.end_year)
+                reconcile_group(src, dst, settings, args.dest_prefix, res, floor_date)
             results.append(res)
 
     # ---- Summary + manifest ----
     total_src = sum(r.source_files for r in results)
     total_copied = sum(r.copied for r in results)
     total_skipped = sum(r.skipped for r in results)
+    total_forbidden = sum(r.forbidden for r in results)
     total_failed = sum(len(r.failures) for r in results)
     total_missing = sum(len(r.missing_in_dest) for r in results)
     total_mismatch = sum(len(r.size_mismatch) for r in results)
 
     logger.info("")
-    logger.info("=== SUMMARY (%.0fs) ===", time.time() - t0)
+    logger.info("=== SUMMARY (%.0fs) — entitlement floor %s ===",
+                time.time() - t0, floor_date)
     for r in results:
         logger.info(
-            "  %-18s %-16s src=%-6d copied=%-6d skipped=%-6d failed=%-3d "
+            "  %-18s %-16s entitled=%-6d copied=%-6d skipped=%-6d failed=%-3d "
             "missing=%-3d mismatch=%-3d %s",
             r.exchange, r.dataset, r.source_files, r.copied, r.skipped,
             len(r.failures), len(r.missing_in_dest), len(r.size_mismatch),
             "" if (args.dry_run or r.ok) else "<<< FAIL",
         )
     logger.info(
-        "  TOTAL src=%d copied=%d skipped=%d failed=%d missing=%d mismatch=%d",
-        total_src, total_copied, total_skipped, total_failed,
+        "  TOTAL entitled=%d copied=%d skipped=%d forbidden=%d failed=%d "
+        "missing=%d mismatch=%d",
+        total_src, total_copied, total_skipped, total_forbidden, total_failed,
         total_missing, total_mismatch,
     )
 
@@ -352,16 +450,16 @@ def main() -> int:
     # Write a manifest record next to the mirror.
     manifest = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "start_year": args.start_year,
-        "end_year": args.end_year,
+        "entitlement_floor": floor_date.isoformat() if floor_date else None,
         "groups": [
             {
                 "exchange": r.exchange,
                 "dataset": r.dataset,
-                "source_files": r.source_files,
-                "source_bytes": r.source_bytes,
+                "entitled_files": r.source_files,
+                "entitled_bytes": r.source_bytes,
                 "copied": r.copied,
                 "skipped": r.skipped,
+                "forbidden": r.forbidden,
                 "failed": len(r.failures),
                 "missing_in_dest": len(r.missing_in_dest),
                 "size_mismatch": len(r.size_mismatch),
