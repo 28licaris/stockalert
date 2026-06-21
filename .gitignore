@@ -10,6 +10,9 @@ __pycache__/
 **/.env
 **/.env.bak.*
 
+# Local OAuth credentials and other developer secrets
+/secrets/
+
 # Schwab OAuth refresh token (written by scripts/schwab_get_refresh_token.py)
 **/.schwab_refresh_token
 **/data/.schwab_refresh_token

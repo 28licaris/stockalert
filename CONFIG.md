@@ -44,6 +44,59 @@ Start ClickHouse locally: `docker compose --profile ch up -d` (see [docker-compo
 
 Integration tests (`tests/test_database_alert.py`): set `CLICKHOUSE_TEST=1` and ensure the credentials in `.env` match your server (many installs require `CLICKHOUSE_PASSWORD`).
 
+## Customer identity PostgreSQL
+
+- `IDENTITY_DATABASE_URL` – SQLAlchemy PostgreSQL URL for customer accounts,
+  tenants, sessions, and future billing state. It is intentionally separate
+  from ClickHouse and is empty by default in `app/config.py` until the identity
+  service is enabled.
+
+Start the lightweight PostgreSQL 17 Alpine development container and apply the
+code-owned schema:
+
+```bash
+docker compose --profile identity up -d postgres
+IDENTITY_DATABASE_URL=postgresql+psycopg://stockalert:stockalert_dev@localhost:5432/stockalert_identity \
+  poetry run alembic upgrade head
+```
+
+The `stockalert_dev` password is local-only. Production must inject an RDS URL
+from the approved secret store and require TLS. Repository integration tests
+require a disposable database URL in `TEST_IDENTITY_DATABASE_URL`; its database
+name must end in `_test` as a destructive-test guard.
+
+The repository provides an isolated test container on port 5433. It uses
+`tmpfs`, so its data disappears with the container and can never overwrite the
+persistent development database:
+
+```bash
+docker compose --profile identity-test up -d postgres-test
+TEST_IDENTITY_DATABASE_URL=postgresql+psycopg://stockalert:stockalert_test@localhost:5433/stockalert_identity_test \
+  poetry run pytest tests/integration/test_identity_postgres.py
+```
+
+### Cognito customer authentication
+
+- `AUTH_ENABLED` – fail-closed feature gate; defaults to `false`.
+- `COGNITO_DOMAIN` – HTTPS Cognito managed-login origin.
+- `COGNITO_ISSUER_URL` – HTTPS user-pool issuer used for exact JWT validation.
+- `COGNITO_CLIENT_ID` – user-pool app client identifier.
+- `COGNITO_CLIENT_SECRET` – optional confidential app-client secret.
+- `COGNITO_REDIRECT_URI` – registered callback URL, normally
+  `http://localhost:8000/auth/callback` in local development.
+- `COGNITO_LOGOUT_URI` – registered allowed sign-out URL.
+- `AUTH_SESSION_HOURS` – StockAlert opaque-session lifetime; default 8.
+- `AUTH_LOGIN_TRANSACTION_MINUTES` – OAuth state/nonce/PKCE lifetime; default 10.
+- `AUTH_COOKIE_NAME`, `AUTH_CSRF_COOKIE_NAME` – browser cookie names.
+- `AUTH_COOKIE_SECURE` – may be `false` only for local HTTP; must be `true` in
+  staging and production.
+
+Before setting `AUTH_ENABLED=true`, apply `alembic upgrade head` and configure
+the exact callback/logout URLs on the Cognito app client. Passwords, MFA
+secrets, and provider tokens are not stored by these routes. The callback
+validates signature, issuer, audience, token use, expiry, and nonce before
+creating a StockAlert session.
+
 ## Technical analysis / divergence
 
 - `PIVOT_K`, `LOOKBACK_BARS`, `EMA_PERIOD`, `USE_TREND_FILTER`, `MIN_PRICE_CHANGE_PCT`, `MIN_INDICATOR_CHANGE_PCT`, `MIN_PIVOT_SEPARATION` – see app defaults in `app/config.py`.

@@ -19,6 +19,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       "/api": { target: BACKEND_URL, changeOrigin: true },
+      "/auth": { target: BACKEND_URL, changeOrigin: true },
       // The AI assistant routes live under /cockpit (not /api). Without this
       // the chat panel's POST /cockpit/assistant/* hits the dev server → 404.
       // In production the built app is same-origin, so no proxy is needed.

@@ -10,8 +10,13 @@
  * flip is "swap the hook implementation"; no component touches.
  */
 
-export type Plan = "dev" | "free" | "pro" | "enterprise";
-export type Role = "owner" | "admin" | "member" | "viewer";
+export type Role =
+  | "owner"
+  | "admin"
+  | "member"
+  | "viewer"
+  | "support"
+  | "developer";
 
 export interface Principal {
   userId: string;
@@ -19,7 +24,8 @@ export interface Principal {
   email: string | null;
   displayName: string;
   roles: Role[];
-  plan: Plan;
+  permissions: string[];
+  entitlements: string[];
 }
 
 export const DEV_PRINCIPAL: Principal = {
@@ -28,5 +34,6 @@ export const DEV_PRINCIPAL: Principal = {
   email: null,
   displayName: "Developer",
   roles: ["owner"],
-  plan: "dev",
+  permissions: ["operator.access"],
+  entitlements: [],
 };

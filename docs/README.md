@@ -57,6 +57,9 @@ For codebase orientation, in this order:
     production-readiness checklist, and alternative model architectures.
 17. [frontend_api_contracts.md](frontend_api_contracts.md) —
     Pydantic contracts the cockpit consumes.
+18. [customer_identity_and_subscription_spec.md](customer_identity_and_subscription_spec.md) —
+    production customer authentication, tenant isolation, PostgreSQL account
+    data, Stripe subscriptions, and customer/operator dashboard separation.
 
 ## Working agreement
 

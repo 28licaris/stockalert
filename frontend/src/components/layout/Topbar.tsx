@@ -3,8 +3,8 @@ import { Menu, Sparkles } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { SymbolSearchInput } from "@/components/symbol/SymbolSearchInput";
-import { useCurrentUser } from "@/auth/useCurrentUser";
 import { cn } from "@/lib/utils";
+import { UserMenu } from "./UserMenu";
 
 interface TopbarProps {
   onMobileMenuOpen: () => void;
@@ -12,8 +12,11 @@ interface TopbarProps {
   onToggleChat: () => void;
 }
 
-export function Topbar({ onMobileMenuOpen, chatOpen, onToggleChat }: TopbarProps) {
-  const user = useCurrentUser();
+export function Topbar({
+  onMobileMenuOpen,
+  chatOpen,
+  onToggleChat,
+}: TopbarProps) {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
 
@@ -58,17 +61,7 @@ export function Topbar({ onMobileMenuOpen, chatOpen, onToggleChat }: TopbarProps
         <Sparkles className="h-5 w-5" />
       </Button>
 
-      <div className="flex items-center gap-3 text-sm">
-        <div className="hidden text-right leading-tight md:block">
-          <div className="text-fg-base">{user.displayName}</div>
-          <div className="text-[10px] uppercase tracking-wider text-fg-subtle">
-            {user.plan} · {user.roles[0]}
-          </div>
-        </div>
-        <div className="grid h-8 w-8 place-items-center rounded-full bg-bg-muted text-xs font-medium text-fg-base">
-          {user.displayName.charAt(0).toUpperCase()}
-        </div>
-      </div>
+      <UserMenu />
     </header>
   );
 }

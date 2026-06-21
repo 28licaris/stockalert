@@ -87,19 +87,100 @@
   }
 }
 
+/* Authentication surface: ambient depth without image assets or layout shift. */
+.auth-grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: 52px 52px;
+  mask-image: linear-gradient(to bottom, black, transparent 88%);
+}
+
+.auth-glow {
+  position: absolute;
+  width: 38rem;
+  height: 38rem;
+  border-radius: 9999px;
+  filter: blur(110px);
+  pointer-events: none;
+}
+
+.auth-glow-one {
+  left: -15rem;
+  top: -16rem;
+  background: rgba(99, 102, 241, 0.2);
+}
+
+.auth-glow-two {
+  bottom: -22rem;
+  right: 18%;
+  background: rgba(139, 92, 246, 0.13);
+}
+
+@keyframes auth-card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.auth-card-enter {
+  animation: auth-card-enter 500ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-card-enter {
+    animation: none;
+  }
+}
+
 /* Compact markdown styling for assistant messages (.markdown wrapper). */
-.markdown > :first-child { margin-top: 0; }
-.markdown > :last-child { margin-bottom: 0; }
-.markdown p { margin: 0.5rem 0; }
-.markdown h1, .markdown h2, .markdown h3 { margin: 0.75rem 0 0.4rem; font-weight: 600; }
-.markdown h1 { font-size: 1rem; }
-.markdown h2 { font-size: 0.95rem; }
-.markdown h3 { font-size: 0.9rem; }
-.markdown ul, .markdown ol { margin: 0.4rem 0; padding-left: 1.25rem; }
-.markdown ul { list-style: disc; }
-.markdown ol { list-style: decimal; }
-.markdown li { margin: 0.15rem 0; }
-.markdown a { color: hsl(var(--accent)); text-decoration: underline; }
+.markdown > :first-child {
+  margin-top: 0;
+}
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+.markdown p {
+  margin: 0.5rem 0;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  margin: 0.75rem 0 0.4rem;
+  font-weight: 600;
+}
+.markdown h1 {
+  font-size: 1rem;
+}
+.markdown h2 {
+  font-size: 0.95rem;
+}
+.markdown h3 {
+  font-size: 0.9rem;
+}
+.markdown ul,
+.markdown ol {
+  margin: 0.4rem 0;
+  padding-left: 1.25rem;
+}
+.markdown ul {
+  list-style: disc;
+}
+.markdown ol {
+  list-style: decimal;
+}
+.markdown li {
+  margin: 0.15rem 0;
+}
+.markdown a {
+  color: hsl(var(--accent));
+  text-decoration: underline;
+}
 .markdown code {
   font-family: "JetBrains Mono", ui-monospace, monospace;
   font-size: 0.85em;
@@ -115,8 +196,29 @@
   border-radius: 0.375rem;
   overflow-x: auto;
 }
-.markdown pre code { background: transparent; padding: 0; }
-.markdown table { width: 100%; border-collapse: collapse; margin: 0.5rem 0; font-size: 0.8rem; }
-.markdown th, .markdown td { border: 1px solid hsl(var(--border)); padding: 0.25rem 0.5rem; text-align: left; }
-.markdown th { background: hsl(var(--bg-muted)); font-weight: 600; }
-.markdown blockquote { border-left: 2px solid hsl(var(--border)); padding-left: 0.75rem; color: hsl(var(--fg-muted)); margin: 0.5rem 0; }
+.markdown pre code {
+  background: transparent;
+  padding: 0;
+}
+.markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+  font-size: 0.8rem;
+}
+.markdown th,
+.markdown td {
+  border: 1px solid hsl(var(--border));
+  padding: 0.25rem 0.5rem;
+  text-align: left;
+}
+.markdown th {
+  background: hsl(var(--bg-muted));
+  font-weight: 600;
+}
+.markdown blockquote {
+  border-left: 2px solid hsl(var(--border));
+  padding-left: 0.75rem;
+  color: hsl(var(--fg-muted));
+  margin: 0.5rem 0;
+}
