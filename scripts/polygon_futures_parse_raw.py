@@ -38,6 +38,7 @@ import argparse
 import gzip
 import io
 import logging
+import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -46,6 +47,13 @@ import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Revert the botocore/AWS-SDK default (>=1.36) that adds CRC64NVME checksums to
+# uploads — it triggers `BadDigest` on multipart parquet PUTs via PyIceberg's
+# pyarrow S3 writer. Must be set before any AWS client initializes. Safe in all
+# environments; only disables the *automatic* extra checksum.
+os.environ.setdefault("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
+os.environ.setdefault("AWS_RESPONSE_CHECKSUM_VALIDATION", "when_required")
 
 logging.basicConfig(
     level=logging.INFO,
