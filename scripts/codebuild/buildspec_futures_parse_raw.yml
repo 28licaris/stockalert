@@ -1,0 +1,66 @@
+# CodeBuild buildspec for scripts/polygon_futures_parse_raw.py.
+#
+# Phase 2: parse the futures flat-file mirror → futures.polygon_raw (Iceberg).
+#   s3://<lake>/polygon_flatfiles_mirror/{ex}/minute_aggs_v1/*.csv.gz
+#     → CodeBuild (us-east-1, in-region read of our own bucket)
+#     → futures.polygon_raw  (per-contract outright bars, no roll)
+#
+# No Polygon access needed — reads OUR mirror. The CodeBuild role only needs
+# s3:Get/Put/List on STOCK_LAKE_BUCKET + glue:* on the futures database.
+#
+# Launch (reuses the silver project; overrides buildspec + branch):
+#   AWS_PROFILE=stockalert-admin aws codebuild start-build \
+#     --project-name sockalert-silver-full-backfill \
+#     --buildspec-override scripts/codebuild/buildspec_futures_parse_raw.yml \
+#     --source-version elliot-wave \
+#     --compute-type-override BUILD_GENERAL1_LARGE \
+#     --timeout-in-minutes-override 480 \
+#     --region us-east-1
+#
+# Scope override: --environment-variables-override \
+#   "name=PARSE_EXCHANGES,value=us_futures_comex,type=PLAINTEXT"
+
+version: 0.2
+
+env:
+  variables:
+    AWS_REGION: us-east-1
+    STOCK_LAKE_BUCKET: stock-lake-562741918372-us-east-1-an
+    STOCK_LAKE_REGION: us-east-1
+    ICEBERG_GLUE_DATABASE: stock_lake
+    ICEBERG_FUTURES_GLUE_DATABASE: futures
+    ICEBERG_WAREHOUSE_PREFIX: iceberg
+    ICEBERG_CATALOG_NAME: stock_lake
+    PARSE_EXCHANGES: "us_futures_cme us_futures_cbot us_futures_comex us_futures_nymex"
+    PARSE_WORKERS: "16"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - echo "=== install ==="
+      - pip install --upgrade pip
+      - pip install poetry==1.8.3
+      - poetry config virtualenvs.create false
+      - poetry install --without dev --no-interaction --no-ansi
+
+  pre_build:
+    commands:
+      - echo "=== pre_build ==="
+      - 'echo "Lake bucket  $STOCK_LAKE_BUCKET"'
+      - 'echo "Futures DB   $ICEBERG_FUTURES_GLUE_DATABASE"'
+      - 'echo "Exchanges    $PARSE_EXCHANGES"'
+      - 'echo "Build ID     $CODEBUILD_BUILD_ID"'
+      # Confirm the mirror is present before parsing.
+      - aws s3 ls "s3://$STOCK_LAKE_BUCKET/polygon_flatfiles_mirror/" | head -5
+
+  build:
+    commands:
+      - echo "=== build ==="
+      - poetry run python scripts/polygon_futures_parse_raw.py --exchanges $PARSE_EXCHANGES --workers "$PARSE_WORKERS"
+
+  post_build:
+    commands:
+      - echo "=== post_build ==="
+      - 'echo "Build succeeding  $CODEBUILD_BUILD_SUCCEEDING"'
