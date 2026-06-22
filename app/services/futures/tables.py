@@ -22,6 +22,9 @@ from app.services.futures.schemas import (
     FUTURES_OHLCV_PARTITION,
     FUTURES_OHLCV_SCHEMA,
     FUTURES_OHLCV_SORT,
+    POLYGON_RAW_PARTITION,
+    POLYGON_RAW_SCHEMA,
+    POLYGON_RAW_SORT,
     futures_table_id,
 )
 from app.services.iceberg_catalog import get_catalog
@@ -99,6 +102,38 @@ def ensure_polygon_futures(catalog: Catalog | None = None) -> Table:
         location=location,
         partition_spec=FUTURES_OHLCV_PARTITION,
         sort_order=FUTURES_OHLCV_SORT,
+        properties={**_BASE_PROPERTIES, **_MOR_PROPERTIES},
+    )
+
+
+POLYGON_RAW_TABLE_NAME = "polygon_raw"
+
+
+def ensure_polygon_raw(catalog: Catalog | None = None) -> Table:
+    """Create `futures.polygon_raw` if absent; return it.
+
+    Per-CONTRACT raw 1-min OHLCV (outright contracts ESH4, CLM4, …) parsed
+    from the flat-file mirror — no roll, no adjustment. Analog of
+    `equities.polygon_raw`. Partitioned by identity(root) + month(timestamp).
+    Populated by scripts/polygon_futures_parse_raw.py; the continuous-root
+    layer (futures.polygon_continuous) is derived from this table."""
+    catalog = catalog or get_catalog()
+    _ensure_namespace(catalog)
+
+    table_id = futures_table_id(POLYGON_RAW_TABLE_NAME)
+    try:
+        return catalog.load_table(table_id)
+    except NoSuchTableError:
+        pass
+
+    location = _futures_table_location(POLYGON_RAW_TABLE_NAME)
+    log.info("Creating Iceberg table %s at %s", table_id, location)
+    return catalog.create_table(
+        identifier=table_id,
+        schema=POLYGON_RAW_SCHEMA,
+        location=location,
+        partition_spec=POLYGON_RAW_PARTITION,
+        sort_order=POLYGON_RAW_SORT,
         properties={**_BASE_PROPERTIES, **_MOR_PROPERTIES},
     )
 
