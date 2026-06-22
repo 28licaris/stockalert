@@ -213,3 +213,40 @@ def contract_root(ticker: str) -> str | None:
         return None
     m = _OUTRIGHT_RE.match(ticker.strip().upper())
     return m.group(1) if m else None
+
+
+# ── futures.polygon_continuous — derived continuous roots (analog of
+# equities.polygon_adjusted).
+#
+# Built from futures.polygon_raw by volume-based roll + ratio back-adjustment
+# (see volume_roll.py). `symbol` is the continuous root (/ES); prices are
+# back-adjusted so roll seams vanish; `adj_factor` is the cumulative ratio
+# applied to that bar (1.0 on the front segment) so the true contract price is
+# recoverable. `contract` records which underlying contract the bar came from.
+POLYGON_CONTINUOUS_SCHEMA = Schema(
+    NestedField(1, "symbol", StringType(), required=True),          # continuous root, /ES
+    NestedField(2, "timestamp", TimestamptzType(), required=True),
+    NestedField(3, "open", DoubleType(), required=False),           # back-adjusted
+    NestedField(4, "high", DoubleType(), required=False),
+    NestedField(5, "low", DoubleType(), required=False),
+    NestedField(6, "close", DoubleType(), required=False),
+    NestedField(7, "volume", DoubleType(), required=False),
+    NestedField(8, "vwap", DoubleType(), required=False),
+    NestedField(9, "trade_count", LongType(), required=False),
+    NestedField(10, "adj_factor", DoubleType(), required=False),    # cumulative roll ratio
+    NestedField(11, "contract", StringType(), required=False),      # underlying, e.g. ESH4
+    NestedField(12, "source", StringType(), required=False),
+    NestedField(13, "ingestion_ts", TimestamptzType(), required=False),
+    NestedField(14, "ingestion_run_id", StringType(), required=False),
+    identifier_field_ids=[1, 2],
+)
+
+POLYGON_CONTINUOUS_PARTITION = PartitionSpec(
+    PartitionField(source_id=1, field_id=1000, transform=IdentityTransform(), name="symbol"),
+    PartitionField(source_id=2, field_id=1001, transform=MonthTransform(), name="ts_month"),
+)
+
+POLYGON_CONTINUOUS_SORT = SortOrder(
+    SortField(source_id=1, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+    SortField(source_id=2, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+)
