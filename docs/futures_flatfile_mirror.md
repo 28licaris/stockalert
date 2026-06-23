@@ -79,3 +79,74 @@ Polygon flat files
   continuous-roots step.
 - `quotes_v1` (5.77 TB, ~$133/mo S3) is intentionally **not** mirrored. Revisit
   only if microstructure/spread-fill research is needed; pull a targeted subset.
+
+## Roadmap to equities parity
+
+The equities lake separates **raw** (every symbol, unadjusted) from **derived**
+(`polygon_adjusted`, built by a periodic job). Futures must follow the same
+split. The dropped `futures.polygon_futures` table was wrong because it
+conflated both — baking roll logic into ingest and storing continuous `/ES`
+directly. Mapping each equities layer to the futures gap:
+
+| Equities | Futures equivalent | Status |
+|---|---|---|
+| `equities.polygon_raw` (`tables.py` `ensure_polygon_raw`) | `futures.polygon_raw` — every **contract** (ESH4, CLM4…), no roll | ✅ **DONE — 179.2M rows, all roots** |
+| `equities.polygon_adjusted` (Spark `polygon_adjustment_job.py`) | `futures.polygon_continuous` — volume-based roll off `polygon_raw` | ✅ **DONE — 55.4M rows, 37 roots** |
+| `equities.market_corp_actions` | — (futures have no corp actions) | n/a |
+| `equities.schwab_universe` | `futures.schwab_futures` (live) | ✅ exists |
+| `AdjustedOhlcvReader` → `polygon_adjusted` | `bars_gateway` + `lake_to_ch_fill` → `polygon_continuous` (+ schwab tip) | ✅ **DONE — read path repointed + verified** |
+| `nightly_polygon_refresh` → `polygon_raw` | nightly mirror → raw → continuous | ⏳ **remaining** (Schwab nightly covers the recent tip today) |
+
+### Built & verified (2026-06-22)
+- **Phase 1 mirror:** 88.85 GB (minute+session+trades, 2021-06-21→present).
+- **Phase 2 `polygon_raw`:** 179,155,856 outright-contract rows, 0 failures;
+  all 20 liquid roots present incl. the 8 the old backfill dropped (CL/YM/PL/PA/BZ…).
+- **Phase 3 `polygon_continuous`:** 55,441,450 rows, 37 roots; roll cadence
+  correct by class (quarterly=20, energy monthly=60, metals=25, grains≈24);
+  `/ES` & `/GC` seams smooth, `/CL` outliers verified as real Sunday-open
+  moves (not seam gaps); `adj_factor` recoverable (front=1.0).
+- **Read path:** `_scan_futures_lake` → `polygon_continuous` (+ schwab tip),
+  verified serving back-adjusted bars.
+
+### Remaining (finish-line)
+1. **Nightly Polygon extend** (analog of `nightly_polygon_refresh`): mirror
+   yesterday → append `polygon_raw` → extend `polygon_continuous` front edge.
+   Not blocking historical backtesting; Schwab nightly already keeps the recent
+   tip fresh via the union. Needs the CodeBuild role granted Glue perms on the
+   `futures` DB (or run under `stock-lake` creds).
+2. **Dead-code cleanup:** the abandoned roll-at-ingest path now references the
+   dropped `polygon_futures` table — `ensure_polygon_futures`, `polygon_sink.py`,
+   `polygon_futures_backfill.py`, `polygon_futures_flatfiles_backfill.py`,
+   `contract_chain.py`, and their buildspecs. Dormant (nothing live calls them),
+   safe to remove.
+3. **session_aggs → daily raw** (small): parse the mirrored daily/session files.
+
+### Phase 2 — `futures.polygon_raw` (raw, every contract)
+- New schema: contract `ticker` + `exchange` + OHLCV + `vwap` + `transactions`
+  (+ `dollar_volume`), partitioned `month(timestamp)` (consider `bucket` by
+  root). Add `ensure_polygon_raw()` + sink in `app/services/futures/`.
+- Parse job reads the **mirror** (`polygon_flatfiles_mirror/{ex}/minute_aggs_v1`)
+  → Iceberg append. Runs on CodeBuild (no Polygon dependency → subscription-safe).
+- Parse `session_aggs` into a daily raw table (or feed `schwab_futures_daily`'s analog).
+- `trades_v1` stays raw `.csv.gz` (equities doesn't parse trades either).
+
+### Phase 3 — `futures.polygon_continuous` (derived roots)
+- Volume-based roll: front month = dominant-volume contract per day, with roll
+  **hysteresis** (require N days of dominance) to avoid flip-flop. Reads
+  `polygon_raw`, writes continuous `/ES`, `/CL`, … Replaces the dropped table.
+  Fixes the monthly-root window-collapse bug at the root (low-volume strip
+  pseudo-contracts never win) and needs **zero REST**.
+- **Open design decisions (need sign-off before building):**
+  1. Roll signal: volume (recommended) vs open-interest (not in flat files) vs calendar.
+  2. Back-adjustment: store unadjusted continuous, back-adjusted (Panama/ratio,
+     an `adj_factor` analog), or both? EWT leans unadjusted; confirm.
+  3. Continuous universe: which roots get a `/X` series.
+  4. Naming: `futures.polygon_continuous` vs reuse `futures.polygon_futures`.
+
+### Phase 4 — wiring + nightly
+- Point `bars_gateway._futures_one_min_from_lake` + `lake_to_ch_fill` at
+  `polygon_continuous` (union with `schwab_futures` for the live tip), replacing
+  the dropped `polygon_futures` reference.
+- Nightly futures Polygon refresh (analog of `nightly_polygon_refresh`):
+  incremental mirror of yesterday → append to `polygon_raw` → extend
+  `polygon_continuous` tip. Keeps the rolling window fresh.
