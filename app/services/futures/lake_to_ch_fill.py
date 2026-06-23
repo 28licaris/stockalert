@@ -6,8 +6,9 @@ root's requested window, it fills that bounded window from the futures lake
 and re-queries CH.
 
 Lake sources (unioned at read time):
-  • ``futures.schwab_futures``  — recent ~48-day 1-min from Schwab
-  • ``futures.polygon_futures`` — deep 1-min history from Polygon backfill
+  • ``futures.schwab_futures``    — recent ~48-day 1-min from Schwab
+  • ``futures.polygon_continuous`` — deep back-adjusted continuous history
+    (volume-rolled + ratio-adjusted from Polygon flat files)
 
 ``_scan_futures_lake`` unions both tables, deduplicating by timestamp (Schwab
 wins on ties — it's live-sourced). The caller doesn't need to know which
@@ -86,9 +87,9 @@ def _scan_futures_lake(
     """Read futures lake tables for ``symbol`` in ``[start, end)``.
 
     Unions ``futures.schwab_futures`` (recent, ~48d) and
-    ``futures.polygon_futures`` (deep history) so CH fills draw from
-    whichever tier has coverage. Deduplicates by timestamp: when both
-    tables have a bar for the same minute, the Schwab bar is kept
+    ``futures.polygon_continuous`` (deep back-adjusted history) so CH fills
+    draw from whichever tier has coverage. Deduplicates by timestamp: when
+    both tables have a bar for the same minute, the Schwab bar is kept
     (it's live-sourced and more recent).
 
     Returns a merged Arrow table (possibly 0 rows), or ``None`` only
@@ -96,7 +97,10 @@ def _scan_futures_lake(
     """
     from pyiceberg.exceptions import NoSuchTableError
 
-    from app.services.futures.tables import ensure_polygon_futures, ensure_schwab_futures
+    from app.services.futures.tables import (
+        ensure_polygon_continuous,
+        ensure_schwab_futures,
+    )
 
     if start.tzinfo is None:
         start = start.replace(tzinfo=timezone.utc)
@@ -110,14 +114,14 @@ def _scan_futures_lake(
     except Exception as exc:
         logger.error("futures lake: schwab scan error for %s: %s", symbol, exc)
 
-    # Polygon table — deep history; may not exist yet.
+    # Continuous (back-adjusted) table — deep history; may not exist yet.
     poly_arr: Optional[pa.Table] = None
     try:
-        poly_arr = _scan_one(ensure_polygon_futures(), symbol, start, end)
+        poly_arr = _scan_one(ensure_polygon_continuous(), symbol, start, end)
     except NoSuchTableError:
-        pass  # polygon_futures not yet created — normal before first backfill
+        pass  # polygon_continuous not yet built — normal before first build
     except Exception as exc:
-        logger.warning("futures lake: polygon scan error for %s: %s", symbol, exc)
+        logger.warning("futures lake: continuous scan error for %s: %s", symbol, exc)
 
     # Both failed — propagate None so the caller can degrade gracefully.
     if schwab_arr is None and poly_arr is None:
