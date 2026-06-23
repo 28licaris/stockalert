@@ -50,15 +50,10 @@ class PolygonContinuousSink:
     def table_name(self) -> str:
         return f"futures.{POLYGON_CONTINUOUS_TABLE_NAME}"
 
-    def write_frame(self, df) -> int:
-        """Append a built continuous DataFrame. Columns: symbol, timestamp,
-        open, high, low, close, volume, vwap, trade_count, adj_factor,
-        contract. Raises on append failure."""
-        if df is None or len(df) == 0:
-            return 0
+    def _build_arrow(self, df):
         n = len(df)
         ts = pa.array(df["timestamp"]).cast(pa.timestamp("us", tz="UTC"))
-        arrow = pa.table({
+        return pa.table({
             "symbol":           pa.array(df["symbol"].astype("string"),   type=pa.string()),
             "timestamp":        ts,
             "open":             pa.array(df["open"],        type=pa.float64()),
@@ -74,5 +69,25 @@ class PolygonContinuousSink:
             "ingestion_ts":     pa.array([self._ingestion_ts] * n, type=pa.timestamp("us", tz="UTC")),
             "ingestion_run_id": pa.array([self._run_id] * n,       type=pa.string()),
         }, schema=_ARROW)
-        self._table.append(arrow)
-        return n
+
+    def write_frame(self, df) -> int:
+        """Append a built continuous DataFrame. Columns: symbol, timestamp,
+        open, high, low, close, volume, vwap, trade_count, adj_factor,
+        contract. Raises on append failure."""
+        if df is None or len(df) == 0:
+            return 0
+        self._table.append(self._build_arrow(df))
+        return len(df)
+
+    def replace_symbol(self, df, symbol: str) -> int:
+        """Atomically replace ALL rows for one continuous root (overwrite by
+        symbol filter, single commit). Used by the nightly rebuild so back-
+        adjustment re-scaling at rolls is applied without dropping the live
+        table. Other roots stay queryable throughout."""
+        from pyiceberg.expressions import EqualTo
+
+        if df is None or len(df) == 0:
+            return 0
+        self._table.overwrite(self._build_arrow(df),
+                              overwrite_filter=EqualTo("symbol", symbol))
+        return len(df)

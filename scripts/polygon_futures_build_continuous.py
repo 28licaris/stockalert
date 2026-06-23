@@ -61,7 +61,13 @@ def build_continuous_frame(df_root: pd.DataFrame, root: str, hysteresis_days: in
 
     if df_root.empty:
         return None, 0
-    df = df_root.sort_values("timestamp").reset_index(drop=True)
+    df = df_root.sort_values("timestamp")
+    # polygon_raw is bronze (append-only): Polygon's daily files overlap at
+    # session boundaries, so the same (contract, timestamp) bar can land twice.
+    # Dedup here — the continuous layer is the silver that must be unique —
+    # before volume aggregation (so roll volumes aren't double-counted) and
+    # before stitching (so the series has no duplicate timestamps).
+    df = df.drop_duplicates(subset=["contract", "timestamp"], keep="last").reset_index(drop=True)
     df["etdate"] = df["timestamp"].dt.tz_convert(NY).dt.date
 
     # 1. per-(day, contract) volume → roll schedule

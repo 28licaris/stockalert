@@ -142,6 +142,14 @@ class Settings(BaseModel):
     futures_nightly_run_hour_utc: int = int(os.getenv("FUTURES_NIGHTLY_RUN_HOUR_UTC", "22"))
     futures_nightly_symbols: str = os.getenv("FUTURES_NIGHTLY_SYMBOLS", "active")
 
+    # Polygon flat-file → futures.polygon_raw → futures.polygon_continuous
+    # (see nightly_futures_polygon_refresh). Keeps the authoritative back-
+    # adjusted deep history fresh; complements the Schwab nightly (recent tip).
+    # Gated separately + OFF by default (heavy per-root rebuild). Default run
+    # hour 21 UTC — Polygon finalizes a day's files ~11:00 ET next morning.
+    futures_polygon_nightly_enabled: bool = os.getenv("FUTURES_POLYGON_NIGHTLY_ENABLED", "false").lower() == "true"
+    futures_polygon_nightly_run_hour_utc: int = int(os.getenv("FUTURES_POLYGON_NIGHTLY_RUN_HOUR_UTC", "21"))
+
     # CH reconcile — push the authoritative, complete lake tables
     # (equities.schwab_universe → ohlcv_1m, futures.schwab_futures →
     # futures_ohlcv_1m) back into ClickHouse so live-stream gaps
