@@ -79,7 +79,7 @@ def _bars(symbol: str, closes: list[float]) -> list[BronzeBar]:
 def _stub_reader(bars: list[BronzeBar], snapshot_id: str | None = "test-snap") -> IndicatorReader:
     """An IndicatorReader whose `_fetch_bars` is patched to return `bars`."""
     reader = IndicatorReader()
-    reader._fetch_bars = lambda symbol, start, end, interval, provider: (bars, snapshot_id)  # type: ignore[method-assign]
+    reader._fetch_bars = lambda symbol, start, end, interval: (bars, snapshot_id)  # type: ignore[method-assign]
     return reader
 
 

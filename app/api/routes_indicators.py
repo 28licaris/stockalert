@@ -69,7 +69,7 @@ class ChartDataRequest(BaseModel):
     start: datetime
     end: datetime
     interval: str = Field("1d", description="'1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d'.")
-    provider: str = Field("polygon", description="Bronze provider (only used when interval='1m').")
+    provider: str = Field("polygon", description="Legacy/ignored — all intervals now read from ClickHouse.")
     indicators: list[IndicatorSpecRequest]
 
 
@@ -85,7 +85,7 @@ def get_indicator_series(
     end: datetime = Query(..., description="Window end, exclusive (ISO 8601)."),
     indicator: str = Query(..., description="Registry name: 'sma', 'rsi', 'bollinger', ..."),
     interval: str = Query("1d", description="Bar interval: '1m', '5m', '15m', '30m', '1h', '4h', '1d'."),
-    provider: str = Query("polygon", description="Bronze provider (only used when interval='1m')."),
+    provider: str = Query("polygon", description="Legacy/ignored — all intervals now read from ClickHouse."),
     params: Optional[str] = Query(
         None,
         description=(
@@ -136,9 +136,11 @@ def post_chart_data(
     component (e.g. `bollinger_upper`, `bollinger_middle`,
     `bollinger_lower`, `bollinger_bandwidth`, `bollinger_percent_b`).
 
-    Reading from bronze (`interval='1m'`) pins `snapshot_id` for
-    reproducibility; CH-backed reads (other intervals) return
-    `snapshot_id: null`.
+    All intervals (1m included) read from ClickHouse — the hot cache —
+    so indicators stay aligned with the candles the chart shows.
+    `snapshot_id` is always null (CH has no Iceberg snapshots); a missing
+    1m window is healed out-of-band by the lake→CH sync, not by reading
+    the lake here.
     """
     try:
         return reader.get_chart_data(
