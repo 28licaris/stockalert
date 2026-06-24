@@ -9,9 +9,12 @@ import hmac
 import time
 import asyncio
 from urllib.parse import urlencode
+from urllib.parse import urlparse
 
+import boto3
 import httpx
 import jwt
+from botocore.exceptions import BotoCoreError, ClientError
 from jwt import PyJWK
 from pydantic import ValidationError
 
@@ -21,6 +24,7 @@ from app.services.identity.schemas import (
     CognitoTokenSet,
     ExternalIdentityClaim,
 )
+from app.services.identity.provider_session import provider_source_from_id_claims
 
 
 class CognitoIdentityProvider:
@@ -30,6 +34,7 @@ class CognitoIdentityProvider:
         config: CognitoOAuthConfig,
         http_client: httpx.AsyncClient | None = None,
         jwks_ttl_seconds: int = 3600,
+        cognito_client: object | None = None,
     ) -> None:
         self._config = config
         self._http_client = http_client
@@ -37,6 +42,15 @@ class CognitoIdentityProvider:
         self._jwks: dict[str, PyJWK] = {}
         self._jwks_loaded_at = 0.0
         self._jwks_lock = asyncio.Lock()
+        self._region = urlparse(config.issuer_url).hostname.split(".")[1]
+        self._cognito_client = cognito_client
+
+    def _mfa_client(self):
+        if self._cognito_client is None:
+            self._cognito_client = boto3.client(
+                "cognito-idp", region_name=self._region
+            )
+        return self._cognito_client
 
     @classmethod
     def from_settings(cls) -> "CognitoIdentityProvider":
@@ -159,6 +173,7 @@ class CognitoIdentityProvider:
                 id_token=id_token,
                 refresh_token=payload.get("refresh_token"),
                 expires_in=expires_in,
+                source_provider=provider_source_from_id_claims(claims),
             )
         except (KeyError, ValidationError) as exc:
             raise IdentityProviderError(
@@ -167,6 +182,44 @@ class CognitoIdentityProvider:
 
     def logout_url(self, *, logout_uri: str) -> str:
         return f"{self._config.domain}/logout?{urlencode({'client_id': self._config.client_id, 'logout_uri': logout_uri})}"
+
+    def get_mfa_status(self, *, access_token: str) -> tuple[bool, bool]:
+        try:
+            response = self._mfa_client().get_user(AccessToken=access_token)
+        except (BotoCoreError, ClientError) as exc:
+            raise IdentityProviderError("mfa_status_failed", "Unable to read MFA status") from exc
+        settings = response.get("UserMFASettingList", [])
+        return (
+            "SOFTWARE_TOKEN_MFA" in settings,
+            response.get("PreferredMfaSetting") == "SOFTWARE_TOKEN_MFA",
+        )
+
+    def associate_software_token(self, *, access_token: str) -> str:
+        try:
+            response = self._mfa_client().associate_software_token(
+                AccessToken=access_token
+            )
+            return str(response["SecretCode"])
+        except (BotoCoreError, ClientError, KeyError) as exc:
+            raise IdentityProviderError("mfa_enrollment_failed", "Unable to begin MFA enrollment") from exc
+
+    def verify_software_token(self, *, access_token: str, code: str) -> bool:
+        try:
+            client = self._mfa_client()
+            verified = client.verify_software_token(
+                AccessToken=access_token,
+                UserCode=code,
+                FriendlyDeviceName="StockAlert dashboard",
+            )
+            if verified.get("Status") != "SUCCESS":
+                return False
+            client.set_user_mfa_preference(
+                AccessToken=access_token,
+                SoftwareTokenMfaSettings={"Enabled": True, "PreferredMfa": True},
+            )
+            return True
+        except (BotoCoreError, ClientError) as exc:
+            raise IdentityProviderError("mfa_verification_failed", "Unable to verify MFA code") from exc
 
     async def _validate_id_token(
         self, id_token: str, *, expected_nonce: str

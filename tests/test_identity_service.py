@@ -145,6 +145,9 @@ class FakeIdentityRepository:
             entitlements=principal.entitlements,
         )
 
+    def get_provider_session_ciphertext(self, principal: Principal) -> bytes | None:
+        return None
+
 
 def test_fake_and_service_satisfy_public_protocols() -> None:
     repo = FakeIdentityRepository()

@@ -89,7 +89,7 @@ Resources:
       GenerateSecret: true
       AllowedOAuthFlowsUserPoolClient: true
       AllowedOAuthFlows: [code]
-      AllowedOAuthScopes: [openid, email, profile]
+      AllowedOAuthScopes: [openid, email, profile, aws.cognito.signin.user.admin]
       CallbackURLs: !Ref CallbackUrls
       LogoutURLs: !Ref LogoutUrls
       SupportedIdentityProviders: !If

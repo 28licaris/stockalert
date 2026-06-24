@@ -30,6 +30,7 @@ from app.services.identity.schemas import (
 )
 from app.services.identity.security import hash_session_token
 from app.services.identity.service import IdentityService
+from app.services.identity.provider_session import LocalAesGcmProviderSessionCipher
 
 
 NOW = datetime(2026, 6, 19, 12, 0, tzinfo=timezone.utc)
@@ -152,6 +153,7 @@ def _service(repo: FakeRepository, provider: FakeProvider) -> OAuthAuthenticatio
         provider=provider,
         repository=repo,
         identity_service=identity,
+        provider_session_cipher=LocalAesGcmProviderSessionCipher("test-secret"),
         redirect_uri="http://localhost:8000/auth/callback",
         logout_uri="http://localhost:5173/app/login",
         session_ttl=timedelta(hours=8),

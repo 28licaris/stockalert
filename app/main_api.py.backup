@@ -100,7 +100,18 @@ def _register_background_jobs(
     """
     from app.config import settings as _s
 
-    # DISABLED: Backfill gap sweeper job registration
+    # Backfill gap sweeper — sync `sweep_now` doesn't self-audit, wrap it.
+    async def _run_gap_sweeper_once() -> None:
+        async with audit_run("backfill_gap_sweeper"):
+            await asyncio.to_thread(backfill_service.sweep_now)
+
+    job_registry.register(
+        name="backfill_gap_sweeper",
+        display_name="Backfill gap sweeper",
+        schedule="daily at 06:00 UTC (7d window)",
+        setting_key=None,
+        run_now=_run_gap_sweeper_once,
+    )
 
     # Live lake writer — `run_cycle` already writes to ingestion_runs,
     # so the manual run just invokes it without an audit wrapper.
@@ -222,9 +233,18 @@ async def lifespan(app: FastAPI):
     # ── Subsystem startup, each isolated ───────────────────────────────
     # One subsystem's failure must not affect the others.
 
-    # DISABLED: Backfill service causes unwanted Polygon API calls
-    backfill_started = None
-    logger.info("ℹ️  Backfill service disabled (dev mode)")
+    backfill_started = await _safe_start(
+        "Backfill service", lambda: backfill_service.start()
+    )
+    if backfill_started is not None or True:
+        # backfill_service.start() returns None on success; the gap sweeper
+        # is wired below only if start succeeded.
+        try:
+            status = backfill_service.status() if hasattr(backfill_service, "status") else None
+            if status is None:
+                logger.info("✅ Backfill service ready")
+        except Exception:
+            logger.info("✅ Backfill service ready")
 
     # Stream service starts first — it owns Schwab subscriptions and the
     # stream_universe table. Watchlist service depends on it (auto-extend
@@ -271,7 +291,39 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("ℹ️  Live lake writer disabled (LIVE_LAKE_WRITER_ENABLED=false)")
 
-    # DISABLED: Gap sweeper and initial sweep (causes Polygon API calls)
+    # Wire the periodic gap sweeper: every 15 min the backfill service will
+    # ask `stream_service` for the current streaming set and auto-enqueue
+    # gap-fill jobs for any symbol with within-session holes.
+    def _streaming_symbols_for_sweeper() -> list[str]:
+        try:
+            return list(stream_service.status().get("streaming_symbols") or [])
+        except Exception as e:
+            logger.warning("gap sweeper: could not enumerate streaming symbols: %s", e)
+            return []
+    try:
+        backfill_service.set_symbol_provider(_streaming_symbols_for_sweeper)
+        logger.info("✅ Backfill gap sweeper armed (daily at 06:00 UTC, 7d window)")
+    except Exception as e:
+        logger.warning("gap sweeper arming failed: %s", e)
+
+    # Kick a one-shot sweep shortly after startup so any holes that opened up
+    # while the app was down (or while a provider switch was in flight) get
+    # repaired immediately instead of waiting until the next 06:00 UTC sweep.
+    # The per-symbol `gap_fill` throttle (6h cooldown) makes this a free no-op
+    # if a sweep already ran recently, so rapid restarts don't hammer the
+    # provider.
+    async def _initial_gap_sweep_after_warmup() -> None:
+        # Let the watchlist subscribe + a couple of live bars land before we
+        # scan. 30s is well inside the user's "Refresh" loop and outside the
+        # tightest WS-handshake window.
+        try:
+            await asyncio.sleep(30.0)
+            result = backfill_service.sweep_now()
+            logger.info("✅ Initial gap sweep complete: %s", result)
+        except Exception as e:
+            logger.warning("Initial gap sweep failed: %s", e)
+    asyncio.create_task(_initial_gap_sweep_after_warmup(),
+                        name="backfill_initial_sweep")
 
     # Journal sync is Schwab-only — gate it behind both an explicit toggle and
     # the presence of Schwab credentials so users running on other providers

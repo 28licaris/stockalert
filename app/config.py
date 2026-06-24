@@ -263,6 +263,15 @@ class Settings(BaseModel):
     auth_cookie_secure: bool = (
         os.getenv("AUTH_COOKIE_SECURE", "true").lower() == "true"
     )
+    auth_provider_token_cipher: str = os.getenv(
+        "AUTH_PROVIDER_TOKEN_CIPHER", "disabled"
+    ).lower()
+    auth_provider_token_kms_key_id: str = os.getenv(
+        "AUTH_PROVIDER_TOKEN_KMS_KEY_ID", ""
+    )
+    auth_provider_token_kms_region: str = os.getenv(
+        "AUTH_PROVIDER_TOKEN_KMS_REGION", "us-east-1"
+    )
     # Optional tag stored on OHLCV rows (e.g. matches DATA_PROVIDER)
     data_source_tag: str = os.getenv("DATA_SOURCE_TAG", "")
     # Comma-separated symbols for the dashboard tape. Uses liquid ETFs that

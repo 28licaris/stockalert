@@ -405,6 +405,17 @@ class PostgresIdentityRepository:
                 entitlements=principal.entitlements,
             )
 
+    def get_provider_session_ciphertext(self, principal: Principal) -> bytes | None:
+        with self._session_factory() as db:
+            return db.scalar(
+                select(SessionModel.provider_session_ciphertext).where(
+                    SessionModel.id == principal.session_id,
+                    SessionModel.user_id == principal.user_id,
+                    SessionModel.tenant_id == principal.tenant_id,
+                    SessionModel.revoked_at.is_(None),
+                )
+            )
+
     def create_security_event(
         self, command: CreateSecurityEventCommand
     ) -> CreateSecurityEventResult:
