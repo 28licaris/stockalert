@@ -155,18 +155,27 @@ precedence and adjustment semantics are identical regardless of engine.
 
 ## 4. Migration (keep current callers working)
 
-1. Introduce `SourceSpec` + registry; refactor `get_bars_union` to
-   build its two scans from the registry (behavior-identical:
-   polygon+schwab, polygon wins). No external change.
-2. Add `read_arrow(...)` (DuckDB engine) behind a flag; cover with
-   tests that assert byte-identical results vs the Python path on a
-   fixture.
-3. Re-implement `get_bars`/`get_bars_union` on top of `read_arrow` for
-   a single symbol; keep `SilverBarsResponse` output identical.
-4. Point ML/whole-market consumers at `read_arrow`; leave HTTP/MCP on
+1. **[DONE]** `SourceSpec` + registry (`readers/source_registry.py`)
+   and `read_arrow()` (`readers/read_arrow.py`, **Polars** engine — see
+   §6 q1) landed as additive modules. Levers baked in: lazy
+   `LazyFrame` + projection/predicate pushdown (lever 3), single-symbol
+   sorted-merge hint (lever 2), streaming collect. Covered by
+   `tests/test_read_arrow.py` (real local Iceberg table: union/dedup
+   precedence, single-source select, projection, cold-start). Zero
+   change to existing callers.
+2. **[NEXT]** Re-implement `get_bars`/`get_bars_union` on top of
+   `read_arrow` (keep `SilverBarsResponse` identical). Requires
+   migrating the reader's table-injection tests to the new catalog/
+   registry seam — its own focused pass.
+3. Point ML/whole-market consumers at `read_arrow`; leave HTTP/MCP on
    the Pydantic API.
-5. Onboard a third source (Alpaca) as a registry entry to prove
+4. Onboard a third source (Alpaca) as a registry entry to prove
    modularity end-to-end.
+
+   Signoff-gated follow-ups (NOT bundled — each is a storage/behaviour
+   change requiring its own go-ahead): materialized union table (lever
+   1, dual storage); snapshot-keyed result cache (lever 4); post-union
+   gap-fill via provider REST.
 
 Each step is independently shippable and reversible.
 
