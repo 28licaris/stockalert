@@ -1,0 +1,97 @@
+# CodeBuild buildspec for the lake read-layer engine benchmark (spike).
+#
+# Runs scripts/spikes/lake_read_engine_bench.py IN-REGION (us-east-1) so
+# the numbers reflect production cold reads — an EC2-class box in the
+# bucket's region, not a laptop over the WAN. Read-only: scans the
+# equities Iceberg lake (Glue + S3), writes nothing to the lake.
+#
+# Spec: docs/lake_read_layer_design.md §6 q1 (engine choice).
+#
+# Use (admin profile; branch must be pushed to origin first):
+#   AWS_PROFILE=stockalert-admin aws codebuild start-build \
+#     --project-name sockalert-silver-full-backfill \
+#     --buildspec-override scripts/codebuild/buildspec_lake_read_bench.yml \
+#     --source-version feat/lake-read-layer \
+#     --compute-type-override BUILD_GENERAL1_2XLARGE \
+#     --timeout-in-minutes-override 60 \
+#     --region us-east-1
+#
+# 2XLARGE (72 GB) so the Python baseline's peak RSS isn't truncated by
+# an OOM at the 20-symbol shape — we want the true memory curve for
+# every engine. Override the sweep per build via:
+#   --environment-variables-override \
+#     "name=BENCH_ENGINES,value=baseline,polars,duckdb,type=PLAINTEXT" \
+#     "name=BENCH_YEARS,value=5,type=PLAINTEXT" \
+#     "name=BENCH_SYMBOL_SETS,value=AAPL;AAPL,MSFT,NVDA,type=PLAINTEXT"
+
+version: 0.2
+
+env:
+  variables:
+    AWS_REGION: us-east-1
+    STOCK_LAKE_BUCKET: stock-lake-562741918372-us-east-1-an
+    STOCK_LAKE_REGION: us-east-1
+    ICEBERG_GLUE_DATABASE: stock_lake
+    ICEBERG_EQUITIES_GLUE_DATABASE: equities
+    ICEBERG_WAREHOUSE_PREFIX: iceberg
+    ICEBERG_CATALOG_NAME: stock_lake
+    # Bench sweep — overridable per build via --environment-variables-override.
+    BENCH_ENGINES: "baseline,polars,duckdb,duckdb_iceberg"
+    BENCH_YEARS: "5"
+    BENCH_REPEAT: "1"
+    # Semicolon-separated symbol sets; each becomes one request shape.
+    BENCH_SYMBOL_SETS: "AAPL;AAPL,MSFT,NVDA,AMZN,GOOGL;AAPL,MSFT,NVDA,AMZN,GOOGL,META,TSLA,AMD,NFLX,INTC,CRM,ORCL,ADBE,CSCO,QCOM,TXN,AVGO,MU,AMAT,IBM"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - echo "=== install ==="
+      - python --version
+      - pip install --upgrade pip
+      - pip install poetry==1.8.3
+      - poetry config virtualenvs.create false
+      - poetry install --with spike --without dev --no-interaction --no-ansi
+
+  pre_build:
+    commands:
+      - echo "=== pre_build ==="
+      - 'echo "Region            $AWS_REGION"'
+      - 'echo "Bucket            $STOCK_LAKE_BUCKET"'
+      - 'echo "Equities Glue DB  $ICEBERG_EQUITIES_GLUE_DATABASE"'
+      - 'echo "Engines           $BENCH_ENGINES"'
+      - 'echo "Years             $BENCH_YEARS"'
+      - 'echo "Symbol sets       $BENCH_SYMBOL_SETS"'
+      - 'echo "Compute           ${CODEBUILD_BUILD_ID}"'
+      # Reach-out sanity: confirm in-region S3 + Glue read works before timing.
+      - aws s3 ls "s3://$STOCK_LAKE_BUCKET/iceberg/equities/" | head -5
+      - aws glue get-database --name "$ICEBERG_EQUITIES_GLUE_DATABASE" --query 'Database.Name'
+      - python -c "import duckdb, polars, pyiceberg; print('duckdb', duckdb.__version__, 'polars', polars.__version__, 'pyiceberg', pyiceberg.__version__)"
+
+  build:
+    commands:
+      - echo "=== build ==="
+      - |
+        bash -c '
+        set -euo pipefail
+        ARGS=()
+        IFS=";" read -ra SETS <<< "$BENCH_SYMBOL_SETS"
+        for s in "${SETS[@]}"; do ARGS+=(--symbols "$s"); done
+        echo "running ${#SETS[@]} shapes × engines=[$BENCH_ENGINES] years=$BENCH_YEARS repeat=$BENCH_REPEAT"
+        poetry run python -m scripts.spikes.lake_read_engine_bench \
+          --engines "$BENCH_ENGINES" --years "$BENCH_YEARS" --repeat "$BENCH_REPEAT" \
+          "${ARGS[@]}" | tee /tmp/lake_read_bench.txt
+        '
+
+  post_build:
+    commands:
+      - echo "=== post_build ==="
+      - 'echo "Succeeding        $CODEBUILD_BUILD_SUCCEEDING"'
+      # Persist the result table to the operator-readable reports prefix.
+      - |
+        if [ -f /tmp/lake_read_bench.txt ]; then
+          aws s3 cp /tmp/lake_read_bench.txt \
+            "s3://$STOCK_LAKE_BUCKET/silver_build_reports/lake_read_bench_${CODEBUILD_BUILD_ID##*:}.txt"
+          echo "report: s3://$STOCK_LAKE_BUCKET/silver_build_reports/lake_read_bench_${CODEBUILD_BUILD_ID##*:}.txt"
+        fi

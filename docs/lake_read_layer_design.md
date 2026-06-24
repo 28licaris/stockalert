@@ -21,6 +21,35 @@ This doc does **not** change ingestion (the `DataProvider` interface
 is already pluggable) or the ClickHouse hot tier. It targets the
 **lake-direct read path**.
 
+## 0. Cold-read consumers & requirements (signed off 2026-06-23)
+
+The hot/interactive path (live intraday monitoring, alert evaluation)
+stays on **ClickHouse** and is out of scope. This read layer serves the
+**cold** consumers:
+
+1. **Sync / one-time-load ClickHouse** from the lake (seed or repair the
+   hot tier).
+2. **Batch pull** for backtesting and agent/ML training.
+
+Requirements that pin the design:
+
+- **Selectable source or default union.** A caller can target a single
+  table, or — by default — **union across the per-(security-type,
+  provider) tables**. e.g. `AAPL` → Polygon deep history `∪` Schwab
+  universe, with **polygon winning** contested `(symbol, timestamp)`.
+- **Optional post-union gap-fill.** After fetch+union, the caller may
+  request that remaining gaps be filled from a provider REST read
+  (Schwab / Polygon / …). This is a **separate downstream step**, not an
+  engine concern — it consumes this layer's output, it doesn't change
+  the union/dedup contract.
+- **Fast even though it's cold.** Cold ≠ slow: the path must stay
+  efficient from 1 symbol to whole-market without a Python object
+  explosion.
+
+The engine that backs the columnar path (§3.2) is being chosen by a
+spike — see [`scripts/spikes/README.md`](../scripts/spikes/README.md)
+(DuckDB-over-Iceberg vs Polars vs the PyIceberg+Python baseline).
+
 ## 1. The problem
 
 There are two read paths today, with different performance profiles:
@@ -155,9 +184,48 @@ Each step is independently shippable and reversible.
 
 ## 6. Open questions (for signoff)
 
-1. **Engine for the bulk path:** DuckDB-over-Iceberg (recommended) vs
-   Polars vs "just widen ClickHouse retention and union there." Pick
-   one to spike.
+1. **Engine for the bulk path: RESOLVED → Polars-over-PyIceberg.**
+   Spiked all three in `scripts/spikes/` (see
+   `scripts/spikes/README.md`) against the real lake:
+   - **Correctness:** baseline (Python), Polars, and DuckDB-on-planned-
+     files are byte-identical on every shape tested (offline fixture +
+     live AAPL window) — confirmed via content-hash cross-check.
+   - **DuckDB's native `iceberg_scan` over our Glue-backed tables
+     fails** (`HTTP 404` resolving the manifest-list path off
+     `metadata.json` — `allow_moved_paths=true` does not help). This is
+     exactly the spec's Risk #1 (DuckDB↔Glue Iceberg maturity) landing
+     in practice, not a hypothetical. DuckDB is usable only via
+     PyIceberg-planned file lists (`read_parquet([...])`), which means
+     it does **not** apply Iceberg merge-on-read delete files itself —
+     a correctness trap for `polygon_adjusted` (merge-on-read) that the
+     harness flags (`deletes_present`) but DuckDB can't resolve without
+     re-deriving PyIceberg's own delete-application logic.
+   - **Polars (`pl.scan_iceberg`) reuses PyIceberg's planning layer
+     directly** — same Glue/S3 wiring already proven in production
+     (`AWS_PROFILE=stock-lake`), and PyIceberg applies merge-on-read
+     deletes correctly by construction. No new integration surface.
+   - **Decision: Polars-over-PyIceberg** backs `read_arrow()`. DuckDB
+     is not viable today against this repo's Glue catalog without
+     reimplementing delete-file handling — revisit if/when DuckDB's
+     Iceberg-Glue support matures.
+   - **Bench numbers** (laptop→S3 WAN, 5y window, not in-region — see
+     `scripts/spikes/README.md` for the in-region caveat):
+
+     | Shape | Engine | Total | Peak RSS |
+     |---|---|---|---|
+     | 1 symbol | baseline | 189.1s | 2,253 MB |
+     | 1 symbol | polars | 192.3s | **1,026 MB** |
+     | 5 symbols | baseline | 777.0s | 6,233 MB |
+     | 5 symbols | polars | 692.9s | **2,796 MB** |
+     | 1 symbol | duckdb (file-list) | — | timed out (S3 GET) |
+     | 5 symbols | duckdb (file-list) | — | timed out (S3 GET) |
+
+     Wall-clock is WAN-bound and roughly tied; the decisive number is
+     **peak RSS ~55% lower with Polars at every scale tested** — the
+     Python-object-explosion problem (§1.2) measurably confirmed and
+     measurably fixed. duckdb's file-list fallback also failed
+     (timeout) on both shapes from this network — a second, independent
+     strike against DuckDB beyond the Glue-catalog 404.
 2. **Whole-market batch:** Athena vs reuse the EMR/Spark path already
    running the weekly adjustment job?
 3. **Registry location:** co-locate `SourceSpec` with
