@@ -208,24 +208,41 @@ Each step is independently shippable and reversible.
      is not viable today against this repo's Glue catalog without
      reimplementing delete-file handling — revisit if/when DuckDB's
      Iceberg-Glue support matures.
-   - **Bench numbers** (laptop→S3 WAN, 5y window, not in-region — see
-     `scripts/spikes/README.md` for the in-region caveat):
+   - **Bench numbers — IN-REGION** (CodeBuild `BUILD_GENERAL1_2XLARGE`
+     in us-east-1, 5y window; the decisive run — reproduce via
+     `scripts/codebuild/buildspec_lake_read_bench.yml`):
 
-     | Shape | Engine | Total | Peak RSS |
+     | Symbols (rows) | Engine | Total | Peak RSS |
      |---|---|---|---|
-     | 1 symbol | baseline | 189.1s | 2,253 MB |
-     | 1 symbol | polars | 192.3s | **1,026 MB** |
-     | 5 symbols | baseline | 777.0s | 6,233 MB |
-     | 5 symbols | polars | 692.9s | **2,796 MB** |
-     | 1 symbol | duckdb (file-list) | — | timed out (S3 GET) |
-     | 5 symbols | duckdb (file-list) | — | timed out (S3 GET) |
+     | 1 (980K) | baseline | 23.9s | 2.4 GB |
+     | | **polars** | **4.5s** | **1.9 GB** |
+     | | duckdb | 5.5s | 4.1 GB |
+     | 5 (4.1M) | baseline | 79.8s | 7.6 GB |
+     | | **polars** | **9.0s** | **2.8 GB** |
+     | | duckdb | 8.4s | 9.9 GB |
+     | 20 (13.4M) | baseline | 261.5s | 18.7 GB |
+     | | **polars** | **18.1s** | **6.4 GB** |
+     | | duckdb | 20.9s | 25.6 GB |
+     | all | duckdb_iceberg | — | ERROR (Glue 404, every shape) |
 
-     Wall-clock is WAN-bound and roughly tied; the decisive number is
-     **peak RSS ~55% lower with Polars at every scale tested** — the
-     Python-object-explosion problem (§1.2) measurably confirmed and
-     measurably fixed. duckdb's file-list fallback also failed
-     (timeout) on both shapes from this network — a second, independent
-     strike against DuckDB beyond the Glue-catalog 404.
+     All engines hash-identical at every shape (correctness holds on
+     real data). **Polars wins outright:** at 20 symbols it is **14×
+     faster than the Python baseline** (18.1s vs 261.5s) AND uses the
+     least memory of any engine (6.4 GB vs duckdb's 25.6 GB). Polars
+     planning stays flat ~1.1s at every scale (PyIceberg pruning);
+     baseline planning grows to ~30s. DuckDB matches Polars on speed
+     but is the **worst on memory** (25.6 GB at 20 symbols, 4× Polars —
+     would OOM a normal box before Polars does), on top of the native-
+     Glue 404 and the merge-on-read-delete gap on its file-list path.
+     The baseline's 262s / 18.7 GB at 20 symbols is the object-explosion
+     problem (§1.2) measured.
+
+   - **Bench numbers — laptop→WAN** (kept for contrast; *misleading on
+     speed*): over the WAN, S3 latency dwarfed compute, so baseline and
+     polars looked "tied" (~190s @ 1 sym, ~700-780s @ 5 sym) and only
+     the ~55% peak-RSS gap was visible; duckdb's file-list path *timed
+     out* on S3 GETs. The in-region run above is what the speed
+     decision rests on — never size an engine from a WAN bench.
 2. **Whole-market batch:** Athena vs reuse the EMR/Spark path already
    running the weekly adjustment job?
 3. **Registry location:** co-locate `SourceSpec` with
