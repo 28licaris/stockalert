@@ -166,7 +166,7 @@ LOCKED TARGET: 5-year chart populated within 30 seconds of POST /api/v1/stream
 EXPECTED:      ~15 seconds typical
 ```
 
-Implementation: `tests/test_add_new_symbol_latency.py`. Picks a fresh
+Implementation: `tests/integration/test_add_new_symbol_latency.py`. Picks a fresh
 symbol not in `stream_universe`, posts it, polls CH.ohlcv_1m until row
 count ≥ thresholds at 30d / 270d / 5y windows. Records elapsed time
 to `ingestion_runs` for the historical trend visible on the Status

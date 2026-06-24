@@ -49,6 +49,7 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
+testpaths = ["app", "scripts", "tests"]
 markers = [
   "integration: tests that require live AWS / ClickHouse infra; skip without creds",
 ]

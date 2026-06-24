@@ -57,13 +57,14 @@ implementation map; the design rationale lives in
 
 - **No look-ahead** — a label at bar `t` uses only pivots confirmed by `t`;
   re-running with future bars yields a byte-identical label
-  (`tests/test_elliott_no_lookahead.py`).
+  (`app/signals/elliott/tests/test_elliott_no_lookahead.py`).
 - **Deterministic** — same input → same output; ties break on pivot-index tuples.
 - **Honest** — primary + secondary + an explicit uncertainty mass; the engine
   refuses to force a count (returns "no clear count") rather than fabricate.
 - **Reproducible** — every stored row carries `engine_ver` + `git_sha`.
 - **Pure engine** — `app/signals/elliott/` imports nothing from
-  `app.db` / `app.providers` / `app.services` (`tests/test_elliott_purity.py`).
+  `app.db` / `app.providers` / `app.services`
+  (`app/signals/elliott/tests/test_elliott_purity.py`).
 
 ## Operations
 

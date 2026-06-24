@@ -162,7 +162,7 @@ Brief summary + commit / PR link.
 ### `schwab-chart-fields-test-drift` — resolved 2026-05-17
 
 Three `TestChartContentToBar` / `TestDataProviderContract` fixtures
-in `tests/test_schwab_provider.py` were rewritten to use the
+in `app/providers/tests/test_schwab_provider.py` were rewritten to use the
 empirical CHART_EQUITY field map (`2=Open, 3=High, 4=Low, 5=Close,
 6=Volume, 7=ChartTime(ms)`) that the production constant
 `CHART_EQUITY_FIELDS = "0,2,3,4,5,6,7"` uses. Implementation
@@ -190,11 +190,11 @@ that never existed in this repo (`app.services.alert_service`,
 `app.indicators.rsi.calculate_rsi`, `app.main`) and tested
 designs that have been superseded. Coverage of the equivalent
 functionality:
-- RSI: `tests/test_indicators_ta3.py` + the screener, MTF, and
+- RSI: `app/indicators/tests/test_indicators_ta3.py` + the screener, MTF, and
   MCP-live test suites.
 - Divergence: now at `app/signals/divergence.py`; covered by
-  `tests/test_monitors_manual.py`, `tests/test_mcp_live.py`,
-  `tests/test_readers_unit.py`.
+  `tests/manual/monitor_check.py`, `app/mcp/tests/test_mcp_live.py`,
+  `app/services/readers/tests/test_readers_unit.py`.
 - Production websocket (`/ws/signals` on `app/main_api.py`):
   currently uncovered. Filed as separate follow-up — not the
   same thing the deleted scaffold was attempting.
@@ -213,7 +213,7 @@ used to send `period` alongside explicit `startDate`/`endDate` for
 `startDate` is explicit. Sending both can confuse Schwab's internal
 date math. Dropped `period` entirely from the request payload;
 pinned the new behavior with
-`tests/test_schwab_provider.py::TestHistoricalDf::test_single_day_window_does_not_send_period`
+`app/providers/tests/test_schwab_provider.py::TestHistoricalDf::test_single_day_window_does_not_send_period`
 and updated the existing assertion in
 `test_uses_market_data_base_url_and_symbol_param` from
 `period == 1` → `"period" not in params`.
@@ -235,7 +235,7 @@ market holiday. Resolved by [commit on main, push pending].
 
 ### `watchlist-repo-containing-test-failure` — resolved 2026-05-17
 
-`tests/test_watchlist_repo.py::test_watchlists_containing`
+`tests/integration/test_watchlist_repo.py::test_watchlists_containing`
 asserted `watchlists_containing("QQQ") == [b]` (exact equality)
 but the production-seeded `default` watchlist also contains QQQ
 (seeded by `migrate_default_watchlist` on app startup; CH is

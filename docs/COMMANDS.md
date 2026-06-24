@@ -91,8 +91,8 @@ bash scripts/ch_verify.sh
 poetry run pytest
 
 # A single file or test
-poetry run pytest tests/test_bronze_gaps.py -v
-poetry run pytest tests/test_schwab_provider.py::TestChartContentToBar -v
+poetry run pytest app/services/equities/tests/test_equities_gaps.py -v
+poetry run pytest app/providers/tests/test_schwab_provider.py::TestChartContentToBar -v
 
 # Integration tier (requires AWS creds + STOCK_LAKE_BUCKET in .env)
 poetry run pytest -m integration
@@ -153,7 +153,7 @@ same query can't use both.
 poetry run python scripts/schwab_get_refresh_token.py
 
 # Verify the token works
-poetry run python scripts/test_schwab_live.py
+poetry run python scripts/check_schwab_live.py
 ```
 
 If the refresh token expires (Schwab rotates every 7 days), re-run
@@ -162,7 +162,7 @@ the first command.
 ## Polygon live test
 
 ```bash
-poetry run python scripts/test_polygon_live.py
+poetry run python scripts/check_polygon_live.py
 ```
 
 ## Worktree / branch hygiene

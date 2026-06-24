@@ -174,4 +174,4 @@ The dev script's `aws cognito-idp describe-user-pool-client` trick is a local co
 - **Cognito config:** [`infra/auth/cognito.yaml`](../infra/auth/cognito.yaml)
 - **Auth routes:** [`app/api/routes_customer_auth.py`](../app/api/routes_customer_auth.py)
 - **Identity service:** [`app/services/identity/`](../app/services/identity/)
-- **Tests:** [`tests/test_oauth_authentication_service.py`](../tests/test_oauth_authentication_service.py), [`tests/test_identity_service.py`](../tests/test_identity_service.py)
+- **Tests:** [`test_oauth_authentication_service.py`](../app/services/identity/tests/test_oauth_authentication_service.py), [`test_identity_service.py`](../app/services/identity/tests/test_identity_service.py)

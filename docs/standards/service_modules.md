@@ -9,10 +9,10 @@ service_name/
 ├── contract.py   Protocol — public interface
 ├── service.py    Implementation — NEVER imported across services
 ├── README.md     What it owns, contract, how to test
-└── tests/
+└── tests/        Unit tests owned by this service
 ```
 
-Canonical example: `app/services/bronze/`.
+Canonical example: `app/services/stream/`.
 
 ## Rules
 
@@ -57,6 +57,10 @@ Canonical example: `app/services/bronze/`.
 6. **Idempotent everything.** `--start X --end X` twice = same result
    as once. CH: `ReplacingMergeTree(version)`. Iceberg: watermarks +
    append.
+
+7. **Tests follow ownership.** Pure service tests live in the service's
+   `tests/` folder. Cross-service contract tests live in repository-level
+   `tests/contract/`; live-infrastructure tests live in `tests/integration/`.
 
 ## Forbidden
 

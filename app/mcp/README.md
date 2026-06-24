@@ -35,9 +35,8 @@ app/mcp/
 ```
 
 Future write-side tools go in dedicated modules (`tools/writes.py`,
-`tools/trading.py`). The structural test in
-`tests/test_mcp_layering.py` enforces this — non-mutation tool files
-must not import write-side service methods.
+`tools/trading.py`). Keep the current modules read-only and add an explicit
+structural gate before introducing a write-side surface.
 
 ## Tool surface (current — 23 tools)
 
@@ -153,7 +152,7 @@ curl -X POST http://127.0.0.1:8000/mcp/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 ```
 
-For programmatic testing, use the helpers in `tests/test_mcp_lake.py`
+For programmatic testing, use the helpers in [`tests/test_mcp_lake.py`](tests/test_mcp_lake.py)
 which exercise the tools through the FastMCP API directly.
 
 ## How to add a new tool

@@ -19,10 +19,12 @@ trading_day = ts_utc.astimezone(ZoneInfo("America/New_York")).date()
 
 ## Use existing helpers — don't roll your own
 
-- `app.services.bronze.gaps.yesterday_et()` — "yesterday"
-- `latest_bronze_date(table)` — "most recent trading day with data"
+- `app.services.equities.gaps.yesterday_et()` — "yesterday"
+- `app.services.equities.gaps.latest_loaded_date(table)` — most recent
+  trading day present in an Iceberg table
 
-`tests/test_bronze_gaps.py` covers weekend-spanning + boundary cases.
+`app/services/equities/tests/test_equities_gaps.py` covers ET date conversion,
+missing sessions, and boundary cases.
 Add cases if you extend trading-day math.
 
 ## Storage convention — store UTC, convert at query time

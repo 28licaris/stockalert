@@ -35,7 +35,7 @@ poetry run uvicorn app.main_api:app --reload      # API on :8000
 poetry run pytest                                 # all tests
 poetry run pytest -m "not integration"            # unit only (fast)
 poetry run pytest -m integration                  # live-service
-poetry run pytest tests/test_foo.py::test_bar     # single test
+poetry run pytest app/providers/tests/test_schwab_provider.py::TestChartContentToBar  # single test
 docker compose --profile ch up -d                 # local ClickHouse
 docker compose --profile full up --build          # full stack
 ```
