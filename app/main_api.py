@@ -359,6 +359,31 @@ async def lifespan(app: FastAPI):
                 exc,
             )
 
+    # Nightly Polygon flat-file → futures.polygon_raw → futures.polygon_continuous
+    # refresh (keeps the back-adjusted deep history fresh). OFF by default.
+    nightly_futures_polygon_task: asyncio.Task | None = None
+    if _settings.futures_polygon_nightly_enabled and (_settings.stock_lake_bucket or "").strip():
+        try:
+            from app.services.ingest.nightly_futures_polygon_refresh import (
+                run_futures_polygon_refresh_loop,
+            )
+
+            nightly_futures_polygon_task = asyncio.create_task(
+                run_futures_polygon_refresh_loop(),
+                name="nightly_futures_polygon_refresh",
+            )
+            app.state.nightly_futures_polygon_task = nightly_futures_polygon_task
+            logger.info(
+                "nightly_futures_polygon_refresh: background loop started "
+                "(FUTURES_POLYGON_NIGHTLY_RUN_HOUR_UTC=%s)",
+                _settings.futures_polygon_nightly_run_hour_utc,
+            )
+        except Exception as exc:
+            logger.exception(
+                "✗ nightly_futures_polygon_refresh failed to start: %s — continuing without it",
+                exc,
+            )
+
     # Nightly Elliott Wave recompute (EW-3) — OFF unless ELLIOTT_RECOMPUTE_ENABLED.
     nightly_elliott_task: asyncio.Task | None = None
     if _settings.elliott_recompute_enabled and (_settings.stock_lake_bucket or "").strip():
