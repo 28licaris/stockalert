@@ -29,6 +29,11 @@ import type { components } from "./types.gen";
 
 export type Bar = components["schemas"]["Bar"];
 export type Signal = components["schemas"]["Signal"];
+
+// Indicators (chart overlays + oscillator panes)
+export type IndicatorSeries = components["schemas"]["IndicatorSeries"];
+export type IndicatorChartData = components["schemas"]["IndicatorChartData"];
+
 export type InstrumentMatch = components["schemas"]["InstrumentMatch"];
 export type InstrumentSearchResponse =
   components["schemas"]["InstrumentSearchResponse"];
@@ -128,6 +133,8 @@ export const queryKeys = {
     ["lake", "bars", symbol, interval, windowDays] as const,
   symbolSignals: (symbol: string, limit: number) =>
     ["symbol", "signals", symbol, limit] as const,
+  indicators: (symbol: string, interval: string, ids: string) =>
+    ["symbol", "indicators", symbol, interval, ids] as const,
   watchlists: ["watchlists"] as const,
   watchlist: (name: string) => ["watchlist", name] as const,
   seed: ["seed"] as const,
@@ -400,6 +407,49 @@ export function useSymbolSignals(symbol: string | undefined, limit = 100) {
     },
     enabled: Boolean(symbol),
     staleTime: 15_000,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// /api/v1/indicators/chart-data — overlay + oscillator series for the
+// chart. We reuse the SAME window-days + refetch cadence as `useLakeBars`
+// so the indicator series stay aligned with the candles they annotate
+// and refresh in lockstep. We send `params: {}` per spec — defaults-only
+// first pass — and read only `series` (bars come from `useLakeBars`).
+// ─────────────────────────────────────────────────────────────────────
+
+export function useIndicators(
+  symbol: string | undefined,
+  interval: string,
+  indicatorIds: ReadonlyArray<string>,
+) {
+  const windowDays = LAKE_WINDOW_DAYS[interval] ?? 30;
+  // Stable, order-independent key so re-ordering selections doesn't refetch.
+  const ids = [...indicatorIds].sort();
+  const idsKey = ids.join(",");
+
+  return useQuery({
+    queryKey: queryKeys.indicators(symbol ?? "", interval, idsKey),
+    queryFn: async (): Promise<IndicatorSeries[]> => {
+      if (!symbol) throw new Error("symbol required");
+      const end = new Date();
+      const start = new Date(end.getTime() - windowDays * 24 * 60 * 60 * 1000);
+      const { data } = await apiClient.POST("/api/v1/indicators/chart-data", {
+        body: {
+          symbol,
+          start: start.toISOString(),
+          end: end.toISOString(),
+          interval,
+          provider: "polygon",
+          indicators: ids.map((name) => ({ name, params: {} })),
+        },
+      });
+      return data?.series ?? [];
+    },
+    enabled: Boolean(symbol) && ids.length > 0,
+    staleTime: 10_000,
+    refetchInterval: REFETCH_MS[interval] ?? 30_000,
+    refetchOnWindowFocus: true,
   });
 }
 

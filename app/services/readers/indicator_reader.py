@@ -152,7 +152,10 @@ class IndicatorReader:
         single_canonical_only: bool,
         raise_on_indicator_error: bool,
     ) -> IndicatorChartData:
-        bars, snapshot_id = self._fetch_bars(symbol, start, end, interval, provider)
+        # `provider` is retained on the public API for backward compat but
+        # no longer selects a bar source — everything reads from CH now.
+        _ = provider
+        bars, snapshot_id = self._fetch_bars(symbol, start, end, interval)
         if not bars:
             return IndicatorChartData(
                 symbol=symbol, interval=interval, start=start, end=end,
@@ -273,25 +276,19 @@ class IndicatorReader:
         start: datetime,
         end: datetime,
         interval: str,
-        provider: str,
     ) -> tuple[list[BronzeBar], Optional[str]]:
         """
-        Return (bars, snapshot_id). `snapshot_id` is set only when
-        we pulled from bronze (Iceberg has snapshots; CH doesn't).
+        Read bars from ClickHouse — the hot cache is the single read
+        source for EVERY interval, 1m included. This keeps indicators
+        aligned with the candles the chart shows (which also come from
+        CH via the bars gateway). A missing 1m window is healed
+        out-of-band by the lake→CH sync (``ch_reconcile`` /
+        ``reconcile_ch_from_schwab``), NOT by reading the lake here.
+
+        `snapshot_id` is always None — CH has no Iceberg snapshots. The
+        tuple shape is kept for `IndicatorChartData.snapshot_id`.
         """
-        if interval == "1m":
-            return self._fetch_bars_bronze(symbol, start, end, provider)
         return self._fetch_bars_ch(symbol, start, end, interval)
-
-    def _fetch_bars_bronze(
-        self, symbol: str, start: datetime, end: datetime, provider: str,
-    ) -> tuple[list[BronzeBar], Optional[str]]:
-        from app.services.readers.bronze_reader import BronzeReader
-
-        reader = BronzeReader.from_settings()
-        bars = reader.get_bars(symbol, start, end, provider=provider)
-        snapshot_id = self._capture_snapshot(provider)
-        return list(bars), snapshot_id
 
     def _fetch_bars_ch(
         self, symbol: str, start: datetime, end: datetime, interval: str,
@@ -316,19 +313,6 @@ class IndicatorReader:
             for lb in live_bars
         ]
         return bronze_bars, None  # CH has no snapshot
-
-    def _capture_snapshot(self, provider: str) -> Optional[str]:
-        try:
-            from app.config import settings
-            from app.services.iceberg_catalog import get_catalog
-
-            table_id = f"{settings.iceberg_glue_database}.{provider}_minute"
-            t = get_catalog().load_table(table_id)
-            snap = t.current_snapshot()
-            return str(snap.snapshot_id) if snap else None
-        except Exception as exc:  # noqa: BLE001 — non-fatal
-            logger.warning("IndicatorReader: snapshot capture failed: %s", exc)
-            return None
 
 
 # ─────────────────────────────────────────────────────────────────────

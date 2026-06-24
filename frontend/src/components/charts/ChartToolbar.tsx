@@ -1,0 +1,296 @@
+import { useEffect, useRef, useState } from "react";
+import {
+  AreaChart as AreaChartIcon,
+  CandlestickChart,
+  ChevronDown,
+  LineChart as LineChartIcon,
+  Plus,
+  X,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { TZ_OPTIONS, type TzSetting } from "@/lib/timezone";
+import {
+  INDICATOR_CATALOG,
+  indicatorChipLabel,
+  type IndicatorKind,
+} from "./indicatorCatalog";
+import type { ChartType } from "./OhlcvChart";
+
+interface ChartToolbarProps {
+  interval: string;
+  intervals: readonly string[];
+  onIntervalChange: (i: string) => void;
+  chartType: ChartType;
+  onChartTypeChange: (t: ChartType) => void;
+  tz: TzSetting;
+  onTzChange: (t: TzSetting) => void;
+  /** Selected indicator ids (registry names). */
+  selected: ReadonlyArray<string>;
+  onToggleIndicator: (id: string) => void;
+  onClearIndicators: () => void;
+}
+
+/** Shared styling for the segmented control groups. */
+const GROUP = "inline-flex rounded-md border border-border bg-bg-subtle p-0.5";
+const SEG_BASE = "rounded-sm px-2.5 py-1 font-mono text-xs transition-colors";
+const SEG_ON = "bg-accent text-accent-fg";
+const SEG_OFF = "text-fg-muted hover:bg-bg-muted hover:text-fg-base";
+
+/**
+ * Chart control bar — chart type, interval, timezone, and the indicator
+ * picker, grouped into segmented controls. Selected indicators surface
+ * as removable chips below the controls.
+ */
+export function ChartToolbar({
+  interval,
+  intervals,
+  onIntervalChange,
+  chartType,
+  onChartTypeChange,
+  tz,
+  onTzChange,
+  selected,
+  onToggleIndicator,
+  onClearIndicators,
+}: ChartToolbarProps) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <ChartTypeToggle value={chartType} onChange={onChartTypeChange} />
+
+        <div role="tablist" aria-label="Interval" className={GROUP}>
+          {intervals.map((i) => (
+            <button
+              key={i}
+              type="button"
+              role="tab"
+              aria-selected={interval === i}
+              onClick={() => onIntervalChange(i)}
+              className={cn(SEG_BASE, interval === i ? SEG_ON : SEG_OFF)}
+            >
+              {i}
+            </button>
+          ))}
+        </div>
+
+        <div role="tablist" aria-label="Timezone" className={GROUP}>
+          {TZ_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              role="tab"
+              aria-selected={tz === opt.value}
+              onClick={() => onTzChange(opt.value)}
+              className={cn(SEG_BASE, tz === opt.value ? SEG_ON : SEG_OFF)}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
+        <IndicatorMenu selected={selected} onToggle={onToggleIndicator} />
+      </div>
+
+      {selected.length > 0 ? (
+        <IndicatorChips
+          selected={selected}
+          onRemove={onToggleIndicator}
+          onClear={onClearIndicators}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+
+const CHART_TYPES: ReadonlyArray<{
+  id: ChartType;
+  label: string;
+  Icon: typeof CandlestickChart;
+}> = [
+  { id: "candles", label: "Candlesticks", Icon: CandlestickChart },
+  { id: "line", label: "Line", Icon: LineChartIcon },
+  { id: "area", label: "Area", Icon: AreaChartIcon },
+];
+
+function ChartTypeToggle({
+  value,
+  onChange,
+}: {
+  value: ChartType;
+  onChange: (t: ChartType) => void;
+}) {
+  return (
+    <div role="tablist" aria-label="Chart type" className={GROUP}>
+      {CHART_TYPES.map(({ id, label, Icon }) => (
+        <button
+          key={id}
+          type="button"
+          role="tab"
+          aria-selected={value === id}
+          title={label}
+          aria-label={label}
+          onClick={() => onChange(id)}
+          className={cn(
+            SEG_BASE,
+            "flex items-center",
+            value === id ? SEG_ON : SEG_OFF,
+          )}
+        >
+          <Icon className="h-3.5 w-3.5" aria-hidden />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+
+const KIND_LABEL: Record<IndicatorKind, string> = {
+  overlay: "Overlays",
+  oscillator: "Oscillators",
+};
+
+function IndicatorMenu({
+  selected,
+  onToggle,
+}: {
+  selected: ReadonlyArray<string>;
+  onToggle: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  // Close on outside click / Escape.
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const selectedSet = new Set(selected);
+  const kinds: IndicatorKind[] = ["overlay", "oscillator"];
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className={cn(
+          "inline-flex items-center gap-1 rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 text-xs text-fg-muted transition-colors hover:bg-bg-muted hover:text-fg-base",
+          open && "bg-bg-muted text-fg-base",
+        )}
+      >
+        <Plus className="h-3.5 w-3.5" aria-hidden />
+        <span>Indicators</span>
+        {selected.length > 0 ? (
+          <span className="ml-0.5 rounded-full bg-accent px-1.5 font-mono text-[10px] text-accent-fg">
+            {selected.length}
+          </span>
+        ) : null}
+        <ChevronDown className="h-3 w-3 opacity-60" aria-hidden />
+      </button>
+
+      {open ? (
+        <div
+          role="menu"
+          className="absolute right-0 z-20 mt-1 w-60 rounded-md border border-border bg-bg-elevated p-1 shadow-lg"
+        >
+          {kinds.map((kind) => (
+            <div key={kind} className="py-1">
+              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">
+                {KIND_LABEL[kind]}
+              </div>
+              {INDICATOR_CATALOG.filter((d) => d.kind === kind).map((d) => {
+                const on = selectedSet.has(d.id);
+                return (
+                  <button
+                    key={d.id}
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={on}
+                    onClick={() => onToggle(d.id)}
+                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-fg-base hover:bg-bg-muted"
+                  >
+                    <span
+                      className={cn(
+                        "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border",
+                        on
+                          ? "border-accent bg-accent text-accent-fg"
+                          : "border-border",
+                      )}
+                      aria-hidden
+                    >
+                      {on ? "✓" : ""}
+                    </span>
+                    <span className="flex flex-col">
+                      <span className="font-medium">{d.label}</span>
+                      <span className="text-[10px] text-fg-subtle">
+                        {d.description}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+
+function IndicatorChips({
+  selected,
+  onRemove,
+  onClear,
+}: {
+  selected: ReadonlyArray<string>;
+  onRemove: (id: string) => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {selected.map((id) => (
+        <span
+          key={id}
+          className="inline-flex items-center gap-1 rounded-full border border-border bg-bg-subtle py-0.5 pl-2 pr-1 font-mono text-[11px] text-fg-base"
+        >
+          {indicatorChipLabel(id)}
+          <button
+            type="button"
+            aria-label={`Remove ${indicatorChipLabel(id)}`}
+            onClick={() => onRemove(id)}
+            className="flex h-3.5 w-3.5 items-center justify-center rounded-full text-fg-subtle hover:bg-bg-muted hover:text-fg-base"
+          >
+            <X className="h-2.5 w-2.5" aria-hidden />
+          </button>
+        </span>
+      ))}
+      {selected.length > 1 ? (
+        <button
+          type="button"
+          onClick={onClear}
+          className="ml-1 text-[11px] text-fg-subtle hover:text-fg-base"
+        >
+          Clear all
+        </button>
+      ) : null}
+    </div>
+  );
+}
