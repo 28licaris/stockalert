@@ -1,19 +1,16 @@
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useState } from "react";
-import { OhlcvChart } from "@/components/charts/OhlcvChart";
+import { useCallback, useState } from "react";
+import { OhlcvChart, type ChartType } from "@/components/charts/OhlcvChart";
+import { ChartToolbar } from "@/components/charts/ChartToolbar";
 import { BarsTable } from "@/components/tables/BarsTable";
 import { Button } from "@/components/ui/button";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
 import { SymbolSearchInput } from "@/components/symbol/SymbolSearchInput";
-import {
-  useLakeBars,
-  useSymbolSignals,
-} from "@/api/queries";
+import { useIndicators, useLakeBars, useSymbolSignals } from "@/api/queries";
 import { useUserSetting } from "@/lib/storage";
 import {
   DEFAULT_TZ,
   resolveZone,
-  TZ_OPTIONS,
   type TzSetting,
 } from "@/lib/timezone";
 import { fmtAgo, fmtPrice } from "@/lib/fmt";
@@ -23,14 +20,19 @@ const INTERVALS = ["1m", "5m", "15m", "30m", "1h", "1d"] as const;
 type Interval = (typeof INTERVALS)[number];
 
 const DEFAULT_INTERVAL: Interval = "5m";
+const DEFAULT_CHART_TYPE: ChartType = "candles";
 
 /**
- * Symbol page — FE-2 parity scaffold.
+ * Symbol page — chart + indicators (FE-2.1).
  *
- * Today: OHLCV candle + volume + signal markers + recent bars table.
+ * OHLCV (candles / line / area) + volume + signal markers, with
+ * configurable indicator overlays (moving averages, Bollinger) and
+ * oscillator panes (RSI, MACD, Stochastic, TSI, ATR) sourced from
+ * `/api/v1/indicators/chart-data`. Selections persist per user via
+ * localStorage.
+ *
  * Coming in subsequent phases:
- *   - indicator overlays (FE-2.1; the /api/indicators/series endpoint
- *     already exists)
+ *   - per-indicator parameter editing (period, source)
  *   - coverage strip beneath the chart (FE-7)
  *   - journal-trades-on-this-ticker panel (FE-8)
  *   - adjusted/raw price toggle (once silver lands the _adj columns)
@@ -43,12 +45,34 @@ export function SymbolPage() {
     "symbol.interval",
     DEFAULT_INTERVAL,
   );
+  const [chartType, setChartType] = useUserSetting<ChartType>(
+    "chart.type",
+    DEFAULT_CHART_TYPE,
+  );
+  // Selected indicator registry ids (e.g. ["sma", "rsi"]).
+  const [indicatorIds, setIndicatorIds] = useUserSetting<string[]>(
+    "chart.indicators",
+    [],
+  );
   // Global display timezone for the chart axis + Recent Bars table.
   const [tz, setTz] = useUserSetting<TzSetting>("chart.timezone", DEFAULT_TZ);
   const zone = resolveZone(tz);
 
   const bars = useLakeBars(ticker || undefined, interval);
   const signals = useSymbolSignals(ticker || undefined, 100);
+  const indicators = useIndicators(ticker || undefined, interval, indicatorIds);
+
+  const toggleIndicator = useCallback(
+    (id: string) =>
+      setIndicatorIds((prev) =>
+        prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+      ),
+    [setIndicatorIds],
+  );
+  const clearIndicators = useCallback(
+    () => setIndicatorIds([]),
+    [setIndicatorIds],
+  );
 
   if (!ticker) {
     return <SymbolPicker />;
@@ -60,7 +84,7 @@ export function SymbolPage() {
     latest && prevClose ? ((latest.close - prevClose) / prevClose) * 100 : null;
 
   return (
-    <div className="flex h-full flex-col gap-4 p-4 md:p-6">
+    <div className="flex h-full flex-col gap-3 p-4 md:p-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-fg-base">
@@ -88,13 +112,23 @@ export function SymbolPage() {
             </span>
           </div>
         </div>
-        <div className="flex items-end gap-2">
-          <TimezonePicker value={tz} onChange={setTz} />
-          <IntervalPicker value={interval} onChange={setInterval} />
-        </div>
       </header>
 
+      <ChartToolbar
+        interval={interval}
+        intervals={INTERVALS}
+        onIntervalChange={(i) => setInterval(i as Interval)}
+        chartType={chartType}
+        onChartTypeChange={setChartType}
+        tz={tz}
+        onTzChange={setTz}
+        selected={indicatorIds}
+        onToggleIndicator={toggleIndicator}
+        onClearIndicators={clearIndicators}
+      />
+
       {bars.error ? <ApiErrorAlert error={bars.error} /> : null}
+      {indicators.error ? <ApiErrorAlert error={indicators.error} /> : null}
 
       {/* Out-of-universe symbols are fetched live from Schwab on first view,
           which takes a few seconds. Overlay the (still-mounted) chart so we
@@ -104,6 +138,8 @@ export function SymbolPage() {
         <OhlcvChart
           bars={bars.data ?? []}
           signals={signals.data ?? []}
+          indicators={indicators.data ?? []}
+          chartType={chartType}
           timezone={zone}
         />
         {!bars.data || bars.data.length === 0 ? (
@@ -134,80 +170,9 @@ export function SymbolPage() {
 
 // ─────────────────────────────────────────────────────────────────────
 
-function IntervalPicker({
-  value,
-  onChange,
-}: {
-  value: Interval;
-  onChange: (next: Interval) => void;
-}) {
-  return (
-    <div
-      role="tablist"
-      aria-label="Interval"
-      className="inline-flex rounded-md border border-border bg-bg-subtle p-0.5"
-    >
-      {INTERVALS.map((i) => (
-        <button
-          key={i}
-          type="button"
-          role="tab"
-          aria-selected={value === i}
-          onClick={() => onChange(i)}
-          className={cn(
-            "rounded-sm px-2.5 py-1 font-mono text-xs",
-            value === i
-              ? "bg-accent text-accent-fg"
-              : "text-fg-muted hover:bg-bg-muted hover:text-fg-base",
-          )}
-        >
-          {i}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function TimezonePicker({
-  value,
-  onChange,
-}: {
-  value: TzSetting;
-  onChange: (next: TzSetting) => void;
-}) {
-  return (
-    <div
-      role="tablist"
-      aria-label="Timezone"
-      className="inline-flex rounded-md border border-border bg-bg-subtle p-0.5"
-    >
-      {TZ_OPTIONS.map((tz) => (
-        <button
-          key={tz.value}
-          type="button"
-          role="tab"
-          aria-selected={value === tz.value}
-          onClick={() => onChange(tz.value)}
-          className={cn(
-            "rounded-sm px-2.5 py-1 font-mono text-xs",
-            value === tz.value
-              ? "bg-accent text-accent-fg"
-              : "text-fg-muted hover:bg-bg-muted hover:text-fg-base",
-          )}
-        >
-          {tz.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 function SymbolPicker() {
   const navigate = useNavigate();
-  const [recent, setRecent] = useUserSetting<string[]>(
-    "symbol.recent",
-    [],
-  );
+  const [recent, setRecent] = useUserSetting<string[]>("symbol.recent", []);
   const [input, setInput] = useState("");
 
   const go = (sym: string) => {
@@ -225,8 +190,8 @@ function SymbolPicker() {
       <header>
         <h1 className="text-2xl font-semibold text-fg-base">Symbol</h1>
         <p className="mt-1 text-sm text-fg-muted">
-          Search by ticker or company name. Pick a suggestion or hit
-          Enter on what you've typed.
+          Search by ticker or company name. Pick a suggestion or hit Enter on
+          what you've typed.
         </p>
       </header>
 
@@ -239,11 +204,7 @@ function SymbolPicker() {
           autoFocus
           className="flex-1"
         />
-        <Button
-          type="button"
-          onClick={() => go(input)}
-          disabled={!input.trim()}
-        >
+        <Button type="button" onClick={() => go(input)} disabled={!input.trim()}>
           Open
         </Button>
       </div>
