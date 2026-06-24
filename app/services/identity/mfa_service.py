@@ -1,7 +1,6 @@
 """Provider-neutral TOTP MFA orchestration for authenticated customers."""
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 from datetime import datetime, timezone
 from urllib.parse import quote, urlencode
@@ -23,9 +22,6 @@ from app.services.identity.schemas import (
     SecurityEventType,
 )
 from app.services.identity.service import IdentityService
-
-
-logger = logging.getLogger(__name__)
 
 
 class MfaServiceError(RuntimeError):
@@ -73,11 +69,6 @@ class MfaService:
                 access_token=material.access_token.get_secret_value()
             )
         except IdentityProviderError as exc:
-            logger.warning(
-                "MFA status lookup failed user_id=%s code=%s",
-                principal.user_id,
-                exc.code,
-            )
             raise MfaServiceError(exc.code, "Unable to load MFA status") from exc
         return MfaStatusResponse(
             supported=True, enabled=enabled, preferred=preferred
@@ -92,11 +83,6 @@ class MfaService:
                 access_token=material.access_token.get_secret_value()
             )
         except IdentityProviderError as exc:
-            logger.warning(
-                "MFA enrollment association failed user_id=%s code=%s",
-                principal.user_id,
-                exc.code,
-            )
             raise MfaServiceError(exc.code, "Unable to begin MFA enrollment") from exc
         current = self._repository.get_current_user(principal)
         label = current.email if current is not None else str(principal.user_id)
@@ -116,30 +102,14 @@ class MfaService:
                 access_token=material.access_token.get_secret_value(), code=code
             )
         except IdentityProviderError as exc:
-            logger.warning(
-                "MFA verification failed user_id=%s code=%s",
-                principal.user_id,
-                exc.code,
-            )
             raise MfaServiceError(exc.code, "Unable to verify MFA code") from exc
         if not verified:
-            logger.info("MFA verification rejected invalid code user_id=%s", principal.user_id)
             raise MfaServiceError("invalid_mfa_code", "The verification code is invalid")
         audit = self._identity_service.record_security_event(
             principal, SecurityEventType.MFA_ENABLED
         )
         if audit.status != "created":
-            logger.error(
-                "MFA enabled but audit record failed user_id=%s status=%s",
-                principal.user_id,
-                audit.status,
-            )
             raise MfaServiceError("audit_unavailable", "MFA audit could not be recorded")
-        logger.info(
-            "MFA TOTP enabled user_id=%s tenant_id=%s",
-            principal.user_id,
-            principal.tenant_id,
-        )
         return MfaVerificationResponse(enabled=True)
 
     def _required_material(self, principal: Principal) -> ProviderSessionMaterial:

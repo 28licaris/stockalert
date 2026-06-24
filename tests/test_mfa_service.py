@@ -10,7 +10,6 @@ from app.services.identity.mfa_service import MfaService, MfaServiceError
 from app.services.identity.provider_session import (
     LocalAesGcmProviderSessionCipher,
     ProviderSessionMaterial,
-    _kms_region,
 )
 from app.services.identity.schemas import (
     CreateSecurityEventResult,
@@ -130,18 +129,3 @@ def test_mfa_requires_recent_auth_and_rejects_federated_sessions() -> None:
     with pytest.raises(MfaServiceError, match="Sign in again"):
         _service(expired=True).begin_enrollment(principal)
     assert _service("google").status(principal).supported is False
-
-
-def test_kms_region_prefers_arn_region_over_fallback() -> None:
-    arn = "arn:aws:kms:eu-west-1:123456789012:key/abcd-ef"
-    assert _kms_region(arn, "us-east-1") == "eu-west-1"
-
-
-def test_kms_region_uses_fallback_for_key_id_or_alias() -> None:
-    assert _kms_region("alias/stockalert-provider-session", "us-east-2") == "us-east-2"
-    assert _kms_region("abcd-1234", "ap-southeast-1") == "ap-southeast-1"
-
-
-def test_kms_region_requires_fallback_when_not_an_arn() -> None:
-    with pytest.raises(ValueError, match="AUTH_PROVIDER_TOKEN_KMS_REGION"):
-        _kms_region("alias/stockalert-provider-session", "")

@@ -18,9 +18,6 @@ from app.services.identity.provider_session import (
     ProviderSessionCipher,
 )
 from app.services.identity.mfa_service import MfaService
-from app.services.billing.service import BillingService
-from app.services.billing.repository import SubscriptionRepository
-from app.services.billing.gateway import StripeApiGateway
 
 
 @lru_cache(maxsize=1)
@@ -102,20 +99,6 @@ def get_authentication_service() -> OAuthAuthenticationService:
 
 @lru_cache(maxsize=1)
 def get_mfa_service() -> MfaService:
-    from app.config import settings
-
-    if not settings.auth_enabled:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Customer authentication is disabled.",
-            headers={"X-Error-Code": "auth_disabled"},
-        )
-    if not settings.identity_database_url:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Customer authentication is not configured.",
-            headers={"X-Error-Code": "auth_not_configured"},
-        )
     repository = PostgresIdentityRepository.from_settings()
     identity_service = IdentityService(repository=repository)
     return MfaService(
@@ -123,30 +106,6 @@ def get_mfa_service() -> MfaService:
         provider=CognitoIdentityProvider.from_settings(),
         cipher=get_provider_session_cipher(),
         identity_service=identity_service,
-    )
-
-
-@lru_cache(maxsize=1)
-def get_billing_service() -> BillingService:
-    from app.config import settings
-
-    if not settings.stripe_secret_key:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Billing is not configured.",
-            headers={"X-Error-Code": "billing_not_configured"},
-        )
-    gateway = StripeApiGateway(
-        api_key=settings.stripe_secret_key,
-        webhook_secret=settings.stripe_webhook_secret,
-    )
-    return BillingService(
-        gateway=gateway,
-        repository=SubscriptionRepository.from_settings(),
-        price_monthly=settings.stripe_price_pro_monthly,
-        price_annual=settings.stripe_price_pro_annual,
-        trial_days=settings.stripe_trial_days,
-        return_url=settings.stripe_billing_return_url,
     )
 
 
@@ -233,4 +192,3 @@ def clear_auth_dependency_caches() -> None:
     get_identity_service.cache_clear()
     get_provider_session_cipher.cache_clear()
     get_mfa_service.cache_clear()
-    get_billing_service.cache_clear()

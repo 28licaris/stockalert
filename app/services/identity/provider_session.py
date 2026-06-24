@@ -52,21 +52,6 @@ class LocalAesGcmProviderSessionCipher:
         return ProviderSessionMaterial.model_validate_json(raw)
 
 
-def _kms_region(key_id: str, fallback: str) -> str:
-    """Prefer the region embedded in a key ARN so the client targets the
-    key's home region; fall back to the configured region for key-id/alias forms.
-    """
-    if key_id.startswith("arn:"):
-        parts = key_id.split(":")
-        if len(parts) >= 4 and parts[3]:
-            return parts[3]
-    if not fallback:
-        raise ValueError(
-            "AUTH_PROVIDER_TOKEN_KMS_REGION is required when the key is not a full ARN"
-        )
-    return fallback
-
-
 class KmsProviderSessionCipher:
     """Production cipher backed by an AWS KMS customer-managed key."""
 
@@ -74,7 +59,7 @@ class KmsProviderSessionCipher:
         if not key_id:
             raise ValueError("AUTH_PROVIDER_TOKEN_KMS_KEY_ID is required")
         self._key_id = key_id
-        self._client = boto3.client("kms", region_name=_kms_region(key_id, region))
+        self._client = boto3.client("kms", region_name=region)
 
     def encrypt(self, material: ProviderSessionMaterial) -> bytes:
         response = self._client.encrypt(
