@@ -83,15 +83,12 @@ stream/
 └── tests/         Unit tests owned by this service
 ```
 
-## Migration notes
+## Historical migration
 
 - The CH table was renamed from `seed_universe` → `stream_universe` in
   FE-CONTRACTS-4 final cutover. `app/db/init.py::_migrate_seed_to_stream_universe`
   performs the one-shot rename on first startup post-deploy.
-- `app/services/seed/` is now a thin re-export shim pointing here.
-  Both `seed_service` and `stream_service` are the same singleton.
-  Direct imports of `seed_service` should be migrated to `stream_service`.
-- Followups (not in this PR):
-  - Retire `app/data/seed_universe.py::SEED_SYMBOLS` Python constant.
-  - Rewire `app/services/universe/active_universe.py::get_active_universe`
-    to read from the CH table instead of `SEED_SYMBOLS ∪ watchlists`.
+- The legacy seed service, `/api/v1/seed` routes, and static equity seed list
+  were retired after `stream_universe` became the sole runtime source of truth.
+- Empty tables remain empty until an operator explicitly adds or imports
+  symbols through `/api/v1/stream`; reads never repopulate the table.

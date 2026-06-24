@@ -6,7 +6,6 @@ an ownership boundary; read its README before editing it.
 | Package | Owns |
 |---|---|
 | [`api/`](api/) | FastAPI adapters and HTTP schemas |
-| [`data/`](data/) | Static seed data |
 | [`db/`](db/) | ClickHouse and PostgreSQL access |
 | [`indicators/`](indicators/) | Pure technical-analysis math |
 | [`mcp/`](mcp/) | Agent-facing MCP adapters |

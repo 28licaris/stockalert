@@ -60,13 +60,5 @@ class StreamServiceProtocol(Protocol):
     ) -> list[str]:
         """Auto-extend the universe for symbols not yet present. Returns added."""
 
-    def is_empty(self, *, owner_id: Optional[str] = None) -> bool:
-        ...
-
-    def bootstrap_if_empty(
-        self, *, owner_id: Optional[str] = None
-    ) -> tuple[bool, int]:
-        ...
-
     def status(self) -> dict:
         ...

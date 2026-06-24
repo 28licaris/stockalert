@@ -409,19 +409,19 @@ trades on that ticker.
   saw live" inspection. See
   [silver_layer_plan.md §14.2](silver_layer_plan.md).
 
-**Warming-up state.** Branches by whether the symbol is in the
-seed universe (silver_layer_plan §2.3):
+**Warming-up state.** Branches by whether the symbol is in the authoritative
+ClickHouse `stream_universe`:
 
-- **Seed-universe symbol** (full silver history exists): chart area
+- **Stream-universe symbol** (full silver history exists): chart area
   renders a progress card. Shows live-stream subscription status,
   silver→CH backfill progress (~10s ETA), bars-loaded count.
   Card swaps to chart when bars are sufficient. Source label:
   "Backfilling from silver (Iceberg) — your own data, no provider
   API calls."
 
-- **Ad-hoc symbol** (NOT in seed universe; silver has no history
+- **Ad-hoc symbol** (not in `stream_universe`; silver has no history
   yet): chart area shows a banner: "Exploration mode — fetching
-  ~48 days from Schwab REST. Promote to seed universe for deeper
+  ~48 days from Schwab REST. Add to the stream universe for deeper
   history." Live ticks appear immediately as overlays; Schwab REST
   history fills in over ~30s. After the next nightly silver_build,
   the chart automatically switches to silver-derived data.
@@ -431,14 +431,14 @@ buffered (`bar_buffer` in the Symbol page state) and prepended
 only when the historical context behind them is loaded. No
 floating lonely candles.
 
-**"Promote to seed" button** on the Symbol page header for ad-hoc
-symbols. Clicking it calls `POST /api/seed/promote` which:
-1. Adds the symbol to `settings.seed_symbols`.
+**"Add to stream" button** on the Symbol page header for ad-hoc
+symbols. Clicking it calls `POST /api/v1/stream` which:
+1. Adds the symbol to ClickHouse `stream_universe`.
 2. Kicks off a deeper one-shot backfill (Polygon flat-files if
    subscribed; Schwab REST otherwise).
 3. Marks the symbol for nightly refresh inclusion.
 
-The button hides once the symbol is in seed.
+The button hides once the symbol is in `stream_universe`.
 
 Powered by: existing routes; one new combined
 `/api/symbol/{ticker}/overview` to reduce roundtrips on first

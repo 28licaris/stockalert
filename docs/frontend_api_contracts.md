@@ -5,8 +5,9 @@ How the React cockpit (`frontend/`) talks to the FastAPI backend
 the frontend depends on, its current typing posture, gaps, and the
 microservice rules every new endpoint must satisfy.
 
-**Status:** **APPROVED 2026-05-18.** All seven §10 questions locked
-(see §10 for the decisions). FE-CONTRACTS-1 starts next.
+**Status:** Implemented. The current universe contract is
+`stream_universe` + `/api/v1/stream`; historical `seed_universe` design notes
+are superseded by §4.4 and §10.1 below.
 
 **Companion docs:**
 
@@ -110,8 +111,7 @@ today.
 
 | Capability | Missing endpoint(s) | Storage gap? |
 |---|---|---|
-| Manage seed universe from FE | `GET /api/v1/seed`, `POST /api/v1/seed`, `DELETE /api/v1/seed/{symbol}` | Yes — today `SEED_SYMBOLS` is env-only |
-| Promote ad-hoc → seed (referenced in [frontend_plan.md §5.2](frontend_plan.md)) | `POST /api/v1/seed/promote` | Same gap as above |
+| Manage stream universe from FE | Implemented at `GET/POST /api/v1/stream`, `DELETE /api/v1/stream/{symbol}` | `stream_universe` is authoritative |
 | Change streaming provider from FE | `GET /api/v1/config/streaming`, `PUT /api/v1/config/streaming` | Yes — today `DATA_PROVIDER` is env-only; provider switch requires process restart |
 | Simulated paper trades | `GET /api/v1/sim/trades`, `POST /api/v1/sim/trades`, `DELETE /api/v1/sim/trades/{id}`, `GET /api/v1/sim/positions`, `GET /api/v1/sim/equity-curve` | Yes — no `sim_trades` CH table |
 | Ad-hoc ClickHouse query | `POST /api/v1/clickhouse/query`, `GET /api/v1/clickhouse/schema` | No (CH client exists) — but **read-only guard required** |
@@ -255,7 +255,6 @@ Topic catalog:
 | `monitors.{symbol}` | `state` / `signal` / `error` | `MonitorEvent` |
 | `backfill.progress` | `tick` | `BackfillProgress` |
 | `backtest.{run_id}` | `tick` / `done` | `BacktestProgress` / `RunMetrics` |
-| `seed.changed` | `added` / `removed` | `{symbol, asset_type}` |
 | `config.changed` | `streaming_provider` | `{from, to}` |
 | `logs` | `line` | `LogLine` |
 
@@ -400,62 +399,51 @@ class WatchlistMutationResponse(BaseModel):
     changed: list[str]    # symbols added or removed (empty if no-op)
 ```
 
-### 4.4 Seed universe management
+### 4.4 Stream universe management
 
-**Today:** `SEED_SYMBOLS` is an env var. No HTTP surface. No
-mutation path other than editing `.env` and restarting.
-
-**Gaps:**
-- No endpoint to read current seed.
-- No endpoint to add/remove.
-- No persistent backing store survives restart.
-
-**Plan:**
-
-Move seed-symbol persistence from env to a ClickHouse table:
+ClickHouse `stream_universe` is the sole runtime source of truth:
 
 ```sql
-CREATE TABLE seed_universe (
+CREATE TABLE stream_universe (
   symbol String,
+  owner_id String,
   asset_type LowCardinality(String),
   added_at DateTime64(3, 'UTC') DEFAULT now64(),
   added_by String DEFAULT '',
   is_active UInt8 DEFAULT 1,
   notes String DEFAULT ''
 ) ENGINE = ReplacingMergeTree(added_at)
-ORDER BY symbol;
+ORDER BY (owner_id, symbol);
 ```
 
-Settings reads `seed_symbols` from this table (fallback to env on
-empty for first-run bootstrap). Changes emit a `seed.changed` WS
-event so the streamer can subscribe/unsubscribe live.
+There is no environment fallback and reads never populate the table. Empty is
+valid. ClickHouse errors propagate. A new installation is populated explicitly
+through the API or an operator-controlled import.
 
 Endpoints:
 
 ```python
-class SeedEntry(BaseModel):
+class StreamUniverseEntry(BaseModel):
     symbol: str
     asset_type: Literal[...]
     added_at: datetime
     added_by: str
     notes: str
 
-class SeedUniverseResponse(BaseModel):
-    items: list[SeedEntry]
+class StreamUniverseResponse(BaseModel):
+    items: list[StreamUniverseEntry]
     count: int
 
-# GET    /api/v1/seed
-# POST   /api/v1/seed             { symbol, asset_type?, notes? }
-# DELETE /api/v1/seed/{symbol}
-# POST   /api/v1/seed/import      { symbols: [...] } — bulk
+# GET    /api/v1/stream
+# POST   /api/v1/stream             { symbol, asset_type?, notes? }
+# DELETE /api/v1/stream/{symbol}
+# POST   /api/v1/stream/import      { symbols: [...] } — bulk
 ```
 
 **Side-effect contract:** every mutation triggers, in order:
-1. CH `seed_universe` upsert.
+1. CH `stream_universe` upsert.
 2. Streamer subscribe / unsubscribe.
-3. WS `seed.changed` event broadcast.
-4. Backfill enqueue (`POST /api/v1/backfill` daily + intraday) so
-   new seed symbols get historical coverage within 30s for chart
+3. Backfill enqueue so new stream symbols get historical coverage within 30s for chart
    readiness.
 
 ### 4.5 Trade journal performance (from Schwab account)
@@ -979,7 +967,7 @@ app/api/schemas/         ← NEW: all Pydantic models in one place
 ├── bars.py              (Bar)
 ├── signals.py           (Signal)
 ├── watchlists.py        (Watchlist, WatchlistMember, ...)
-├── seed.py              (SeedEntry, SeedUniverseResponse, ...)
+├── stream.py            (StreamUniverseEntry, StreamUniverseResponse, ...)
 ├── journal.py           (JournalAccount, JournalTrade, JournalSummary, ...)
 ├── sim.py               (SimTrade, SimPosition, ...)
 ├── backtest.py          (BacktestRequest, BacktestResponse, RunMetrics, ...)
@@ -1089,16 +1077,15 @@ the existing cockpit pages use. Hand-rolled interfaces in
 
 **Gate:** FE-3 page can be built with zero hand-rolled types.
 
-### FE-CONTRACTS-4 — Seed universe + provider switch (~3 days)
+### FE-CONTRACTS-4 — Stream universe + provider switch (landed)
 
-- `seed_universe` CH table + migration.
-- `SeedEntry`, `StreamingConfig*` models.
-- `/api/v1/seed`, `/api/v1/config/streaming` endpoints.
-- Streamer wired to react to `seed.changed` WS event.
+- `stream_universe` CH table and `StreamUniverse*` models.
+- `/api/v1/stream` is the sole membership surface.
+- Add/remove operations update live Schwab subscriptions directly.
 - **This is where the watchlist-vs-streaming question (§10.1) gets
   resolved.**
 
-**Gate:** operator can promote `NVDA` to seed from a curl, see it
+**Gate:** operator can add `NVDA` from a curl, see it
 appear in the active universe, and confirm Schwab stream subscribes
 within 5s.
 
@@ -1190,7 +1177,7 @@ universe = the set of symbols Schwab streams to ClickHouse, 24/7
   Adding a ticker anywhere (search, watchlist, screener)
   that isn't already in the universe
       ↓
-  1. Add it to the universe (CH seed_universe table)
+  1. Add it to the universe (CH stream_universe table)
   2. Subscribe Schwab CHART_EQUITY stream
   3. Hot-load history: backfill into ClickHouse + S3 bronze
      (~30s tip-fill via Schwab REST)
@@ -1200,7 +1187,7 @@ universe = the set of symbols Schwab streams to ClickHouse, 24/7
       ↓
   → does NOT stop streaming. The universe is sticky.
   → Explicit "remove from universe" is a separate action,
-    surfaced on a dedicated Seed Universe page (FE-Seed).
+    surfaced on the dedicated Stream Service page.
 ```
 
 **Key property: removal is asymmetric.** Watchlists are
@@ -1208,14 +1195,9 @@ organizational labels over the universe; reorganizing watchlists
 never loses streaming coverage. To stop streaming a symbol, the
 operator must explicitly remove it from the universe.
 
-**Backward compatibility:** today's
-[streaming_universe_model.md](streaming_universe_model.md) active-
-universe model (`SEED_SYMBOLS ∪ <watchlist members>`) is
-**superseded** by this locked model in FE-CONTRACTS-4. The dynamic
-union from the streaming model lives on as a *one-time migration*:
-on FE-CONTRACTS-4 launch, every symbol in any active watchlist gets
-materialized into the new `seed_universe` table. From then on, the
-universe is the source of truth, not the watchlists.
+The earlier `SEED_SYMBOLS ∪ <watchlist members>` model and `/seed` API are
+retired. Watchlist additions may auto-extend `stream_universe`, but watchlists
+are not read as an alternate source of truth.
 
 ### 10.2 `/api/v1` namespace — **LOCKED: one-shot rename**
 
@@ -1224,16 +1206,15 @@ All `/api/*` → `/api/v1/*` in FE-CONTRACTS-1. Legacy paths return
 through the transition. Legacy redirects deleted in FE-CONTRACTS-7
 or when the last legacy HTML page is removed, whichever comes first.
 
-### 10.3 Seed universe storage — **LOCKED: ClickHouse table**
+### 10.3 Stream universe storage — **LOCKED: ClickHouse table**
 
-`seed_universe` CH table is the source of truth (DDL in §4.4).
+`stream_universe` is the source of truth (DDL in §4.4).
 Persistent across restarts, queryable from the CH query page, audit
 fields (`added_by`, `added_at`) populate from the request's
 `Principal` (the SaaS-readiness seam).
 
-Bootstrap: on first run of FE-CONTRACTS-4, if the CH table is empty,
-seed it from today's `SEED_SYMBOLS` env var ∪ current watchlist
-members (the one-time migration referenced in §10.1).
+No runtime bootstrap or fallback is permitted. Operators explicitly add or
+bulk-import symbols; read failures surface as errors.
 
 ### 10.4 ClickHouse query page — **LOCKED: bare SQL + safety rails**
 

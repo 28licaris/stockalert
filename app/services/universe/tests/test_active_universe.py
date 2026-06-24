@@ -7,10 +7,9 @@ docs/standards/data/symbol_lifecycle.md:
   - The active universe is read from the canonical `stream_universe`
     CH table (via `stream_service.list_active_symbols()`), NOT from
     `SEED_SYMBOLS ∪ watchlists` anymore.
-  - SEED_SYMBOLS is the cold-start fallback only.
   - `resolve_universe_spec` routes:
-      "seed" / ""   → SEED_SYMBOLS
-      "active"      → stream_universe
+      "" / "active" → stream_universe
+      "seed"         → rejected (retired)
       "all" / "*"   → empty list (whole-market signal for Polygon flat-files)
       "AAPL,NVDA"   → explicit CSV
   - Nightly Schwab + silver build delegate through resolve_universe_spec.
@@ -22,10 +21,8 @@ from unittest.mock import patch
 
 import pytest
 
-from app.data.seed_universe import SEED_SYMBOLS
 from app.services.universe import (
     UNIVERSE_SPEC_ACTIVE,
-    UNIVERSE_SPEC_SEED,
     get_active_universe,
     resolve_universe_spec,
 )
@@ -57,16 +54,14 @@ class TestGetActiveUniverse:
             symbols = get_active_universe()
         assert symbols == []
 
-    def test_ch_outage_returns_empty(self) -> None:
-        """If stream_service.list_active_symbols raises, we degrade
-        gracefully to empty (never propagate the exception). Nightlies
-        no-op on empty universe — same as cold-start."""
+    def test_ch_outage_propagates(self) -> None:
+        """An unavailable source of truth must fail loudly."""
         with patch(
             "app.services.stream.stream_service.list_active_symbols",
             side_effect=RuntimeError("CH down"),
         ):
-            symbols = get_active_universe()
-        assert symbols == []
+            with pytest.raises(RuntimeError, match="CH down"):
+                get_active_universe()
 
     def test_does_NOT_union_with_seed(self) -> None:
         """REGRESSION: pre-FE-CONTRACTS-4-final the function returned
@@ -79,30 +74,6 @@ class TestGetActiveUniverse:
         ):
             symbols = get_active_universe()
         assert symbols == ["PG"]
-        # SEED constants are NOT silently included anymore.
-        assert "AAPL" not in symbols  # AAPL is in SEED but not in stream
-
-    def test_deprecated_include_seed_fallback_kwarg_is_ignored(self) -> None:
-        """Back-compat: legacy callers may pass `include_seed_fallback=True`
-        — it's accepted but does nothing now."""
-        with patch(
-            "app.services.stream.stream_service.list_active_symbols",
-            return_value=set(),
-        ):
-            # No crash; still returns empty since stream_universe is empty.
-            assert get_active_universe(include_seed_fallback=True) == []
-
-    def test_deprecated_watchlist_kinds_arg_is_ignored(self) -> None:
-        """Back-compat: the `watchlist_kinds` keyword is preserved for
-        legacy callers that haven't migrated, but it has no effect.
-        Watchlists no longer drive the universe."""
-        with patch(
-            "app.services.stream.stream_service.list_active_symbols",
-            return_value={"AAPL"},
-        ):
-            # No crash, returns the stream-derived set regardless.
-            symbols = get_active_universe(watchlist_kinds=["user", "baseline"])
-        assert symbols == ["AAPL"]
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -111,12 +82,9 @@ class TestGetActiveUniverse:
 
 
 class TestResolveUniverseSpec:
-    def test_seed_keyword_returns_legacy_seed(self) -> None:
-        """`seed` spec is kept for legacy operator scripts that explicitly
-        request the static SEED_SYMBOLS list. New code paths route
-        through `active` (stream_universe)."""
-        assert set(resolve_universe_spec("seed")) == set(SEED_SYMBOLS)
-        assert set(resolve_universe_spec("SEED")) == set(SEED_SYMBOLS)
+    def test_seed_keyword_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="static seed universe is retired"):
+            resolve_universe_spec("seed")
 
     def test_empty_or_none_defaults_to_active(self) -> None:
         """Empty spec defaults to active (stream_universe), NOT seed.
@@ -160,7 +128,6 @@ class TestResolveUniverseSpec:
         assert resolve_universe_spec(" AAPL ,  NVDA ,") == ["AAPL", "NVDA"]
 
     def test_canonical_constants(self) -> None:
-        assert UNIVERSE_SPEC_SEED == "seed"
         assert UNIVERSE_SPEC_ACTIVE == "active"
 
 
@@ -179,10 +146,11 @@ class TestSchwabNightlyDelegation:
         ):
             assert _resolve_symbols("active") == ["PG"]
 
-    def test_seed_keyword_still_returns_seed(self) -> None:
+    def test_seed_keyword_is_rejected(self) -> None:
         from app.services.ingest.nightly_schwab_refresh import _resolve_symbols
 
-        assert set(_resolve_symbols("seed")) == set(SEED_SYMBOLS)
+        with pytest.raises(ValueError, match="static seed universe is retired"):
+            _resolve_symbols("seed")
 
 
 class TestPolygonNightlyDelegation:
@@ -209,12 +177,13 @@ class TestPolygonNightlyDelegation:
         ):
             assert resolve_nightly_lake_symbols("active") == ["PG"]
 
-    def test_seed_keyword_still_returns_seed(self) -> None:
+    def test_seed_keyword_is_rejected(self) -> None:
         from app.services.ingest.nightly_polygon_refresh import (
             resolve_nightly_lake_symbols,
         )
 
-        assert set(resolve_nightly_lake_symbols("seed")) == set(SEED_SYMBOLS)
+        with pytest.raises(ValueError, match="static seed universe is retired"):
+            resolve_nightly_lake_symbols("seed")
 
 
 # ─────────────────────────────────────────────────────────────────────

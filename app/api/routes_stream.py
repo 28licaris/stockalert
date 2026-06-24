@@ -6,9 +6,8 @@ directly via `StreamService` (no longer indirected through
 WatchlistService — see docs/frontend_api_contracts.md §10.1 locked
 sticky-universe model).
 
-`/api/v1/seed/*` remains mounted (`routes_seed.py`) and returns the
-same data via the back-compat `seed_service` alias; new clients
-should target `/stream/*`.
+This is the only HTTP surface for universe membership. The retired
+`/api/v1/seed/*` namespace must not be reintroduced.
 """
 from __future__ import annotations
 
@@ -38,18 +37,11 @@ def _entries(items: list[dict]) -> list[StreamUniverseEntry]:
 
 @router.get("/stream", response_model=StreamUniverseResponse)
 async def list_stream_universe() -> StreamUniverseResponse:
-    """List the active stream universe.
-
-    On first read after the CH table is created, bootstraps from
-    `SEED_SYMBOLS ∪ active-watchlist members` so the cockpit doesn't
-    show an empty list out of the box.
-    """
-    bootstrapped, _ = await asyncio.to_thread(stream_service.bootstrap_if_empty)
+    """List the authoritative ClickHouse stream universe."""
     items = await asyncio.to_thread(stream_service.list_universe)
     return StreamUniverseResponse(
         items=_entries(items),
         count=len(items),
-        bootstrapped=bootstrapped,
     )
 
 

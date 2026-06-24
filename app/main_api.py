@@ -46,7 +46,6 @@ from app.api import (
     routes_monitors,
     routes_movers,
     routes_screener,
-    routes_seed,
     routes_adjusted,
     routes_admin_auth,
     routes_auth,
@@ -731,7 +730,6 @@ app.include_router(routes_corp_actions.router, prefix=_V1, tags=["CorpActions"])
 app.include_router(routes_adjusted.router, prefix=_V1, tags=["Adjusted"])
 app.include_router(routes_monitors.router, prefix=_V1, tags=["Monitors"])
 app.include_router(routes_watchlist.router, prefix=_V1, tags=["Watchlist"])
-app.include_router(routes_seed.router, prefix=_V1, tags=["Seed"])
 app.include_router(routes_stream.router, prefix=_V1, tags=["Stream"])
 app.include_router(routes_jobs.router, prefix=_V1, tags=["Jobs"])
 app.include_router(routes_clickhouse.router, prefix=_V1, tags=["ClickHouse"])

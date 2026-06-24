@@ -31,10 +31,9 @@ def test_seconds_until_next_exact_boundary():
     assert s >= 86400.0 - 1.0
 
 
-def test_resolve_seed_non_empty():
-    syms = resolve_nightly_lake_symbols("seed")
-    assert len(syms) >= 10
-    assert all(isinstance(x, str) and x.isupper() for x in syms)
+def test_resolve_seed_is_rejected():
+    with pytest.raises(ValueError, match="static seed universe is retired"):
+        resolve_nightly_lake_symbols("seed")
 
 
 def test_resolve_explicit_and_all():

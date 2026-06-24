@@ -3,7 +3,7 @@ Nightly Polygon flat-files → `equities.polygon_raw` refresh.
 
 Background asyncio loop: sleep until ``POLYGON_NIGHTLY_RUN_HOUR_UTC``,
 then archive **yesterday's** Polygon aggregates for
-``POLYGON_NIGHTLY_SYMBOLS`` (default: seed universe). ClickHouse OHLCV
+``POLYGON_NIGHTLY_SYMBOLS`` (default: whole market). ClickHouse OHLCV
 is not written by this loop — only the v2 equities Iceberg sink.
 
 Gating: ``POLYGON_NIGHTLY_ENABLED``, non-empty ``STOCK_LAKE_BUCKET``,
@@ -27,7 +27,6 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.config import settings
-from app.data.seed_universe import SEED_SYMBOLS
 from app.providers.polygon_flatfiles import PolygonFlatFilesClient
 from app.services.equities.sink import EquitiesIcebergSink
 from app.services.ingest.flatfiles_backfill import FlatFilesBackfillService
@@ -49,28 +48,19 @@ def resolve_nightly_lake_symbols(spec: str) -> list[str]:
     """Translate ``POLYGON_NIGHTLY_SYMBOLS`` → list[str].
 
     Spec strings:
-      - "seed" / "seed-100" → SEED_SYMBOLS
       - "all" / "*" / ""    → empty list (= whole-market via flat-files;
                               Polygon flat-files contain every symbol
                               regardless of input, so the empty list is
                               the "import everything" signal)
-      - "active"            → SEED_SYMBOLS ∪ active-watchlist symbols
-                              (per G1 dynamic-universe; same semantics
-                              as Schwab nightly + silver build)
+      - "active"            → authoritative ClickHouse stream_universe
       - "AAPL,NVDA,…"       → explicit list (uppercased)
     """
     s = (spec or "").strip().lower()
     if s in ("all", "*", ""):
         return []
-    if s in ("active", "universe", "dynamic"):
-        # Local import: avoid pulling watchlist_repo (CH dependency)
-        # at module-load time. Module-load needs to work even when
-        # CH is unavailable.
-        from app.services.universe import resolve_universe_spec
-        return resolve_universe_spec("active")
-    if s in ("seed", "seed-100", "seed_100"):
-        return list(SEED_SYMBOLS)
-    return [tok.strip().upper() for tok in spec.split(",") if tok.strip()]
+    from app.services.universe import resolve_universe_spec
+
+    return resolve_universe_spec(spec)
 
 
 def _nightly_lake_gated() -> bool:

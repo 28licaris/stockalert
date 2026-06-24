@@ -26,9 +26,9 @@ action, not a disaster recovery. The only thing destroyed by
 
 **Usage:**
 
-    # Rebuild CH for the seed universe from a fresh silver build:
+    # Rebuild CH for the authoritative stream universe from a fresh silver build:
     poetry run python scripts/rebuild_ch_from_silver.py \\
-        --symbols seed --wipe
+        --symbols active --wipe
 
     # Rebuild specific symbols only (no wipe — additive):
     poetry run python scripts/rebuild_ch_from_silver.py \\
@@ -36,7 +36,7 @@ action, not a disaster recovery. The only thing destroyed by
 
     # Rebuild with explicit window:
     poetry run python scripts/rebuild_ch_from_silver.py \\
-        --symbols seed --since 2021-01-04 --until 2026-05-18 --wipe
+        --symbols active --since 2021-01-04 --until 2026-05-18 --wipe
 
     # Whole-market rebuild (use after TA-5.6 whole-market silver lands):
     poetry run python scripts/rebuild_ch_from_silver.py \\
@@ -142,9 +142,9 @@ def _lake_history_start() -> date:
 
 def _resolve_symbols(spec: Optional[str]) -> list[str]:
     """Delegate to the same universe resolver the silver build uses,
-    so `seed` / `active` / explicit-CSV all behave identically."""
+    so `active` / explicit-CSV behave identically."""
     from app.services.universe import resolve_universe_spec
-    return resolve_universe_spec(spec or "seed")
+    return resolve_universe_spec(spec or "active")
 
 
 def _ch_ohlcv_row_count() -> int:
@@ -212,10 +212,10 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument(
-        "--symbols", type=str, default="seed",
+        "--symbols", type=str, default="active",
         help=(
-            "Comma-separated symbols, or 'seed' (SEED_SYMBOLS, default), "
-            "or 'active' (seed ∪ active watchlists per G1 dynamic universe)."
+            "Comma-separated symbols, or 'active' (the authoritative "
+            "ClickHouse stream_universe, default)."
         ),
     )
     p.add_argument(
