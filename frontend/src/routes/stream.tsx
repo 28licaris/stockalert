@@ -3,18 +3,18 @@ import { Link } from "react-router-dom";
 import { Plus, RefreshCw, Search, Upload, X } from "lucide-react";
 import {
   useAddFutures,
-  useAddSeed,
+  useAddStream,
   useFuturesCatalog,
   useFuturesUniverse,
-  useImportSeed,
+  useImportStream,
   useInstrumentLookup,
   useLatestBars,
   useRemoveFutures,
-  useRemoveSeed,
-  useSeedUniverse,
+  useRemoveStream,
+  useStreamUniverse,
   type FuturesCatalogEntry,
   type FuturesUniverseEntry,
-  type SeedEntry,
+  type StreamUniverseEntry,
 } from "@/api/queries";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
 import { Button } from "@/components/ui/button";
@@ -38,12 +38,12 @@ import { cn } from "@/lib/utils";
 type StreamTab = "equities" | "futures";
 
 export function StreamPage() {
-  const query = useSeedUniverse();
+  const query = useStreamUniverse();
   const futures = useFuturesUniverse();
   const [tab, setTab] = useState<StreamTab>("equities");
   const [filter, setFilter] = useState("");
 
-  const filtered: SeedEntry[] = useMemo(() => {
+  const filtered: StreamUniverseEntry[] = useMemo(() => {
     const items = query.data?.items ?? [];
     const needle = filter.trim().toUpperCase();
     if (!needle) return items;
@@ -89,7 +89,6 @@ export function StreamPage() {
 
       {tab === "equities" ? (
         <div className="space-y-6">
-          {query.data?.bootstrapped ? <BootstrapNotice /> : null}
           {query.error ? <ApiErrorAlert error={query.error} /> : null}
           <AddRow />
           <SearchBar value={filter} onChange={setFilter} />
@@ -457,20 +456,6 @@ function FuturesList({
 
 // ─────────────────────────────────────────────────────────────────────
 
-function BootstrapNotice() {
-  return (
-    <div className="rounded-md border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-fg-base">
-      <span className="font-semibold">First-time setup:</span> Stream
-      universe bootstrapped from the curated{" "}
-      <code className="rounded bg-bg-muted px-1 font-mono text-xs">
-        SEED_SYMBOLS
-      </code>{" "}
-      list + your current default watchlist. Future reads return whatever
-      you've edited from here.
-    </div>
-  );
-}
-
 function SearchBar({
   value,
   onChange,
@@ -504,7 +489,7 @@ function SearchBar({
 // ─────────────────────────────────────────────────────────────────────
 
 function AddRow() {
-  const add = useAddSeed();
+  const add = useAddStream();
   const [symbol, setSymbol] = useState("");
 
   const doAdd = (sym: string) => {
@@ -552,7 +537,7 @@ function AddRow() {
 // ─────────────────────────────────────────────────────────────────────
 
 function ImportPanel() {
-  const imp = useImportSeed();
+  const imp = useImportStream();
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
 
@@ -632,10 +617,10 @@ function StreamList({
   entries,
   loading,
 }: {
-  entries: ReadonlyArray<SeedEntry>;
+  entries: ReadonlyArray<StreamUniverseEntry>;
   loading: boolean;
 }) {
-  const remove = useRemoveSeed();
+  const remove = useRemoveStream();
 
   // Batch-lookup company descriptions for the rendered set.
   const symbols = useMemo(() => entries.map((e) => e.symbol), [entries]);

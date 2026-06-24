@@ -3,7 +3,7 @@ Nightly Schwab REST → ``equities.schwab_universe`` refresh.
 
 Background asyncio loop: sleep until ``SCHWAB_NIGHTLY_RUN_HOUR_UTC``,
 then pull **yesterday's** 1-minute bars from Schwab pricehistory for
-``SCHWAB_NIGHTLY_SYMBOLS`` (default: seed 100) and append them to
+``SCHWAB_NIGHTLY_SYMBOLS`` (default: active stream universe) and append them to
 ``equities.schwab_universe``.
 
 Gating: ``SCHWAB_NIGHTLY_ENABLED``, non-empty ``STOCK_LAKE_BUCKET``, and
@@ -24,7 +24,6 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 
 from app.config import settings
-from app.data.seed_universe import SEED_SYMBOLS
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +45,7 @@ def _seconds_until_next_run(hour_utc: int, *, now: datetime | None = None) -> fl
 def _resolve_symbols(spec: str) -> list[str]:
     """Translate ``SCHWAB_NIGHTLY_SYMBOLS`` → list[str].
 
-    Spec strings: "seed" (default), "active" (= SEED ∪ watchlists,
-    per G1 dynamic universe), or explicit CSV. See
+    Spec strings: "active" (the ClickHouse stream universe) or explicit CSV. See
     `app.services.universe.resolve_universe_spec` for details.
     """
     # Local import: keep watchlist_repo (CH) out of module-load path.
@@ -97,7 +95,7 @@ async def refresh_schwab_bronze_yesterday(
         logger.info("nightly_schwab_refresh: skipping — %s", why)
         return {"skipped": True, "reason": why}
 
-    sym_spec = getattr(settings, "schwab_nightly_symbols", "seed")
+    sym_spec = getattr(settings, "schwab_nightly_symbols", "active")
     symbols = _resolve_symbols(sym_spec)
 
     # Determine which dates to process.

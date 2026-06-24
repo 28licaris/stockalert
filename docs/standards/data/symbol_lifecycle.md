@@ -140,6 +140,12 @@ Written by:
   - watchlist auto-extend   (adding a watchlist symbol not yet streaming)
 ```
 
+There is no automatic equity bootstrap and no static fallback. An empty table
+means an intentionally empty universe. If ClickHouse cannot be read, universe
+resolution raises and the dependent job or stream startup fails visibly.
+Operators populate a new installation explicitly through `POST /api/v1/stream`
+or `POST /api/v1/stream/import`.
+
 Polygon nightly is **not** universe-bounded. It pulls the whole
 market regardless of stream_universe — bronze.polygon_minute is the
 historical reference for any symbol someone might add tomorrow.
@@ -152,7 +158,9 @@ historical reference for any symbol someone might add tomorrow.
 | Schwab WS dies (token / network) | Live ticks stop; nightly Schwab refresh (22:00 UTC) catches up within 24h; tip-fill on next operator action |
 | Polygon nightly fails | Auto-catchup runs next night for missing weekdays; manual run via Job Registry |
 | Silver build fails for one symbol | Other symbols still build; failed one retries next night; operator can manually re-trigger |
-| CH wiped | Full re-sync from silver via `silver_to_ch_refresh` (manual full mode); only the last 24h of live ticks are unrecoverable |
+| CH market-data tables wiped | Full re-sync from silver via `silver_to_ch_refresh` (manual full mode); only the last 24h of live ticks are unrecoverable |
+| `stream_universe` unavailable | Stream startup and universe-bounded jobs fail loudly; restore ClickHouse access rather than substituting a static list |
+| `stream_universe` intentionally emptied | No equities stream or universe-bounded job work runs until an operator explicitly imports symbols |
 | Corp-action adjustment changes historical bars | silver build re-snapshots; silver_to_ch_refresh's 14-day window catches recent changes; full re-sync for deeper history |
 | Polygon subscription paused | bronze.polygon_minute freezes at pause date; Schwab nightly + WS keep stream_universe symbols current; on resume Polygon backfill catches up |
 

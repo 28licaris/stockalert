@@ -528,19 +528,10 @@ class StreamService:
         """
         if self._started:
             return
-        self._started = True
         # Capture the main event loop so worker-thread callers (API
         # routes invoking us via asyncio.to_thread) can schedule
         # provider.subscribe_bars + warmup tasks back onto it.
         self._main_loop = asyncio.get_running_loop()
-
-        # Empty-table bootstrap: on first startup the CH table will be
-        # empty even if SEED_SYMBOLS has 100 tickers. Populate it so the
-        # stream actually has something to subscribe to.
-        try:
-            self.bootstrap_if_empty()
-        except Exception as e:  # noqa: BLE001 — boundary
-            logger.warning("Stream: bootstrap_if_empty failed: %s", e)
 
         # Futures roots live in a separate table; seed them too so a fresh
         # CH streams the standard contracts out of the box.
@@ -549,19 +540,16 @@ class StreamService:
         except Exception as e:  # noqa: BLE001 — boundary
             logger.warning("Stream: bootstrap_futures_if_empty failed: %s", e)
 
-        try:
-            active = {row["symbol"] for row in self._read_universe()}
-            # Futures (continuous roots) live in a separate universe table;
-            # the provider routes '/'-prefixed keys to CHART_FUTURES.
-            active |= self._read_futures_universe()
-        except Exception as e:  # noqa: BLE001 — boundary
-            logger.error("Stream: could not read universe table: %s", e)
-            active = set()
+        active = {row["symbol"] for row in self._read_universe()}
+        # Futures (continuous roots) live in a separate universe table;
+        # the provider routes '/'-prefixed keys to CHART_FUTURES.
+        active |= self._read_futures_universe()
 
         with self._lock:
             before = set(self._subscribed)
             self._apply_subscription_diff(before, active)
             self._subscribed = active
+            self._started = True
 
         logger.info(
             "Stream: started (subscribed=%d, provider=%s)",
@@ -602,18 +590,11 @@ class StreamService:
     ) -> set[str]:
         """Lightweight: just the active symbols, no metadata.
 
-        Used by `get_active_universe()` and the nightly job universe
-        filters. Returns a set so callers can union with seed fallbacks
-        cheaply. Tolerates CH outages by returning an empty set (the
-        caller decides the fallback).
+        Used by `get_active_universe()` and nightly universe filters.
+        ClickHouse errors propagate: an unavailable source of truth must
+        never be misreported as an intentionally empty universe.
         """
-        try:
-            return {row["symbol"] for row in self._read_universe(owner_id=owner_id)}
-        except Exception as exc:  # noqa: BLE001 — boundary
-            logger.warning(
-                "Stream: list_active_symbols read failed: %s", exc,
-            )
-            return set()
+        return {row["symbol"] for row in self._read_universe(owner_id=owner_id)}
 
     def is_streaming(self, symbol: str) -> bool:
         sym = _normalize_symbol(symbol)
@@ -754,79 +735,11 @@ class StreamService:
         return added
 
     # ─────────────────────────────────────────────────────────────────
-    # Bootstrap (first-run only)
-    # ─────────────────────────────────────────────────────────────────
-
-    def is_empty(self, *, owner_id: Optional[str] = None) -> bool:
-        owner = owner_id or self.DEFAULT_OWNER
-        client = get_client()
-        rows = client.query(
-            f"""
-            SELECT 1 FROM {STREAM_UNIVERSE_TABLE} FINAL
-            WHERE owner_id = {{owner:String}} AND is_active = 1
-            LIMIT 1
-            """,
-            parameters={"owner": owner},
-        )
-        return not rows.result_rows
-
-    def bootstrap_if_empty(
-        self, *, owner_id: Optional[str] = None,
-    ) -> tuple[bool, int]:
-        """Seed the universe from SEED_SYMBOLS ∪ active-watchlist members
-        iff the table is empty. Returns `(did_bootstrap, count)`.
-        """
-        owner = owner_id or self.DEFAULT_OWNER
-        if not self.is_empty(owner_id=owner):
-            return False, len(self._read_universe(owner_id=owner))
-
-        from app.data.seed_universe import SEED_SYMBOLS
-
-        seed_pool: set[str] = {s for s in SEED_SYMBOLS if s}
-        try:
-            from app.db import watchlist_repo
-
-            seed_pool.update(watchlist_repo.list_all_active_symbols())
-        except Exception as exc:  # noqa: BLE001 — boundary
-            logger.warning(
-                "Stream bootstrap: could not read watchlists: %s", exc,
-            )
-
-        if not seed_pool:
-            return False, 0
-
-        now = datetime.now(timezone.utc)
-        version = int(now.timestamp() * 1000)
-        rows = [
-            [
-                sym, owner, "", now, "bootstrap",
-                "imported from SEED_SYMBOLS + watchlists", 1, version,
-            ]
-            for sym in sorted(seed_pool)
-        ]
-        client = get_client()
-        client.insert(
-            STREAM_UNIVERSE_TABLE,
-            rows,
-            column_names=[
-                "symbol", "owner_id", "asset_type", "added_at",
-                "added_by", "notes", "is_active", "version",
-            ],
-        )
-        logger.info(
-            "stream_universe: bootstrapped with %d symbols", len(rows),
-        )
-        return True, len(rows)
-
-    # ─────────────────────────────────────────────────────────────────
     # Observability
     # ─────────────────────────────────────────────────────────────────
 
     def status(self) -> dict:
-        try:
-            universe_count = len(self._read_universe())
-        except Exception:  # noqa: BLE001 — boundary
-            universe_count = 0
+        universe_count = len(self._read_universe())
         with self._lock:
             return {
                 "started": self._started,

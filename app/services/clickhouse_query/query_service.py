@@ -251,5 +251,5 @@ class ClickHouseQueryService:
         }
 
 
-# Module-level singleton — matches WatchlistService / SeedService pattern.
+# Module-level singleton — matches the other service adapters.
 query_service = ClickHouseQueryService()

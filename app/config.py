@@ -98,8 +98,8 @@ class Settings(BaseModel):
     polygon_nightly_run_hour_utc: int = int(os.getenv("POLYGON_NIGHTLY_RUN_HOUR_UTC", "7"))
     # Per docs/standards/data/symbol_lifecycle.md (LOCKED): Polygon is
     # the whole-market historical archive. "all" = no universe filter
-    # (Polygon flat-files contain every symbol). Override to "seed"
-    # only for low-storage dev environments.
+    # (Polygon flat-files contain every symbol). Override to "active"
+    # or an explicit CSV only for deliberately bounded development runs.
     polygon_nightly_symbols: str = os.getenv("POLYGON_NIGHTLY_SYMBOLS", "all")
     polygon_nightly_kind: str = os.getenv("POLYGON_NIGHTLY_KIND", "minute").strip().lower()
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Seed ClickHouse OHLCV for the curated universe (or explicit symbols) using
+Fill ClickHouse OHLCV for the active stream universe (or explicit symbols) using
 Schwab price history via ``BackfillService``.
 
 **This script never writes S3.** For Schwab → stock-lake Parquet, use
 ``scripts/schwab_lake_backfill.py`` instead.
 
 This mirrors ``polygon_flatfiles_bulk_backfill.py`` ergonomics (``--symbols
-seed``, dotenv from ``scripts/.env``) but writes **only ClickHouse** through
+active``, dotenv from ``scripts/.env``) but writes **only ClickHouse** through
 the REST history provider — not Polygon flat files.
 
 Requires ``HISTORY_PROVIDER`` / ``DATA_PROVIDER`` such that
@@ -27,21 +27,21 @@ the lake layout — that CH→S3 pipeline is not implemented yet.
 
 Examples
 --------
-Seed the default 100-ticker universe (48d quick/deep/5m + long daily)::
+Fill the authoritative ClickHouse stream universe::
 
-    poetry run python scripts/schwab_seed_backfill.py --symbols seed
+    poetry run python scripts/schwab_universe_backfill.py --symbols active
 
 Same but force a single window for the three intraday-ish kinds::
 
-    poetry run python scripts/schwab_seed_backfill.py --symbols seed --window-days 45
+    poetry run python scripts/schwab_universe_backfill.py --symbols active --window-days 45
 
 Dry-run (no ClickHouse / no API calls)::
 
-    poetry run python scripts/schwab_seed_backfill.py --symbols seed --dry-run
+    poetry run python scripts/schwab_universe_backfill.py --symbols active --dry-run
 
 Explicit tickers plus extra symbols from a file (one symbol per line)::
 
-    poetry run python scripts/schwab_seed_backfill.py \\
+    poetry run python scripts/schwab_universe_backfill.py \\
         --symbols AAPL,MSFT --symbols-file ./extra.txt
 """
 from __future__ import annotations
@@ -60,7 +60,7 @@ load_dotenv(_HERE / ".env", override=False)
 load_dotenv(override=False)
 
 from app.config import settings  # noqa: E402
-from app.data.seed_universe import SEED_SYMBOLS  # noqa: E402
+from app.services.universe import resolve_universe_spec  # noqa: E402
 from app.db import init_schema  # noqa: E402
 from app.services.ingest.backfill_service import backfill_service  # noqa: E402
 
@@ -73,12 +73,10 @@ def _resolve_schwab_symbols(spec: str) -> list[str]:
     s = (spec or "").strip().lower()
     if s in ("all", "*", ""):
         raise ValueError(
-            "'all' / empty filter is not supported for Schwab seed; "
-            "use 'seed' or an explicit comma-separated list.",
+            "'all' / empty filter is not supported for Schwab; "
+            "use 'active' or an explicit comma-separated list.",
         )
-    if s in ("seed", "seed-100", "seed_100"):
-        return list(SEED_SYMBOLS)
-    return [tok.strip().upper() for tok in spec.split(",") if tok.strip()]
+    return resolve_universe_spec(spec)
 
 
 def _symbols_from_file(path: Path) -> list[str]:
@@ -125,14 +123,14 @@ async def _wait_kind(sym: str, kind: str, *, timeout_s: float) -> dict:
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Schwab-backed OHLCV seed into ClickHouse (seed universe or list).",
+        description="Schwab-backed OHLCV fill into ClickHouse (stream universe or list).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
     p.add_argument(
         "--symbols",
-        default="seed",
-        help="'seed' (default) or comma-separated tickers (not 'all').",
+        default="active",
+        help="'active' (default) or comma-separated tickers (not 'all').",
     )
     p.add_argument(
         "--symbols-file",
@@ -230,7 +228,7 @@ async def _async_main(args: argparse.Namespace) -> int:
         quick_d, deep_d, intra_d = args.quick_days, args.deep_days, args.intraday_days
 
     print(
-        f"Schwab seed: {len(symbols)} symbol(s); "
+        f"Schwab universe: {len(symbols)} symbol(s); "
         f"quick={quick_d}d deep={deep_d}d intraday={intra_d}d daily={args.daily_days}d",
     )
     if args.dry_run:

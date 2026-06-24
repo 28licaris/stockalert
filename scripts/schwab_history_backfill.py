@@ -20,7 +20,7 @@ Idempotent-ish:
 
 Run:
     poetry run python scripts/schwab_history_backfill.py \\
-        --symbols seed --days 48
+        --symbols active --days 48
 
     # narrower scope:
     poetry run python scripts/schwab_history_backfill.py \\
@@ -42,7 +42,7 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 
 from app.config import settings  # noqa: E402
-from app.data.seed_universe import SEED_SYMBOLS  # noqa: E402
+from app.services.universe import resolve_universe_spec  # noqa: E402
 from app.services.equities.sink import EquitiesIcebergSink  # noqa: E402
 
 logging.basicConfig(
@@ -62,11 +62,9 @@ US_EASTERN = ZoneInfo("America/New_York")
 
 def _resolve_symbols(spec: str) -> list[str]:
     s = (spec or "").strip().lower()
-    if s in ("seed", "seed-100", "seed_100"):
-        return list(SEED_SYMBOLS)
     if s in ("all", "*", ""):
-        raise ValueError("Use explicit symbols or 'seed'; 'all' is not supported for Schwab REST.")
-    return [tok.strip().upper() for tok in spec.split(",") if tok.strip()]
+        raise ValueError("Use 'active' or explicit symbols; 'all' is not supported for Schwab REST.")
+    return resolve_universe_spec(spec)
 
 
 def _us_eastern_day_window(d: date) -> tuple[datetime, datetime]:
@@ -238,8 +236,11 @@ def _parse_date(s: str) -> date:
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--symbols", default="seed",
-                   help="'seed' for the curated 100-symbol list, or comma-separated tickers.")
+    p.add_argument(
+        "--symbols",
+        default="active",
+        help="'active' for ClickHouse stream_universe, or comma-separated tickers.",
+    )
     grp = p.add_mutually_exclusive_group()
     grp.add_argument("--days", type=int, default=None,
                      help="Backfill the last N ET days ending at --end (or yesterday).")

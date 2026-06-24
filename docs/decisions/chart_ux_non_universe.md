@@ -1,6 +1,8 @@
 # Decision — Chart UX for non-universe symbols
 
-**Status:** Decided (2026-05-19), pending TA-5.6 implementation.
+**Status:** Superseded by
+[`standards/data/symbol_lifecycle.md`](../standards/data/symbol_lifecycle.md).
+This file retains the pre-`stream_universe` decision context only.
 **Owners:** operator + system design.
 **Supersedes:** none.
 **Affects:** frontend chart routes, `/api/silver/bars/*`, `/api/ohlcv/*`,

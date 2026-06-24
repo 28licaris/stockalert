@@ -173,14 +173,6 @@ def stream_svc(monkeypatch) -> StreamService:
         lambda self, sym, owner, is_active, *, asset_type="", added_by="", notes="":
             fake_repo.write(sym, is_active, asset_type=asset_type, added_by=added_by, notes=notes),
     )
-    monkeypatch.setattr(
-        StreamService, "is_empty",
-        lambda self, *, owner_id=None: not any(r["is_active"] for r in fake_repo.rows.values()),
-    )
-    monkeypatch.setattr(
-        StreamService, "bootstrap_if_empty",
-        lambda self, *, owner_id=None: (False, 0),
-    )
     monkeypatch.setattr(stream_module, "get_stream_provider", lambda: fake_prov)
 
     s = StreamService()

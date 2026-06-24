@@ -8,11 +8,8 @@ subscribes Schwab + triggers backfill warmup; removing here is the
 only path that fully strips a symbol from the live stream. Watchlist
 operations auto-extend this universe but never evict from it.
 
-Shape mirrors the existing `seed` schemas one-for-one (`SeedEntry` ≡
-`StreamUniverseEntry`, etc.) since the two endpoints describe the
-same underlying CH table — the `/seed` namespace is preserved for
-back-compat and the `/stream` namespace surfaces the new
-StreamStatus snapshot for the cockpit's status tile.
+The `/stream` namespace is the only universe API. Its shapes expose the
+authoritative `stream_universe` ClickHouse table and live subscription state.
 """
 from __future__ import annotations
 
@@ -45,14 +42,10 @@ class StreamUniverseEntry(BaseModel):
 
 
 class StreamUniverseResponse(BaseModel):
-    """The active stream universe + a bit of side-effect context."""
+    """The authoritative active stream universe."""
 
     items: list[StreamUniverseEntry]
     count: int = Field(..., description="Number of active stream universe members.")
-    bootstrapped: bool = Field(
-        ...,
-        description="True iff this read triggered a one-time bootstrap.",
-    )
 
 
 class AddStreamRequest(BaseModel):

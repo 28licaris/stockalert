@@ -66,14 +66,14 @@ export type ClickHouseQueryRequest =
 export type ClickHouseQueryResponse =
   components["schemas"]["ClickHouseQueryResponse"];
 
-// Seed universe (FE-CONTRACTS-4)
-export type SeedEntry = components["schemas"]["SeedEntry"];
-export type SeedUniverseResponse =
-  components["schemas"]["SeedUniverseResponse"];
-export type SeedMutationResponse =
-  components["schemas"]["SeedMutationResponse"];
-export type AddSeedRequest = components["schemas"]["AddSeedRequest"];
-export type ImportSeedRequest = components["schemas"]["ImportSeedRequest"];
+// Authoritative ClickHouse stream universe
+export type StreamUniverseEntry = components["schemas"]["StreamUniverseEntry"];
+export type StreamUniverseResponse =
+  components["schemas"]["StreamUniverseResponse"];
+export type StreamMutationResponse =
+  components["schemas"]["StreamMutationResponse"];
+export type AddStreamRequest = components["schemas"]["AddStreamRequest"];
+export type ImportStreamRequest = components["schemas"]["ImportStreamRequest"];
 
 // ─────────────────────────────────────────────────────────────────────
 // /api/health/services — composite Status page health
@@ -137,7 +137,7 @@ export const queryKeys = {
     ["symbol", "indicators", symbol, interval, ids] as const,
   watchlists: ["watchlists"] as const,
   watchlist: (name: string) => ["watchlist", name] as const,
-  seed: ["seed"] as const,
+  streamUniverse: ["stream", "universe"] as const,
   instrumentSearch: (query: string, limit: number) =>
     ["instruments", "search", query, limit] as const,
   instrumentLookup: (symbols: string) =>
@@ -571,66 +571,60 @@ export function useRemoveWatchlistMembers() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// /api/v1/seed — Seed universe (FE-CONTRACTS-4)
-//
-// Mutations invalidate `queryKeys.seed` AND `queryKeys.watchlists`
-// because seed add/remove cascades into the default watchlist via the
-// refcounted subscribe machinery — any open Watchlists page should
-// pick the change up too.
+// /api/v1/stream — authoritative ClickHouse stream universe
 // ─────────────────────────────────────────────────────────────────────
 
-export function useSeedUniverse() {
+export function useStreamUniverse() {
   return useQuery({
-    queryKey: queryKeys.seed,
-    queryFn: async (): Promise<SeedUniverseResponse> => {
-      const { data } = await apiClient.GET("/api/v1/seed");
-      return data as SeedUniverseResponse;
+    queryKey: queryKeys.streamUniverse,
+    queryFn: async (): Promise<StreamUniverseResponse> => {
+      const { data } = await apiClient.GET("/api/v1/stream");
+      return data as StreamUniverseResponse;
     },
     staleTime: 10_000,
   });
 }
 
-function _invalidateSeedAndWatchlists(qc: ReturnType<typeof useQueryClient>) {
-  qc.invalidateQueries({ queryKey: queryKeys.seed });
-  qc.invalidateQueries({ queryKey: queryKeys.watchlists });
+function _invalidateStreamUniverse(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: queryKeys.streamUniverse });
 }
 
-export function useAddSeed() {
+export function useAddStream() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (req: AddSeedRequest): Promise<SeedMutationResponse> => {
-      const { data } = await apiClient.POST("/api/v1/seed", { body: req });
-      return data as SeedMutationResponse;
+    mutationFn: async (req: AddStreamRequest): Promise<StreamMutationResponse> => {
+      const { data } = await apiClient.POST("/api/v1/stream", { body: req });
+      return data as StreamMutationResponse;
     },
-    onSuccess: () => _invalidateSeedAndWatchlists(qc),
+    onSuccess: () => _invalidateStreamUniverse(qc),
   });
 }
 
-export function useRemoveSeed() {
+export function useRemoveStream() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (symbol: string): Promise<SeedMutationResponse> => {
-      const { data } = await apiClient.DELETE("/api/v1/seed/{symbol}", {
+    mutationFn: async (symbol: string): Promise<StreamMutationResponse> => {
+      const { data } = await apiClient.DELETE("/api/v1/stream/{symbol}", {
         params: { path: { symbol } },
       });
-      return data as SeedMutationResponse;
+      return data as StreamMutationResponse;
     },
-    onSuccess: () => _invalidateSeedAndWatchlists(qc),
+    onSuccess: () => _invalidateStreamUniverse(qc),
   });
 }
 
-export function useImportSeed() {
+export function useImportStream() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (
-      req: ImportSeedRequest,
-    ): Promise<SeedMutationResponse> => {
-      const { data } = await apiClient.POST("/api/v1/seed/import", {
+      req: ImportStreamRequest,
+    ): Promise<StreamMutationResponse> => {
+      const { data } = await apiClient.POST("/api/v1/stream/import", {
         body: req,
       });
-      return data as SeedMutationResponse;
+      return data as StreamMutationResponse;
     },
-    onSuccess: () => _invalidateSeedAndWatchlists(qc),
+    onSuccess: () => _invalidateStreamUniverse(qc),
   });
 }
 

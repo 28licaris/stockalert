@@ -2,9 +2,8 @@
 Unit tests for StreamService — the post-FE-CONTRACTS-4 owner of Schwab
 subscriptions + the `stream_universe` CH table.
 
-The CH repo methods (`_read_universe`, `_is_active`, `_write_row`,
-`bootstrap_if_empty`, `is_empty`) are patched to drive off an
-in-memory fake; the provider is the same FakeDataProvider used in
+The CH repo methods (`_read_universe`, `_is_active`, `_write_row`) are
+patched to drive off an in-memory fake; the provider is the same FakeDataProvider used in
 the watchlist tests. This isolates the subscription state machine
 from ClickHouse / Schwab.
 
@@ -90,10 +89,6 @@ class FakeUniverseRepo:
             "is_active": bool(is_active),
         }
 
-    def is_empty(self) -> bool:
-        return not any(r["is_active"] for r in self.rows.values())
-
-
 # ----- Fixture -----
 
 
@@ -123,15 +118,6 @@ def svc(monkeypatch) -> StreamService:
         lambda self, sym, owner, is_active, *, asset_type="", added_by="", notes="":
             fake_repo.write(sym, is_active, asset_type=asset_type, added_by=added_by, notes=notes),
     )
-    monkeypatch.setattr(
-        StreamService, "is_empty",
-        lambda self, *, owner_id=None: fake_repo.is_empty(),
-    )
-    monkeypatch.setattr(
-        StreamService, "bootstrap_if_empty",
-        lambda self, *, owner_id=None: (False, 0),
-    )
-
     # Patch provider acquisition so the service never calls Schwab.
     monkeypatch.setattr(stream_module, "get_stream_provider", lambda: fake_prov)
 
@@ -164,6 +150,33 @@ async def test_start_is_idempotent(svc: StreamService) -> None:
     await svc.start()
     await svc.start()  # second call must not double-subscribe
     assert svc._fake_prov.subscribe_calls == [["AAPL"]]
+
+
+@pytest.mark.asyncio
+async def test_start_propagates_universe_read_failure(
+    svc: StreamService, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fail(*, owner_id=None):
+        raise RuntimeError("ClickHouse unavailable")
+
+    monkeypatch.setattr(svc, "_read_universe", _fail)
+
+    with pytest.raises(RuntimeError, match="ClickHouse unavailable"):
+        await svc.start()
+
+    assert svc._started is False
+
+
+def test_list_active_symbols_propagates_universe_read_failure(
+    svc: StreamService, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fail(*, owner_id=None):
+        raise RuntimeError("ClickHouse unavailable")
+
+    monkeypatch.setattr(svc, "_read_universe", _fail)
+
+    with pytest.raises(RuntimeError, match="ClickHouse unavailable"):
+        svc.list_active_symbols()
 
 
 # ----- add subscribes immediately -----
