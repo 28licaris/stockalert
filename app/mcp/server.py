@@ -64,6 +64,7 @@ def register_all_tools() -> None:
     from app.mcp.tools import stats  # noqa: F401
     from app.mcp.tools import system  # noqa: F401
     from app.mcp.tools import watchlist  # noqa: F401
+    from app.mcp.tools import wave  # noqa: F401
 
     logger.info(
         "MCP tools registered (lake + live + quotes + signals + "

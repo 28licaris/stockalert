@@ -12,6 +12,8 @@ Identifier (symbol, timestamp) → idempotent upserts/dedup on read.
 """
 from __future__ import annotations
 
+import re
+
 from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
 from pyiceberg.table.sorting import NullOrder, SortDirection, SortField, SortOrder
@@ -144,6 +146,107 @@ FUTURES_OHLCV_PARTITION = PartitionSpec(
 )
 
 FUTURES_OHLCV_SORT = SortOrder(
+    SortField(source_id=1, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+    SortField(source_id=2, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+)
+
+
+# ── futures.polygon_raw — per-CONTRACT raw bars (analog of equities.polygon_raw)
+#
+# Unlike FUTURES_OHLCV_SCHEMA (keyed by continuous root /ES), this holds the
+# raw outright contracts exactly as Polygon publishes them — ESH4, CLM4, … —
+# with NO roll and NO adjustment. It is the queryable raw layer parsed from the
+# flat-file mirror; the continuous-root layer (futures.polygon_continuous) is
+# derived FROM this table via volume-based roll.
+#
+# Keyed by (contract, timestamp) for idempotent re-parse. `root` is derived from
+# the contract ticker (ESH4 → ES) and partitions the table so the continuous
+# job can prune to one root's contracts cheaply. `exchange` + `dollar_volume`
+# are the futures-specific flat-file columns equities lacks.
+POLYGON_RAW_SCHEMA = Schema(
+    NestedField(1, "contract", StringType(), required=True),       # outright ticker, e.g. ESH4
+    NestedField(2, "timestamp", TimestamptzType(), required=True),
+    NestedField(3, "open", DoubleType(), required=False),
+    NestedField(4, "high", DoubleType(), required=False),
+    NestedField(5, "low", DoubleType(), required=False),
+    NestedField(6, "close", DoubleType(), required=False),
+    NestedField(7, "volume", DoubleType(), required=False),
+    NestedField(8, "vwap", DoubleType(), required=False),
+    NestedField(9, "trade_count", LongType(), required=False),
+    NestedField(10, "dollar_volume", DoubleType(), required=False),
+    NestedField(11, "root", StringType(), required=False),         # derived, e.g. ES
+    NestedField(12, "exchange", StringType(), required=False),     # us_futures_cme
+    NestedField(13, "source", StringType(), required=False),
+    NestedField(14, "ingestion_ts", TimestamptzType(), required=False),
+    NestedField(15, "ingestion_run_id", StringType(), required=False),
+    identifier_field_ids=[1, 2],
+)
+
+# identity(root) + month(timestamp): the continuous-root job filters by root
+# over a date range, so both prune.
+POLYGON_RAW_PARTITION = PartitionSpec(
+    PartitionField(source_id=11, field_id=1000, transform=IdentityTransform(), name="root"),
+    PartitionField(source_id=2, field_id=1001, transform=MonthTransform(), name="ts_month"),
+)
+
+POLYGON_RAW_SORT = SortOrder(
+    SortField(source_id=11, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+    SortField(source_id=1, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+    SortField(source_id=2, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+)
+
+# An outright futures contract: <root><month-code><year>, e.g. ESH4, MESM24,
+# 6EH5, CLF6. Deliberately rejects calendar spreads (contain '-' or ':'),
+# strip/average pseudo-contracts (e.g. "CL:SA 12M G4"), and odd variants
+# ("CLF5XXX") — those stay in the raw .csv.gz mirror but are not parsed into the
+# table (the continuous-root logic only needs clean outrights).
+_OUTRIGHT_RE = re.compile(r"^([A-Z0-9]{1,4}?)([FGHJKMNQUVXZ])(\d{1,2})$")
+
+
+def contract_root(ticker: str) -> str | None:
+    """Derive the root from an outright contract ticker (ESH4 → 'ES').
+
+    Returns None for non-outright tickers (spreads, strips, malformed) so
+    callers can filter them out of `futures.polygon_raw`.
+    """
+    if not ticker:
+        return None
+    m = _OUTRIGHT_RE.match(ticker.strip().upper())
+    return m.group(1) if m else None
+
+
+# ── futures.polygon_continuous — derived continuous roots (analog of
+# equities.polygon_adjusted).
+#
+# Built from futures.polygon_raw by volume-based roll + ratio back-adjustment
+# (see volume_roll.py). `symbol` is the continuous root (/ES); prices are
+# back-adjusted so roll seams vanish; `adj_factor` is the cumulative ratio
+# applied to that bar (1.0 on the front segment) so the true contract price is
+# recoverable. `contract` records which underlying contract the bar came from.
+POLYGON_CONTINUOUS_SCHEMA = Schema(
+    NestedField(1, "symbol", StringType(), required=True),          # continuous root, /ES
+    NestedField(2, "timestamp", TimestamptzType(), required=True),
+    NestedField(3, "open", DoubleType(), required=False),           # back-adjusted
+    NestedField(4, "high", DoubleType(), required=False),
+    NestedField(5, "low", DoubleType(), required=False),
+    NestedField(6, "close", DoubleType(), required=False),
+    NestedField(7, "volume", DoubleType(), required=False),
+    NestedField(8, "vwap", DoubleType(), required=False),
+    NestedField(9, "trade_count", LongType(), required=False),
+    NestedField(10, "adj_factor", DoubleType(), required=False),    # cumulative roll ratio
+    NestedField(11, "contract", StringType(), required=False),      # underlying, e.g. ESH4
+    NestedField(12, "source", StringType(), required=False),
+    NestedField(13, "ingestion_ts", TimestamptzType(), required=False),
+    NestedField(14, "ingestion_run_id", StringType(), required=False),
+    identifier_field_ids=[1, 2],
+)
+
+POLYGON_CONTINUOUS_PARTITION = PartitionSpec(
+    PartitionField(source_id=1, field_id=1000, transform=IdentityTransform(), name="symbol"),
+    PartitionField(source_id=2, field_id=1001, transform=MonthTransform(), name="ts_month"),
+)
+
+POLYGON_CONTINUOUS_SORT = SortOrder(
     SortField(source_id=1, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
     SortField(source_id=2, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
 )

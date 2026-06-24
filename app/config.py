@@ -103,6 +103,27 @@ class Settings(BaseModel):
     polygon_nightly_symbols: str = os.getenv("POLYGON_NIGHTLY_SYMBOLS", "all")
     polygon_nightly_kind: str = os.getenv("POLYGON_NIGHTLY_KIND", "minute").strip().lower()
 
+    # Nightly Elliott Wave recompute (EW-3). OFF by default — enabling it wires
+    # a daily background loop that labels `elliott_recompute_symbols` and appends
+    # to `<ns>.elliott_wave_labels`. Run hour is UTC; default 22:00 (after the
+    # equities session settles). Symbols is a comma-separated list (`/`-prefixed
+    # = futures); empty means the loop no-ops. See docs/elliott_wave_system_spec.md §4.
+    elliott_recompute_enabled: bool = os.getenv("ELLIOTT_RECOMPUTE_ENABLED", "false").lower() == "true"
+    elliott_recompute_run_hour_utc: int = int(os.getenv("ELLIOTT_RECOMPUTE_RUN_HOUR_UTC", "22"))
+    elliott_recompute_symbols: str = os.getenv("ELLIOTT_RECOMPUTE_SYMBOLS", "")
+    elliott_recompute_intervals: str = os.getenv("ELLIOTT_RECOMPUTE_INTERVALS", "1d")
+
+    # Live intraday Elliott Wave scanner (EW-7 live path).  Fires wave alerts
+    # on each incoming bar by re-running compute_labeling(source=AUTO) and
+    # broadcasting via the WebSocket signal multiplex.  OFF by default.
+    # ELLIOTT_LIVE_SCANNER_SYMBOLS: comma-separated list, e.g. "AAPL,TSLA,/ES"
+    # ELLIOTT_LIVE_SCANNER_INTERVAL: bar interval to scan (default "5m")
+    elliott_live_scanner_enabled: bool = (
+        os.getenv("ELLIOTT_LIVE_SCANNER_ENABLED", "false").lower() == "true"
+    )
+    elliott_live_scanner_symbols: str = os.getenv("ELLIOTT_LIVE_SCANNER_SYMBOLS", "")
+    elliott_live_scanner_interval: str = os.getenv("ELLIOTT_LIVE_SCANNER_INTERVAL", "5m")
+
     # Schwab REST pricehistory → equities.schwab_universe (see nightly_schwab_refresh).
     # 22:00 UTC = 3 PM Arizona; ~30 min after NYSE close.
     schwab_nightly_enabled: bool = os.getenv("SCHWAB_NIGHTLY_ENABLED", "false").lower() == "true"
@@ -120,6 +141,14 @@ class Settings(BaseModel):
     futures_nightly_enabled: bool = os.getenv("FUTURES_NIGHTLY_ENABLED", "false").lower() == "true"
     futures_nightly_run_hour_utc: int = int(os.getenv("FUTURES_NIGHTLY_RUN_HOUR_UTC", "22"))
     futures_nightly_symbols: str = os.getenv("FUTURES_NIGHTLY_SYMBOLS", "active")
+
+    # Polygon flat-file → futures.polygon_raw → futures.polygon_continuous
+    # (see nightly_futures_polygon_refresh). Keeps the authoritative back-
+    # adjusted deep history fresh; complements the Schwab nightly (recent tip).
+    # Gated separately + OFF by default (heavy per-root rebuild). Default run
+    # hour 21 UTC — Polygon finalizes a day's files ~11:00 ET next morning.
+    futures_polygon_nightly_enabled: bool = os.getenv("FUTURES_POLYGON_NIGHTLY_ENABLED", "false").lower() == "true"
+    futures_polygon_nightly_run_hour_utc: int = int(os.getenv("FUTURES_POLYGON_NIGHTLY_RUN_HOUR_UTC", "21"))
 
     # CH reconcile — push the authoritative, complete lake tables
     # (equities.schwab_universe → ohlcv_1m, futures.schwab_futures →

@@ -19,6 +19,7 @@ from app.indicators.base import Indicator
 from app.indicators.bollinger import BollingerBands
 from app.indicators.ema import EMA
 from app.indicators.macd import MACD
+from app.indicators.pivots import PivotDetector
 from app.indicators.rsi import RSI
 from app.indicators.sma import SMA
 from app.indicators.stochastic import StochasticOscillator
@@ -43,6 +44,8 @@ _INDICATOR_REGISTRY: dict[str, Callable[..., Indicator]] = {
     # Volatility
     "atr": ATR,
     "bollinger": BollingerBands,
+    # Structure
+    "pivots": PivotDetector,
 }
 
 

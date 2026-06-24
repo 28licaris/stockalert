@@ -1,18 +1,18 @@
 """On-demand lake → ClickHouse fill for futures chart requests.
 
 The futures peer of ``app/services/equities/lake_to_ch_fill.py``. When the
-bars gateway sees insufficient ``stocks.futures_ohlcv_1m`` coverage for a
-root's requested window, it fills that bounded window from
-``futures.schwab_futures`` (the authoritative lake) and re-queries CH.
+bars gateway detects insufficient ``stocks.futures_ohlcv_1m`` coverage for a
+root's requested window, it fills that bounded window from the futures lake
+and re-queries CH.
 
-Simpler than the equities path: the futures lake is a SINGLE small,
-month-partitioned table (no polygon∪schwab union, no merge-on-read delete
-files, no adjustment), so a bounded PyIceberg scan with a (symbol, window)
-row-filter is already fast — no Athena round-trip needed.
+Lake sources (unioned at read time):
+  • ``futures.schwab_futures``    — recent ~48-day 1-min from Schwab
+  • ``futures.polygon_continuous`` — deep back-adjusted continuous history
+    (volume-rolled + ratio-adjusted from Polygon flat files)
 
-``_scan_futures_lake`` is shared by the fill path AND the lake-only read
-path in the bars gateway (``source='lake'``), so both surfaces read the
-exact same bytes.
+``_scan_futures_lake`` unions both tables, deduplicating by timestamp (Schwab
+wins on ties — it's live-sourced). The caller doesn't need to know which
+source has coverage; it just gets the best available bars.
 
 Source tag: ``lake-fill-futures`` distinguishes gateway fills from
 ``schwab-stream`` (live) and ``lake-reconcile-schwab_futures`` (nightly
@@ -27,6 +27,7 @@ from threading import Lock
 from typing import Optional
 
 import pyarrow as pa
+import pyarrow.compute
 
 from app.db.client import get_client
 
@@ -52,25 +53,18 @@ def _get_sync_lock(symbol: str) -> Lock:
         return lock
 
 
-def _scan_futures_lake(
-    symbol: str, start: datetime, end: datetime
-) -> Optional[pa.Table]:
-    """Read ``futures.schwab_futures`` for ``symbol`` in ``[start, end)``.
+_LAKE_SELECTED_FIELDS = (
+    "symbol", "timestamp", "open", "high", "low", "close",
+    "volume", "vwap", "trade_count",
+)
 
-    Returns a deduped (merge-on-read) Arrow table, or ``None`` on a lake
-    read error (logged — NO silent failure; the caller degrades to "serve
-    what CH has"). Empty window → 0-row table (not None)."""
+
+def _scan_one(table, symbol: str, start: datetime, end: datetime) -> Optional[pa.Table]:
+    """Scan a single Iceberg table for symbol in [start, end).
+    Returns None on read error, 0-row table on empty window."""
     from pyiceberg.expressions import And, EqualTo, GreaterThanOrEqual, LessThan
 
-    from app.services.futures.tables import ensure_schwab_futures
-
-    if start.tzinfo is None:
-        start = start.replace(tzinfo=timezone.utc)
-    if end.tzinfo is None:
-        end = end.replace(tzinfo=timezone.utc)
-
     try:
-        table = ensure_schwab_futures()
         return table.scan(
             row_filter=And(
                 EqualTo("symbol", symbol),
@@ -79,16 +73,92 @@ def _scan_futures_lake(
                     LessThan("timestamp", end.isoformat()),
                 ),
             ),
-            selected_fields=(
-                "symbol", "timestamp", "open", "high", "low", "close",
-                "volume", "vwap", "trade_count",
-            ),
+            selected_fields=_LAKE_SELECTED_FIELDS,
         ).to_arrow()
     except Exception as exc:  # noqa: BLE001 — boundary
-        logger.error(
-            "futures lake scan failed: %s [%s, %s): %s", symbol, start, end, exc,
-        )
+        logger.error("futures lake scan failed on %s for %s [%s, %s): %s",
+                     table.name(), symbol, start, end, exc)
         return None
+
+
+def _scan_futures_lake(
+    symbol: str, start: datetime, end: datetime
+) -> Optional[pa.Table]:
+    """Read futures lake tables for ``symbol`` in ``[start, end)``.
+
+    Unions ``futures.schwab_futures`` (recent, ~48d) and
+    ``futures.polygon_continuous`` (deep back-adjusted history) so CH fills
+    draw from whichever tier has coverage. Deduplicates by timestamp: when
+    both tables have a bar for the same minute, the Schwab bar is kept
+    (it's live-sourced and more recent).
+
+    Returns a merged Arrow table (possibly 0 rows), or ``None`` only
+    when BOTH scans fail (logged — callers degrade to "serve what CH has").
+    """
+    from pyiceberg.exceptions import NoSuchTableError
+
+    from app.services.futures.tables import (
+        ensure_polygon_continuous,
+        ensure_schwab_futures,
+    )
+
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+
+    # Schwab table — authoritative for recent data.
+    schwab_arr: Optional[pa.Table] = None
+    try:
+        schwab_arr = _scan_one(ensure_schwab_futures(), symbol, start, end)
+    except Exception as exc:
+        logger.error("futures lake: schwab scan error for %s: %s", symbol, exc)
+
+    # Continuous (back-adjusted) table — deep history; may not exist yet.
+    poly_arr: Optional[pa.Table] = None
+    try:
+        poly_arr = _scan_one(ensure_polygon_continuous(), symbol, start, end)
+    except NoSuchTableError:
+        pass  # polygon_continuous not yet built — normal before first build
+    except Exception as exc:
+        logger.warning("futures lake: continuous scan error for %s: %s", symbol, exc)
+
+    # Both failed — propagate None so the caller can degrade gracefully.
+    if schwab_arr is None and poly_arr is None:
+        return None
+
+    # Only one source available — return it directly.
+    if schwab_arr is None or schwab_arr.num_rows == 0:
+        return poly_arr
+    if poly_arr is None or poly_arr.num_rows == 0:
+        return schwab_arr
+
+    # Both have rows — union, deduplicate by timestamp keeping Schwab wins.
+    # Sort combined table by timestamp; for ties the Schwab rows come second
+    # (appended last) and we keep_first=False so the LAST occurrence (Schwab)
+    # is retained after dedup. Then sort ascending for the CH insert.
+    combined = pa.concat_tables([poly_arr, schwab_arr])
+    ts_col = combined.column("timestamp")
+    sort_idx = pa.compute.sort_indices(ts_col)
+    sorted_tbl = combined.take(sort_idx)
+
+    # Deduplicate by timestamp: keep the LAST occurrence (Schwab wins on ties).
+    timestamps = sorted_tbl.column("timestamp").to_pylist()
+    seen: set = set()
+    keep: list[int] = []
+    for i in range(len(timestamps) - 1, -1, -1):
+        ts = timestamps[i]
+        if ts not in seen:
+            seen.add(ts)
+            keep.append(i)
+    keep.reverse()
+    deduped = sorted_tbl.take(keep)
+
+    logger.debug(
+        "futures lake union: %s schwab=%d poly=%d merged=%d",
+        symbol, schwab_arr.num_rows, poly_arr.num_rows, deduped.num_rows,
+    )
+    return deduped
 
 
 def fill_ch_from_futures_lake_sync(

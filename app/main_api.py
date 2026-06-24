@@ -38,6 +38,7 @@ from app.api import (
     routes_corp_actions,
     routes_health,
     routes_indicators,
+    routes_wave,
     routes_instruments,
     routes_jobs,
     routes_journal,
@@ -307,24 +308,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("gap sweeper arming failed: %s", e)
 
-    # Kick a one-shot sweep shortly after startup so any holes that opened up
-    # while the app was down (or while a provider switch was in flight) get
-    # repaired immediately instead of waiting until the next 06:00 UTC sweep.
-    # The per-symbol `gap_fill` throttle (6h cooldown) makes this a free no-op
-    # if a sweep already ran recently, so rapid restarts don't hammer the
-    # provider.
-    async def _initial_gap_sweep_after_warmup() -> None:
-        # Let the watchlist subscribe + a couple of live bars land before we
-        # scan. 30s is well inside the user's "Refresh" loop and outside the
-        # tightest WS-handshake window.
-        try:
-            await asyncio.sleep(30.0)
-            result = backfill_service.sweep_now()
-            logger.info("✅ Initial gap sweep complete: %s", result)
-        except Exception as e:
-            logger.warning("Initial gap sweep failed: %s", e)
-    asyncio.create_task(_initial_gap_sweep_after_warmup(),
-                        name="backfill_initial_sweep")
+    # Startup gap sweep removed 2026-06-20: nightly ch_reconcile (23:00 UTC)
+    # is the correct mechanism for healing lake→CH gaps. A startup sweep
+    # hammers the history provider on every restart for all streaming symbols.
 
     # Journal sync is Schwab-only — gate it behind both an explicit toggle and
     # the presence of Schwab credentials so users running on other providers
@@ -410,6 +396,115 @@ async def lifespan(app: FastAPI):
                 "✗ nightly_futures_refresh failed to start: %s — continuing without it",
                 exc,
             )
+
+    # Nightly Polygon flat-file → polygon_raw → polygon_continuous refresh
+    # (keeps the back-adjusted deep history fresh). OFF by default.
+    if _settings.futures_polygon_nightly_enabled and (_settings.stock_lake_bucket or "").strip():
+        try:
+            from app.services.ingest.nightly_futures_polygon_refresh import (
+                run_futures_polygon_refresh_loop,
+            )
+
+            nightly_futures_polygon_task = asyncio.create_task(
+                run_futures_polygon_refresh_loop(),
+                name="nightly_futures_polygon_refresh",
+            )
+            app.state.nightly_futures_polygon_task = nightly_futures_polygon_task
+            logger.info(
+                "nightly_futures_polygon_refresh: background loop started "
+                "(FUTURES_POLYGON_NIGHTLY_RUN_HOUR_UTC=%s)",
+                _settings.futures_polygon_nightly_run_hour_utc,
+            )
+        except Exception as exc:
+            logger.exception(
+                "✗ nightly_futures_polygon_refresh failed to start: %s — continuing without it",
+                exc,
+            )
+
+    # Nightly Elliott Wave recompute (EW-3) — OFF unless ELLIOTT_RECOMPUTE_ENABLED.
+    nightly_elliott_task: asyncio.Task | None = None
+    if _settings.elliott_recompute_enabled and (_settings.stock_lake_bucket or "").strip():
+        try:
+            from app.services.elliott_store import (
+                run_elliott_recompute_loop,
+                run_now_recompute,
+            )
+
+            _ewt_symbols = [s.strip() for s in _settings.elliott_recompute_symbols.split(",") if s.strip()]
+            _ewt_intervals = tuple(i.strip() for i in _settings.elliott_recompute_intervals.split(",") if i.strip()) or ("1d",)
+
+            def _ewt_symbols_provider() -> list[str]:
+                return _ewt_symbols
+
+            async def _run_elliott_once() -> None:
+                await run_now_recompute(_ewt_symbols_provider, _ewt_intervals)
+
+            nightly_elliott_task = asyncio.create_task(
+                run_elliott_recompute_loop(
+                    _ewt_symbols_provider,
+                    run_hour_utc=_settings.elliott_recompute_run_hour_utc,
+                    intervals=_ewt_intervals,
+                ),
+                name="nightly_elliott_recompute",
+            )
+            app.state.nightly_elliott_task = nightly_elliott_task
+            job_registry.register(
+                name="nightly_elliott_recompute",
+                display_name="Nightly Elliott Wave recompute",
+                schedule=f"daily at {int(_settings.elliott_recompute_run_hour_utc):02d}:00 UTC",
+                setting_key="ELLIOTT_RECOMPUTE_RUN_HOUR_UTC",
+                run_now=_run_elliott_once,
+            )
+            logger.info(
+                "nightly_elliott_recompute: background loop started "
+                "(ELLIOTT_RECOMPUTE_RUN_HOUR_UTC=%s, symbols=%d)",
+                _settings.elliott_recompute_run_hour_utc, len(_ewt_symbols),
+            )
+        except Exception as exc:
+            logger.exception(
+                "✗ nightly_elliott_recompute failed to start: %s — continuing without it",
+                exc,
+            )
+
+    # EW-7 live path: IntradayWaveScanner wired into MonitorManager. Fires wave
+    # alerts through the existing WebSocket broadcast on each incoming bar.
+    # Gated by ELLIOTT_LIVE_SCANNER_ENABLED; empty SYMBOLS list → no-op.
+    if _settings.elliott_live_scanner_enabled:
+        _scan_symbols = [
+            s.strip() for s in _settings.elliott_live_scanner_symbols.split(",")
+            if s.strip()
+        ]
+        if _scan_symbols:
+            try:
+                # Lazy wrapper: reads app.state.broadcast_signal at call time so
+                # we can start the scanner before broadcast_signal is defined below.
+                async def _wave_broadcast(alert) -> None:
+                    cb = getattr(app.state, "broadcast_signal", None)
+                    if cb:
+                        await cb(alert.model_dump())
+
+                result = monitor_manager.start_wave_scanner(
+                    symbols=_scan_symbols,
+                    interval=_settings.elliott_live_scanner_interval,
+                    broadcast_cb=_wave_broadcast,
+                )
+                app.state.wave_scanner_symbols = _scan_symbols
+                app.state.wave_scanner_interval = _settings.elliott_live_scanner_interval
+                logger.info(
+                    "✅ Elliott live wave scanner started "
+                    "(interval=%s, symbols=%d, result=%s)",
+                    _settings.elliott_live_scanner_interval, len(_scan_symbols),
+                    result.get("status"),
+                )
+            except Exception as exc:
+                logger.exception(
+                    "✗ Elliott live wave scanner failed to start: %s — continuing without it",
+                    exc,
+                )
+        else:
+            logger.info("ℹ️  Elliott live scanner enabled but ELLIOTT_LIVE_SCANNER_SYMBOLS is empty")
+    else:
+        logger.info("ℹ️  Elliott live scanner disabled (ELLIOTT_LIVE_SCANNER_ENABLED=false)")
 
     # CH reconcile: post-close, push the authoritative lakes (schwab_universe
     # + schwab_futures) into CH so live-stream gaps self-heal. Runs after the
@@ -669,6 +764,7 @@ app.include_router(routes_journal.router, prefix=_V1, tags=["Journal"])
 app.include_router(routes_lake.router, prefix=_V1, tags=["Lake"])
 app.include_router(routes_indicators.router, prefix=_V1, tags=["Indicators"])
 app.include_router(routes_screener.router, prefix=_V1, tags=["Screener"])
+app.include_router(routes_wave.router, prefix=_V1, tags=["Elliott Wave"])
 app.include_router(routes_corp_actions.router, prefix=_V1, tags=["CorpActions"])
 app.include_router(routes_adjusted.router, prefix=_V1, tags=["Adjusted"])
 app.include_router(routes_monitors.router, prefix=_V1, tags=["Monitors"])

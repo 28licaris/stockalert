@@ -11,8 +11,12 @@ Layout (US equities, SIP feed):
   ``us_stocks_sip/minute_aggs_v1/<YYYY>/<MM>/<YYYY-MM-DD>.csv.gz``
   ``us_stocks_sip/day_aggs_v1/<YYYY>/<YYYY-MM-DD>.csv.gz``
 
-CSV columns: ``ticker, volume, open, close, high, low, window_start,
-transactions``. ``window_start`` is a Unix nanosecond timestamp in UTC.
+  US futures (CME / COMEX / CBOT / NYMEX):
+    ``us_futures_{exchange}/minute_aggs_v1/<YYYY>/<MM>/<YYYY-MM-DD>.csv.gz``
+    Columns: ``ticker, exchange, session_end_date, window_start, open,
+    high, low, close, volume, dollar_volume, transactions``
+
+``window_start`` is a Unix nanosecond timestamp in UTC in both layouts.
 
 This module is **transport-only**: it downloads, parses, and returns a
 DataFrame. It does NOT touch ClickHouse, ``settings`` (except for the
@@ -336,6 +340,189 @@ class PolygonFlatFilesClient:
         out.sort(key=lambda f: f.file_date)
         return out
 
+    # ---------- futures flat-files API ----------
+
+    def futures_minute_aggs_key(self, exchange_prefix: str, d: date) -> str:
+        """Return the S3 key for the futures 1-minute aggregates file on date ``d``.
+        Pure function — never makes a network call."""
+        return (
+            f"{exchange_prefix}/minute_aggs_v1/{d.year:04d}/"
+            f"{d.month:02d}/{d:%Y-%m-%d}.csv.gz"
+        )
+
+    def download_futures_minute_aggs(
+        self,
+        exchange_prefix: str,
+        d: date,
+        *,
+        tickers: Optional[Iterable[str]] = None,
+    ) -> pd.DataFrame:
+        """Download the futures 1-minute aggregates file for ``d`` from
+        ``exchange_prefix`` (e.g. ``"us_futures_cme"``) and return a DataFrame.
+
+        Optionally filters to ``tickers`` (e.g. ``["ESM5", "ESU5"]``) before
+        returning — pass the front-month ticker to avoid materialising the full
+        file (~all CME contracts). Returns an empty DataFrame if the date has no
+        file (weekend / holiday). Raises ``PolygonFlatFilesError`` on any other
+        failure.
+
+        Returned columns: ``ticker, exchange, session_end_date, window_start,
+        open, high, low, close, volume, dollar_volume, transactions, timestamp,
+        vwap``.
+        """
+        key = self.futures_minute_aggs_key(exchange_prefix, d)
+        try:
+            body = self._get_object_bytes(key)
+        except PolygonFlatFilesError as e:
+            response = getattr(e.__cause__, "response", None)
+            code = ""
+            http_status: Optional[int] = None
+            if isinstance(response, dict):
+                code = response.get("Error", {}).get("Code", "") or ""
+                http_status = response.get("ResponseMetadata", {}).get(
+                    "HTTPStatusCode"
+                )
+            if str(code) in {"404", "NoSuchKey", "NotFound"} or http_status == 404:
+                logger.debug(
+                    "Polygon Flat Files: no futures file %s (market closed)", key
+                )
+                return pd.DataFrame()
+            raise
+
+        return self._read_futures_csv_gz(body, tickers)
+
+    def _read_futures_csv_gz(
+        self,
+        body: bytes,
+        tickers: Optional[Iterable[str]],
+    ) -> pd.DataFrame:
+        """Decompress and parse a futures gzipped CSV.
+
+        Adds ``timestamp`` (UTC datetime from ``window_start`` nanoseconds) and
+        ``vwap`` (``dollar_volume / volume`` where volume > 0). Uppercases tickers
+        for consistency with the rest of the system.
+        """
+        with gzip.GzipFile(fileobj=io.BytesIO(body)) as gz:
+            df = pd.read_csv(gz, dtype=_FUTURES_CSV_DTYPES)
+        if df.empty:
+            return df
+
+        df["ticker"] = df["ticker"].astype("string").str.upper()
+
+        if tickers is not None:
+            wanted = {t.strip().upper() for t in tickers if t and t.strip()}
+            if wanted:
+                df = df[df["ticker"].isin(wanted)].copy()
+
+        if df.empty:
+            return df
+
+        df["timestamp"] = pd.to_datetime(df["window_start"], unit="ns", utc=True)
+
+        # vwap = dollar_volume / volume — NaN where volume is zero or missing
+        vol = df["volume"]
+        dvol = df["dollar_volume"]
+        with_vwap = vol.notna() & (vol > 0) & dvol.notna()
+        df["vwap"] = dvol.where(with_vwap) / vol.where(with_vwap)
+
+        return df
+
+    def available_futures_dates(
+        self,
+        exchange_prefix: str,
+        start: date,
+        end: date,
+    ) -> list[FlatFileInfo]:
+        """List the trading days actually available in ``[start, end]`` for
+        ``exchange_prefix`` (e.g. ``"us_futures_cme"``).
+
+        Returns a chronologically sorted list of ``FlatFileInfo``. Groups S3
+        listings by year to bound the listing scope and avoid scanning the full
+        bucket.
+        """
+        if end < start:
+            return []
+
+        client = self._get_client()
+        out: list[FlatFileInfo] = []
+        for year in range(start.year, end.year + 1):
+            prefix = f"{exchange_prefix}/minute_aggs_v1/{year:04d}/"
+            continuation: Optional[str] = None
+            while True:
+                kwargs: dict[str, Any] = {
+                    "Bucket": self._bucket,
+                    "Prefix": prefix,
+                    "MaxKeys": 1000,
+                }
+                if continuation:
+                    kwargs["ContinuationToken"] = continuation
+                try:
+                    resp = client.list_objects_v2(**kwargs)
+                except Exception as e:
+                    raise PolygonFlatFilesError(
+                        f"Polygon Flat Files list_objects_v2 failed under {prefix}: {e}"
+                    ) from e
+                for c in resp.get("Contents", []) or []:
+                    file_date = _parse_date_from_key(c["Key"])
+                    if file_date is None:
+                        continue
+                    if file_date < start or file_date > end:
+                        continue
+                    out.append(FlatFileInfo(
+                        key=c["Key"],
+                        file_date=file_date,
+                        size=int(c.get("Size", 0)),
+                    ))
+                if not resp.get("IsTruncated"):
+                    break
+                continuation = resp.get("NextContinuationToken")
+                if not continuation:
+                    break
+        out.sort(key=lambda f: f.file_date)
+        return out
+
+
+# ── Futures flat-files support ───────────────────────────────────────────────
+
+# Maps CME product root (no slash) → Polygon exchange prefix in the flat-files
+# bucket. Every root listed here has a confirmed S3 prefix; update when Polygon
+# adds new exchanges.
+FUTURES_EXCHANGE_PREFIXES: dict[str, str] = {
+    # CME — equity index + FX futures
+    "ES":  "us_futures_cme", "NQ":  "us_futures_cme", "YM":  "us_futures_cme",
+    "RTY": "us_futures_cme", "MES": "us_futures_cme", "MNQ": "us_futures_cme",
+    "MYM": "us_futures_cme", "M2K": "us_futures_cme",
+    "6E":  "us_futures_cme", "6J":  "us_futures_cme", "6B":  "us_futures_cme",
+    "6A":  "us_futures_cme", "6C":  "us_futures_cme", "6S":  "us_futures_cme",
+    # COMEX — metals
+    "GC": "us_futures_comex", "MGC": "us_futures_comex",
+    "SI": "us_futures_comex", "SIL": "us_futures_comex",
+    "HG": "us_futures_comex", "PL":  "us_futures_comex", "PA": "us_futures_comex",
+    # CBOT — rates + grains
+    "ZB": "us_futures_cbot", "UB": "us_futures_cbot",
+    "ZN": "us_futures_cbot", "ZF": "us_futures_cbot", "ZT": "us_futures_cbot",
+    "ZC": "us_futures_cbot", "ZS": "us_futures_cbot", "ZW": "us_futures_cbot",
+    "ZM": "us_futures_cbot", "ZL": "us_futures_cbot",
+    # NYMEX — energy
+    "CL":  "us_futures_nymex", "MCL": "us_futures_nymex",
+    "NG":  "us_futures_nymex", "RB":  "us_futures_nymex",
+    "HO":  "us_futures_nymex", "BZ":  "us_futures_nymex",
+}
+
+_FUTURES_CSV_DTYPES: dict[str, Any] = {
+    "ticker":           "string",
+    "exchange":         "string",
+    "session_end_date": "string",
+    "window_start":     "int64",
+    "open":             "float64",
+    "high":             "float64",
+    "low":              "float64",
+    "close":            "float64",
+    "volume":           "float64",
+    "dollar_volume":    "float64",
+    "transactions":     "Int64",
+}
+
 
 def _parse_date_from_key(key: str) -> Optional[date]:
     """Extract the ``YYYY-MM-DD`` date from a flat-files key. Returns None
@@ -369,6 +556,7 @@ def iter_trading_days(start: date, end: date) -> Iterable[date]:
 # Re-export for callers that just need timezone-aware utility imports.
 __all__ = [
     "DEFAULT_STOCKS_PREFIX",
+    "FUTURES_EXCHANGE_PREFIXES",
     "FlatFileInfo",
     "PolygonFlatFilesClient",
     "PolygonFlatFilesError",

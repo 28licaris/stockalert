@@ -13,11 +13,11 @@ Data-tier model:
     only holds what's been streamed or filled. Not authoritative.
 
 Sources (the `source` selector):
-  - ``auto`` (default): CH-first. On an empty result for a bounded
-    window, fill that window from the lake into CH and re-query CH.
-    Self-healing cache — the second identical request is hot. This is
-    effectively "CH plus S3 for whatever's missing."
-  - ``clickhouse``: CH only. Fast, may be partial. Never touches S3.
+  - ``auto`` (default): CH-first. Returns CH bars immediately. When CH
+    doesn't cover the requested window, schedules a background fill
+    (gap_fill_worker) and returns what CH has now — the caller gets a
+    response in <100ms and the next identical request will be hot.
+  - ``clickhouse``: CH only. Fast, always partial. Never touches S3.
     Use when you explicitly want "only what's hot."
   - ``lake``: S3 ground truth only. Reads 1-minute adjusted bars from
     `equities.polygon_adjusted` and resamples to `interval` in-process.
@@ -118,6 +118,14 @@ def get_chart_bars(
     if source == BarSource.LAKE:
         return _from_lake(symbol, interval=interval, lookback_days=lookback_days, limit=limit)
 
+    # Futures daily is served from the deep daily lake tier for EVERY source —
+    # the 1-minute-derived CH/lake only covers ~48 days, so the CH path would
+    # hand back a stub. Falls through to CH only if the daily table is empty.
+    if is_futures_symbol(symbol) and interval == "1d":
+        daily = _from_lake(symbol, interval="1d", lookback_days=lookback_days, limit=limit)
+        if daily:
+            return daily
+
     table = ch_table_for(symbol)
     ch_reader = reader or BarReader.from_settings()
     bars = ch_reader.get_bars_for_chart(
@@ -128,11 +136,10 @@ def get_chart_bars(
     if source == BarSource.CLICKHOUSE:
         return bars
 
-    # AUTO: CH-first; fill from the lake when CH doesn't cover the window —
-    # empty OR lacking depth (CH loaded 3mo but the agent asked for 1yr).
-    # The depth check catches the partial-coverage case the old empty-only
-    # trigger missed. Mid-window holes in *today's* session aren't fillable
-    # here (the lake is nightly-fed) — those are the reconcile job's domain.
+    # AUTO: CH-first. If CH doesn't cover the window, schedule a background
+    # fill and return what CH has immediately. The fill lands asynchronously;
+    # the next request (after the fill completes) will see the full window.
+    # Mid-session holes aren't fillable here — ch_reconcile handles those.
     if (
         lookback_days is not None
         and lookback_days <= _MAX_FILL_LOOKBACK_DAYS
@@ -140,20 +147,12 @@ def get_chart_bars(
         end = datetime.now(timezone.utc)
         start = end - timedelta(days=lookback_days)
         if _ch_lacks_window(bars, start):
-            try:
-                inserted = _lake_fill_fn(symbol)(symbol.upper(), start, end)
-                if inserted > 0:
-                    logger.info(
-                        "bars_gateway: lake-filled %s (%d rows, %dd window); re-querying CH",
-                        symbol, inserted, lookback_days,
-                    )
-                    bars = ch_reader.get_bars_for_chart(
-                        symbol, interval=interval,
-                        lookback_days=lookback_days, limit=limit,
-                        source_table=table,
-                    )
-            except Exception as exc:  # noqa: BLE001 — boundary; degrade to CH result
-                logger.warning("bars_gateway: lake fill for %s failed: %s", symbol, exc)
+            from app.services.live.gap_fill_worker import schedule_gap_fill
+            schedule_gap_fill(symbol, start, end)
+            logger.info(
+                "bars_gateway: CH lacks window for %s (%dd); gap fill scheduled",
+                symbol, lookback_days,
+            )
 
     return bars
 
@@ -196,16 +195,12 @@ def get_range_bars(
         and 0 < window_days <= _MAX_FILL_LOOKBACK_DAYS
         and _ch_lacks_window(bars, start)
     ):
-        try:
-            inserted = _lake_fill_fn(symbol)(symbol.upper(), start, end)
-            if inserted > 0:
-                logger.info(
-                    "bars_gateway: range lake-filled %s (%d rows, %dd); re-querying CH",
-                    symbol, inserted, window_days,
-                )
-                bars = ch_reader.get_bars_in_range(symbol, start, end, **kwargs)
-        except Exception as exc:  # noqa: BLE001 — boundary; degrade to CH result
-            logger.warning("bars_gateway: range lake fill for %s failed: %s", symbol, exc)
+        from app.services.live.gap_fill_worker import schedule_gap_fill
+        schedule_gap_fill(symbol, start, end)
+        logger.info(
+            "bars_gateway: CH lacks window for %s (%dd); gap fill scheduled",
+            symbol, window_days,
+        )
 
     return bars
 
@@ -228,6 +223,15 @@ def _from_lake(
     start = end - timedelta(days=lookback_days if lookback_days is not None else 30)
 
     if is_futures_symbol(symbol):
+        # Daily+ intervals: prefer the deep daily tier (futures.schwab_futures_daily,
+        # years of history) over resampling the ~48-day 1-minute window. Falls
+        # through to the 1m resample if the daily table is empty / not built yet.
+        if interval == "1d":
+            daily = _futures_daily_from_lake(symbol, start, end)
+            if daily:
+                if limit is not None and len(daily) > limit:
+                    daily = daily[-limit:]
+                return daily
         one_min = _futures_one_min_from_lake(symbol, start, end)
     else:
         from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
@@ -288,6 +292,62 @@ def _futures_one_min_from_lake(
             )
         )
     out.sort(key=lambda b: b.timestamp)  # lake scan isn't guaranteed ordered
+    return out
+
+
+def _futures_daily_from_lake(
+    symbol: str, start: datetime, end: datetime
+) -> list[LiveBar]:
+    """Daily ``LiveBar``s for a futures root from ``futures.schwab_futures_daily``,
+    oldest-first. Empty list when the table doesn't exist yet or on a read error
+    (so callers fall back to resampling the 1-minute lake)."""
+    from pyiceberg.exceptions import NoSuchTableError
+    from pyiceberg.expressions import And, EqualTo, GreaterThanOrEqual, LessThan
+
+    from app.services.futures.schemas import futures_table_id
+    from app.services.iceberg_catalog import get_catalog
+
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+
+    try:
+        table = get_catalog().load_table(futures_table_id("schwab_futures_daily"))
+        arr = table.scan(
+            row_filter=And(
+                EqualTo("symbol", symbol.upper()),
+                And(GreaterThanOrEqual("timestamp", start.isoformat()),
+                    LessThan("timestamp", end.isoformat())),
+            ),
+            selected_fields=("symbol", "timestamp", "open", "high", "low", "close",
+                             "volume", "vwap", "trade_count"),
+        ).to_arrow()
+    except NoSuchTableError:
+        return []
+    except Exception as exc:  # noqa: BLE001 — degrade to the 1m path
+        logger.warning("bars_gateway: futures daily lake read failed for %s: %s", symbol, exc)
+        return []
+
+    if arr is None or arr.num_rows == 0:
+        return []
+    cols = arr.to_pydict()
+    out: list[LiveBar] = []
+    for i in range(arr.num_rows):
+        vwap = cols["vwap"][i]
+        tc = cols["trade_count"][i]
+        out.append(
+            LiveBar(
+                symbol=cols["symbol"][i], timestamp=cols["timestamp"][i],
+                open=float(cols["open"][i]), high=float(cols["high"][i]),
+                low=float(cols["low"][i]), close=float(cols["close"][i]),
+                volume=float(cols["volume"][i]) if cols["volume"][i] is not None else 0.0,
+                vwap=float(vwap) if vwap not in (None, 0, 0.0) else None,
+                trade_count=int(tc) if tc not in (None, 0) else None,
+                source="lake-schwab_futures_daily", interval="1d",
+            )
+        )
+    out.sort(key=lambda b: b.timestamp)
     return out
 
 

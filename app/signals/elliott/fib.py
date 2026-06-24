@@ -1,0 +1,250 @@
+"""Fibonacci scoring and **anchored** target/invalidation projection.
+
+Two distinct jobs, and the distinction matters:
+
+  * **Scoring** compares *leg lengths as ratios* (w3/w1, w2/w1, …). Ratios are
+    anchor-independent, so `score_impulse` is a pure function of the leg
+    magnitudes.
+  * **Targets** are *price levels*, and a price level must be projected from the
+    correct anchor. A wave-3 target is `wave-2 termination ± 1.618·|w1|` — NOT
+    `1.618 × price`. Getting the anchor wrong is the classic Fib mistake.
+
+`direction` is "up" or "down"; `s = +1/-1` carries it through the projections.
+"""
+from __future__ import annotations
+
+from typing import Literal
+
+Direction = Literal["up", "down"]
+# Canonical Fibonacci ratios used throughout EWT.
+# Added 0.764, 0.854 (deep wave-2/B retracements), 1.236 (C/B extensions),
+# 2.0 (wave-3 double extension), 3.236 (wave-3 triple) per Elliott Wave
+# Forecast reference — fills the gaps between prior 0.786 and 1.618 entries.
+FIB = (0.236, 0.382, 0.5, 0.618, 0.764, 0.786, 0.854, 1.0, 1.236, 1.272, 1.618, 2.0, 2.618, 3.236)
+
+
+def _sign(direction: Direction) -> int:
+    return 1 if direction == "up" else -1
+
+
+def retrace_pct(a: float, b: float, c: float) -> float:
+    """Fraction of the a→b move retraced by b→c."""
+    move = abs(b - a)
+    return abs(c - b) / move if move else 0.0
+
+
+def nearest_fib(ratio: float) -> tuple[float, float]:
+    """Closest Fib level and its absolute distance."""
+    best = min(FIB, key=lambda f: abs(f - ratio))
+    return best, abs(best - ratio)
+
+
+def _band(x: float, lo: float, hi: float, peak: float, width: float = 0.35) -> float:
+    """1.0 at `peak`, ~1.0 across [lo, hi], decaying outside. Bounded [0, 1]."""
+    if lo <= x <= hi:
+        return 1.0 - 0.3 * abs(x - peak) / max(peak, 1e-9)
+    edge = lo if x < lo else hi
+    return max(0.0, 1.0 - abs(x - edge) / width)
+
+
+def score_impulse(prices: list[float], direction: Direction) -> float:
+    """0..1 Fibonacci-fit over the legs that exist, plus an alternation reward.
+    More confirmed structure that fits the guidelines → higher score."""
+    parts: list[float] = []
+    w1 = abs(prices[1] - prices[0]) if len(prices) >= 2 else 0.0
+
+    if len(prices) >= 3 and w1:
+        w2r = abs(prices[1] - prices[2]) / w1               # wave-2 retrace of wave-1
+        # EWT guidelines: 50%, 61.8%, 76.4%, 85.4% are all valid W2 retracements
+        parts.append(_band(w2r, 0.382, 0.854, 0.618))
+    if len(prices) >= 4 and w1:
+        w3e = abs(prices[3] - prices[2]) / w1               # wave-3 extension of wave-1
+        # EWT: 161.8%, 200%, 261.8%, 323.6% are all valid W3 extensions
+        parts.append(_band(w3e, 1.0, 3.236, 1.618, width=0.7))
+    if len(prices) >= 5:
+        w3 = abs(prices[3] - prices[2])
+        if w3:
+            w4r = abs(prices[3] - prices[4]) / w3           # wave-4 retrace of wave-3
+            # EWT: 14.6%, 23.6%, 38.2% valid; max ~50%
+            parts.append(_band(w4r, 0.146, 0.5, 0.382))
+        # alternation: wave 2 and wave 4 should differ in depth
+        if w1:
+            w2r = abs(prices[1] - prices[2]) / w1
+            w4r2 = abs(prices[3] - prices[4]) / max(w3, 1e-9)
+            parts.append(min(1.0, abs(w2r - w4r2) * 2.0))
+    if len(prices) >= 6 and w1:
+        w5e = abs(prices[5] - prices[4]) / w1               # wave-5 vs wave-1
+        parts.append(max(_band(w5e, 0.618, 1.0, 1.0), _band(w5e, 1.5, 1.8, 1.618)))
+
+    return round(sum(parts) / len(parts), 4) if parts else 0.0
+
+
+def score_zigzag(prices: list[float], direction: Direction) -> float:
+    """0..1 fit for a zigzag: B retraces A by 38.2–85.4%; C = 61.8%, 100%, or 123.6% of A."""
+    parts: list[float] = []
+    a = abs(prices[1] - prices[0]) if len(prices) >= 2 else 0.0
+    if len(prices) >= 3 and a:
+        br = abs(prices[1] - prices[2]) / a
+        # EWT: B = 50%, 61.8%, 76.4%, 85.4% of A — center at 0.618
+        parts.append(_band(br, 0.382, 0.854, 0.618))
+    if len(prices) >= 4 and a:
+        c = abs(prices[3] - prices[2]) / a
+        # EWT: C = 61.8%, 100%, or 123.6% of A
+        parts.append(max(_band(c, 0.5, 1.2, 1.0), _band(c, 1.1, 1.5, 1.236)))
+    return round(sum(parts) / len(parts), 4) if parts else 0.0
+
+
+def score_flat(prices: list[float], direction: Direction) -> float:
+    """0..1 Fibonacci-fit for a flat correction (A-B-C, 3-3-5 internal).
+
+    Three subtypes, all scored here (highest wins in engine ranking):
+
+      Regular flat   — B ≈ 90–105% of A;  C ≈ 61.8–123.6% of AB combined
+      Expanded flat  — B ≈ 105–138% (123.6% ideal);  C ≈ 100–161.8% of AB
+      Running flat   — B ≈ 105–138% (same as expanded);  C ≈ 61.8–100% of AB
+                        (C falls short of A's endpoint — the "running" signature)
+
+    B scores the same for expanded and running (both need deep B); the C
+    band differentiates them: expanded C > regular C > running C (short C).
+    """
+    parts: list[float] = []
+    a = abs(prices[1] - prices[0]) if len(prices) >= 2 else 0.0
+    if len(prices) >= 3 and a:
+        b_ret = abs(prices[2] - prices[1]) / a
+        # Regular: B ≈ 90–105%; expanded/running: B ≈ 105–138% (123.6% ideal)
+        parts.append(max(_band(b_ret, 0.90, 1.05, 1.00),
+                         _band(b_ret, 1.05, 1.382, 1.236, width=0.20)))
+    if len(prices) >= 4 and a:
+        c = abs(prices[3] - prices[2]) / a
+        # Regular: C ≈ 100–123.6% of A; expanded: C ≈ 123.6–161.8%; running: C ≈ 61.8–100%
+        parts.append(max(_band(c, 0.85, 1.15, 1.00),
+                         _band(c, 1.15, 1.80, 1.236),
+                         _band(c, 0.50, 1.00, 0.618, width=0.20)))
+    return round(sum(parts) / len(parts), 4) if parts else 0.0
+
+
+def score_triangle(prices: list[float], direction: Direction) -> float:
+    """0..1 Fibonacci-fit for a contracting triangle (A-B-C-D-E).
+
+    Each successive leg contracts toward the apex. The ideal contraction ratio
+    is 0.618 (golden ratio) — each leg ≈ 0.618× the leg before it.
+    """
+    parts: list[float] = []
+    legs = [abs(prices[i + 1] - prices[i]) for i in range(len(prices) - 1)]
+    for i in range(1, len(legs)):
+        if legs[i - 1] > 0:
+            ratio = legs[i] / legs[i - 1]
+            # Ideal: each leg ≈ 0.618× previous; real triangles: 0.50-0.85
+            parts.append(_band(ratio, 0.40, 0.90, 0.618, width=0.25))
+    return round(sum(parts) / len(parts), 4) if parts else 0.0
+
+
+def score_diagonal(prices: list[float], direction: Direction) -> float:
+    """0..1 Fibonacci-fit for a contracting diagonal (wedge).
+
+    Waves contract: w3 ideally 0.618×w1, w5 ideally 0.618×w3.
+    Corrective waves (w2, w4) retrace deeply: 0.618-0.786 of the preceding
+    motive wave, creating the overlap with the prior motive wave.
+    """
+    parts: list[float] = []
+    w1 = abs(prices[1] - prices[0]) if len(prices) >= 2 else 0.0
+    if len(prices) >= 3 and w1:
+        w2r = abs(prices[2] - prices[1]) / w1
+        # W2 retraces 0.618-0.786 of W1 (deep, typical of diagonal)
+        parts.append(_band(w2r, 0.618, 0.90, 0.786, width=0.20))
+    if len(prices) >= 4 and w1:
+        w3 = abs(prices[3] - prices[2]) / w1
+        # W3 ≈ 0.618×W1 (shorter than W1 — defines contracting diagonal)
+        parts.append(_band(w3, 0.40, 0.85, 0.618, width=0.20))
+    if len(prices) >= 5:
+        w3_abs = abs(prices[3] - prices[2])
+        if w3_abs:
+            w4r = abs(prices[4] - prices[3]) / w3_abs
+            # W4 retraces 0.618-0.786 of W3 (deep, creates W1 overlap)
+            parts.append(_band(w4r, 0.618, 0.90, 0.786, width=0.20))
+    if len(prices) >= 6 and w1:
+        w5 = abs(prices[5] - prices[4]) / w1
+        # W5 ≈ 0.618×W1 or shorter (continuing contraction)
+        parts.append(_band(w5, 0.30, 0.75, 0.618, width=0.20))
+    return round(sum(parts) / len(parts), 4) if parts else 0.0
+
+
+def personality_bonus(prices: list[float], direction: Direction,
+                      last_price: float, current_wave: str) -> float:
+    """Bonus score [0, 1] for how far the open wave has confirmed itself.
+
+    `score_impulse` can only measure *completed* legs (pivot-to-pivot ratios).
+    It has no signal from the current partial wave — a wave-3 that's already
+    extended 1.74× wave-1 deserves more credit than one that's barely started,
+    but both look the same to `score_impulse` before that 4th pivot is confirmed.
+
+    Wave 3 in progress:
+      Reward extension ratio (w3_so_far / w1) via a band centred at 1.618.
+      Below 0.618 → small credit; 0.618–2.618 → high credit; above → decays.
+    Wave 5 in progress:
+      Wave 5 ideally equals wave-1 (or a 0.618/1.618 multiple).
+
+    Returns 0.0 when the wave hasn't made forward progress or the wave is not
+    an in-progress trend wave (complete, A, B, C, wave-2, wave-4).
+    """
+    s = _sign(direction)
+    w1 = abs(prices[1] - prices[0]) if len(prices) >= 2 else 0.0
+    if w1 <= 0:
+        return 0.0
+
+    if current_wave == "3" and len(prices) >= 3:
+        w3_so_far = (last_price - prices[2]) * s   # positive if moving in trend direction
+        if w3_so_far <= 0:
+            return 0.0
+        ratio = w3_so_far / w1
+        # Below 0.618: early, declining credit; 0.618–2.618: confirmed extension zone
+        return round(_band(ratio, 0.618, 2.618, 1.618, width=0.6), 4)
+
+    if current_wave == "5" and len(prices) >= 5:
+        w5_so_far = (last_price - prices[4]) * s
+        if w5_so_far <= 0:
+            return 0.0
+        ratio = w5_so_far / w1
+        # Wave 5 ≈ wave 1 (equality), also valid at 0.618 or 1.618
+        return round(max(
+            _band(ratio, 0.50, 1.20, 1.00, width=0.30),
+            _band(ratio, 1.40, 2.00, 1.618, width=0.30),
+        ), 4)
+
+    return 0.0
+
+
+def impulse_targets(prices: list[float], direction: Direction, wave: int) -> dict[str, float]:
+    """Anchored forward price targets for the wave currently in progress."""
+    s = _sign(direction)
+    w1 = abs(prices[1] - prices[0]) if len(prices) >= 2 else 0.0
+    out: dict[str, float] = {}
+    if wave == 3 and len(prices) >= 3 and w1:
+        anchor = prices[2]                                  # project wave 3 from wave-2 low
+        out["w3=1.618xW1"] = round(anchor + s * 1.618 * w1, 2)
+        out["w3=2.618xW1"] = round(anchor + s * 2.618 * w1, 2)
+    elif wave == 5 and len(prices) >= 5 and w1:
+        anchor = prices[4]                                  # project wave 5 from wave-4 low
+        out["w5=1.0xW1"] = round(anchor + s * w1, 2)
+        out["w5=1.618xW1"] = round(anchor + s * 1.618 * w1, 2)
+    elif wave == 2 and len(prices) >= 2 and w1:
+        for f in (0.5, 0.618, 0.786):                       # likely wave-2 reversal zone
+            out[f"w2={f}retr"] = round(prices[1] - s * f * w1, 2)
+    elif wave == 4 and len(prices) >= 4:
+        w3 = abs(prices[3] - prices[2])
+        for f in (0.236, 0.382):                            # likely wave-4 reversal zone
+            out[f"w4={f}retr"] = round(prices[3] - s * f * w3, 2)
+    return out
+
+
+def impulse_invalidation(prices: list[float], direction: Direction, wave: int) -> float:
+    """The price that voids the current count — i.e. the trade's stop."""
+    if wave == 2:
+        return round(prices[0], 2)                          # below wave-1 origin
+    if wave == 3 and len(prices) >= 3:
+        return round(prices[2], 2)                          # below wave-2 termination
+    if wave == 4 and len(prices) >= 2:
+        return round(prices[1], 2)                          # into wave-1 territory
+    if wave == 5 and len(prices) >= 5:
+        return round(prices[4], 2)                          # below wave-4 termination
+    return round(prices[0], 2)                              # wave 1 / default: the origin

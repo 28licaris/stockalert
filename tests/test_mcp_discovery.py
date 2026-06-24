@@ -64,10 +64,10 @@ def test_slice3_tools_registered() -> None:
 
 
 def test_total_tool_count() -> None:
-    """Lock in the canonical surface — 23 tools across all 3 slices so far."""
+    """Lock in the canonical surface — 23 base + 3 Elliott Wave (EW-4 + EW-6)."""
     tools = asyncio.run(mcp.list_tools())
     # Allow growth, but flag drops (which usually means a registration regression).
-    assert len(tools) >= 23, f"expected at least 23 tools, got {len(tools)}"
+    assert len(tools) >= 26, f"expected at least 26 tools, got {len(tools)}"
 
 
 # ─────────────────────────────────────────────────────────────────────

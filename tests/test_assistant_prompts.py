@@ -8,11 +8,14 @@ import pytest
 from app.services.assistant import prompts
 
 
-def test_current_returns_v1() -> None:
+def test_current_returns_v2() -> None:
     p = prompts.current()
-    assert p.version == "v1"
+    assert p.version == "v2"
     assert isinstance(p.text, str)
-    assert len(p.text) > 200, "v1 prompt should be substantial — sanity check"
+    assert len(p.text) > 200, "prompt should be substantial — sanity check"
+    # EW-8: the active prompt must teach the wave tools + doctrine.
+    assert "elliott wave" in p.text.lower()
+    assert "get_wave_state" in p.text
 
 
 def test_hash_matches_sha256_of_text() -> None:

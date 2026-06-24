@@ -2,16 +2,33 @@
 Monitor Manager - Manages multiple concurrent monitoring tasks.
 
 Handles starting, stopping, and tracking multiple divergence monitors
-across different symbols and indicator configurations.
+(indicator-based) and Elliott Wave live scanners across symbols.
 """
 import asyncio
 import logging
-from typing import Dict, Optional, List
+from typing import Callable, Dict, Optional
 
 from app.config import get_provider
 from app.services.live.monitor_service import MonitorService
 
 logger = logging.getLogger(__name__)
+
+
+async def _run_wave_scanner(scanner, symbols: list, provider) -> None:
+    """Long-running task: subscribe the scanner to live bars then heartbeat.
+
+    Mirrors MonitorService.monitor() — subscribe first, then keep the
+    coroutine alive so the asyncio.Task stays attached and can be cancelled.
+    """
+    provider.subscribe_bars(scanner.on_bar, symbols)
+    logger.info("IntradayWaveScanner subscribed (%d symbols, interval=%s)",
+                len(symbols), scanner.interval)
+    try:
+        while True:
+            await asyncio.sleep(60)
+    except asyncio.CancelledError:
+        logger.info("IntradayWaveScanner task cancelled")
+        raise
 
 
 class MonitorManager:
@@ -197,10 +214,92 @@ class MonitorManager:
             "tickers": tickers
         }
     
+    # ── Elliott Wave live scanner (EW-7 live path) ──────────────────────────
+
+    def _wave_key(self, symbols: list[str], interval: str) -> str:
+        return f"wave:{interval}:{','.join(sorted(symbols))}"
+
+    def start_wave_scanner(
+        self,
+        symbols: list[str],
+        interval: str = "5m",
+        broadcast_cb: Optional[Callable] = None,
+        min_probability: float = 0.6,
+        min_risk_reward: float = 2.0,
+    ) -> dict:
+        """Start a live intraday Elliott Wave scanner for `symbols`.
+
+        Returns immediately — the scanner task runs in the background and
+        calls `broadcast_cb(WaveAlert)` whenever a new setup fires.
+        """
+        from app.services.alerts.intraday import IntradayWaveScanner, INTRADAY_INTERVALS
+        key = self._wave_key(symbols, interval)
+
+        if interval not in INTRADAY_INTERVALS:
+            return {"status": "error",
+                    "message": f"interval must be one of {INTRADAY_INTERVALS}"}
+
+        if key in self.monitors:
+            task = self.monitors[key]["task"]
+            if not task.done():
+                return {"status": "already_running", "key": key, "symbols": symbols}
+            del self.monitors[key]
+
+        if self.provider is None:
+            self.provider = get_provider()
+
+        scanner = IntradayWaveScanner(
+            symbols, interval,
+            broadcast_cb=broadcast_cb,
+            min_probability=min_probability,
+            min_risk_reward=min_risk_reward,
+        )
+        task = asyncio.create_task(_run_wave_scanner(scanner, symbols, self.provider))
+        self.monitors[key] = {
+            "task": task,
+            "tickers": symbols,
+            "indicator": "elliott_wave",
+            "signal_type": f"wave_{interval}",
+        }
+        logger.info("✅ Started wave scanner: %s (%d symbols)", key, len(symbols))
+        return {"status": "started", "key": key, "symbols": symbols, "interval": interval}
+
+    def stop_wave_scanner(self, symbols: list[str], interval: str = "5m") -> dict:
+        """Stop a running wave scanner."""
+        key = self._wave_key(symbols, interval)
+        if key not in self.monitors:
+            return {"status": "not_found", "key": key}
+
+        info = self.monitors.pop(key)
+        task = info["task"]
+        if not task.done():
+            task.cancel()
+
+        if self.provider:
+            try:
+                self.provider.unsubscribe_bars(symbols)
+            except Exception as e:
+                logger.warning("wave scanner unsubscribe error: %s", e)
+
+        logger.info("🛑 Stopped wave scanner: %s", key)
+        return {"status": "stopped", "key": key, "symbols": symbols}
+
+    def list_wave_scanners(self) -> dict:
+        """Return active wave scanner entries (keys prefixed 'wave:')."""
+        return {
+            k: {
+                "status": "running" if not v["task"].done() else "stopped",
+                "symbols": v["tickers"],
+                "signal_type": v["signal_type"],
+            }
+            for k, v in self.monitors.items()
+            if k.startswith("wave:")
+        }
+
     async def stop_all(self):
         """
         Stop all active monitors and cleanup.
-        
+
         Called during application shutdown.
         """
         logger.info("Stopping all monitors...")

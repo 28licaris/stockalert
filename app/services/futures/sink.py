@@ -11,7 +11,12 @@ from __future__ import annotations
 import pyarrow as pa
 
 from app.services.equities.sink import EquitiesIcebergSink
-from app.services.futures.tables import FUTURES_TABLE_NAME, ensure_schwab_futures
+from app.services.futures.tables import (
+    FUTURES_DAILY_TABLE_NAME,
+    FUTURES_TABLE_NAME,
+    ensure_schwab_futures,
+    ensure_schwab_futures_daily,
+)
 from app.services.iceberg_catalog import get_catalog
 
 # 12 canonical OHLCV columns — ``futures.schwab_futures`` shape. Same byte
@@ -55,5 +60,20 @@ def futures_iceberg_sink() -> EquitiesIcebergSink:
         name=f"futures_{FUTURES_TABLE_NAME}",
         arrow_schema=_SCHWAB_FUTURES_ARROW,
         accepted_providers=_FUTURES_ACCEPTED_PROVIDERS,
+        static_adj_factor=None,
+    )
+
+
+def futures_daily_iceberg_sink() -> EquitiesIcebergSink:
+    """Construct the ``futures.schwab_futures_daily`` sink (creates the table if
+    absent). Same column shape as the 1-minute sink; `accepted_providers=None`
+    so the daily backfill (tagged kind='day') is written without a provider
+    allowlist check."""
+    table = ensure_schwab_futures_daily(get_catalog())
+    return EquitiesIcebergSink(
+        table=table,
+        name=f"futures_{FUTURES_DAILY_TABLE_NAME}",
+        arrow_schema=_SCHWAB_FUTURES_ARROW,
+        accepted_providers=None,
         static_adj_factor=None,
     )
