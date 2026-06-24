@@ -2,6 +2,21 @@
 
 Customer auth and identity management for StockAlert SaaS is **production-ready for core flows** (signup, login, logout, session isolation, audit trail). This document tracks optional enhancements (all non-blocking; ranked by value).
 
+## ⚠️ Local dev caveat: must use `scripts/dev/run_auth_api.sh`
+
+**Do not start the auth-enabled backend with plain `poetry run uvicorn app.main_api:app --reload`.** It works for everything else (charts, lake, futures), but auth will silently break:
+
+- `app/config.py:263` defaults `AUTH_COOKIE_SECURE=true`. Browsers refuse to set/send `Secure` cookies over plain `http://localhost` — so the session + CSRF cookies are dropped, and any CSRF-protected action (logout, session revoke, MFA enrollment, billing checkout) fails with `"Your security token is missing."`
+- Cognito's `COGNITO_CLIENT_SECRET` isn't checked into `.env` (it's a live AWS secret) — without it, login exchange fails outright.
+
+**Always run:**
+```bash
+bash scripts/dev/run_auth_api.sh
+```
+This script ([scripts/dev/run_auth_api.sh](../scripts/dev/run_auth_api.sh)) fetches the live `COGNITO_CLIENT_SECRET` via `aws cognito-idp describe-user-pool-client`, and exports `AUTH_ENABLED=true`, `AUTH_COOKIE_SECURE=false`, and the identity Postgres URL before launching uvicorn. Requires `docker compose --profile identity up -d postgres` running first (see root `CLAUDE.md` commands).
+
+If you ever see `"Your security token is missing. Refresh and try again."` locally: kill whatever's on :8000 (`lsof -ti:8000 | xargs kill -9`), restart via the script above, then log out/in again so a properly-set cookie is issued.
+
 ## Completed (this session)
 
 ✅ Cognito integration (OAuth 2.0 customer signup/login/logout)
@@ -130,6 +145,29 @@ Customer auth and identity management for StockAlert SaaS is **production-ready 
 **Nice-to-have:** #5 (rate limiting) and #6 (SSO) are valuable but not urgent for internal testing.
 
 ---
+
+## How this works in production (cloud)
+
+The local-only failure mode above doesn't exist in the cloud, for two reasons:
+
+**1. HTTPS is real, so `AUTH_COOKIE_SECURE=true` just works.**
+In prod, the FastAPI app sits behind a load balancer (ALB/CloudFront) that terminates TLS — every request the browser sees is `https://`. With `AUTH_COOKIE_SECURE=true` (the production value, and the default in [config.py:263](../app/config.py:263) for exactly this reason), the browser happily sets and returns the `Secure` session + CSRF cookies on every request. There's no plain-HTTP path for them to be silently dropped on.
+
+**2. Secrets come from AWS, not a fetched-at-startup CLI call.**
+The dev script's `aws cognito-idp describe-user-pool-client` trick is a local convenience — it assumes a developer's AWS credentials and the `stockalert-admin` profile. In production this doesn't run at all. Instead:
+- `COGNITO_CLIENT_SECRET`, `IDENTITY_DATABASE_URL`, `STRIPE_SECRET_KEY`, etc. are pulled from **AWS Secrets Manager / SSM Parameter Store** and injected as container environment variables at deploy time (e.g. ECS task definition `secrets:` block, or Lambda environment encryption).
+- `COGNITO_REDIRECT_URI` / `COGNITO_LOGOUT_URI` point at the real domain (`https://app.stockalert.io/auth/callback`), not `localhost:8000` — these are registered as allowed callback/logout URLs on the Cognito App Client (`infra/auth/cognito.yaml` `CallbackUrls` / `LogoutUrls` params).
+- `AUTH_PROVIDER_TOKEN_CIPHER=kms` (vs. local's `=local`) — provider OAuth tokens (Schwab/Polygon) are encrypted with a customer-managed KMS key instead of a local dev key.
+
+**Net effect:** the exact same code path (`routes_auth.py` → `OAuthAuthenticationService` → cookie `set_cookie` calls) runs in both environments — only the environment variables differ. Nothing in the auth code itself needs to know it's "in the cloud"; the cookie-secure flag and secret source are the only things that flip between dev and prod.
+
+| | Local dev | Production |
+|---|---|---|
+| Transport | `http://localhost` | `https://` behind ALB/CloudFront |
+| `AUTH_COOKIE_SECURE` | `false` (script-set) | `true` (config default) |
+| Cognito client secret | Fetched live via AWS CLI in `run_auth_api.sh` | Injected from Secrets Manager at deploy |
+| Redirect/logout URIs | `localhost:8000/...` | Real domain, registered on the Cognito App Client |
+| Provider token cipher | `local` | `kms` |
 
 ## Links
 

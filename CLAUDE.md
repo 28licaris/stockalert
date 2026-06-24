@@ -12,6 +12,7 @@ day/swing trading**.
 | Editing `app/services/*` | [`service_modules.md`](docs/standards/service_modules.md) |
 | Tests | [`testing.md`](docs/standards/testing.md) |
 | New service / arch change | [`doc_discipline.md`](docs/standards/doc_discipline.md) |
+| Merging any branch | [`merge_discipline.md`](docs/standards/merge_discipline.md) (rebase first, verify the feature after) |
 | `sim/` / strategies / indicators | [`trading_subsystem.md`](docs/standards/trading_subsystem.md) |
 | Lake / ML architecture (canonical v2) | [`docs/architecture_v2/`](docs/architecture_v2/README.md) (**source of truth for lake design**) |
 | Adding a symbol / ingest paths | [`data/symbol_lifecycle.md`](docs/standards/data/symbol_lifecycle.md) |

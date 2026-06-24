@@ -18,6 +18,7 @@ contradicts a standard here, the standard wins. Update the standard
 | [`service_modules.md`](service_modules.md) | Before adding or editing a module in `app/services/` |
 | [`testing.md`](testing.md) | Before adding or modifying tests |
 | [`doc_discipline.md`](doc_discipline.md) | Before adding a service or changing architecture |
+| [`merge_discipline.md`](merge_discipline.md) | Before merging any branch — rebase first, verify the feature after |
 
 ## Domain rules
 
