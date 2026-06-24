@@ -557,6 +557,7 @@ class TestTraderApiMethods:
         assert "startDate" in params and "endDate" in params
         assert "types" not in params
 
+    @pytest.mark.asyncio
     async def test_get_transactions_passes_types_filter(self):
         p = SchwabProvider("cid", "secret", refresh_token="rt")
         with patch.object(p, "_trader_get", new_callable=AsyncMock, return_value=[]) as mock_get:
