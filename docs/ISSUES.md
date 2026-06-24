@@ -193,7 +193,7 @@ functionality:
 - RSI: `app/indicators/tests/test_indicators_ta3.py` + the screener, MTF, and
   MCP-live test suites.
 - Divergence: now at `app/signals/divergence.py`; covered by
-  `tests/manual/monitor_check.py`, `app/mcp/tests/test_mcp_live.py`,
+  `app/mcp/tests/test_mcp_live.py` and
   `app/services/readers/tests/test_readers_unit.py`.
 - Production websocket (`/ws/signals` on `app/main_api.py`):
   currently uncovered. Filed as separate follow-up — not the

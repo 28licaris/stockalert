@@ -864,42 +864,6 @@ async def health():
     }
 
 
-@app.get("/stats")
-async def stats():
-    from app.db import queries
-
-    total_bars, total_signals, recent = await asyncio.gather(
-        asyncio.to_thread(queries.count_bars),
-        asyncio.to_thread(queries.count_signals),
-        asyncio.to_thread(queries.recent_signals, 5),
-    )
-
-    def _ts(v):
-        """Force-stamp naive ClickHouse datetimes with `Z` so JS parses them as UTC."""
-        if v is None:
-            return None
-        if hasattr(v, "isoformat"):
-            if getattr(v, "tzinfo", None) is None:
-                return v.isoformat() + "Z"
-            return v.isoformat()
-        return str(v)
-
-    return {
-        "total_bars": total_bars,
-        "total_signals": total_signals,
-        "recent_signals": [
-            {
-                "symbol": s["symbol"],
-                "type": s["type"],
-                "indicator": s["indicator"],
-                "price": s["price"],
-                "timestamp": _ts(s["ts"]),
-            }
-            for s in recent
-        ]
-    }
-
-
 @app.websocket("/ws/signals")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()

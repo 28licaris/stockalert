@@ -384,10 +384,9 @@ subsystem.
 - Live "log tail" stream over WS (last 50 INFO/ERROR lines from
   the FastAPI logger).
 
-Powered by: `/health`, `/stats`, `/api/backfill/status`,
-`/monitors`, `/api/lake/last-day` (existing); + 1 new endpoint
-`/api/health/services` (composite); + new `/api/silver/health`
-(after silver lands).
+Powered by the typed `/api/v1/health/services` composite endpoint, with
+domain drill-downs through `/api/v1/backfill/status`,
+`/api/v1/monitors`, and `/api/v1/lake/last-day`.
 
 ### 5.2 `/symbol/{ticker}` — Symbol (PARITY + extensions + warming-up UX)
 
