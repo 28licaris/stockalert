@@ -6,7 +6,10 @@ and `iceberg/futures/` S3 location.
 Tables:
   futures.schwab_futures         — 1-min OHLCV from Schwab (~48-day window)
   futures.schwab_futures_daily   — Daily OHLCV from Schwab (years of history)
-  futures.polygon_futures        — 1-min OHLCV from Polygon (deep history)
+  futures.polygon_raw            — per-contract 1-min OHLCV from the Polygon
+                                   flat-file mirror (every outright, no roll)
+  futures.polygon_continuous     — back-adjusted continuous roots (volume roll
+                                   + ratio adjustment) derived from polygon_raw
 """
 from __future__ import annotations
 
@@ -68,36 +71,6 @@ def ensure_schwab_futures(catalog: Catalog | None = None) -> Table:
         pass
 
     location = _futures_table_location(FUTURES_TABLE_NAME)
-    log.info("Creating Iceberg table %s at %s", table_id, location)
-    return catalog.create_table(
-        identifier=table_id,
-        schema=FUTURES_OHLCV_SCHEMA,
-        location=location,
-        partition_spec=FUTURES_OHLCV_PARTITION,
-        sort_order=FUTURES_OHLCV_SORT,
-        properties={**_BASE_PROPERTIES, **_MOR_PROPERTIES},
-    )
-
-
-POLYGON_FUTURES_TABLE_NAME = "polygon_futures"
-
-
-def ensure_polygon_futures(catalog: Catalog | None = None) -> Table:
-    """Create `futures.polygon_futures` if absent; return it.
-
-    Deep-history 1-min OHLCV from Polygon per-contract pulls stitched into
-    continuous roots. Same column shape as schwab_futures; source tag is
-    'polygon-futures'. Populated by scripts/polygon_futures_backfill.py."""
-    catalog = catalog or get_catalog()
-    _ensure_namespace(catalog)
-
-    table_id = futures_table_id(POLYGON_FUTURES_TABLE_NAME)
-    try:
-        return catalog.load_table(table_id)
-    except NoSuchTableError:
-        pass
-
-    location = _futures_table_location(POLYGON_FUTURES_TABLE_NAME)
     log.info("Creating Iceberg table %s at %s", table_id, location)
     return catalog.create_table(
         identifier=table_id,

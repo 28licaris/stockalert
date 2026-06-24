@@ -25,7 +25,6 @@ separation is deliberate — the same client is used by:
 
   * ``FlatFilesBackfillService`` (in-app daily/weekly bulk ingestion)
   * ``scripts/polygon_flatfiles_bulk_backfill.py`` (one-off CLI runs)
-  * ``scripts/polygon_futures_flatfiles_backfill.py`` (futures deep history)
   * future analytics jobs that want raw daily files directly
 
 Boto3 is initialised lazily so importing this module costs nothing.

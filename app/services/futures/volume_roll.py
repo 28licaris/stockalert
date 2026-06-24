@@ -6,9 +6,10 @@ Contract chronological order is parsed straight from the ticker month-code
 (ESH4 → ESM4 → ESU4 → ESZ4 → ESH5 …), and the active contract each day is the
 one carrying the most volume, with hysteresis so it never flip-flops.
 
-This replaces the old contract_chain.py roll (fixed 4-days-before-expiry on a
-REST-discovered chain), which broke on monthly roots. Volume rolls track where
-liquidity actually is and are immune to the strip/pseudo-contract pollution.
+This supersedes the earlier fixed-offset roll (4 business days before expiry on
+a REST-discovered contract chain), which broke on monthly roots. Volume rolls
+track where liquidity actually is and are immune to strip/pseudo-contract
+pollution — and need no REST calls at all.
 
 Two stages:
   1. front_month_schedule(): {trading_day -> active contract}, monotonic in

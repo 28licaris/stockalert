@@ -1,8 +1,8 @@
 """Iceberg sink for futures.polygon_raw (per-contract raw 1-min OHLCV).
 
-Mirrors polygon_sink.py but targets the `polygon_raw` table — outright
-contracts (ESH4, CLM4, …) parsed verbatim from the flat-file mirror, no roll,
-no adjustment. Analog of `equities.polygon_raw`.
+Synchronous Iceberg writer for the `polygon_raw` table — outright contracts
+(ESH4, CLM4, …) parsed verbatim from the flat-file mirror, no roll, no
+adjustment. Analog of `equities.polygon_raw`.
 
 Populated by scripts/polygon_futures_parse_raw.py (and the nightly futures
 refresh once wired in). Idempotent: (contract, timestamp) is the Iceberg
