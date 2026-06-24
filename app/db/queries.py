@@ -348,19 +348,6 @@ def list_signals(symbol: Optional[str], limit: int) -> List[dict]:
     return rows
 
 
-def count_bars() -> int:
-    # Avoid ``FINAL`` here: on a large ReplacingMergeTree it can exhaust server
-    # RAM (merge-at-read). ``count()`` without ``FINAL`` uses part metadata and
-    # may include not-yet-merged physical duplicates — fine for a dashboard stat.
-    r = get_client().query("SELECT count() FROM ohlcv_1m")
-    return int(r.result_rows[0][0]) if r.result_rows else 0
-
-
-def count_signals() -> int:
-    r = get_client().query("SELECT count() FROM signals")
-    return int(r.result_rows[0][0]) if r.result_rows else 0
-
-
 def recent_signals(limit: int = 5) -> List[dict]:
     return list_signals(None, limit)
 

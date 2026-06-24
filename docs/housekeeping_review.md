@@ -7,7 +7,6 @@ is a review queue, not authorization to delete or refactor anything.
 
 | Candidate | Evidence | Safe next decision |
 |---|---|---|
-| `tests/manual/monitor_check.py` and `monitor_cli.py` | Manual scripts target unversioned `/monitors`, `/watchlist`, and `/stats`-era behavior and contain print-based exception handling rather than assertions. | Verify whether operators still use them; modernize against `/api/v1` or delete with approval. |
 | `tests/manual/historical_check.py` and `livestream_check.py` | Credentialed Alpaca diagnostics, not automated tests. Equivalent provider coverage exists in module unit tests, but these scripts may retain operational value. | Confirm operational use; keep, move to an operator runbook, or delete with approval. |
 
 ## Classification corrections completed
@@ -20,3 +19,5 @@ is a review queue, not authorization to delete or refactor anything.
   mistaken for unit tests.
 - The legacy seed service/API and static equity seed universe were retired;
   ClickHouse `stream_universe` is now the fail-loud sole runtime authority.
+- The unused legacy `/stats` endpoint, its private count helpers, and obsolete
+  manual monitor scripts were retired together.
