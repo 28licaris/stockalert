@@ -65,6 +65,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const signOut = useCallback(async () => {
+    // Dev/preview modes inject a fake principal and never establish a real
+    // session or CSRF cookie, so calling the CSRF-protected backend logout
+    // would always throw "security token missing". Mirror refresh()'s
+    // short-circuit and just clear local state.
+    if (isDevPrincipal || isPreview) {
+      setUser(null);
+      setStatus("unauthenticated");
+      window.location.assign("/app/login");
+      return;
+    }
     setSigningOut(true);
     setError(null);
     try {
