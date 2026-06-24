@@ -87,7 +87,7 @@ result = chunked_upsert(table, arrow_table, log_label="silver.foo")
 
 Never `table.upsert(...)` directly — PyIceberg 0.11.1 SIGBUSes past
 ~3k predicate nodes on macOS arm64. Tests in
-`tests/test_iceberg_safe_upsert.py` pin the contract.
+`app/services/tests/test_iceberg_safe_upsert.py` pins the contract.
 
 ## Debugging a "successful" run that did nothing
 

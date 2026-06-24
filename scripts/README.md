@@ -46,7 +46,7 @@ The redirect loads a success page and the script receives the token without past
 After you have a refresh token (in `.env` or in the token file):
 
 ```bash
-poetry run python scripts/test_schwab_live.py
+poetry run python scripts/check_schwab_live.py
 ```
 
 Optional arguments:

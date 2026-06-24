@@ -72,7 +72,7 @@ Concrete table location format:
 Partition directory names (`symbol_bucket=N`, `ts_month=YYYY-MM`,
 `ex_month=YYYY-MM`) are what PyIceberg's `BucketTransform` /
 `MonthTransform` emit — verified by the CV1 unit tests in
-`tests/test_equities_schemas.py`.
+`app/services/equities/tests/test_equities_schemas.py`.
 
 ### Bucket naming convention
 

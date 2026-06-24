@@ -11,9 +11,12 @@ than they paid back.
 
 ## Rules
 
-1. **Every microservice folder has a `README.md`** — what it owns, its
-   public contract, how to test it. **New folder → README in the same
-   commit.**
+1. **Every functional Python module has a `README.md`** — what it owns and
+   does not own, its public contract, important dependencies, and how to test
+   it. This includes top-level application packages, every service folder, and
+   meaningful nested packages. Test/support folders may use their parent
+   module's README. **New module → README in the same commit.** Write for a
+   future human or AI agent that has not loaded the rest of the repository.
 
 2. **Plan docs update in the same change as the code.** Doc-to-change
    map:

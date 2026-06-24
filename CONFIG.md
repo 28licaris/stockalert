@@ -42,7 +42,7 @@ The provider also uses the Trader API for OAuth, accounts/orders/transactions (r
 
 Start ClickHouse locally: `docker compose --profile ch up -d` (see [docker-compose.yml](docker-compose.yml)). If port `8123` is already in use, stop the other service or change `CLICKHOUSE_PORT`.
 
-Integration tests (`tests/test_database_alert.py`): set `CLICKHOUSE_TEST=1` and ensure the credentials in `.env` match your server (many installs require `CLICKHOUSE_PASSWORD`).
+Integration tests (`tests/integration/test_database_alert.py`): set `CLICKHOUSE_TEST=1` and ensure the credentials in `.env` match your server (many installs require `CLICKHOUSE_PASSWORD`).
 
 ## Customer identity PostgreSQL
 

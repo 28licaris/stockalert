@@ -102,7 +102,7 @@ TEST_IDENTITY_DATABASE_URL=postgresql+psycopg://stockalert:stockalert_test@local
 
 ```bash
 poetry run python scripts/schwab_get_refresh_token.py
-poetry run python scripts/test_schwab_live.py
+poetry run python scripts/check_schwab_live.py
 ```
 
 See [scripts/README.md](scripts/README.md) for OAuth and options.

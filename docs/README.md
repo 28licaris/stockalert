@@ -18,9 +18,8 @@ For codebase orientation, in this order:
    v2 lake + ML design (schemas, S3 layout, Spark, providers,
    migration log, runbook, decision gates). **Source of truth** for
    anything lake / ingest / ML related.
-3. [ARCHITECTURE.md](ARCHITECTURE.md) — system-wide bounded-service
-   overview. Predates the v2 migration; lake sections defer to
-   architecture_v2/ when they conflict.
+3. [ARCHITECTURE.md](ARCHITECTURE.md) — redirect to the canonical v2
+   architecture documentation.
 4. [STARTUP_FLOW.md](STARTUP_FLOW.md) — what `uvicorn app.main_api:app`
    does at boot; how to verify each subsystem is alive.
 5. [trading_subsystem_design.md](trading_subsystem_design.md) —
@@ -68,8 +67,8 @@ For codebase orientation, in this order:
 - **No silent failures** (per [`standards/coding.md`](standards/coding.md)).
 - **The commit log is the journal.** Detailed reasoning lives in
   commit messages (`git log --grep CV` for the v2 migration).
-- **Every microservice folder has a `README.md`** describing what it
-  does, what it owns, its contract.
+- **Every functional Python module has a `README.md`** describing ownership,
+  boundaries, public contracts, dependencies, and local tests.
 - **Docs stay current with code.** Adding a service or changing an
   architectural boundary updates the relevant plan doc in the same
   change.
@@ -81,6 +80,8 @@ For codebase orientation, in this order:
 - [`../CONFIG.md`](../CONFIG.md) — operator config reference.
 - [ISSUES.md](ISSUES.md) — bug + flaky-test tracker.
 - [COMMANDS.md](COMMANDS.md) — operator cheatsheet.
+- [housekeeping_review.md](housekeeping_review.md) — suspected legacy or
+  transitional files awaiting owner decisions; never a deletion authorization.
 - [`standards/`](standards/README.md) — coding / engagement / testing rules.
 - [`architecture_v2/07_runbook.md`](architecture_v2/07_runbook.md) —
   operator procedures for the v2 lake (bulk-imports, Spark jobs,

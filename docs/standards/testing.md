@@ -6,10 +6,22 @@ whole point of the architecture.
 
 ## Layout
 
-- `tests/` — unit, no external deps. Must pass with zero AWS / CH /
-  provider creds.
-- `tests/integration/` — live CH / S3 / provider. Gated by
-  `integration` marker.
+- `<module>/tests/` — unit tests owned by that module. They have no
+  external dependencies and must pass with zero AWS / CH / provider creds.
+- `tests/contract/` — in-process behavior spanning more than one module
+  (for example, parity between a reader, HTTP route, and MCP tool). No live
+  infrastructure.
+- `tests/integration/` — live CH / PostgreSQL / S3 / provider / model tests.
+  Every file is gated by the `integration` marker.
+- `tests/manual/` — operator diagnostics, not pytest tests. Files here must
+  not be named `test_*.py` when they are not assertion-based tests.
+- `tests/support/` — fixtures or builders shared by multiple modules. Keep
+  module-specific fixtures beside the module.
+
+Put a test at the lowest level that owns all behavior under test. A service's
+pure behavior belongs in that service's `tests/`; an API/service/MCP parity
+test belongs in `tests/contract/`; a real database round trip belongs in
+`tests/integration/`.
 
 ## Commands
 
@@ -20,7 +32,7 @@ poetry run pytest -m integration         # live-service
 
 ## Key fixture
 
-`clickhouse_ready` (session-scoped, in `tests/conftest.py`) skips
+`clickhouse_ready` (session-scoped, in repository-root `conftest.py`) skips
 gracefully if CH unreachable and auto-runs `init_schema()`. Any
 CH-touching test depends on it. **Never** open a CH client ad-hoc.
 

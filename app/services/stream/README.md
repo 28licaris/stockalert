@@ -58,9 +58,8 @@ must match on both sides.
 ## How to test
 
 ```bash
-# Unit + integration (gated by clickhouse_ready fixture):
-poetry run pytest tests/test_stream_service.py -m "not integration"
-poetry run pytest tests/test_stream_service.py -m integration
+# Unit tests use fake provider and repository boundaries:
+poetry run pytest app/services/stream/tests -m "not integration"
 
 # Manual: subscribe count + recent bars
 curl http://localhost:8000/api/v1/stream/status
@@ -81,7 +80,7 @@ stream/
 ├── contract.py    Protocol — public interface
 ├── service.py     Implementation — NEVER imported across services
 ├── README.md      This file
-└── tests/         (lives under repo-root tests/test_stream_service.py)
+└── tests/         Unit tests owned by this service
 ```
 
 ## Migration notes

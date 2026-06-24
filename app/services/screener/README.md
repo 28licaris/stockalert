@@ -93,7 +93,7 @@ limit: 10
    existing pattern (param validation → indicator compute →
    `RuleEval(passed, metric_name, metric_value)`).
 3. Register it in `_RULE_EVALUATORS`.
-4. Add a test in `tests/test_screener.py` exercising the pass and
+4. Add a test in [`tests/test_screener.py`](tests/test_screener.py) exercising the pass and
    fail paths.
 
 Bad rule kinds raise `ValueError` at scan time, not at spec validation —

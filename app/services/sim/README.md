@@ -37,7 +37,7 @@ Read it before changing anything here.
 5. Implement `on_bar(self, ctx) -> Action`. Reach indicators via
    `ctx.indicator("sma", period=N)` — never import indicator
    classes directly.
-6. Write tests in `tests/` against synthetic bar streams (strategies
+6. Write tests in [`strategies/tests/`](strategies/tests/) against synthetic bar streams (strategies
    are pure → trivial to test).
 
 ## How to add a new indicator
@@ -100,7 +100,8 @@ The Context exposes each via:
 **No look-ahead invariant**: coarser-interval bars are only visible
 when `coarser_bar.timestamp + interval_duration <= execution_bar.timestamp`.
 The Backtester enforces this via `advance_coarser` ordering;
-`tests/test_multi_timeframe.py::test_backtester_releases_coarser_bars_only_when_ready`
+[`tests/test_multi_timeframe.py`](tests/test_multi_timeframe.py) in
+`test_backtester_releases_coarser_bars_only_when_ready`
 pins it.
 
 Single-TF strategies (only `interval`, no `intervals` attribute)

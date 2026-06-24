@@ -58,8 +58,8 @@ result = await job_registry.run_now("nightly_schwab_refresh")
 ## How to test
 
 ```bash
-poetry run pytest tests/test_jobs_service.py -m "not integration"
-poetry run pytest tests/test_routes_jobs.py
+poetry run pytest app/services/jobs/tests -m "not integration"
+poetry run pytest app/api/tests/test_routes_jobs.py
 curl http://localhost:8000/api/v1/jobs | jq
 curl -X POST http://localhost:8000/api/v1/jobs/backfill_gap_sweeper/run | jq
 ```
@@ -76,4 +76,5 @@ jobs/
 └── README.md      This file
 ```
 
-Tests live under `tests/test_jobs_service.py` + `tests/test_routes_jobs.py`.
+Service tests live under [`tests/`](tests/); HTTP adapter tests live under
+[`../../api/tests/`](../../api/tests/).

@@ -28,7 +28,7 @@ importing classes directly:
   [monitor_service.py](../services/live/monitor_service.py).
 - **The dashboard + MCP agents** call the `IndicatorReader` and
   HTTP/MCP indicator endpoints — see
-  [docs/indicator_exposure_design.md](../../../docs/indicator_exposure_design.md).
+  [docs/indicator_exposure_design.md](../../docs/indicator_exposure_design.md).
 
 ## Multi-output indicators
 
@@ -70,27 +70,28 @@ Rules:
 - No I/O. Indicators are pure: same inputs → same outputs. Caching and
   persistence live one layer up.
 
-## TODO — full TA library buildout (not started)
+## Future library expansion
 
-Today's three indicators (RSI, MACD, TSI) are what divergence detection
-needs. The plan is to expand this folder into a full TA toolkit so
-agents and strategies can pick from a rich set without external deps.
+The registry already covers moving averages, momentum, volatility, and pivots.
+Possible additions should land only when a consumer requires them and must
+include registry exposure and colocated unit tests.
 
 Candidate adds, grouped by family:
 
-- **Momentum:** Stochastic (`%K`/`%D`), Stochastic RSI, Williams %R, CCI,
+- **Momentum:** Stochastic RSI, Williams %R, CCI,
   ROC, Momentum, Ultimate Oscillator, Awesome Oscillator
 - **Trend:** ADX/DI+/DI-, Aroon, SuperTrend, Parabolic SAR, Ichimoku
   (Tenkan/Kijun/Senkou/Chikou)
-- **Moving averages:** SMA, EMA, WMA, HMA, DEMA, TEMA, KAMA, VWMA, ALMA
-- **Volatility:** ATR, Bollinger Bands, Keltner Channels, Donchian
+- **Moving averages:** HMA, DEMA, TEMA, KAMA, VWMA, ALMA
+- **Volatility:** Keltner Channels, Donchian
   Channels, Chaikin Volatility, NATR
 - **Volume:** OBV, A/D Line, Chaikin Money Flow, MFI, VWAP (intraday),
   Volume Profile, Force Index
 - **Cycles / statistics:** Hurst exponent, Z-score, linear-regression
   slope, Hilbert Transform dominant cycle period
 
-Each gets its own file + class + unit tests + an entry in the table above.
+Each accepted addition gets its own file + class + tests in [`tests/`](tests/)
+and an entry in the table above.
 
 Pattern detectors that consume these indicators live in
 [`app/signals/`](../signals/) — that's a separate layer with its own

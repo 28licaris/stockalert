@@ -387,7 +387,7 @@ PyIceberg version drift and identifier-column-count changes.
    to land a fix (PyPI's latest as of 2026-05-18 is 0.11.1 with the
    bug).
 3. **Locked by tests** —
-   [`tests/test_iceberg_safe_upsert.py`](../tests/test_iceberg_safe_upsert.py)
+   [`test_iceberg_safe_upsert.py`](../app/services/tests/test_iceberg_safe_upsert.py)
    pins the chunking math + delegation contract (10 tests). Any
    refactor that bypasses the helper or un-chunks the path breaks
    loudly.

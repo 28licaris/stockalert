@@ -202,7 +202,7 @@ Each tool is a thin adapter over `WaveReader` / the alerts service, wrapped in
 the `tool_call(...)` middleware with an `@lru_cache(maxsize=1)` reader —
 identical to `tools/indicators.py`. The module must be **read-only** (no
 write-side imports) and wired into `register_all_tools()`; both are enforced
-by `tests/test_mcp_discovery.py` (which also locks a tool count — bump it by 3).
+by `app/mcp/tests/test_mcp_discovery.py` (which also locks a tool count — bump it by 3).
 
 ---
 

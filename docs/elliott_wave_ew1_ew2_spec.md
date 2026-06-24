@@ -37,7 +37,7 @@ If you disagree with any recommendation, say so before I write code.
 app/indicators/pivots.py        NEW — PivotDetector + Pivot dataclass
 app/indicators/registry.py      EDIT — register "pivots"
 app/signals/divergence.py       EDIT — find_pivot_* become thin wrappers (no behavior change)
-tests/test_pivots_unit.py       NEW
+app/indicators/tests/test_pivots_unit.py       NEW
 ```
 
 ### Types
@@ -93,7 +93,7 @@ def detect_multidegree(close, high, low, ks=(3,5,8,13,21)) -> list[Pivot]:
     # No subset enforcement here — the engine consumes per-degree streams.
 ```
 
-### EW-1 test list (`tests/test_pivots_unit.py`)
+### EW-1 test list (`app/indicators/tests/test_pivots_unit.py`)
 
 | Test | Asserts |
 |---|---|
@@ -126,15 +126,15 @@ app/signals/elliott/schemas.py      NEW — Pivot re-export + WaveCandidate + Wa
 app/signals/elliott/rules.py        NEW — the 3 hard rules (pure predicates)
 app/signals/elliott/fib.py          NEW — Fib ratio scoring + retracement/extension levels
 app/signals/elliott/engine.py       NEW — WaveEngine.label(...)
-tests/test_elliott_rules_unit.py    NEW
-tests/test_elliott_engine_unit.py   NEW
-tests/test_elliott_no_lookahead.py  NEW  ← gate zero
-tests/test_elliott_purity.py        NEW  ← import-purity gate (see below)
+app/signals/elliott/tests/test_elliott_rules_unit.py    NEW
+app/signals/elliott/tests/test_elliott_engine_unit.py   NEW
+app/signals/elliott/tests/test_elliott_no_lookahead.py  NEW  ← gate zero
+app/signals/elliott/tests/test_elliott_purity.py        NEW  ← import-purity gate (see below)
 ```
 
 `app/signals/elliott/` is a **pure** package: no `app.db`, `app.providers`,
 `app.services` imports. There is no existing AST purity gate to reuse, so
-EW-2 **adds** `tests/test_elliott_purity.py` — an AST-walk over the package
+EW-2 **adds** `app/signals/elliott/tests/test_elliott_purity.py` — an AST-walk over the package
 asserting none of those modules are imported (the gate other pure layers
 should have had). Cheap, and it locks the lift-out contract from day one.
 
@@ -210,7 +210,7 @@ No I/O. Deterministic. `label()` is a pure function of its inputs.
 
 ### EW-2 test list
 
-`tests/test_elliott_rules_unit.py`
+`app/signals/elliott/tests/test_elliott_rules_unit.py`
 
 | Test | Asserts |
 |---|---|
@@ -219,7 +219,7 @@ No I/O. Deterministic. `label()` is a pure function of its inputs.
 | `test_rule3_rejects_w4_overlap` | Wave 4 entering wave 1 territory → `rule3` False. |
 | `test_textbook_impulse_passes_all` | Clean 5-wave path → all three True. |
 
-`tests/test_elliott_engine_unit.py`
+`app/signals/elliott/tests/test_elliott_engine_unit.py`
 
 | Test | Asserts |
 |---|---|
@@ -231,7 +231,7 @@ No I/O. Deterministic. `label()` is a pure function of its inputs.
 | `test_tie_break_stable` | Two candidates with equal confidence → ordered by pivot-timestamp tuple. |
 | `test_current_wave_open_leg` | `current_wave` equals the in-progress leg after the last confirmed pivot. |
 
-`tests/test_elliott_no_lookahead.py` — **gate zero**
+`app/signals/elliott/tests/test_elliott_no_lookahead.py` — **gate zero**
 
 | Test | Asserts |
 |---|---|

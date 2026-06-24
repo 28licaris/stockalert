@@ -271,7 +271,7 @@ expected pivots on a 100-bar synthetic series; no regressions in
   - Return top-K (default K=3) `WaveLabeling`s, primary + alternates.
 - Walk-forward correctness: at any bar `t`, only pivots with
   `pivot.timestamp + look_ahead <= t` are visible. Pinned by
-  `tests/test_elliott_no_lookahead.py::test_label_does_not_change_when_future_data_added`.
+  `app/signals/elliott/tests/test_elliott_no_lookahead.py::test_label_does_not_change_when_future_data_added`.
 - Pure module — no I/O, no `app.db`, no `app.providers` imports.
   Enforced by the same AST-walk gate that polices `app/services/sim/strategies/`.
 - Tests:
@@ -465,7 +465,7 @@ The same invariants we enforce for indicators apply more strictly here:
    forward-only or by explicit re-backfill. Backtests must pin the
    engine version they were trained against.
 
-4. **Test gate.** `tests/test_elliott_no_lookahead.py` runs the
+4. **Test gate.** `app/signals/elliott/tests/test_elliott_no_lookahead.py` runs the
    engine on bars `1..N`, then again on bars `1..N+10`, and asserts
    that the labelings for bars `1..N` are byte-identical between
    the two runs.

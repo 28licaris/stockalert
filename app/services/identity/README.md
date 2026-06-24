@@ -100,7 +100,7 @@ the approved secret store.
 ## Tests
 
 ```bash
-poetry run pytest tests/test_identity_contracts.py tests/test_identity_service.py
+poetry run pytest app/services/identity/tests
 ```
 
 PostgreSQL repository integration tests use `TEST_IDENTITY_DATABASE_URL` and
@@ -109,5 +109,5 @@ are marked `integration`; they must point at a disposable test database.
 ```bash
 docker compose --profile identity-test up -d postgres-test
 TEST_IDENTITY_DATABASE_URL=postgresql+psycopg://stockalert:stockalert_test@localhost:5433/stockalert_identity_test \
-  poetry run pytest tests/integration/test_identity_postgres.py
+poetry run pytest tests/integration/test_identity_postgres.py -m integration
 ```
