@@ -10,6 +10,7 @@ import {
   HistogramSeries,
   createSeriesMarkers,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
   type CandlestickData,
@@ -30,9 +31,48 @@ import {
 
 export type ChartType = "candles" | "line" | "area";
 
+/** One labeled swing point of a wave count (the engine's primary pivots). */
+export interface WavePivotPoint {
+  ts: string;
+  price: number;
+  label: string;
+  kind?: "high" | "low";
+}
+
+/** A horizontal level to draw (invalidation / Fib target). */
+export interface WavePriceLevel {
+  price: number;
+  title: string;
+  kind: "invalidation" | "target";
+}
+
+/** Dotted forward projection line + optional target zone. */
+export interface WaveProjection {
+  fromTs: string;
+  fromPrice: number;
+  toTs: string;
+  toPrice: number;
+  targetLow?: number;
+  targetHigh?: number;
+}
+
+export interface WaveOverlay {
+  pivots: ReadonlyArray<WavePivotPoint>;
+  levels: ReadonlyArray<WavePriceLevel>;
+  /** Latest bar timestamp used for the "in-progress" extension segment. */
+  asOfTs?: string;
+  /** Latest bar price used for the extension segment endpoint. */
+  asOfPrice?: number;
+  /** Forward projection to the next-move target zone. */
+  projection?: WaveProjection;
+}
+
 interface OhlcvChartProps {
   bars: ReadonlyArray<Bar>;
   signals?: ReadonlyArray<Signal>;
+  /** Elliott Wave overlay (pivot path, extension, projection, price levels).
+   * When present, wave pivot markers take priority over signal markers. */
+  wave?: WaveOverlay | null;
   /**
    * Computed indicator series from `useIndicators`. Overlay indicators
    * (SMA/EMA/WMA/Bollinger) draw on the price pane; oscillators
@@ -74,6 +114,7 @@ const OSC_PANE_PX = 150;
 export function OhlcvChart({
   bars,
   signals,
+  wave,
   indicators,
   chartType = "candles",
   height = 480,
@@ -86,6 +127,14 @@ export function OhlcvChart({
   >(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  // Elliott Wave overlay series — created once in the chart-lifecycle
+  // effect (chart-type-independent, like volume).
+  const waveSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  /** Dashed line: last confirmed pivot → current price (in-progress wave). */
+  const extensionSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  /** Dotted line: current price → forward target midpoint. */
+  const projectionSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const priceLinesRef = useRef<IPriceLine[]>([]);
   // Indicator series added on the last render — removed before the next.
   const indicatorRefs = useRef<ISeriesApi<"Line" | "Histogram">[]>([]);
   // Resolved palette captured at create-time so data effects don't
@@ -97,6 +146,8 @@ export function OhlcvChart({
   barsRef.current = bars;
   const signalsRef = useRef(signals);
   signalsRef.current = signals;
+  const waveRef = useRef(wave);
+  waveRef.current = wave;
 
   // Total height grows with the number of oscillator panes so the price
   // pane keeps its real estate. Drives the container; ResizeObserver
@@ -148,8 +199,35 @@ export function OhlcvChart({
       scaleMargins: { top: 0.82, bottom: 0 },
     });
 
+    const waveLine = chart.addSeries(LineSeries, {
+      color: palette.fg,
+      lineWidth: 2,
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+    });
+    const extensionLine = chart.addSeries(LineSeries, {
+      color: palette.fg,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+    });
+    const projectionLine = chart.addSeries(LineSeries, {
+      color: palette.fg,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dotted,
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+    });
+
     chartRef.current = chart;
     volumeSeriesRef.current = volume;
+    waveSeriesRef.current = waveLine;
+    extensionSeriesRef.current = extensionLine;
+    projectionSeriesRef.current = projectionLine;
 
     const ro = new ResizeObserver((entries) => {
       const rect = entries[0]?.contentRect;
@@ -166,6 +244,10 @@ export function OhlcvChart({
       priceSeriesRef.current = null;
       volumeSeriesRef.current = null;
       markersRef.current = null;
+      waveSeriesRef.current = null;
+      extensionSeriesRef.current = null;
+      projectionSeriesRef.current = null;
+      priceLinesRef.current = [];
       indicatorRefs.current = [];
       paletteRef.current = null;
     };
@@ -185,7 +267,7 @@ export function OhlcvChart({
     // Markers live on the price series, so (re)create the plugin here.
     markersRef.current = createSeriesMarkers(
       series,
-      buildMarkers(signalsRef.current, palette),
+      buildMarkers(signalsRef.current, waveRef.current, palette),
     );
 
     return () => {
@@ -216,12 +298,91 @@ export function OhlcvChart({
     );
   }, [bars, chartType]);
 
-  // ── Data updates — markers ─────────────────────────────────────────
+  // ── Data updates — markers (wave pivots take priority over signals) ─
   useEffect(() => {
     const palette = paletteRef.current;
     if (!markersRef.current || !palette) return;
-    markersRef.current.setMarkers(buildMarkers(signals, palette));
-  }, [signals]);
+    markersRef.current.setMarkers(buildMarkers(signals, wave, palette));
+  }, [signals, wave]);
+
+  // ── Data updates — wave path + extension + projection + price lines ─
+  useEffect(() => {
+    const price = priceSeriesRef.current;
+    const line = waveSeriesRef.current;
+    const ext = extensionSeriesRef.current;
+    const proj = projectionSeriesRef.current;
+    const palette = paletteRef.current;
+    if (!price || !line || !ext || !proj || !palette) return;
+
+    for (const pl of priceLinesRef.current) {
+      try {
+        price.removePriceLine(pl);
+      } catch {
+        // price series was recreated (chart-type change) — line is gone.
+      }
+    }
+    priceLinesRef.current = [];
+
+    if (!wave) {
+      line.setData([]);
+      ext.setData([]);
+      proj.setData([]);
+      return;
+    }
+
+    // Confirmed pivot path — each segment colored by direction. LWC
+    // applies the color on point[i] to the segment ending at point[i].
+    const lineData: LineData<Time>[] = wave.pivots.map((p, i) => {
+      let color: string | undefined;
+      if (i > 0) {
+        color = p.price > wave.pivots[i - 1].price ? palette.up : palette.down;
+      } else if (wave.pivots.length > 1) {
+        color = wave.pivots[1].price > p.price ? palette.up : palette.down;
+      }
+      return { time: toUnix(p.ts), value: p.price, color };
+    });
+    line.setData(lineData);
+
+    // Extension: dashed line from last confirmed pivot → current bar price.
+    const lastPivot = wave.pivots.at(-1);
+    if (lastPivot && wave.asOfTs && wave.asOfPrice != null) {
+      const extUp = wave.asOfPrice > lastPivot.price;
+      const extColor = extUp ? palette.up : palette.down;
+      ext.setData([
+        { time: toUnix(lastPivot.ts), value: lastPivot.price, color: extColor },
+        { time: toUnix(wave.asOfTs), value: wave.asOfPrice, color: extColor },
+      ]);
+    } else {
+      ext.setData([]);
+    }
+
+    // Projection: dotted line from current price → target midpoint.
+    if (wave.projection) {
+      const p = wave.projection;
+      const projUp = p.toPrice > p.fromPrice;
+      const projColor = projUp ? palette.upAlpha : palette.downAlpha;
+      proj.setData([
+        { time: toUnix(p.fromTs), value: p.fromPrice, color: projColor },
+        { time: toUnix(p.toTs), value: p.toPrice, color: projColor },
+      ]);
+    } else {
+      proj.setData([]);
+    }
+
+    // Invalidation + Fib target price lines
+    for (const lvl of wave.levels) {
+      priceLinesRef.current.push(
+        price.createPriceLine({
+          price: lvl.price,
+          color: lvl.kind === "invalidation" ? palette.down : palette.up,
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: lvl.title,
+        }),
+      );
+    }
+  }, [wave, chartType]);
 
   // ── Indicators — overlays + oscillator panes ───────────────────────
   useEffect(() => {
@@ -413,8 +574,25 @@ function setPriceData(
 
 function buildMarkers(
   signals: ReadonlyArray<Signal> | undefined,
+  wave: WaveOverlay | null | undefined,
   palette: Palette,
 ): SeriesMarker<Time>[] {
+  if (wave && wave.pivots.length > 0) {
+    return wave.pivots.map((p) => ({
+      time: toUnix(p.ts),
+      position:
+        p.kind === "high" ? "aboveBar"
+        : p.kind === "low" ? "belowBar"
+        : p.label === "0" ? "belowBar"
+        : "aboveBar",
+      shape: "circle",
+      color:
+        p.kind === "high" ? palette.up
+        : p.kind === "low" ? palette.down
+        : palette.fg,
+      text: p.label,
+    }));
+  }
   if (!signals || signals.length === 0) return [];
   return signals.map((s) => {
     const isBull = signalDirection(s) === "bull";

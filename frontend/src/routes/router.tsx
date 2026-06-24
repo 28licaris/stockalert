@@ -2,6 +2,8 @@ import { createBrowserRouter, Navigate } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatusPage } from "./status";
 import { SymbolPage } from "./symbol";
+import { EwtPage } from "./ewt";
+import { EwtGuidePage } from "./ewt-guide";
 import { WatchlistsPage } from "./watchlists";
 import { StreamPage } from "./stream";
 import { ClickHousePage } from "./clickhouse";
@@ -31,6 +33,9 @@ export const router = createBrowserRouter(
             { index: true, element: <StatusPage /> },
             { path: "symbol", element: <SymbolPage /> },
             { path: "symbol/:ticker", element: <SymbolPage /> },
+            { path: "ewt", element: <EwtPage /> },
+            { path: "ewt/guide", element: <EwtGuidePage /> },
+            { path: "ewt/:ticker", element: <EwtPage /> },
             { path: "watchlists", element: <WatchlistsPage /> },
             { path: "stream", element: <StreamPage /> },
             { path: "seed", element: <Navigate to="/stream" replace /> },
