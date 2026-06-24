@@ -25,6 +25,7 @@ import asyncio
 import logging
 import os
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 # Large PyIceberg multipart writes (the per-root continuous rebuild) need the
 # AWS auto-checksum default reverted — see reference_s3_crc64nvme_multipart.
@@ -35,6 +36,7 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+NY = ZoneInfo("America/New_York")
 FUTURES_POLYGON_NIGHTLY_DEFAULT_HOUR_UTC = 21  # ~4pm/5pm ET; yesterday is final
 _EXCHANGES = ["us_futures_cme", "us_futures_cbot", "us_futures_comex", "us_futures_nymex"]
 _DATASETS = ["minute_aggs_v1", "session_aggs_v1"]
@@ -140,6 +142,94 @@ def _rebuild_continuous(roots: list[str], hysteresis_days: int) -> dict:
     return out
 
 
+def _continuous_last(cont, symbol: str):
+    """Latest (timestamp, contract) for a continuous root, scanning only the
+    recent window (cheap). None if the root has no recent continuous bars."""
+    from datetime import timedelta
+
+    from pyiceberg.expressions import And, EqualTo, GreaterThanOrEqual
+
+    since = (datetime.now(timezone.utc) - timedelta(days=20)).isoformat()
+    df = cont.scan(
+        row_filter=And(EqualTo("symbol", symbol), GreaterThanOrEqual("timestamp", since)),
+        selected_fields=("timestamp", "contract"),
+    ).to_arrow().to_pandas()
+    if df.empty:
+        return None
+    row = df.loc[df["timestamp"].idxmax()]
+    return row["timestamp"], row["contract"]
+
+
+def _refresh_continuous_incremental(roots: list[str], hysteresis_days: int) -> dict:
+    """Per root: APPEND the new front-month bars when nothing rolled, and only
+    FULL-REBUILD the roots whose front contract actually changed.
+
+    Detection: the dominant-volume contract for each new ET day. If every new
+    day's dominant == the root's current front contract, no roll happened →
+    append those bars at adj_factor=1.0 (the front segment is always 1.0).
+    Otherwise a roll (or thereabouts) occurred → rebuild that root so the
+    back-adjustment is re-scaled correctly. Conservative: when in doubt it
+    rebuilds, which is always correct.
+    """
+    import pandas as pd
+    from pyiceberg.expressions import And, EqualTo, GreaterThan
+
+    from scripts.polygon_futures_build_continuous import build_continuous_frame
+
+    from app.services.futures.polygon_continuous_sink import PolygonContinuousSink
+    from app.services.futures.tables import ensure_polygon_continuous, ensure_polygon_raw
+    from app.services.iceberg_catalog import get_catalog
+
+    raw = ensure_polygon_raw(get_catalog())
+    cont = ensure_polygon_continuous(get_catalog())
+    sink = PolygonContinuousSink()
+    cols = ("contract", "timestamp", "open", "high", "low", "close",
+            "volume", "vwap", "trade_count")
+
+    appended: dict = {}
+    rebuilt: dict = {}
+    for root in roots:
+        sym = "/" + root
+        last = _continuous_last(cont, sym)
+        if last is None:
+            # No recent continuous data → first build / cold root.
+            df = raw.scan(row_filter=EqualTo("root", root), selected_fields=cols).to_arrow().to_pandas()
+            adj, _ = build_continuous_frame(df, root, hysteresis_days)
+            if adj is not None and not adj.empty:
+                rebuilt[root] = sink.replace_symbol(adj, sym)
+                logger.info("nightly_futures_polygon: built /%s cold (%d bars)", root, rebuilt[root])
+            continue
+
+        last_ts, last_contract = last
+        new = raw.scan(
+            row_filter=And(EqualTo("root", root), GreaterThan("timestamp", last_ts.isoformat())),
+            selected_fields=cols,
+        ).to_arrow().to_pandas()
+        if new.empty:
+            continue  # this root already current
+
+        new = new.drop_duplicates(subset=["contract", "timestamp"], keep="last")
+        new["etdate"] = new["timestamp"].dt.tz_convert(NY).dt.date
+        vol = new.groupby(["etdate", "contract"])["volume"].sum().reset_index()
+        dominant = vol.loc[vol.groupby("etdate")["volume"].idxmax()]
+
+        if (dominant["contract"] == last_contract).all():
+            # No roll — append the front contract's new bars at adj_factor 1.0.
+            app = new[new["contract"] == last_contract].copy()
+            app["symbol"] = sym
+            app["adj_factor"] = 1.0
+            n = sink.write_frame(app)
+            appended[root] = n
+            logger.info("nightly_futures_polygon: appended /%s (%d bars, no roll)", root, n)
+        else:
+            df = raw.scan(row_filter=EqualTo("root", root), selected_fields=cols).to_arrow().to_pandas()
+            adj, _ = build_continuous_frame(df, root, hysteresis_days)
+            rebuilt[root] = sink.replace_symbol(adj, sym)
+            logger.info("nightly_futures_polygon: rebuilt /%s on roll (%d bars)", root, rebuilt[root])
+
+    return {"appended": appended, "rebuilt": rebuilt}
+
+
 def _refresh_sync(target: date | None, roots: list[str] | None, hysteresis_days: int) -> dict:
     import boto3
     from botocore.config import Config
@@ -177,13 +267,15 @@ def _refresh_sync(target: date | None, roots: list[str] | None, hysteresis_days:
         mirrored += _mirror_day(src, dst, d)
         parsed += _parse_day(dst, d)
 
-    rebuilt = _rebuild_continuous(roots, hysteresis_days)
+    res = _refresh_continuous_incremental(roots, hysteresis_days)
     return {
         "days": [d.isoformat() for d in days],
         "files_mirrored": mirrored,
         "raw_rows_appended": parsed,
-        "roots_rebuilt": len([r for r, n in rebuilt.items() if n > 0]),
-        "continuous_rows": sum(rebuilt.values()),
+        "roots_appended": len(res["appended"]),
+        "roots_rebuilt": len(res["rebuilt"]),
+        "continuous_rows_appended": sum(res["appended"].values()),
+        "continuous_rows_rebuilt": sum(res["rebuilt"].values()),
     }
 
 
