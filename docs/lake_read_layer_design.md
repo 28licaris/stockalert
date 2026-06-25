@@ -194,7 +194,8 @@ precedence and adjustment semantics are identical regardless of engine.
    Signoff-gated follow-ups (NOT bundled — each is a storage/behaviour
    change requiring its own go-ahead): materialized union table (lever
    1, dual storage); snapshot-keyed result cache (lever 4); post-union
-   gap-fill via provider REST.
+   gap-fill + hotload-on-add — specced separately in
+   [`symbol_onboarding_read_design.md`](symbol_onboarding_read_design.md).
 
 Each step is independently shippable and reversible.
 
