@@ -163,10 +163,15 @@ precedence and adjustment semantics are identical regardless of engine.
    `tests/test_read_arrow.py` (real local Iceberg table: union/dedup
    precedence, single-source select, projection, cold-start). Zero
    change to existing callers.
-2. **[NEXT]** Re-implement `get_bars`/`get_bars_union` on top of
-   `read_arrow` (keep `SilverBarsResponse` identical). Requires
-   migrating the reader's table-injection tests to the new catalog/
-   registry seam — its own focused pass.
+2. **[DONE]** `get_bars_union` now delegates its union/dedup to the
+   shared Polars engine (`read_arrow.union_arrow`) — ONE dedup rule
+   across reader + bulk path, replacing the per-row Python dict-merge
+   (§1.1 bottleneck). The reader keeps its existing PyIceberg scan seam
+   (so its lightweight unit tests are unchanged — all 54 reader +
+   read_arrow tests green), feeding already-scanned Arrow into
+   `union_arrow`. `get_bars` (single source, no dedup) is unchanged.
+   `SilverBarsResponse` output is identical; verified vs the real lake
+   (AAPL union 13,832 rows, snapshot pinned, sorted, provenance kept).
 3. Point ML/whole-market consumers at `read_arrow`; leave HTTP/MCP on
    the Pydantic API.
 4. Onboard a third source (Alpaca) as a registry entry to prove

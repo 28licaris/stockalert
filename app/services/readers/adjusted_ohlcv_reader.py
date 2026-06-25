@@ -275,17 +275,24 @@ class AdjustedOhlcvReader:
             label="equities.schwab_universe",
         )
 
-        polygon_bars = self._arrow_to_bars(polygon_arrow) if polygon_arrow is not None else []
-        schwab_bars = self._arrow_to_bars(schwab_arrow) if schwab_arrow is not None else []
+        # Union + dedup on (symbol, timestamp), polygon winning, via the
+        # shared Polars engine (read_arrow.union_arrow) — ONE dedup rule
+        # across the reader and the bulk read_arrow path, replacing the
+        # old per-row Python dict-merge (spec §1.1 bottleneck). Imported
+        # lazily so importing this reader doesn't pull in Polars.
+        from app.services.readers.read_arrow import union_arrow
 
-        # Dedupe on (symbol, timestamp); polygon wins.
-        merged: dict[tuple, SilverBar] = {}
-        for b in schwab_bars:
-            merged[(b.symbol, b.timestamp)] = b
-        for b in polygon_bars:
-            merged[(b.symbol, b.timestamp)] = b
+        arrow_by_source: dict = {}
+        if polygon_arrow is not None:
+            arrow_by_source["polygon_adjusted"] = polygon_arrow
+        if schwab_arrow is not None:
+            arrow_by_source["schwab_universe"] = schwab_arrow
 
-        bars = sorted(merged.values(), key=lambda b: b.timestamp)
+        merged_arrow = union_arrow(
+            arrow_by_source,
+            sources=["polygon_adjusted", "schwab_universe"],
+        )
+        bars = self._arrow_to_bars(merged_arrow)
 
         # Snapshot id reflects the polygon side — that's the canonical
         # adjusted source, and reproducibility-critical consumers care

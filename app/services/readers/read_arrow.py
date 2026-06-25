@@ -145,6 +145,44 @@ def read_arrow(
     return _collect(lf).to_arrow()
 
 
+def union_arrow(
+    arrow_by_source: dict,
+    *,
+    sources: Optional[Sequence[str]] = None,
+) -> pa.Table:
+    """Union + dedup per-source Arrow the caller has ALREADY scanned.
+
+    Same dedup rule as `scan()`/`read_arrow()` — highest-precedence row
+    per (symbol, timestamp), sorted ascending — but over Arrow tables the
+    caller produced itself. This is the seam the Pydantic readers use:
+    `AdjustedOhlcvReader.get_bars_union` keeps its existing PyIceberg scan
+    (so its lightweight unit tests keep working) yet shares this ONE dedup
+    rule instead of a hand-rolled Python dict-merge (the §1.1 bottleneck).
+
+    `arrow_by_source` maps `SourceSpec.name → pa.Table`; None / empty
+    tables are skipped (cold-start safe). `sources` supplies precedence
+    via the registry. Returns an empty table if nothing contributed.
+    """
+    import polars as pl
+
+    specs = {s.name: s for s in resolve_sources(sources)}
+    frames = []
+    for name, arrow in (arrow_by_source or {}).items():
+        spec = specs.get(name)
+        if spec is None:
+            raise ValueError(f"unknown source {name!r} in arrow_by_source")
+        if arrow is None or arrow.num_rows == 0:
+            continue
+        frames.append(
+            pl.from_arrow(arrow).lazy().with_columns(
+                pl.lit(spec.precedence, dtype=pl.Int32).alias(_PREC)
+            )
+        )
+    if not frames:
+        return pa.table({})
+    return _collect(_union_dedup(frames, pl=pl)).to_arrow()
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Internals
 # ─────────────────────────────────────────────────────────────────────
