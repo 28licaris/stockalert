@@ -109,3 +109,4 @@ creating a StockAlert session.
 ## Historical / cache
 
 - `MONITOR_PRELOAD_BARS`, `MONITOR_PRELOAD_DAYS`, `BACKFILL_DEFAULT_DAYS`, `MAX_BARS_PER_REQUEST`, `FETCH_SAFETY_MARGIN`, `DATA_SUFFICIENCY_THRESHOLD`, `USE_PARQUET_CACHE`, `PARQUET_CACHE_DIR`.
+- `SYMBOL_HOTLOAD_ENABLED` (default `true`), `SYMBOL_HOTLOAD_DAYS` (default `30`) — hotload-on-add fast recent tier. `false` = stream-from-now, no backfill. 30d is sized for a <5s first paint. Independent of `LAKE_WARMUP_ENABLED` (the deep 730d lake tier). See `docs/symbol_onboarding_read_design.md`.
