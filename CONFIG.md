@@ -110,3 +110,4 @@ creating a StockAlert session.
 
 - `MONITOR_PRELOAD_BARS`, `MONITOR_PRELOAD_DAYS`, `MAX_BARS_PER_REQUEST`, `FETCH_SAFETY_MARGIN`, `DATA_SUFFICIENCY_THRESHOLD`, `USE_PARQUET_CACHE`, `PARQUET_CACHE_DIR`.
 - `SYMBOL_HOTLOAD_ENABLED` (default `true`), `SYMBOL_HOTLOAD_DAYS` (default `30`) — hotload-on-add fast recent tier. `false` = stream-from-now, no backfill. 30d is sized for a <5s first paint. Independent of `LAKE_WARMUP_ENABLED` (the deep 730d lake tier). See `docs/symbol_onboarding_read_design.md`.
+- `SYMBOL_GAPFILL_ENABLED` (default `true`) — read-path gap-fill fallback. When a requested window isn't in CH and the lake can't cover it (cold/new symbol), fall to a provider REST fill (Schwab tip-fill → lake + CH). Non-blocking, idempotent; equities only in v1. See `docs/symbol_onboarding_read_design.md` §3.3.

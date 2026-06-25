@@ -229,6 +229,19 @@ class Settings(BaseModel):
     )
     symbol_hotload_days: int = int(os.getenv("SYMBOL_HOTLOAD_DAYS", "30"))
 
+    # Read-path gap-fill (edge case). When the bars gateway's lake→CH
+    # fill comes up empty for a requested window — i.e. the lake (ground
+    # truth) has nothing, typically a brand-new/cold symbol — fall to a
+    # provider REST fill (Schwab tip-fill → schwab_universe lake + CH) so
+    # the chart self-heals on demand. Non-blocking, idempotent,
+    # single-flight. The nightly provider jobs own the steady state; this
+    # is the on-demand fallback only. Equities only in v1 (futures + a
+    # pluggable provider knob are follow-ups). Spec:
+    # docs/symbol_onboarding_read_design.md §3.3.
+    symbol_gapfill_enabled: bool = (
+        os.getenv("SYMBOL_GAPFILL_ENABLED", "true").lower() == "true"
+    )
+
     # CV13: silver_ohlcv_build_* settings removed.
     # The v2 equivalent (polygon_adjustment_job) runs OUT-OF-PROCESS
     # via EMR Serverless / CodeBuild / local Spark — it's not a

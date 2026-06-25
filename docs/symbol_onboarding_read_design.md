@@ -1,7 +1,20 @@
 # Symbol Onboarding — Hotload + Gap-Fill
 
-**Status:** hotload-on-add IMPLEMENTED (§3.1); gap-fill still proposal —
-needs signoff. Branch `feat/lake-read-followups`.
+**Status:** hotload-on-add (§3.1) and read-path gap-fill (§3.3) both
+IMPLEMENTED. Branch `feat/lake-read-followups`.
+
+**Gap-fill done (v1, edge-case scope):** `SYMBOL_GAPFILL_ENABLED`
+(default true). The read path already schedules a lake→CH fill when CH
+lacks the window; when that lake fill comes up EMPTY (ground truth has
+nothing — a cold/new symbol), it now falls to a provider REST fill
+(Schwab `tip_fill` → schwab_universe lake + CH, idempotent) so the chart
+self-heals. Non-blocking (existing daemon-thread worker), single-flight
+(existing `_IN_FLIGHT` guard). No holiday calendar needed: the provider
+fill is a no-op for non-trading windows, so "what bars exist" is
+deferred to provider data availability (repo convention). Equities only;
+futures + a pluggable per-fill provider knob + interior-hole (mid-series)
+detection are follow-ups. The nightly/weekly provider jobs own the
+steady state — this is the on-demand fallback only.
 
 **Hotload done:** `SYMBOL_HOTLOAD_ENABLED` (default true) /
 `SYMBOL_HOTLOAD_DAYS` (default 30, sized for <5s first paint) gate the
