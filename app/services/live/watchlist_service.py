@@ -101,11 +101,14 @@ class WatchlistService:
           2. Stream auto-extend: any newly-added symbol not already in
              the stream universe gets promoted via
              `stream_service.ensure_streaming` (which subscribes Schwab
-             + queues a silver-derived warmup).
-          3. Backfill warmup: for any symbol already in the stream but
-             new to this watchlist, fire the legacy backfill path if
-             `lake_warmup_enabled` is off (otherwise
-             stream_service.add already fired the silver path).
+             live + queues the deep lake warmup when enabled).
+          3. Hotload (fast recent tier): when the deep lake warmup is
+             OFF, seed the last `symbol_hotload_days` of 1m bars into CH
+             via the quick backfill so the chart paints fast — unless
+             `symbol_hotload_enabled` is off (pure stream-from-now).
+             When the deep warmup is ON, stream_service.add already
+             handled recent + deep, so hotload is skipped to avoid a
+             double fill.
 
         Returns:
             {
@@ -138,21 +141,23 @@ class WatchlistService:
                     name, exc,
                 )
 
-            # Legacy quick/intraday/daily backfill — fires only when the
-            # silver-derived flag is OFF. When the flag is ON, stream
-            # service's add() already handles warmup for symbols it just
-            # promoted; symbols already in the stream are assumed warm
-            # (the nightly silver chain keeps them current).
+            # Hotload (fast recent tier) — seed the last
+            # `symbol_hotload_days` of 1m bars into CH so the chart paints
+            # quickly. Fires only when the deep lake warmup is OFF (when
+            # it's ON, stream_service.add() already ran the deep+tip chain
+            # for promoted symbols — don't double-fill). Disable hotload
+            # for a pure "stream from now" add. Spec:
+            # docs/symbol_onboarding_read_design.md §3.1.
             try:
                 from app.config import settings as _s
 
-                use_legacy = not getattr(
-                    _s, "lake_warmup_enabled", False,
-                )
+                deep_warmup_on = getattr(_s, "lake_warmup_enabled", False)
+                hotload_on = getattr(_s, "symbol_hotload_enabled", True)
+                hotload_days = int(getattr(_s, "symbol_hotload_days", 30))
             except Exception:  # noqa: BLE001 — boundary
-                use_legacy = True
-            if use_legacy:
-                self._enqueue_warmup_legacy(newly)
+                deep_warmup_on, hotload_on, hotload_days = False, True, 30
+            if not deep_warmup_on and hotload_on:
+                self._enqueue_hotload(newly, days=hotload_days)
 
         return {
             "watchlist": name,
@@ -176,14 +181,16 @@ class WatchlistService:
         }
 
     # ─────────────────────────────────────────────────────────────────
-    # Backfill warmup (legacy Path ②, used only when silver-derived
-    # add_members is disabled)
+    # Hotload (fast recent tier) — the latency-first quick backfill that
+    # seeds CH on add. Provider-agnostic (uses the configured history
+    # provider, Schwab by default). Gated by `symbol_hotload_enabled`.
     # ─────────────────────────────────────────────────────────────────
 
-    def _enqueue_warmup_legacy(self, symbols: list[str]) -> None:
-        """Fire-and-forget: quick/intraday/daily backfill via
-        `backfill_service`. Caller controls the silver-vs-legacy flag
-        decision; this method just dispatches.
+    def _enqueue_hotload(self, symbols: list[str], *, days: int = 30) -> None:
+        """Fire-and-forget: seed the last `days` of 1m bars into the CH
+        hot cache via the provider-agnostic quick backfill. Non-blocking
+        (the chart paints when the background fill lands). Idempotent +
+        single-flight at the BackfillService layer.
         """
         if not symbols or self._backfill is None:
             return
@@ -197,9 +204,9 @@ class WatchlistService:
                 # (5m/15m/1h/1d) are resampled from ohlcv_1m on read, and deep
                 # history is auto-filled from the lake on first request — so no
                 # separate 5m / daily backfill is needed.
-                self._backfill.enqueue_quick(sym, days=30)
+                self._backfill.enqueue_quick(sym, days=days)
             except Exception as e:  # noqa: BLE001 — boundary
-                logger.warning("Auto-backfill enqueue failed for %s: %s", sym, e)
+                logger.warning("Hotload enqueue failed for %s: %s", sym, e)
 
     # ─────────────────────────────────────────────────────────────────
     # Observability

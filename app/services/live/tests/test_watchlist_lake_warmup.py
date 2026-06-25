@@ -217,42 +217,82 @@ def wl_svc(monkeypatch) -> WatchlistService:
 
 
 class TestAddMembersFlagDispatch:
-    """The watchlist auto-extend path delegates streaming + silver
-    warmup to StreamService. The watchlist itself only fires the
-    legacy quick/intraday/daily backfill, and only when the flag is OFF.
+    """The watchlist auto-extend path delegates streaming + deep lake
+    warmup to StreamService. The watchlist itself fires the fast
+    hotload (quick backfill) when the deep warmup is OFF and hotload is
+    enabled. Disabling hotload gives a pure stream-from-now add.
     """
 
-    def test_flag_off_fires_legacy_backfill(
+    def test_hotload_fires_when_deep_warmup_off(
         self, wl_svc: WatchlistService, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from app.config import settings
         monkeypatch.setattr(settings, "lake_warmup_enabled", False)
+        monkeypatch.setattr(settings, "symbol_hotload_enabled", True)
+        monkeypatch.setattr(settings, "symbol_hotload_days", 30)
 
-        legacy_calls: list[list[str]] = []
+        calls: list[tuple[list[str], int]] = []
         monkeypatch.setattr(
-            wl_svc, "_enqueue_warmup_legacy",
-            lambda symbols: legacy_calls.append(list(symbols)),
+            wl_svc, "_enqueue_hotload",
+            lambda symbols, *, days: calls.append((list(symbols), days)),
         )
 
         wl_svc.add_members("a", ["NVDA", "AAPL"])
-        # Legacy path got called once with both symbols.
-        assert legacy_calls == [["NVDA", "AAPL"]]
+        # Hotload fired once with both symbols and the configured window.
+        assert calls == [(["NVDA", "AAPL"], 30)]
 
-    def test_flag_on_skips_legacy_backfill(
+    def test_hotload_days_configurable(
+        self, wl_svc: WatchlistService, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from app.config import settings
+        monkeypatch.setattr(settings, "lake_warmup_enabled", False)
+        monkeypatch.setattr(settings, "symbol_hotload_enabled", True)
+        monkeypatch.setattr(settings, "symbol_hotload_days", 7)
+
+        days_seen: list[int] = []
+        monkeypatch.setattr(
+            wl_svc, "_enqueue_hotload",
+            lambda symbols, *, days: days_seen.append(days),
+        )
+
+        wl_svc.add_members("a", ["NVDA"])
+        assert days_seen == [7]
+
+    def test_stream_only_skips_hotload(
+        self, wl_svc: WatchlistService, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """hotload disabled + deep warmup off = pure stream-from-now:
+        subscribe live, no backfill of any kind."""
+        from app.config import settings
+        monkeypatch.setattr(settings, "lake_warmup_enabled", False)
+        monkeypatch.setattr(settings, "symbol_hotload_enabled", False)
+
+        calls: list[list[str]] = []
+        monkeypatch.setattr(
+            wl_svc, "_enqueue_hotload",
+            lambda symbols, *, days: calls.append(list(symbols)),
+        )
+
+        wl_svc.add_members("a", ["NVDA"])
+        assert calls == []
+
+    def test_deep_warmup_on_skips_hotload(
         self, wl_svc: WatchlistService, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from app.config import settings
         monkeypatch.setattr(settings, "lake_warmup_enabled", True)
+        monkeypatch.setattr(settings, "symbol_hotload_enabled", True)
 
-        legacy_calls: list[list[str]] = []
+        calls: list[list[str]] = []
         monkeypatch.setattr(
-            wl_svc, "_enqueue_warmup_legacy",
-            lambda symbols: legacy_calls.append(list(symbols)),
+            wl_svc, "_enqueue_hotload",
+            lambda symbols, *, days: calls.append(list(symbols)),
         )
 
         wl_svc.add_members("a", ["NVDA"])
-        # Stream service owns warmup when flag is on — watchlist legacy NOT called.
-        assert legacy_calls == []
+        # Stream service owns recent+deep when deep warmup is on —
+        # hotload skipped to avoid a double fill.
+        assert calls == []
 
 
 # ─────────────────────────────────────────────────────────────────────

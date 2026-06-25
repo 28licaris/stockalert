@@ -213,6 +213,22 @@ class Settings(BaseModel):
         ).lower() == "true"
     )
 
+    # Hotload-on-add (the fast recent tier). When True, adding a symbol
+    # seeds the last `symbol_hotload_days` of 1m bars into the CH hot
+    # cache via the latency-first quick backfill (provider-agnostic;
+    # uses the configured history provider, Schwab by default) so the
+    # chart paints quickly without waiting on the weekly lake.
+    # When False: pure "stream from now" — subscribe live, no backfill.
+    # Independent of `lake_warmup_enabled` (the deep 730d lake tier).
+    # Spec: docs/symbol_onboarding_read_design.md §3.1.
+    # `symbol_hotload_days` default 30 is sized for a <5s first paint
+    # (quick backfill chunks Schwab's ~10d/call cap); tune down (e.g. 7)
+    # if a provider/window pushes past the budget.
+    symbol_hotload_enabled: bool = (
+        os.getenv("SYMBOL_HOTLOAD_ENABLED", "true").lower() == "true"
+    )
+    symbol_hotload_days: int = int(os.getenv("SYMBOL_HOTLOAD_DAYS", "30"))
+
     # CV13: silver_ohlcv_build_* settings removed.
     # The v2 equivalent (polygon_adjustment_job) runs OUT-OF-PROCESS
     # via EMR Serverless / CodeBuild / local Spark — it's not a

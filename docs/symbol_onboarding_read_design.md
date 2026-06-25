@@ -1,6 +1,16 @@
-# Symbol Onboarding — Hotload + Gap-Fill (design / proposal)
+# Symbol Onboarding — Hotload + Gap-Fill
 
-**Status:** proposal — needs signoff before implementation.
+**Status:** hotload-on-add IMPLEMENTED (§3.1); gap-fill still proposal —
+needs signoff. Branch `feat/lake-read-followups`.
+
+**Hotload done:** `SYMBOL_HOTLOAD_ENABLED` (default true) /
+`SYMBOL_HOTLOAD_DAYS` (default 30, sized for <5s first paint) gate the
+on-add quick fill (provider-agnostic; Schwab by default). `enabled=false`
+= pure stream-from-now. Reuses the existing latency-first quick backfill
+(idempotent + single-flight); independent of the deep lake warmup
+(`lake_warmup_enabled`). Per-add override + an explicit per-hotload
+provider knob are deferred follow-ups (today it uses the configured
+history provider).
 
 What happens, end to end, when a symbol is added and then charted: it
 should **stream forward immediately**, **paint a recent window fast**,
