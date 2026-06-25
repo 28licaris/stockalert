@@ -1,6 +1,20 @@
-# Lake Read Layer — Modular & Fast (design / proposal)
+# Lake Read Layer — Modular & Fast
 
-**Status:** proposal — needs signoff before implementation.
+**Status:** in progress — engine chosen, core landed. Branch
+`feat/lake-read-layer`.
+
+**Done:** Polars-over-PyIceberg engine chosen (§6 q1) via the
+`scripts/spikes/` spike + in-region CodeBuild benchmark (14× faster
+than the Python baseline, lowest memory). `SourceSpec` registry
+(`app/services/readers/source_registry.py`) + `read_arrow()`
+(`app/services/readers/read_arrow.py`) shipped with levers 2 (sorted-
+merge) & 3 (lazy + pushdown) + streaming collect. `get_bars_union`
+delegated to the shared dedup (`union_arrow`). 54 reader + read_arrow
+tests green; verified vs the real lake. See §4 for the step-by-step.
+
+**Open (signoff-gated, NOT built):** lever 1 materialized union table
+(dual storage), lever 4 snapshot-keyed result cache, post-union
+gap-fill, Alpaca as a 3rd registry source. See end of §4.
 
 How the platform reads adjusted OHLCV history out of the v2 Iceberg
 lake, so the read path is (a) **fast in the cloud** for both
