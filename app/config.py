@@ -346,10 +346,7 @@ class Settings(BaseModel):
     # Monitor preload settings (fast startup)
     monitor_preload_bars: int = int(os.getenv("MONITOR_PRELOAD_BARS", "200"))
     monitor_preload_days: int = int(os.getenv("MONITOR_PRELOAD_DAYS", "5"))
-    
-    # Backfill/research settings (more historical data)
-    backfill_default_days: int = int(os.getenv("BACKFILL_DEFAULT_DAYS", "30"))
-    
+
     # API fetch optimization
     max_bars_per_request: int = int(os.getenv("MAX_BARS_PER_REQUEST", "10000"))
     fetch_safety_margin: float = float(os.getenv("FETCH_SAFETY_MARGIN", "1.3"))
@@ -420,7 +417,6 @@ class Settings(BaseModel):
             "journal_enabled": self.journal_enabled,
             "monitor_preload_bars": self.monitor_preload_bars,
             "monitor_preload_days": self.monitor_preload_days,
-            "backfill_default_days": self.backfill_default_days,
             "fetch_safety_margin": self.fetch_safety_margin,
             "use_parquet_cache": self.use_parquet_cache,
             "lookback_bars": self.lookback_bars,
