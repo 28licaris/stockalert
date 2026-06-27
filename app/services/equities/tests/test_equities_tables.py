@@ -71,16 +71,6 @@ def test_ensure_polygon_raw_creates_when_missing():
     assert result is catalog.create_table.return_value
 
 
-def test_ensure_polygon_adjusted_sets_merge_on_read():
-    catalog = _make_catalog(table_exists=False)
-    equities_tables.ensure_polygon_adjusted(catalog)
-
-    props = catalog.create_table.call_args.kwargs["properties"]
-    assert props["write.merge.mode"] == "merge-on-read"
-    assert props["write.update.mode"] == "merge-on-read"
-    assert props["write.delete.mode"] == "merge-on-read"
-
-
 def test_ensure_schwab_universe_sets_merge_on_read():
     catalog = _make_catalog(table_exists=False)
     equities_tables.ensure_schwab_universe(catalog)
@@ -120,15 +110,17 @@ def test_ensure_swallows_namespace_already_exists():
     catalog.create_namespace.assert_called_once_with("equities")
 
 
-def test_ensure_all_creates_four_tables(monkeypatch):
+def test_ensure_all_creates_the_v2_tables(monkeypatch):
     catalog = _make_catalog(table_exists=False)
     result = equities_tables.ensure_all(catalog)
 
+    # polygon_adjusted retired — adjusted is computed at read time.
+    # market_splits added — dedicated splits store.
     assert set(result.keys()) == {
         "polygon_raw",
-        "polygon_adjusted",
         "schwab_universe",
         "market_corp_actions",
+        "market_splits",
     }
     assert catalog.create_table.call_count == 4
 
@@ -157,14 +149,14 @@ def test_ensure_equities_table_raises_on_unknown_name():
     catalog.create_table.assert_not_called()
 
 
-def test_ensure_equities_table_covers_all_four_v2_tables():
+def test_ensure_equities_table_covers_all_v2_tables():
     """Dispatcher must cover every v2 table — a stale dispatcher would
     silently fail any caller using a newly-added table name."""
     for short_name in (
         "polygon_raw",
-        "polygon_adjusted",
         "schwab_universe",
         "market_corp_actions",
+        "market_splits",
     ):
         catalog = _make_catalog(table_exists=False)
         equities_tables.ensure_equities_table(short_name, catalog)

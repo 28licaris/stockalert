@@ -351,7 +351,7 @@ The adjustment job runs:
 ### D. (Optional) Ongoing Polygon flat-file refresh
 
 If the operator wants `equities.polygon_raw` to keep growing (vs frozen
-at the bulk-load date), the existing `nightly_polygon_refresh` job
+at the bulk-load date), the existing `nightly_equities_polygon_refresh` job
 can stay enabled. It writes yesterday's whole-market flat-file into
 `equities.polygon_raw` (then triggers an incremental adjustment).
 

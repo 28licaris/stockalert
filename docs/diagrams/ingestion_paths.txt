@@ -29,7 +29,7 @@
 ╚════════════════════════════════════════════════════════════════════════════════════╝
 
   ┌─────────────────────┐   ┌─────────────────────┐   ┌──────────────────────────┐
-  │ watchlist_service   │   │ backfill_service    │   │ nightly_polygon_refresh  │
+  │ watchlist_service   │   │ backfill_service    │   │ nightly_equities_polygon_refresh  │
   │   ._on_bar          │   │   + historical_     │   │   + polygon_flatfiles_   │
   │                     │   │   loader            │   │     bulk_backfill        │
   │ bar_batcher         │   │                     │   │                          │

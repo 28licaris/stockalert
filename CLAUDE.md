@@ -77,8 +77,6 @@ scripts/             Ops scripts:
                          futures.schwab_futures (continuous roots)
                        run_corp_actions_backfill.py — Polygon REST →
                          equities.market_corp_actions
-                       spark/polygon_adjustment_job.py — whole-market
-                         weekly Spark job → equities.polygon_adjusted
                        rebuild_ch_from_silver.py — bulk lake → CH
                          (legacy filename, sources from v2 lake)
 docs/                Plans, runbooks; docs/standards/ = rules
@@ -90,9 +88,16 @@ Lake tables (v2 / `equities.*` Glue DB):
 | Table | Source | Notes |
 |---|---|---|
 | `equities.polygon_raw` | Polygon flat-files (CV7 nightly, CV3 history puller) | Raw unadjusted, bucket(32, symbol) + month(timestamp) |
-| `equities.polygon_adjusted` | Spark job (CV5) reads raw + corp_actions | Split-adjusted + `adj_factor` column; merge-on-read |
 | `equities.schwab_universe` | Schwab live + REST (CV8) | Pre-adjusted (adj_factor=1.0); bucket(16) |
-| `equities.market_corp_actions` | Polygon REST (CV9) | Splits + dividends; month(ex_date) partition |
+| `equities.market_corp_actions` | Polygon REST (CV9) | Dividends (+ splits, legacy); month(ex_date) partition |
+| `equities.market_splits` | Polygon REST (mirrored from corp-actions) | Splits-only, ~27k rows; the read-time adjustment source. Tiny + symbol-sorted so per-symbol lookup is instant (no dividend scan) |
+
+> **Split-adjusted OHLCV is computed at read time**, not stored — `adjusted =
+> f(polygon_raw, market_corp_actions splits)` via `app/services/equities/adjust.py`.
+> The old materialized `equities.polygon_adjusted` table + its weekly Spark job
+> were retired (see [`docs/adjusted_lean_storage_spec.md`](docs/adjusted_lean_storage_spec.md)).
+> Readers (`AdjustedOhlcvReader`, `read_arrow` "polygon_adjusted" source) apply
+> the adjustment on read.
 
 Futures lake (separate `futures.*` Glue DB + `iceberg/futures/` S3):
 
@@ -119,7 +124,8 @@ deleted 2026-05-21 (CV18).
 ## Infra
 
 AWS only. Glue + S3 (Iceberg warehouse), CodeBuild for long backfills
-(`scripts/codebuild/`), EMR Serverless for the weekly Spark adjustment
-job. No CDK / Terraform. Self-hosted ClickHouse.
+(`scripts/codebuild/`). No CDK / Terraform. Self-hosted ClickHouse.
+(EMR Serverless + the weekly Spark adjustment job were retired — adjustment
+is computed at read time.)
 Secrets via `.env` (gitignored; template in `.env.example`, docs in
 `CONFIG.md`).

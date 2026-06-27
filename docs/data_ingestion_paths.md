@@ -215,14 +215,14 @@ exception to the ground-truth rule — see silver_layer_plan §6.4.
 ### ③ Polygon flat-files + REST → `bronze.polygon_minute` (S3) + optionally CH
 
 **Trigger:**
-- Nightly: `nightly_polygon_refresh` at `POLYGON_NIGHTLY_RUN_HOUR_UTC`
+- Nightly: `nightly_equities_polygon_refresh` at `POLYGON_NIGHTLY_RUN_HOUR_UTC`
   (default 7am UTC = 03:00 ET).
 - Operator bulk: `scripts/polygon_flatfiles_bulk_backfill.py` (one-shot
   historical backfill).
 
 **Code path (nightly):**
 ```
-nightly_polygon_refresh.run_lake_refresh_loop
+nightly_equities_polygon_refresh.run_lake_refresh_loop
   → BronzeIcebergSink.for_polygon_minute()
   → flatfiles_backfill.backfill_window(date_range, sinks=[bronze_sink])
     → PolygonFlatFilesClient downloads daily Parquet
@@ -248,7 +248,7 @@ on the bulk backfill script for operator escape-hatch use, but the
 default is bronze-only.
 
 **Where the code lives:**
-- [app/services/ingest/nightly_polygon_refresh.py](../app/services/ingest/nightly_polygon_refresh.py)
+- [app/services/ingest/nightly_equities_polygon_refresh.py](../app/services/ingest/nightly_equities_polygon_refresh.py)
 - [app/services/ingest/flatfiles_backfill.py](../app/services/ingest/flatfiles_backfill.py)
 - [app/services/bronze/sink.py](../app/services/bronze/sink.py) `BronzeIcebergSink`
 - [scripts/polygon_flatfiles_bulk_backfill.py](../scripts/polygon_flatfiles_bulk_backfill.py)

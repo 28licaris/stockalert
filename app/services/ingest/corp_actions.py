@@ -6,7 +6,7 @@ splits + dividends from `PolygonCorpActionsClient` and upserts the
 rows into `equities.market_corp_actions`.
 
 **Pattern note:** This is the corp-actions ingest job — analogous to
-`nightly_polygon_refresh.py` for OHLCV. It writes to the lake
+`nightly_equities_polygon_refresh.py` for OHLCV. It writes to the lake
 namespace directly; no silver build step (silver is being retired
 in Phase 1C, `equities.market_corp_actions` is the canonical store).
 
@@ -184,6 +184,7 @@ class PolygonCorpActionsIngest:
 
         total_splits = 0
         total_dividends = 0
+        all_splits: list[CorpAction] = []  # mirrored to market_splits after the loop
         mode_tally: dict[str, int] = {"append": 0, "upsert": 0}
 
         # Iterate by calendar year so each Polygon pagination + each
@@ -228,6 +229,7 @@ class PolygonCorpActionsIngest:
                     ingestion_run_id=run_id, mode=year_mode,
                 )
                 total_splits += len(chunk_splits)
+                all_splits.extend(chunk_splits)
 
             chunk_divs = await client.collect_dividends(
                 since=chunk_start, until=chunk_end,
@@ -254,6 +256,12 @@ class PolygonCorpActionsIngest:
                 year, total_splits, total_dividends,
             )
             year += 1
+
+        # Mirror splits into the dedicated equities.market_splits store (the
+        # read-time adjustment source). Tiny set; idempotent upsert keyed on
+        # (symbol, ex_date). Dividends are NOT mirrored — market_splits is
+        # splits-only. See docs/market_splits_spec.md.
+        self._mirror_splits_to_market_splits(all_splits, ingestion_run_id=run_id)
 
         duration = (datetime.now(timezone.utc) - started).total_seconds()
         logger.info(
@@ -396,6 +404,51 @@ class PolygonCorpActionsIngest:
         dates = arrow.column("ex_date").to_pylist()
         valid = [d for d in dates if d is not None]
         return max(valid) if valid else None
+
+    @staticmethod
+    def _mirror_splits_to_market_splits(
+        splits: list[CorpAction], *, ingestion_run_id: str,
+    ) -> None:
+        """Upsert splits into the dedicated equities.market_splits table.
+
+        market_splits is splits-only (factor required), keyed on
+        (symbol, ex_date) — idempotent on re-run. Failure is logged, not
+        raised: a market_splits write failing must not fail the corp-actions
+        backfill that already committed (the read path degrades to identity
+        if market_splits is stale/empty). NO_SILENT_FAILURES: it's logged.
+        """
+        real = [s for s in splits if getattr(s, "factor", None) is not None]
+        if not real:
+            return
+        try:
+            import pyarrow as pa
+            from app.services.equities.tables import ensure_market_splits
+            from app.services.iceberg_safe_upsert import chunked_upsert
+
+            tbl = ensure_market_splits()
+            now = datetime.now(timezone.utc)
+            data = {
+                "symbol": [s.symbol for s in real],
+                "ex_date": [s.ex_date for s in real],
+                "factor": [float(s.factor) for s in real],
+                "source_provider": [getattr(s, "source_provider", None) or "polygon" for s in real],
+                "ingestion_ts": [now] * len(real),
+                "ingestion_run_id": [ingestion_run_id] * len(real),
+            }
+            target = tbl.schema().as_arrow()
+            arrow = pa.table(data)
+            arrow = pa.table({f.name: arrow.column(f.name).cast(f.type) for f in target}, schema=target)
+            res = chunked_upsert(tbl, arrow, log_label="market_splits")
+            logger.info(
+                "polygon_corp_actions_ingest: mirrored %d splits to "
+                "market_splits (%s)", len(real), res,
+            )
+        except Exception as e:  # noqa: BLE001 — boundary; don't fail the backfill
+            logger.error(
+                "polygon_corp_actions_ingest: market_splits mirror FAILED "
+                "(%s) — corp_actions write already committed; market_splits "
+                "may be stale until the next run", e,
+            )
 
     @classmethod
     def _write(

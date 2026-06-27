@@ -28,9 +28,9 @@ from app.services.equities.schemas import (
     MARKET_CORP_ACTIONS_PARTITION,
     MARKET_CORP_ACTIONS_SCHEMA,
     MARKET_CORP_ACTIONS_SORT,
-    POLYGON_ADJUSTED_PARTITION,
-    POLYGON_ADJUSTED_SCHEMA,
-    POLYGON_ADJUSTED_SORT,
+    MARKET_SPLITS_PARTITION,
+    MARKET_SPLITS_SCHEMA,
+    MARKET_SPLITS_SORT,
     POLYGON_RAW_PARTITION,
     POLYGON_RAW_SCHEMA,
     POLYGON_RAW_SORT,
@@ -135,29 +135,6 @@ def ensure_polygon_raw(catalog: Catalog | None = None) -> Table:
     )
 
 
-def ensure_polygon_adjusted(catalog: Catalog | None = None) -> Table:
-    """Create `equities.polygon_adjusted` if absent; return the table."""
-    catalog = catalog or get_catalog()
-    _ensure_namespace(catalog)
-
-    table_id = equities_table_id("polygon_adjusted")
-    try:
-        return catalog.load_table(table_id)
-    except NoSuchTableError:
-        pass
-
-    location = _equities_table_location("polygon_adjusted")
-    log.info("Creating Iceberg table %s at %s", table_id, location)
-    return catalog.create_table(
-        identifier=table_id,
-        schema=POLYGON_ADJUSTED_SCHEMA,
-        location=location,
-        partition_spec=POLYGON_ADJUSTED_PARTITION,
-        sort_order=POLYGON_ADJUSTED_SORT,
-        properties={**_BASE_PROPERTIES, **_MOR_PROPERTIES},
-    )
-
-
 def ensure_schwab_universe(catalog: Catalog | None = None) -> Table:
     """Create `equities.schwab_universe` if absent; return the table."""
     catalog = catalog or get_catalog()
@@ -204,30 +181,59 @@ def ensure_market_corp_actions(catalog: Catalog | None = None) -> Table:
     )
 
 
+def ensure_market_splits(catalog: Catalog | None = None) -> Table:
+    """Create `equities.market_splits` if absent; return the table.
+
+    Dedicated splits store (adjustment input) — kept separate from the
+    ~3M-row market_corp_actions so split lookups don't scan dividends.
+    See docs/market_splits_spec.md.
+    """
+    catalog = catalog or get_catalog()
+    _ensure_namespace(catalog)
+
+    table_id = equities_table_id("market_splits")
+    try:
+        return catalog.load_table(table_id)
+    except NoSuchTableError:
+        pass
+
+    location = _equities_table_location("market_splits")
+    log.info("Creating Iceberg table %s at %s", table_id, location)
+    return catalog.create_table(
+        identifier=table_id,
+        schema=MARKET_SPLITS_SCHEMA,
+        location=location,
+        partition_spec=MARKET_SPLITS_PARTITION,
+        sort_order=MARKET_SPLITS_SORT,
+        properties=_CORP_ACTIONS_PROPERTIES,
+    )
+
+
 def ensure_all(catalog: Catalog | None = None) -> dict[str, Table]:
-    """Convenience: create all four v2 equities tables.
+    """Convenience: create all v2 equities tables.
 
     Returns {table_name: Table}. Idempotent — safe to call repeatedly.
     Intended for operator scripts; not wired into uvicorn startup yet
-    (see follow-up CV1b).
+    (see follow-up CV1b). `polygon_adjusted` is intentionally absent —
+    adjusted OHLCV is computed at read time (lean storage migration).
     """
     catalog = catalog or get_catalog()
     return {
         "polygon_raw": ensure_polygon_raw(catalog),
-        "polygon_adjusted": ensure_polygon_adjusted(catalog),
         "schwab_universe": ensure_schwab_universe(catalog),
         "market_corp_actions": ensure_market_corp_actions(catalog),
+        "market_splits": ensure_market_splits(catalog),
     }
 
 
 # Dispatch table for runtime callers that know the table name as a
 # string (e.g. live writers parameterized by config). Keep in sync with
-# the four ensure_*() functions above.
+# the ensure_*() functions above.
 _ENSURE_DISPATCH: dict[str, "callable[[Catalog | None], Table]"] = {
     "polygon_raw": ensure_polygon_raw,
-    "polygon_adjusted": ensure_polygon_adjusted,
     "schwab_universe": ensure_schwab_universe,
     "market_corp_actions": ensure_market_corp_actions,
+    "market_splits": ensure_market_splits,
 }
 
 

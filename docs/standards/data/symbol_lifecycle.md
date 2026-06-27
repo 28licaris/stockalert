@@ -68,7 +68,7 @@ Daily refresh of the whole hot universe. Keeps the canonical layers in
 sync as new bars print and corp-actions land.
 
 ```
-07:00 UTC   nightly_polygon_refresh
+07:00 UTC   nightly_equities_polygon_refresh
             spec: POLYGON_NIGHTLY_SYMBOLS = "all"  (WHOLE MARKET)
             yesterday's Polygon flat-file → bronze.polygon_minute
             auto-catchup: fills weekday gaps if uvicorn was down

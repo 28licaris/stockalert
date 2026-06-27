@@ -1,0 +1,137 @@
+# Spec — Market Session / Holiday Calendar
+
+Status: **DRAFT — awaiting approval** (engagement spec-first; no code until signed off)
+Author: ops/data
+Date: 2026-06-26
+
+## 1. Problem
+
+Gap detection and freshness reasoning are **holiday-blind**. The system
+treats every Mon–Fri as a trading day and relies on "the provider is the
+source of truth": it attempts every weekday and skips whatever comes back
+empty (`404`/no rows) as `"weekend / holiday / out-of-range"`.
+
+This is robust but has three concrete costs, all observed on **2026-06-19
+(Juneteenth)**:
+
+1. **Wasted work.** A holiday burns a full universe of provider calls
+   (217 Schwab pricehistory requests) before the "no rows" skip.
+2. **Holiday ≡ gap.** `missing_weekdays()`
+   ([app/services/equities/gaps.py](app/services/equities/gaps.py)) counts
+   every weekday as expected, so a holiday is indistinguishable from a real
+   missing-data gap. Freshness/monitoring can never assert "we hold every
+   session" — a permanent holiday hole looks like a defect forever.
+3. **No asset-class distinction.** Equities were closed on Juneteenth but
+   CME futures traded. Nothing in the code knows this, so the futures gap
+   detector and the equities gap detector can't diverge correctly.
+
+The existing code deliberately avoided a calendar — the comment in
+[app/providers/polygon_flatfiles.py:546](app/providers/polygon_flatfiles.py)
+says it skips holidays implicitly "so we don't ship a fragile holiday
+calendar." That instinct (don't hand-maintain a drifting table) is correct
+and this spec honors it.
+
+## 2. Goal / requirements
+
+- A single authoritative answer to: *"Is `<date>` a trading session for
+  `<asset class>`, and if so, is it a half-day / early close?"*
+- Cover **equities (XNYS / NYSE+Nasdaq)** and **CME futures (CMES /
+  Globex)** including the equities-closed-but-futures-open case.
+- Handle **half-days / early closes** (e.g. day after Thanksgiving 13:00
+  ET, Christmas Eve) — needed so freshness doesn't flag a short session as
+  "missing the afternoon".
+- All session math in **ET**, consistent with the existing ET-vs-UTC
+  trading-day handling.
+- **No annual manual upkeep.** Calendar correctness must not depend on a
+  human editing a table each year.
+
+Non-goals: a full execution-grade trading-hours engine; intraday
+microstructure; non-US venues.
+
+## 3. Approach — maintained library, not a hand-kept table
+
+Add **`exchange_calendars`** (alt: `pandas_market_calendars`). It ships and
+maintains:
+- `XNYS` — NYSE/Nasdaq sessions, holidays, half-days, early-close times.
+- `CMES` — CME Globex sessions (Sun–Fri) + CME holiday rules.
+
+Library = source of truth. Optionally cache into a small CH table for
+SQL-side coverage joins (§5), but the table is a derived cache, never the
+authority.
+
+### Why library over DB table
+A DB `market_holidays` table is exactly the "fragile calendar" the codebase
+warned against: it drifts, needs yearly edits, and silently rots. A pinned,
+tested library updates with a dependency bump and is unit-testable against
+known holidays.
+
+## 4. Design
+
+New module `app/services/market_calendar.py` (pure, no I/O beyond the
+library), exposing:
+
+```python
+def is_equities_session(d: date) -> bool
+def is_futures_session(d: date) -> bool
+def equities_sessions(start: date, end: date) -> list[date]
+def futures_sessions(start: date, end: date) -> list[date]
+def equities_early_close(d: date) -> time | None   # None = full day
+def futures_early_close(d: date) -> time | None
+```
+
+Calendars are constructed once (module-level, lazy) and cached — building an
+`exchange_calendars` instance is ~100ms, so we do it once per process.
+
+### Integration points (the only behavioral changes)
+1. `app/services/equities/gaps.py::missing_weekdays` → filter the candidate
+   window to `equities_sessions(...)` instead of `weekday() < 5`. Keeps the
+   bounded cold-start fallback.
+2. `app/services/futures/gaps.py::missing_futures_sessions` → use
+   `futures_sessions(...)` (replaces the current Sun–Fri heuristic + adds
+   CME holiday awareness).
+3. Freshness checks (read-layer / status) → assert coverage against the
+   calendar so "complete through `<last session>`" becomes a real claim,
+   and holidays are reported as `expected-closed`, not `missing`.
+
+### Dependency
+Add `exchange_calendars` to `pyproject.toml`, pinned. One transitive concern
+to verify in the spike: it pulls `pandas`/`numpy` (already present).
+
+## 5. Optional — CH `market_sessions` cache (decide during review)
+
+For SQL-side coverage queries (e.g. "which sessions are we missing in
+`ohlcv_1m`?"), a tiny table helps:
+
+```
+market_sessions(exchange LowCardinality(String), session_date Date,
+                is_open UInt8, early_close_et Nullable(String))
+```
+
+Populated by a startup/nightly job from the library (library = truth, table
+= cache, rebuilt idempotently). **Recommend deferring** to a phase 2 unless
+we need calendar-aware SQL now.
+
+## 6. Edge cases / test matrix
+
+Unit tests against known dates (no network):
+- Juneteenth 2026-06-19 — equities **closed**, futures **open**.
+- Good Friday — equities closed; CME partial (verify library's answer).
+- Thanksgiving — both closed; **day-after** equities early close 13:00 ET.
+- July 4 (+ observed-on-weekday shifts), Christmas (24th early close).
+- Normal weekday — both open. Weekend — both closed (futures Sun evening
+  session boundary handled by the library's session dates).
+
+## 7. Rollout
+
+- Land module + tests (no behavior change) → flip `gaps.py` over → verify a
+  nightly run skips the next holiday with **zero** wasted provider calls and
+  logs `expected-closed`.
+- Low risk: gap detection only ever *narrows* the candidate set (drops
+  holidays); the bounded cold-start fallback is unchanged.
+
+## 8. Open questions for sign-off
+
+1. `exchange_calendars` vs `pandas_market_calendars` — preference?
+2. Build the CH `market_sessions` cache now (§5) or defer to phase 2?
+3. Put the new module under `app/services/` directly, or a small
+   `app/services/calendar/` package per the service-module template?

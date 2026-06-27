@@ -23,8 +23,6 @@ from pyiceberg.types import (  # noqa: E402
 from app.services.equities.schemas import (  # noqa: E402
     MARKET_CORP_ACTIONS_PARTITION,
     MARKET_CORP_ACTIONS_SCHEMA,
-    POLYGON_ADJUSTED_PARTITION,
-    POLYGON_ADJUSTED_SCHEMA,
     POLYGON_BUCKET_COUNT,
     POLYGON_RAW_PARTITION,
     POLYGON_RAW_SCHEMA,
@@ -86,29 +84,10 @@ def test_polygon_raw_has_no_adj_factor():
     assert "adj_factor" not in names, "raw bars are unadjusted by definition"
 
 
-# ─────────────────────────────────────────────────────────────────────
-# polygon_adjusted
-# ─────────────────────────────────────────────────────────────────────
-
-def test_polygon_adjusted_carries_adj_factor_required_double():
-    field = POLYGON_ADJUSTED_SCHEMA.find_field("adj_factor")
-    assert field is not None
-    assert isinstance(field.field_type, DoubleType)
-    assert field.required is True, "Gate 2: NOT NULL"
-
-
-def test_polygon_adjusted_base_columns_match_polygon_raw():
-    adj_cols = [
-        (f.name, f.field_type, f.required)
-        for f in POLYGON_ADJUSTED_SCHEMA.fields
-        if f.name != "adj_factor"
-    ]
-    assert adj_cols == _OHLCV_BASE
-
-
-def test_polygon_adjusted_uses_bucket32_partitioning():
-    fields = POLYGON_ADJUSTED_PARTITION.fields
-    assert fields[0].transform.num_buckets == POLYGON_BUCKET_COUNT == 32
+# polygon_adjusted: RETIRED — adjusted OHLCV is computed at read time
+# (app.services.equities.adjust), not stored. Its schema tests were removed
+# with the table (docs/adjusted_lean_storage_spec.md). The read-time output
+# shape is covered by app/services/equities/tests/test_adjust.py.
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -132,15 +111,6 @@ def test_schwab_universe_partitions_by_month_only():
     assert len(fields) == 1, "no symbol bucketing — small rolling table"
     assert fields[0].name == "ts_month"
     assert str(fields[0].transform) == "month"
-
-
-def test_schwab_universe_schema_unions_with_polygon_adjusted():
-    """The two adjusted tables must have identical column shapes so
-    UNION queries (the cross-provider ML use case in 02_schema.md) need
-    no column massaging."""
-    poly_cols = _column_summary(POLYGON_ADJUSTED_SCHEMA)
-    schwab_cols = _column_summary(SCHWAB_UNIVERSE_SCHEMA)
-    assert poly_cols == schwab_cols
 
 
 # ─────────────────────────────────────────────────────────────────────

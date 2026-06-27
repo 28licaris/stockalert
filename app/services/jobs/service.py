@@ -273,14 +273,14 @@ async def audit_run(
     `ingestion_runs` writes.
 
     Use this when registering a job whose one-cycle function does NOT
-    self-audit (e.g. nightly_polygon_refresh, journal_sync.sync_all).
+    self-audit (e.g. nightly_equities_polygon_refresh, journal_sync.sync_all).
     For loops that already write their own row (live_lake_writer,
     silver_ohlcv_build), wrap nothing — let their existing audit code
     do its thing.
 
     Usage:
         async def _run_polygon_once():
-            async with audit_run("nightly_polygon_refresh"):
+            async with audit_run("nightly_equities_polygon_refresh"):
                 await refresh_polygon_lake_yesterday(...)
 
     The wrapper:

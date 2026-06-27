@@ -32,6 +32,18 @@ from app.services.ingest.corp_actions import (
 from app.services.equities.models import CorpAction
 
 
+@pytest.fixture(autouse=True)
+def _no_market_splits_mirror(monkeypatch):
+    """These tests exercise the corp_actions write logic, not the
+    market_splits mirror. No-op the mirror so unit tests never touch the
+    real catalog (the mirror's own behaviour is covered separately)."""
+    monkeypatch.setattr(
+        PolygonCorpActionsIngest,
+        "_mirror_splits_to_market_splits",
+        staticmethod(lambda *a, **k: None),
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Polygon REST → CorpAction mapping
 # ─────────────────────────────────────────────────────────────────────

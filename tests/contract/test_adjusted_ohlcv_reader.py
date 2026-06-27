@@ -74,6 +74,17 @@ class _FakeIcebergTable:
         return _FakeSnapshot(self._snapshot_id)
 
 
+def _mk_reader(**kwargs):
+    """Construct AdjustedOhlcvReader for tests, injecting an empty
+    market_splits table by default so read-time adjustment is identity
+    (no splits) and the reader never falls through to the real catalog.
+    The historical `ohlcv_table=` seam now injects polygon_raw."""
+    kwargs.setdefault(
+        "splits_table", _FakeIcebergTable(pa.Table.from_pylist([])),
+    )
+    return AdjustedOhlcvReader(**kwargs)
+
+
 def _silver_row(
     symbol: str,
     ts: datetime,
@@ -144,7 +155,7 @@ class TestGetBarsHappyPath:
         ]
         ohlcv_table = _FakeIcebergTable(pa.Table.from_pylist(rows))
         bq_table = _FakeIcebergTable(pa.Table.from_pylist([]))
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=ohlcv_table, bar_quality_table=bq_table,
         )
 
@@ -160,21 +171,23 @@ class TestGetBarsHappyPath:
         assert resp.count == 2
         # Sorted by timestamp ascending.
         assert [b.timestamp for b in resp.bars] == [t0, t1]
-        # Silver stores split-adjusted OHLCV directly.
+        # Read-time adjustment is identity with no splits → close unchanged.
         assert resp.bars[0].close == 190.0
-        # sources_seen promoted from CSV to list.
-        assert resp.bars[0].sources_seen == ["polygon"]
-        # source_provider preserved.
-        assert resp.bars[0].source_provider == "polygon"
+        # Adjusted bars are tagged source='polygon-adjusted' and have no
+        # sources_seen concept (raw is single-provider).
+        assert resp.bars[0].sources_seen == []
+        assert resp.bars[0].source_provider == "polygon-adjusted"
 
-    def test_sources_seen_csv_parses_multi_provider(self) -> None:
+    def test_sources_seen_empty_post_migration(self) -> None:
+        # Read-time adjustment reads polygon_raw (single-provider), so the
+        # old multi-provider `sources_seen` CSV no longer exists — it's [].
         ts = datetime(2024, 6, 10, 13, 30, tzinfo=timezone.utc)
         rows = [_silver_row(
             "AAPL", ts,
             source_provider="polygon",
             sources_seen="polygon,schwab",
         )]
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=_FakeIcebergTable(pa.Table.from_pylist(rows)),
             bar_quality_table=_FakeIcebergTable(pa.Table.from_pylist([])),
         )
@@ -183,12 +196,12 @@ class TestGetBarsHappyPath:
             datetime(2024, 6, 10, tzinfo=timezone.utc),
             datetime(2024, 6, 11, tzinfo=timezone.utc),
         )
-        assert set(resp.bars[0].sources_seen) == {"polygon", "schwab"}
+        assert resp.bars[0].sources_seen == []
 
 
 class TestGetBarsEdgeCases:
     def test_empty_symbol_returns_empty(self) -> None:
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=_FakeIcebergTable(pa.Table.from_pylist([])),
             bar_quality_table=_FakeIcebergTable(pa.Table.from_pylist([])),
         )
@@ -201,7 +214,7 @@ class TestGetBarsEdgeCases:
         assert resp.count == 0
 
     def test_whitespace_symbol_returns_empty(self) -> None:
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=_FakeIcebergTable(pa.Table.from_pylist([])),
             bar_quality_table=_FakeIcebergTable(pa.Table.from_pylist([])),
         )
@@ -218,7 +231,7 @@ class TestGetBarsEdgeCases:
             def load_table(self, _id: Any) -> Any:
                 raise RuntimeError("table not found")
 
-        reader = AdjustedOhlcvReader(catalog=_BoomCatalog())
+        reader = _mk_reader(catalog=_BoomCatalog())
         resp = reader.get_bars(
             "AAPL",
             datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -230,7 +243,7 @@ class TestGetBarsEdgeCases:
 
     def test_scan_failure_returns_empty_no_raise(self) -> None:
         """If a scan blows up mid-query, return empty rather than 500ing."""
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=_FakeIcebergTable(
                 pa.Table.from_pylist([]),
                 scan_raises=RuntimeError("scan exploded"),
@@ -246,7 +259,7 @@ class TestGetBarsEdgeCases:
         assert resp.snapshot_id is None  # no snapshot when scan fails
 
     def test_naive_datetime_upgraded_to_utc(self) -> None:
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=_FakeIcebergTable(pa.Table.from_pylist([])),
             bar_quality_table=_FakeIcebergTable(pa.Table.from_pylist([])),
         )
@@ -267,7 +280,7 @@ class TestGetBarsEdgeCases:
         )
         bad["close"] = None
         rows = [good, bad]
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=_FakeIcebergTable(pa.Table.from_pylist(rows)),
             bar_quality_table=_FakeIcebergTable(pa.Table.from_pylist([])),
         )
@@ -290,7 +303,7 @@ class TestGetBarQuality:
             _bar_quality_row("AAPL", date(2024, 6, 11)),
             _bar_quality_row("AAPL", date(2024, 6, 10)),
         ]
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=_FakeIcebergTable(pa.Table.from_pylist([])),
             bar_quality_table=_FakeIcebergTable(pa.Table.from_pylist(rows)),
         )
@@ -310,7 +323,7 @@ class TestGetBarQuality:
             def load_table(self, _id: Any) -> Any:
                 raise RuntimeError("not found")
 
-        reader = AdjustedOhlcvReader(catalog=_BoomCatalog())
+        reader = _mk_reader(catalog=_BoomCatalog())
         resp = reader.get_bar_quality("AAPL")
         assert resp.rows == []
         assert resp.snapshot_id is None
@@ -485,18 +498,19 @@ class TestV2ReaderTargets:
     """Symbolic checks that the reader resolves equities.polygon_adjusted
     (v2) and not silver.ohlcv_1m (v1). Catch accidental rollback."""
 
-    def test_get_bars_loads_equities_polygon_adjusted(self) -> None:
+    def test_get_bars_loads_equities_polygon_raw(self) -> None:
         from unittest.mock import MagicMock
         from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 
         fake_cat = MagicMock()
         fake_cat.load_table.return_value = MagicMock()
-        r = AdjustedOhlcvReader(catalog=fake_cat)
+        r = _mk_reader(catalog=fake_cat)
         r._get_ohlcv_table()
 
         args, _ = fake_cat.load_table.call_args
-        assert args[0].endswith(".polygon_adjusted"), (
-            f"reader must load equities.polygon_adjusted, got {args[0]!r}"
+        assert args[0].endswith(".polygon_raw"), (
+            f"reader must load equities.polygon_raw (read-time adjustment), "
+            f"got {args[0]!r}"
         )
 
     def test_get_bar_quality_short_circuits_to_empty_without_v2_table(
@@ -511,7 +525,7 @@ class TestV2ReaderTargets:
         fake_cat.load_table.side_effect = AssertionError(
             "must not attempt to load a v2 bar_quality — there is none"
         )
-        r = AdjustedOhlcvReader(catalog=fake_cat)
+        r = _mk_reader(catalog=fake_cat)
         resp = r.get_bar_quality("AAPL")
         assert resp.count == 0
         assert resp.rows == []
@@ -580,7 +594,7 @@ class TestGetBarsUnion:
         ]))
         schwab = _FakeIcebergTable(pa.Table.from_pylist([]))
 
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=polygon, schwab_table=schwab,
         )
         resp = reader.get_bars_union(
@@ -601,7 +615,7 @@ class TestGetBarsUnion:
             _v2_row("AAPL", ts, source="schwab-live"),
         ]))
 
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=polygon, schwab_table=schwab,
         )
         resp = reader.get_bars_union(
@@ -624,7 +638,7 @@ class TestGetBarsUnion:
             _v2_row("AAPL", ts, source="schwab-live", close=150.51),
         ]))
 
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=polygon, schwab_table=schwab,
         )
         resp = reader.get_bars_union(
@@ -650,7 +664,7 @@ class TestGetBarsUnion:
             _v2_row("AAPL", ts_today_a, source="schwab-live"),
         ]))
 
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=polygon, schwab_table=schwab,
         )
         resp = reader.get_bars_union(
@@ -674,7 +688,7 @@ class TestGetBarsUnion:
             pa.Table.from_pylist([]),
             scan_raises=AssertionError("must not scan when symbol blank"),
         )
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=polygon, schwab_table=schwab,
         )
         resp = reader.get_bars_union(
@@ -696,7 +710,7 @@ class TestGetBarsUnion:
         schwab = _FakeIcebergTable(pa.Table.from_pylist([
             _v2_row("AAPL", ts, source="schwab-live"),
         ]))
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=polygon, schwab_table=schwab,
         )
         resp = reader.get_bars_union(
@@ -780,7 +794,7 @@ class TestGetSymbolCoverage:
         # Fake tables provide snapshot_id (="12345") + existence only.
         polygon = _FakeIcebergTable(pa.Table.from_pylist([]))
         schwab = _FakeIcebergTable(pa.Table.from_pylist([]))
-        return AdjustedOhlcvReader(ohlcv_table=polygon, schwab_table=schwab)
+        return _mk_reader(ohlcv_table=polygon, schwab_table=schwab)
 
     @staticmethod
     def _patch(monkeypatch, *, athena, ch):
@@ -803,7 +817,7 @@ class TestGetSymbolCoverage:
         self._patch(
             monkeypatch,
             athena={
-                "polygon_adjusted": AthenaCoverage(100, ts_a, ts_b),
+                "polygon_raw": AthenaCoverage(100, ts_a, ts_b),
                 "schwab_universe": AthenaCoverage(5, ts_c, ts_c),
             },
             ch={"symbol": "AAPL", "earliest": ts_a, "latest": ts_c, "bar_count": 105},
@@ -834,7 +848,7 @@ class TestGetSymbolCoverage:
         self._patch(
             monkeypatch,
             athena={
-                "polygon_adjusted": AthenaCoverage(0, None, None),
+                "polygon_raw": AthenaCoverage(0, None, None),
                 "schwab_universe": AthenaCoverage(1, ts, ts),
             },
             ch={"symbol": "NEWSYM", "earliest": ts, "latest": ts, "bar_count": 1},
@@ -852,7 +866,7 @@ class TestGetSymbolCoverage:
         self._patch(
             monkeypatch,
             athena={
-                "polygon_adjusted": AthenaCoverage(0, None, None),
+                "polygon_raw": AthenaCoverage(0, None, None),
                 "schwab_universe": AthenaCoverage(0, None, None),
             },
             ch={"symbol": "UNKNOWN", "earliest": None, "latest": None, "bar_count": 0},
@@ -872,7 +886,7 @@ class TestGetSymbolCoverage:
         self._patch(
             monkeypatch,
             athena={
-                "polygon_adjusted": None,  # Athena failed
+                "polygon_raw": None,  # Athena failed
                 "schwab_universe": AthenaCoverage(1, ts, ts),
             },
             ch={"symbol": "AAPL", "earliest": ts, "latest": ts, "bar_count": 1},
@@ -1006,7 +1020,7 @@ class TestGetCrossProviderDiff:
             _v2_row_with_close("AAPL", ts1, 150.001, "schwab-live"),  # ~0.0007% diff
             _v2_row_with_close("AAPL", ts2, 150.099, "schwab-live"),  # ~0.0007% diff
         ]))
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=polygon, schwab_table=schwab,
         )
 
@@ -1030,7 +1044,7 @@ class TestGetCrossProviderDiff:
         schwab = _FakeIcebergTable(pa.Table.from_pylist([
             _v2_row_with_close("NVDA", ts, 95.00, "schwab-live"),  # 5% diff
         ]))
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=polygon, schwab_table=schwab,
         )
 
@@ -1064,7 +1078,7 @@ class TestGetCrossProviderDiff:
             _v2_row_with_close("AAPL", ts_both, 150.50, "schwab-live"),
             _v2_row_with_close("AAPL", ts_schwab_only, 999.99, "schwab-live"),
         ]))
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=polygon, schwab_table=schwab,
         )
 
@@ -1092,7 +1106,7 @@ class TestGetCrossProviderDiff:
             _v2_row_with_close("AAPL", ts2, 110.00, "schwab-live"),
             _v2_row_with_close("AAPL", ts3, 90.00, "schwab-live"),
         ]))
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=polygon, schwab_table=schwab,
         )
 
@@ -1115,7 +1129,7 @@ class TestGetCrossProviderDiff:
             pa.Table.from_pylist([]),
             scan_raises=AssertionError("must not scan when symbol blank"),
         )
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=polygon, schwab_table=schwab,
         )
         resp = reader.get_cross_provider_diff(
@@ -1137,7 +1151,7 @@ class TestGetCrossProviderDiff:
             _v2_row_with_close("AAPL", datetime(2024, 6, 1, 14, 30, tzinfo=timezone.utc),
                                150.00, "schwab-live"),
         ]))
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=polygon, schwab_table=schwab,
         )
         resp = reader.get_cross_provider_diff(
@@ -1243,7 +1257,7 @@ class TestListSymbols:
             _v2_row("AAPL", ts, source="schwab-live"),
             _v2_row("GOOG", ts, source="schwab-live"),
         ]))
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=polygon, schwab_table=schwab,
         )
 
@@ -1270,7 +1284,7 @@ class TestListSymbols:
                 "must not scan when sources excludes schwab"
             ),
         )
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=polygon, schwab_table=schwab,
         )
 
@@ -1282,7 +1296,7 @@ class TestListSymbols:
     def test_unknown_source_is_logged_not_raised(self) -> None:
         polygon = _FakeIcebergTable(pa.Table.from_pylist([]))
         schwab = _FakeIcebergTable(pa.Table.from_pylist([]))
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=polygon, schwab_table=schwab,
         )
 
@@ -1299,7 +1313,7 @@ class TestListSymbols:
             _v2_row("MMMM", ts, source="polygon-adjusted"),
         ]))
         schwab = _FakeIcebergTable(pa.Table.from_pylist([]))
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=polygon, schwab_table=schwab,
         )
 
@@ -1309,7 +1323,7 @@ class TestListSymbols:
     def test_default_since_is_30d_back(self) -> None:
         polygon = _FakeIcebergTable(pa.Table.from_pylist([]))
         schwab = _FakeIcebergTable(pa.Table.from_pylist([]))
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=polygon, schwab_table=schwab,
         )
 
@@ -1330,7 +1344,7 @@ class TestListSymbols:
         schwab = _FakeIcebergTable(pa.Table.from_pylist([
             _v2_row("AAPL", ts, source="schwab-live"),
         ]))
-        reader = AdjustedOhlcvReader(
+        reader = _mk_reader(
             ohlcv_table=polygon, schwab_table=schwab,
         )
 

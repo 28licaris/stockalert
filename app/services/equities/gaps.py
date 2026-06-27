@@ -10,7 +10,7 @@ the gap detector miss the next trading day.
 Used by:
   - `scripts/polygon_history_backfill.py` (CV3) — pre-computes skip
     set so re-runs of the same window are no-ops.
-  - `app/services/ingest/nightly_polygon_refresh.py` (CV7) — cuts the
+  - `app/services/ingest/nightly_equities_polygon_refresh.py` (CV7) — cuts the
     nightly cron over to `equities.polygon_raw`.
 
 The v1 `app.services.bronze.gaps` module was deleted in CV14; this is

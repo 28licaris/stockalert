@@ -614,7 +614,7 @@ aws emr-serverless list-job-runs \
 Expected: ~10-15 runs/month total. Monthly cost: $5-15.
 
 ### Polygon subscription
-Fixed monthly. If not actively running `nightly_polygon_refresh` and
+Fixed monthly. If not actively running `nightly_equities_polygon_refresh` and
 not running `polygon_corp_actions_ingest`, consider downgrading or
 canceling.
 

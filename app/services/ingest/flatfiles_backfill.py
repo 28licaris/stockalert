@@ -209,7 +209,7 @@ class FlatFilesBackfillService:
             lake writes construct the service explicitly with
             `sinks=[EquitiesIcebergSink.for_polygon_raw(), …]` (see
             scripts/polygon_history_backfill.py + CV7's
-            nightly_polygon_refresh.py). The legacy LakeSink fallback
+            nightly_equities_polygon_refresh.py). The legacy LakeSink fallback
             was removed in CV19.
 
         Raises if the Polygon Flat Files credentials are missing — we'd

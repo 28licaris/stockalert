@@ -154,8 +154,9 @@ def _iceberg_table_freshness() -> dict:
     from app.services.iceberg_catalog import get_catalog
 
     specs = {
-        # The external weekly Spark tier — the key freshness blind spot.
-        "polygon_adjusted": equities_table_id("polygon_adjusted"),
+        # Polygon cold tier. Adjusted OHLCV is computed at read time from
+        # polygon_raw, so raw's freshness IS the adjusted-history freshness.
+        "polygon_raw": equities_table_id("polygon_raw"),
         "futures_schwab": futures_table_id("schwab_futures"),
         "futures_continuous": futures_table_id("polygon_continuous"),
     }
