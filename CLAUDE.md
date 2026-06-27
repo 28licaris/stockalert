@@ -89,7 +89,8 @@ Lake tables (v2 / `equities.*` Glue DB):
 |---|---|---|
 | `equities.polygon_raw` | Polygon flat-files (CV7 nightly, CV3 history puller) | Raw unadjusted, bucket(32, symbol) + month(timestamp) |
 | `equities.schwab_universe` | Schwab live + REST (CV8) | Pre-adjusted (adj_factor=1.0); bucket(16) |
-| `equities.market_corp_actions` | Polygon REST (CV9) | Splits + dividends; month(ex_date) partition |
+| `equities.market_corp_actions` | Polygon REST (CV9) | Dividends (+ splits, legacy); month(ex_date) partition |
+| `equities.market_splits` | Polygon REST (mirrored from corp-actions) | Splits-only, ~27k rows; the read-time adjustment source. Tiny + symbol-sorted so per-symbol lookup is instant (no dividend scan) |
 
 > **Split-adjusted OHLCV is computed at read time**, not stored — `adjusted =
 > f(polygon_raw, market_corp_actions splits)` via `app/services/equities/adjust.py`.

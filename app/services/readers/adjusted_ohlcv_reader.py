@@ -66,7 +66,7 @@ logger = logging.getLogger(__name__)
 # app.services.equities.adjust.apply_adjustment. The materialized
 # polygon_adjusted table is being retired (docs/adjusted_lean_storage_spec.md).
 _RAW_TABLE_NAME = "polygon_raw"
-_CORP_ACTIONS_TABLE_NAME = "market_corp_actions"
+_SPLITS_TABLE_NAME = "market_splits"
 
 
 class AdjustedOhlcvReader:
@@ -91,7 +91,7 @@ class AdjustedOhlcvReader:
         *,
         catalog=None,
         raw_table: Optional[Table] = None,
-        corp_actions_table: Optional[Table] = None,
+        splits_table: Optional[Table] = None,
         bar_quality_table: Optional[Table] = None,
         schwab_table: Optional[Table] = None,
         ohlcv_table: Optional[Table] = None,  # back-compat alias for raw_table
@@ -101,7 +101,7 @@ class AdjustedOhlcvReader:
         # injects polygon_raw (read-time adjustment). `raw_table` wins if both
         # are given.
         self._ohlcv_table = raw_table if raw_table is not None else ohlcv_table
-        self._corp_actions_table = corp_actions_table
+        self._splits_table = splits_table
         self._bar_quality_table = bar_quality_table
         self._schwab_table = schwab_table
 
@@ -129,44 +129,27 @@ class AdjustedOhlcvReader:
             )
         return self._schwab_table
 
-    def _get_corp_actions_table(self) -> Table:
-        if self._corp_actions_table is None:
-            self._corp_actions_table = self._get_catalog().load_table(
-                equities_table_id(_CORP_ACTIONS_TABLE_NAME),
+    def _get_splits_table(self) -> Table:
+        if self._splits_table is None:
+            self._splits_table = self._get_catalog().load_table(
+                equities_table_id(_SPLITS_TABLE_NAME),
             )
-        return self._corp_actions_table
+        return self._splits_table
 
     def _load_split_lookup(self, symbol: str):
-        """Cumulative-future-split lookup for `symbol` from
-        market_corp_actions. Returns {} (→ identity adjustment) when the
-        corp-actions table is unavailable/empty, so cold-start degrades to
-        raw passthrough rather than raising."""
-        from app.services.equities.adjust import build_cum_factor_lookup
+        """Cumulative-future-split lookup for `symbol` from the dedicated
+        equities.market_splits table (no dividend scan). Returns {} (→
+        identity adjustment) when the table is unavailable/empty."""
+        from app.services.equities.splits_reader import load_cum_factor_lookup
         try:
-            table = self._get_corp_actions_table()
+            table = self._get_splits_table()
         except Exception as e:
             logger.warning(
-                "AdjustedOhlcvReader: market_corp_actions not loadable (%s); "
+                "AdjustedOhlcvReader: market_splits not loadable (%s); "
                 "adjusting with no splits (identity)", e,
             )
             return {}
-        try:
-            arr = table.scan(
-                row_filter=And(
-                    EqualTo("symbol", symbol),
-                    EqualTo("action_type", "split"),
-                ),
-                selected_fields=("symbol", "ex_date", "factor"),
-            ).to_arrow()
-        except Exception as e:
-            logger.warning(
-                "AdjustedOhlcvReader: corp-actions scan failed for %s (%s); "
-                "adjusting with no splits", symbol, e,
-            )
-            return {}
-        d = arr.to_pydict()
-        rows = zip(d.get("symbol", []), d.get("ex_date", []), d.get("factor", []))
-        return build_cum_factor_lookup(rows)
+        return load_cum_factor_lookup(table=table, symbols=[symbol])
 
     def _scan_adjusted_window(self, symbol, start_utc, end_utc):
         """Scan polygon_raw for (symbol, window) and apply read-time split

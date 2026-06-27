@@ -76,11 +76,11 @@ class _FakeIcebergTable:
 
 def _mk_reader(**kwargs):
     """Construct AdjustedOhlcvReader for tests, injecting an empty
-    corp-actions table by default so read-time adjustment is identity
+    market_splits table by default so read-time adjustment is identity
     (no splits) and the reader never falls through to the real catalog.
     The historical `ohlcv_table=` seam now injects polygon_raw."""
     kwargs.setdefault(
-        "corp_actions_table", _FakeIcebergTable(pa.Table.from_pylist([])),
+        "splits_table", _FakeIcebergTable(pa.Table.from_pylist([])),
     )
     return AdjustedOhlcvReader(**kwargs)
 

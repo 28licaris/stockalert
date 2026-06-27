@@ -259,14 +259,10 @@ def _computed_adjusted_arrow(spec: SourceSpec, syms, start_utc, end_utc, catalog
     Returns None if the raw table can't be loaded (cold-start safe). A
     corp-actions load failure degrades to identity adjustment (logged).
     """
-    from pyiceberg.expressions import (
-        And, EqualTo, GreaterThanOrEqual, In, LessThan,
-    )
+    from pyiceberg.expressions import And, GreaterThanOrEqual, In, LessThan
 
-    from app.services.equities.adjust import (
-        apply_adjustment, build_cum_factor_lookup,
-    )
-    from app.services.equities.schemas import equities_table_id
+    from app.services.equities.adjust import apply_adjustment
+    from app.services.equities.splits_reader import load_cum_factor_lookup
 
     table = _load_table(spec, catalog)
     if table is None:
@@ -286,25 +282,8 @@ def _computed_adjusted_arrow(spec: SourceSpec, syms, start_utc, end_utc, catalog
                        spec.name, e)
         return None
 
-    lookup = {}
-    try:
-        cat = catalog
-        if cat is None:
-            from app.services.iceberg_catalog import get_catalog
-            cat = get_catalog()
-        ca = cat.load_table(equities_table_id("market_corp_actions"))
-        carr = ca.scan(
-            row_filter=And(In("symbol", syms), EqualTo("action_type", "split")),
-            selected_fields=("symbol", "ex_date", "factor"),
-        ).to_arrow()
-        d = carr.to_pydict()
-        lookup = build_cum_factor_lookup(
-            zip(d.get("symbol", []), d.get("ex_date", []), d.get("factor", []))
-        )
-    except Exception as e:  # noqa: BLE001 — boundary
-        logger.warning("read_arrow: corp-actions load failed for %s (%s); "
-                       "identity adjustment", spec.name, e)
-        lookup = {}
+    # Splits from the dedicated market_splits table (no dividend scan).
+    lookup = load_cum_factor_lookup(catalog=catalog, symbols=syms)
     return apply_adjustment(raw, lookup)
 
 

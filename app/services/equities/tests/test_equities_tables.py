@@ -115,12 +115,14 @@ def test_ensure_all_creates_the_v2_tables(monkeypatch):
     result = equities_tables.ensure_all(catalog)
 
     # polygon_adjusted retired — adjusted is computed at read time.
+    # market_splits added — dedicated splits store.
     assert set(result.keys()) == {
         "polygon_raw",
         "schwab_universe",
         "market_corp_actions",
+        "market_splits",
     }
-    assert catalog.create_table.call_count == 3
+    assert catalog.create_table.call_count == 4
 
 
 def test_ensure_equities_table_dispatches_known_name():
@@ -154,6 +156,7 @@ def test_ensure_equities_table_covers_all_v2_tables():
         "polygon_raw",
         "schwab_universe",
         "market_corp_actions",
+        "market_splits",
     ):
         catalog = _make_catalog(table_exists=False)
         equities_tables.ensure_equities_table(short_name, catalog)

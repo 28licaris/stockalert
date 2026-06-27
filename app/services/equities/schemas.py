@@ -200,3 +200,32 @@ MARKET_CORP_ACTIONS_SORT = SortOrder(
     SortField(source_id=1, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
     SortField(source_id=2, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
 )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# equities.market_splits — dedicated splits store (adjustment input)
+# ─────────────────────────────────────────────────────────────────────
+#
+# Splits ONLY (factor != 1.0). Separated from market_corp_actions (~3M
+# dividend rows) so the split lookup the read-time adjustment needs is
+# cheap: the whole set is ~50k rows, so a full read is sub-second and a
+# per-symbol read is instant. Sorted by (symbol, ex_date); unpartitioned
+# (the table is tiny). See docs/market_splits_spec.md.
+MARKET_SPLITS_SCHEMA = Schema(
+    NestedField(1, "symbol", StringType(), required=True),
+    NestedField(2, "ex_date", DateType(), required=True),
+    NestedField(3, "factor", DoubleType(), required=True),
+    NestedField(4, "source_provider", StringType(), required=False),
+    NestedField(5, "ingestion_ts", TimestamptzType(), required=False),
+    NestedField(6, "ingestion_run_id", StringType(), required=False),
+    identifier_field_ids=[1, 2],
+)
+
+# Tiny table → unpartitioned. The (symbol, ex_date) sort + small files give
+# fast per-symbol pruning AND fast full scans without partition overhead.
+MARKET_SPLITS_PARTITION = PartitionSpec()
+
+MARKET_SPLITS_SORT = SortOrder(
+    SortField(source_id=1, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+    SortField(source_id=2, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+)

@@ -28,6 +28,9 @@ from app.services.equities.schemas import (
     MARKET_CORP_ACTIONS_PARTITION,
     MARKET_CORP_ACTIONS_SCHEMA,
     MARKET_CORP_ACTIONS_SORT,
+    MARKET_SPLITS_PARTITION,
+    MARKET_SPLITS_SCHEMA,
+    MARKET_SPLITS_SORT,
     POLYGON_RAW_PARTITION,
     POLYGON_RAW_SCHEMA,
     POLYGON_RAW_SORT,
@@ -178,6 +181,34 @@ def ensure_market_corp_actions(catalog: Catalog | None = None) -> Table:
     )
 
 
+def ensure_market_splits(catalog: Catalog | None = None) -> Table:
+    """Create `equities.market_splits` if absent; return the table.
+
+    Dedicated splits store (adjustment input) — kept separate from the
+    ~3M-row market_corp_actions so split lookups don't scan dividends.
+    See docs/market_splits_spec.md.
+    """
+    catalog = catalog or get_catalog()
+    _ensure_namespace(catalog)
+
+    table_id = equities_table_id("market_splits")
+    try:
+        return catalog.load_table(table_id)
+    except NoSuchTableError:
+        pass
+
+    location = _equities_table_location("market_splits")
+    log.info("Creating Iceberg table %s at %s", table_id, location)
+    return catalog.create_table(
+        identifier=table_id,
+        schema=MARKET_SPLITS_SCHEMA,
+        location=location,
+        partition_spec=MARKET_SPLITS_PARTITION,
+        sort_order=MARKET_SPLITS_SORT,
+        properties=_CORP_ACTIONS_PROPERTIES,
+    )
+
+
 def ensure_all(catalog: Catalog | None = None) -> dict[str, Table]:
     """Convenience: create all v2 equities tables.
 
@@ -191,6 +222,7 @@ def ensure_all(catalog: Catalog | None = None) -> dict[str, Table]:
         "polygon_raw": ensure_polygon_raw(catalog),
         "schwab_universe": ensure_schwab_universe(catalog),
         "market_corp_actions": ensure_market_corp_actions(catalog),
+        "market_splits": ensure_market_splits(catalog),
     }
 
 
@@ -201,6 +233,7 @@ _ENSURE_DISPATCH: dict[str, "callable[[Catalog | None], Table]"] = {
     "polygon_raw": ensure_polygon_raw,
     "schwab_universe": ensure_schwab_universe,
     "market_corp_actions": ensure_market_corp_actions,
+    "market_splits": ensure_market_splits,
 }
 
 
