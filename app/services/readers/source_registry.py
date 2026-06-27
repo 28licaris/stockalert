@@ -61,11 +61,16 @@ def equity_sources() -> list[SourceSpec]:
 
     return [
         SourceSpec(
+            # Logical "polygon adjusted" source. Adjustment is computed at
+            # read time from polygon_raw + market_corp_actions (the
+            # materialized polygon_adjusted table was retired — see
+            # docs/adjusted_lean_storage_spec.md), so table_id points at the
+            # RAW table and `adjustment="computed"` drives the read-time math.
             name="polygon_adjusted",
-            table_id=equities_table_id("polygon_adjusted"),
+            table_id=equities_table_id("polygon_raw"),
             precedence=2,
             adjustment="computed",
-            sorted_by_ts=True,
+            sorted_by_ts=False,
             provider_tag="polygon-adjusted",
         ),
         SourceSpec(

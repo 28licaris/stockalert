@@ -173,11 +173,23 @@ def union_arrow(
             raise ValueError(f"unknown source {name!r} in arrow_by_source")
         if arrow is None or arrow.num_rows == 0:
             continue
-        frames.append(
-            pl.from_arrow(arrow).lazy().with_columns(
-                pl.lit(spec.precedence, dtype=pl.Int32).alias(_PREC)
-            )
+        # Project each source to the canonical column set before union, so
+        # sources with extra columns (e.g. schwab_universe's ingestion_ts/
+        # ingestion_run_id) align with the leaner read-time-adjusted arrow.
+        # Mirrors the lazy _scan_source projection. Missing canon columns are
+        # backfilled with null for schema parity.
+        have = set(arrow.schema.names)
+        present = [c for c in CANON_COLUMNS if c in have]
+        missing = [c for c in CANON_COLUMNS if c not in have]
+        lf = pl.from_arrow(arrow).lazy().select(present)
+        if missing:
+            lf = lf.with_columns([pl.lit(None).alias(c) for c in missing])
+        # Re-select in canonical order so vertical concat aligns by position
+        # regardless of which columns each source carried.
+        lf = lf.select(CANON_COLUMNS).with_columns(
+            pl.lit(spec.precedence, dtype=pl.Int32).alias(_PREC)
         )
+        frames.append(lf)
     if not frames:
         return pa.table({})
     return _collect(_union_dedup(frames, pl=pl)).to_arrow()
@@ -194,25 +206,33 @@ def _scan_source(spec: SourceSpec, syms, start_utc, end_utc, *,
     Returns a LazyFrame tagged with `__prec`, or None if the source's
     table can't be loaded (cold-start safe).
     """
-    table = _load_table(spec, catalog)
-    if table is None:
-        return None
+    if spec.adjustment == "computed":
+        # Read-time adjustment: scan the provider RAW table and apply split
+        # factors via the gated apply_adjustment (no materialized copy).
+        arrow = _computed_adjusted_arrow(spec, syms, start_utc, end_utc, catalog)
+        if arrow is None:
+            return None
+        have = set(arrow.schema.names)
+        lf = pl.from_arrow(arrow).lazy()
+    else:
+        table = _load_table(spec, catalog)
+        if table is None:
+            return None
+        have = set(table.schema().column_names)
+        try:
+            lf = pl.scan_iceberg(table)
+        except Exception as e:  # noqa: BLE001 — boundary; report, don't swallow
+            logger.warning("read_arrow: pl.scan_iceberg(%s) failed: %s; "
+                           "skipping source", spec.table_id, e)
+            return None
+        lf = lf.filter(
+            pl.col("symbol").is_in(syms)
+            & (pl.col("timestamp") >= start_utc)
+            & (pl.col("timestamp") < end_utc)
+        )
 
-    have = set(table.schema().column_names)
     proj = [c for c in read_cols if c in have]
-
-    try:
-        lf = pl.scan_iceberg(table)
-    except Exception as e:  # noqa: BLE001 — boundary; report, don't swallow
-        logger.warning("read_arrow: pl.scan_iceberg(%s) failed: %s; "
-                       "skipping source", spec.table_id, e)
-        return None
-
-    lf = lf.filter(
-        pl.col("symbol").is_in(syms)
-        & (pl.col("timestamp") >= start_utc)
-        & (pl.col("timestamp") < end_utc)
-    ).select(proj)
+    lf = lf.select(proj)
 
     # Backfill any projected column the source lacks, so the union is
     # schema-aligned (parity means this is normally a no-op).
@@ -224,10 +244,68 @@ def _scan_source(spec: SourceSpec, syms, start_utc, end_utc, *,
     # Lever 2: on the single-symbol path a (symbol, timestamp)-sorted
     # table is sorted by timestamp within the symbol, so declare it —
     # Polars then merges rather than re-sorts. Safe only for one symbol
-    # (across symbols the global ts order is not monotonic).
-    if single_symbol and spec.sorted_by_ts:
+    # (across symbols the global ts order is not monotonic). The computed
+    # path's row order isn't guaranteed ts-sorted, so it never set_sorted.
+    if single_symbol and spec.sorted_by_ts and spec.adjustment != "computed":
         lf = lf.set_sorted("timestamp")
     return lf
+
+
+def _computed_adjusted_arrow(spec: SourceSpec, syms, start_utc, end_utc, catalog):
+    """Provider RAW table → read-time split-adjusted Arrow, reusing the
+    gated ``app.services.equities.adjust.apply_adjustment`` so the bulk path
+    produces the same values the (deleted) materialized table did.
+
+    Returns None if the raw table can't be loaded (cold-start safe). A
+    corp-actions load failure degrades to identity adjustment (logged).
+    """
+    from pyiceberg.expressions import (
+        And, EqualTo, GreaterThanOrEqual, In, LessThan,
+    )
+
+    from app.services.equities.adjust import (
+        apply_adjustment, build_cum_factor_lookup,
+    )
+    from app.services.equities.schemas import equities_table_id
+
+    table = _load_table(spec, catalog)
+    if table is None:
+        return None
+    try:
+        raw = table.scan(
+            row_filter=And(
+                In("symbol", syms),
+                And(
+                    GreaterThanOrEqual("timestamp", start_utc),
+                    LessThan("timestamp", end_utc),
+                ),
+            ),
+        ).to_arrow()
+    except Exception as e:  # noqa: BLE001 — boundary
+        logger.warning("read_arrow: computed source %s raw scan failed: %s",
+                       spec.name, e)
+        return None
+
+    lookup = {}
+    try:
+        cat = catalog
+        if cat is None:
+            from app.services.iceberg_catalog import get_catalog
+            cat = get_catalog()
+        ca = cat.load_table(equities_table_id("market_corp_actions"))
+        carr = ca.scan(
+            row_filter=And(In("symbol", syms), EqualTo("action_type", "split")),
+            selected_fields=("symbol", "ex_date", "factor"),
+        ).to_arrow()
+        d = carr.to_pydict()
+        lookup = build_cum_factor_lookup(
+            zip(d.get("symbol", []), d.get("ex_date", []), d.get("factor", []))
+        )
+    except Exception as e:  # noqa: BLE001 — boundary
+        logger.warning("read_arrow: corp-actions load failed for %s (%s); "
+                       "identity adjustment", spec.name, e)
+        lookup = {}
+    return apply_adjustment(raw, lookup)
 
 
 def _union_dedup(frames, *, pl):

@@ -2,6 +2,14 @@
 
 **Status:** Design locked, awaiting Phase-1 implementation approval.
 
+> **Superseded note (2026-06-27): `equities.polygon_adjusted` is retired.**
+> Split-adjusted OHLCV is no longer a materialized table built by a weekly
+> Spark job — it's computed at **read time** from `polygon_raw` +
+> `market_corp_actions` (`app/services/equities/adjust.py`). Wherever these
+> docs describe a `polygon_adjusted` table, the EMR Spark adjustment job, or
+> EMR Serverless, read it as historical. Current design:
+> [`docs/adjusted_lean_storage_spec.md`](../adjusted_lean_storage_spec.md).
+
 This folder is the **complete reference** for the v2 architecture
 refactor. Each file is one topic, self-contained, readable in any
 order. Read [`01_architecture.md`](01_architecture.md) first if you

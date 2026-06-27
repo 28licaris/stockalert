@@ -61,7 +61,12 @@ from app.services.equities.models import SilverBar
 logger = logging.getLogger(__name__)
 
 
-_OHLCV_TABLE_NAME = "polygon_adjusted"
+# Read-time adjustment (lean storage): the canonical source is polygon_raw
+# + market_corp_actions splits; adjusted bars are computed on read via
+# app.services.equities.adjust.apply_adjustment. The materialized
+# polygon_adjusted table is being retired (docs/adjusted_lean_storage_spec.md).
+_RAW_TABLE_NAME = "polygon_raw"
+_CORP_ACTIONS_TABLE_NAME = "market_corp_actions"
 
 
 class AdjustedOhlcvReader:
@@ -85,12 +90,18 @@ class AdjustedOhlcvReader:
         self,
         *,
         catalog=None,
-        ohlcv_table: Optional[Table] = None,
+        raw_table: Optional[Table] = None,
+        corp_actions_table: Optional[Table] = None,
         bar_quality_table: Optional[Table] = None,
         schwab_table: Optional[Table] = None,
+        ohlcv_table: Optional[Table] = None,  # back-compat alias for raw_table
     ) -> None:
         self._catalog = catalog
-        self._ohlcv_table = ohlcv_table
+        # `ohlcv_table` is the historical name for the bar source; it now
+        # injects polygon_raw (read-time adjustment). `raw_table` wins if both
+        # are given.
+        self._ohlcv_table = raw_table if raw_table is not None else ohlcv_table
+        self._corp_actions_table = corp_actions_table
         self._bar_quality_table = bar_quality_table
         self._schwab_table = schwab_table
 
@@ -104,9 +115,10 @@ class AdjustedOhlcvReader:
         return self._catalog
 
     def _get_ohlcv_table(self) -> Table:
+        # Now the RAW table — adjustment is applied at read time.
         if self._ohlcv_table is None:
             self._ohlcv_table = self._get_catalog().load_table(
-                equities_table_id(_OHLCV_TABLE_NAME),
+                equities_table_id(_RAW_TABLE_NAME),
             )
         return self._ohlcv_table
 
@@ -116,6 +128,80 @@ class AdjustedOhlcvReader:
                 equities_table_id("schwab_universe"),
             )
         return self._schwab_table
+
+    def _get_corp_actions_table(self) -> Table:
+        if self._corp_actions_table is None:
+            self._corp_actions_table = self._get_catalog().load_table(
+                equities_table_id(_CORP_ACTIONS_TABLE_NAME),
+            )
+        return self._corp_actions_table
+
+    def _load_split_lookup(self, symbol: str):
+        """Cumulative-future-split lookup for `symbol` from
+        market_corp_actions. Returns {} (→ identity adjustment) when the
+        corp-actions table is unavailable/empty, so cold-start degrades to
+        raw passthrough rather than raising."""
+        from app.services.equities.adjust import build_cum_factor_lookup
+        try:
+            table = self._get_corp_actions_table()
+        except Exception as e:
+            logger.warning(
+                "AdjustedOhlcvReader: market_corp_actions not loadable (%s); "
+                "adjusting with no splits (identity)", e,
+            )
+            return {}
+        try:
+            arr = table.scan(
+                row_filter=And(
+                    EqualTo("symbol", symbol),
+                    EqualTo("action_type", "split"),
+                ),
+                selected_fields=("symbol", "ex_date", "factor"),
+            ).to_arrow()
+        except Exception as e:
+            logger.warning(
+                "AdjustedOhlcvReader: corp-actions scan failed for %s (%s); "
+                "adjusting with no splits", symbol, e,
+            )
+            return {}
+        d = arr.to_pydict()
+        rows = zip(d.get("symbol", []), d.get("ex_date", []), d.get("factor", []))
+        return build_cum_factor_lookup(rows)
+
+    def _scan_adjusted_window(self, symbol, start_utc, end_utc):
+        """Scan polygon_raw for (symbol, window) and apply read-time split
+        adjustment. Returns the adjusted Arrow table, or None on
+        table-not-loadable / scan failure (callers treat None as 'this
+        source contributed nothing')."""
+        from app.services.equities.adjust import apply_adjustment
+        try:
+            table = self._get_ohlcv_table()
+        except Exception as e:
+            logger.warning(
+                "AdjustedOhlcvReader: polygon_raw not loadable (%s); "
+                "treating as empty", e,
+            )
+            return None
+        row_filter = And(
+            EqualTo("symbol", symbol),
+            GreaterThanOrEqual("timestamp", start_utc),
+            LessThan("timestamp", end_utc),
+        )
+        try:
+            raw_arrow = table.scan(row_filter=row_filter).to_arrow()
+        except Exception as e:
+            logger.warning(
+                "AdjustedOhlcvReader: polygon_raw scan failed for %s [%s..%s]: %s",
+                symbol, start_utc, end_utc, e,
+            )
+            return None
+        try:
+            return apply_adjustment(raw_arrow, self._load_split_lookup(symbol))
+        except Exception as e:
+            logger.warning(
+                "AdjustedOhlcvReader: adjustment failed for %s: %s", symbol, e,
+            )
+            return None
 
     def _get_bar_quality_table(self) -> Table:
         # No v2 equivalent of silver.bar_quality. Callers of
@@ -179,7 +265,7 @@ class AdjustedOhlcvReader:
             table = self._get_ohlcv_table()
         except Exception as e:
             logger.warning(
-                "AdjustedOhlcvReader: equities.polygon_adjusted not "
+                "AdjustedOhlcvReader: equities.polygon_raw not "
                 "loadable (%s); returning empty result", e,
             )
             return SilverBarsResponse(
@@ -187,26 +273,15 @@ class AdjustedOhlcvReader:
                 snapshot_id=None, bars=[], count=0,
             )
 
-        row_filter = And(
-            EqualTo("symbol", sym),
-            GreaterThanOrEqual("timestamp", start_utc),
-            LessThan("timestamp", end_utc),
-        )
-
-        try:
-            scan = table.scan(row_filter=row_filter)
-            arrow = scan.to_arrow()
-        except Exception as e:
-            logger.warning(
-                "AdjustedOhlcvReader: scan failed for %s [%s..%s]: %s",
-                sym, start_utc, end_utc, e,
-            )
+        # Read-time adjustment: scan polygon_raw + apply split factors.
+        adjusted = self._scan_adjusted_window(sym, start_utc, end_utc)
+        if adjusted is None:
             return SilverBarsResponse(
                 symbol=sym, start=start_utc, end=end_utc,
                 snapshot_id=None, bars=[], count=0,
             )
 
-        bars = self._arrow_to_bars(arrow)
+        bars = self._arrow_to_bars(adjusted)
 
         snap = table.current_snapshot()
         snap_id = str(snap.snapshot_id) if snap else None
@@ -266,10 +341,7 @@ class AdjustedOhlcvReader:
 
         # Pull both tables independently — either may be cold-start
         # empty without failing the union.
-        polygon_arrow = self._scan_window(
-            self._get_ohlcv_table, sym, start_utc, end_utc,
-            label="equities.polygon_adjusted",
-        )
+        polygon_arrow = self._scan_adjusted_window(sym, start_utc, end_utc)
         schwab_arrow = self._scan_window(
             self._get_schwab_table, sym, start_utc, end_utc,
             label="equities.schwab_universe",
@@ -420,7 +492,10 @@ class AdjustedOhlcvReader:
             "polygon_adjusted": lambda: self._coverage_for(
                 self._get_ohlcv_table, sym,
                 table_label="equities.polygon_adjusted",
-                athena_table="polygon_adjusted",
+                # Adjustment doesn't add/remove rows, so adjusted-history
+                # coverage == raw coverage. Source it from polygon_raw (the
+                # materialized adjusted table is being retired).
+                athena_table="polygon_raw",
             ),
             "schwab_universe": lambda: self._coverage_for(
                 self._get_schwab_table, sym,
@@ -674,10 +749,7 @@ class AdjustedOhlcvReader:
                 count=0,
             )
 
-        polygon_arrow = self._scan_window(
-            self._get_ohlcv_table, sym, start_utc, end_utc,
-            label="equities.polygon_adjusted",
-        )
+        polygon_arrow = self._scan_adjusted_window(sym, start_utc, end_utc)
         schwab_arrow = self._scan_window(
             self._get_schwab_table, sym, start_utc, end_utc,
             label="equities.schwab_universe",
@@ -859,11 +931,15 @@ class AdjustedOhlcvReader:
             # Pydantic SilverBar declares them as non-Optional float for
             # the canonical row. Skip rows missing any OHLC (upstream
             # bug worth surfacing rather than silently 0-filling).
+            # Skip rows with NULL or NaN OHLC. Read-time adjustment turns a
+            # NULL raw price into NaN (None → float64 nan), so check both —
+            # an invalid bar must not leak through as a NaN-priced SilverBar.
             if any(
-                r.get(c) is None for c in ("open", "high", "low", "close")
+                (v := r.get(c)) is None or (isinstance(v, float) and v != v)
+                for c in ("open", "high", "low", "close")
             ):
                 logger.debug(
-                    "AdjustedOhlcvReader: skipping row with NULL OHLC for "
+                    "AdjustedOhlcvReader: skipping row with NULL/NaN OHLC for "
                     "%s @ %s", r.get("symbol"), ts,
                 )
                 continue

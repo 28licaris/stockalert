@@ -103,50 +103,14 @@ POLYGON_RAW_SORT = SortOrder(
 
 
 # ─────────────────────────────────────────────────────────────────────
-# equities.polygon_adjusted — Polygon raw + corp-actions applied
+# equities.polygon_adjusted — RETIRED (lean storage migration)
 # ─────────────────────────────────────────────────────────────────────
 #
-# Same shape as polygon_raw plus `adj_factor` (Gate 2). Field ID 13
-# is reserved for adj_factor so a later schema-evolution migration that
-# adds a column here won't collide. NOT NULL — every adjusted row
-# carries its cumulative future-splits factor (1.0 means no future
-# splits at the bar's timestamp).
-POLYGON_ADJUSTED_SCHEMA = Schema(
-    NestedField(1, "symbol", StringType(), required=True),
-    NestedField(2, "timestamp", TimestamptzType(), required=True),
-    NestedField(3, "open", DoubleType(), required=False),
-    NestedField(4, "high", DoubleType(), required=False),
-    NestedField(5, "low", DoubleType(), required=False),
-    NestedField(6, "close", DoubleType(), required=False),
-    NestedField(7, "volume", DoubleType(), required=False),
-    NestedField(8, "vwap", DoubleType(), required=False),
-    NestedField(9, "trade_count", LongType(), required=False),
-    NestedField(10, "source", StringType(), required=False),
-    NestedField(11, "ingestion_ts", TimestamptzType(), required=False),
-    NestedField(12, "ingestion_run_id", StringType(), required=False),
-    NestedField(13, "adj_factor", DoubleType(), required=True),
-    identifier_field_ids=[1, 2],
-)
-
-POLYGON_ADJUSTED_PARTITION = PartitionSpec(
-    PartitionField(
-        source_id=1,
-        field_id=1000,
-        transform=BucketTransform(POLYGON_BUCKET_COUNT),
-        name="symbol_bucket",
-    ),
-    PartitionField(
-        source_id=2,
-        field_id=1001,
-        transform=MonthTransform(),
-        name="ts_month",
-    ),
-)
-
-POLYGON_ADJUSTED_SORT = SortOrder(
-    SortField(source_id=1, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
-    SortField(source_id=2, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
-)
+# The materialized adjusted table was dropped: adjusted OHLCV is a pure
+# function of polygon_raw + market_corp_actions splits, so it's computed at
+# read time via app.services.equities.adjust.apply_adjustment instead of
+# stored as a second ~2.1B-row copy. See docs/adjusted_lean_storage_spec.md.
+# No POLYGON_ADJUSTED_SCHEMA / _PARTITION / _SORT — there is no table.
 
 
 # ─────────────────────────────────────────────────────────────────────

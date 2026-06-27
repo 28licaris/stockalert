@@ -1,7 +1,7 @@
 """Unit tests for `EquitiesIcebergSink` (CV2).
 
 Covers the canonical bar-write path used by Phase 1B writers
-(nightly_polygon_refresh, schwab_tip_fill, live_lake_writer) and by
+(nightly_equities_polygon_refresh, schwab_tip_fill, live_lake_writer) and by
 the history-backfill script (CV3). Uses mocked PyIceberg tables so the
 suite runs offline.
 """
