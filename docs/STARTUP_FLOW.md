@@ -15,7 +15,7 @@ runtime dependencies. Either can be off without affecting the other.
 | Tier | Purpose | Latency | Writers | Readers |
 |---|---|---|---|---|
 | **Hot (ClickHouse)** | Live alerts, UI charts, divergence detection | seconds | `streamer` (WS bars), `backfill_service` (REST → CH) | FastAPI routes, alert engine, dashboard |
-| **Cold (Iceberg bronze)** | ML training, backtests, historical analysis | T+1 day | `nightly_polygon_refresh`, `nightly_schwab_refresh` | Athena, PyIceberg, DuckDB |
+| **Cold (Iceberg bronze)** | ML training, backtests, historical analysis | T+1 day | `nightly_equities_polygon_refresh`, `nightly_schwab_refresh` | Athena, PyIceberg, DuckDB |
 
 The cold tier does NOT depend on `DATA_PROVIDER`. Its writers pull from
 Polygon flat files or Schwab REST regardless of what's streaming live.
@@ -34,7 +34,7 @@ every FastAPI startup. Total wall time: ~3 seconds.
 6.  set_symbol_provider() + gap sweeper    [HOT]   armed daily 06:00 UTC, 7d window
 7.  _initial_gap_sweep_after_warmup()      [HOT]   one-shot 30s after start, repairs holes from downtime
 8.  journal_sync_service.start()           [OPS]   if JOURNAL_ENABLED + Schwab creds → balances+trades every 5min
-9.  nightly_polygon_refresh                [COLD]  if POLYGON_NIGHTLY_ENABLED + STOCK_LAKE_BUCKET → bronze.polygon_minute
+9.  nightly_equities_polygon_refresh                [COLD]  if POLYGON_NIGHTLY_ENABLED + STOCK_LAKE_BUCKET → bronze.polygon_minute
 10. nightly_schwab_refresh                 [COLD]  if SCHWAB_NIGHTLY_ENABLED  + STOCK_LAKE_BUCKET → bronze.schwab_minute
 11. install broadcast_signal helper        [API]   WebSocket fan-out
 12. yield → serve HTTP/WS
@@ -66,7 +66,7 @@ Each one corresponds to one subsystem actually being live:
 ✅ Watchlist service started (provider=X, symbols=N)      # step 5 — if no ERROR above, streaming is OK
 ✅ Backfill gap sweeper armed (daily at 06:00 UTC)        # step 6
 ✅ Journal sync started (every 5min: balances + trades)   # step 8 — only if Schwab creds + JOURNAL_ENABLED
-nightly_polygon_refresh: background loop started ...      # step 9 — only if POLYGON_NIGHTLY_ENABLED
+nightly_equities_polygon_refresh: background loop started ...      # step 9 — only if POLYGON_NIGHTLY_ENABLED
 nightly_schwab_refresh: background loop started  ...      # step 10 — only if SCHWAB_NIGHTLY_ENABLED
 ✅ Application startup complete
 ```
@@ -85,7 +85,7 @@ you which gate to check.
 | `backfill_service` deep path | on demand via API | provider REST → CH |
 | Backfill gap sweeper | daily 06:00 UTC | scans for CH holes, enqueues fixes |
 | `journal_sync_service` | every 5 minutes | Schwab API → CH `account_snapshots`, `trades` |
-| `nightly_polygon_refresh` | daily 07:00 UTC (midnight Arizona) | Polygon flat file → `bronze.polygon_minute` |
+| `nightly_equities_polygon_refresh` | daily 07:00 UTC (midnight Arizona) | Polygon flat file → `bronze.polygon_minute` |
 | `nightly_schwab_refresh` | daily 22:00 UTC (3 PM Arizona) | Schwab pricehistory → `bronze.schwab_minute` |
 
 The two nightly jobs intentionally run at very different hours:
@@ -126,7 +126,7 @@ historical data. Not an error.
 Cancels all background tasks in reverse order. From
 [main_api.py:177-220](../app/main_api.py):
 
-1. Cancel nightly_polygon_refresh task
+1. Cancel nightly_equities_polygon_refresh task
 2. Cancel nightly_schwab_refresh task
 3. `monitor_manager.stop_all()`
 4. `watchlist_service.stop()`

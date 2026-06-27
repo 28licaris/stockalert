@@ -6,7 +6,7 @@ Everything that **puts data into** the hot or cold tier. Multi-provider.
 
 | Module | Purpose |
 |---|---|
-| `nightly_polygon_refresh.py` | Daily 07:00 UTC: Polygon flat files → `equities.polygon_raw` via `EquitiesIcebergSink.for_polygon_raw()` (CV7). Auto-catches up missed weekdays. |
+| `nightly_equities_polygon_refresh.py` | Daily 07:00 UTC: Polygon flat files → `equities.polygon_raw` via `EquitiesIcebergSink.for_polygon_raw()` (CV7). Auto-catches up missed weekdays. |
 | `nightly_schwab_refresh.py` | Daily 22:00 UTC: Schwab pricehistory → `equities.schwab_universe` (CV8). Auto-catchup. |
 | `corp_actions.py` | `PolygonCorpActionsIngest` — splits + dividends → `equities.market_corp_actions` (CV9). Driver: `scripts/run_corp_actions_backfill.py` (`--full` for one-shot history, `--nightly` for incremental cron). |
 | `live_lake_writer.py` | Per-cycle micro-batch writer: live stream → `equities.schwab_universe` so the universe table stays fresh between nightly Schwab refreshes (CV7.5). Idempotent via `ensure_equities_table` on cold-start. |

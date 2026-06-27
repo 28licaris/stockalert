@@ -53,7 +53,7 @@ def resolve_universe_spec(spec: str) -> list[str]:
       - "all" / "*"                                   → empty list (whole-market signal)
       - "AAPL,NVDA,MSFT"                              → explicit list
 
-    Used by nightly_polygon_refresh, nightly_schwab_refresh,
+    Used by nightly_equities_polygon_refresh, nightly_schwab_refresh,
     silver_ohlcv_build, and any future operator-facing CLI that takes
     a symbols flag. Default (empty/None) resolves to the canonical
     active universe rather than seed.

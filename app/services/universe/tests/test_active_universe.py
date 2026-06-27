@@ -156,7 +156,7 @@ class TestSchwabNightlyDelegation:
 class TestPolygonNightlyDelegation:
     def test_all_keyword_returns_empty_for_whole_market(self) -> None:
         """Polygon flat-files: 'all' / '*' / '' → empty list = whole-market."""
-        from app.services.ingest.nightly_polygon_refresh import (
+        from app.services.ingest.nightly_equities_polygon_refresh import (
             resolve_nightly_lake_symbols,
         )
 
@@ -167,7 +167,7 @@ class TestPolygonNightlyDelegation:
     def test_active_keyword_reads_stream_universe(self) -> None:
         """Even though the production default is 'all', 'active' should
         still route through stream_universe for callers that override it."""
-        from app.services.ingest.nightly_polygon_refresh import (
+        from app.services.ingest.nightly_equities_polygon_refresh import (
             resolve_nightly_lake_symbols,
         )
 
@@ -178,7 +178,7 @@ class TestPolygonNightlyDelegation:
             assert resolve_nightly_lake_symbols("active") == ["PG"]
 
     def test_seed_keyword_is_rejected(self) -> None:
-        from app.services.ingest.nightly_polygon_refresh import (
+        from app.services.ingest.nightly_equities_polygon_refresh import (
             resolve_nightly_lake_symbols,
         )
 
@@ -193,5 +193,5 @@ class TestPolygonNightlyDelegation:
 
 # CV14: TestSilverBuildDefaultUniverse removed — exercised the deleted
 # SilverOhlcvBuild class. Active-universe resolution is now covered by
-# TestResolveUniverseSpec above + the live nightly_polygon_refresh /
+# TestResolveUniverseSpec above + the live nightly_equities_polygon_refresh /
 # nightly_schwab_refresh test paths.

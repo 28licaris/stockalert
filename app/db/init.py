@@ -297,7 +297,7 @@ def init_schema() -> None:
 
     # Ingestion-run audit log (TA-5.7 + future ingest jobs).
     # One row per cycle / run of any ingest job (live_lake_writer,
-    # nightly_polygon_refresh, corp_actions_backfill, ...). The
+    # nightly_equities_polygon_refresh, corp_actions_backfill, ...). The
     # operational-layer ledger: Iceberg MERGE INTO is the correctness
     # layer, this is "did the job actually run, when, with what scope,
     # did it succeed."

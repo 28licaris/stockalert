@@ -95,7 +95,7 @@ directly. Mapping each equities layer to the futures gap:
 | `equities.market_corp_actions` | — (futures have no corp actions) | n/a |
 | `equities.schwab_universe` | `futures.schwab_futures` (live) | ✅ exists |
 | `AdjustedOhlcvReader` → `polygon_adjusted` | `bars_gateway` + `lake_to_ch_fill` → `polygon_continuous` (+ schwab tip) | ✅ **DONE — read path repointed + verified** |
-| `nightly_polygon_refresh` → `polygon_raw` | nightly mirror → raw → continuous | ⏳ **remaining** (Schwab nightly covers the recent tip today) |
+| `nightly_equities_polygon_refresh` → `polygon_raw` | nightly mirror → raw → continuous | ⏳ **remaining** (Schwab nightly covers the recent tip today) |
 
 ### Built & verified (2026-06-22)
 - **Phase 1 mirror:** 88.85 GB (minute+session+trades, 2021-06-21→present).
@@ -109,7 +109,7 @@ directly. Mapping each equities layer to the futures gap:
   verified serving back-adjusted bars.
 
 ### Remaining (finish-line)
-1. **Nightly Polygon extend** (analog of `nightly_polygon_refresh`): mirror
+1. **Nightly Polygon extend** (analog of `nightly_equities_polygon_refresh`): mirror
    yesterday → append `polygon_raw` → extend `polygon_continuous` front edge.
    Not blocking historical backtesting; Schwab nightly already keeps the recent
    tip fresh via the union. Needs the CodeBuild role granted Glue perms on the
@@ -147,6 +147,6 @@ directly. Mapping each equities layer to the futures gap:
 - Point `bars_gateway._futures_one_min_from_lake` + `lake_to_ch_fill` at
   `polygon_continuous` (union with `schwab_futures` for the live tip), replacing
   the dropped `polygon_futures` reference.
-- Nightly futures Polygon refresh (analog of `nightly_polygon_refresh`):
+- Nightly futures Polygon refresh (analog of `nightly_equities_polygon_refresh`):
   incremental mirror of yesterday → append to `polygon_raw` → extend
   `polygon_continuous` tip. Keeps the rolling window fresh.

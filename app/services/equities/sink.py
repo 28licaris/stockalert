@@ -8,7 +8,7 @@ too: PyIceberg's `merge_rows` / `overwrite(filter)` reads existing
 files at write time — hundreds of MB of I/O per call, unacceptable
 for nightly whole-market writes and sub-second live writes. Idempotency
 lives UPSTREAM in `ingestion_runs` watermarks (set by
-`nightly_polygon_refresh`, the live Schwab writer, and the history
+`nightly_equities_polygon_refresh`, the live Schwab writer, and the history
 backfill script). The v1 `app.services.bronze.sink.BronzeIcebergSink`
 module was deleted in CV14; this is the canonical Iceberg writer now.
 

@@ -6,7 +6,7 @@ splits + dividends from `PolygonCorpActionsClient` and upserts the
 rows into `equities.market_corp_actions`.
 
 **Pattern note:** This is the corp-actions ingest job — analogous to
-`nightly_polygon_refresh.py` for OHLCV. It writes to the lake
+`nightly_equities_polygon_refresh.py` for OHLCV. It writes to the lake
 namespace directly; no silver build step (silver is being retired
 in Phase 1C, `equities.market_corp_actions` is the canonical store).
 

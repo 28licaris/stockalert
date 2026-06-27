@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.services.ingest.nightly_polygon_refresh import (
+from app.services.ingest.nightly_equities_polygon_refresh import (
     _parse_nightly_kind,
     _seconds_until_next_run,
     resolve_nightly_lake_symbols,
@@ -58,7 +58,7 @@ def test_parse_nightly_kind_variants():
 
 from unittest.mock import patch, AsyncMock, MagicMock  # noqa: E402
 
-from app.services.ingest import nightly_polygon_refresh as nightly  # noqa: E402
+from app.services.ingest import nightly_equities_polygon_refresh as nightly  # noqa: E402
 
 
 def test_module_binds_v2_sink_not_bronze():

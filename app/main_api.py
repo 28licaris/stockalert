@@ -121,15 +121,15 @@ def _register_background_jobs(
     # Nightly Polygon — refresh_polygon_lake_yesterday doesn't audit.
     if polygon_started:
         async def _run_polygon_once() -> None:
-            from app.services.ingest.nightly_polygon_refresh import (
+            from app.services.ingest.nightly_equities_polygon_refresh import (
                 refresh_polygon_lake_yesterday,
             )
 
-            async with audit_run("nightly_polygon_refresh"):
+            async with audit_run("nightly_equities_polygon_refresh"):
                 await refresh_polygon_lake_yesterday()
 
         job_registry.register(
-            name="nightly_polygon_refresh",
+            name="nightly_equities_polygon_refresh",
             display_name="Nightly Polygon refresh",
             schedule=f"daily at {int(_s.polygon_nightly_run_hour_utc):02d}:00 UTC",
             setting_key="POLYGON_NIGHTLY_RUN_HOUR_UTC",
@@ -295,22 +295,22 @@ async def lifespan(app: FastAPI):
     nightly_lake_task: asyncio.Task | None = None
     if _settings.polygon_nightly_enabled and (_settings.stock_lake_bucket or "").strip():
         try:
-            from app.services.ingest.nightly_polygon_refresh import run_lake_refresh_loop
+            from app.services.ingest.nightly_equities_polygon_refresh import run_lake_refresh_loop
 
             nightly_lake_task = asyncio.create_task(
                 run_lake_refresh_loop(),
-                name="nightly_polygon_refresh",
+                name="nightly_equities_polygon_refresh",
             )
             app.state.nightly_lake_task = nightly_lake_task
             logger.info(
-                "nightly_polygon_refresh: background loop started "
+                "nightly_equities_polygon_refresh: background loop started "
                 "(POLYGON_NIGHTLY_RUN_HOUR_UTC=%s, symbols=%s)",
                 _settings.polygon_nightly_run_hour_utc,
                 _settings.polygon_nightly_symbols,
             )
         except Exception as exc:
             logger.exception(
-                "✗ nightly_polygon_refresh failed to start: %s — continuing without it",
+                "✗ nightly_equities_polygon_refresh failed to start: %s — continuing without it",
                 exc,
             )
 

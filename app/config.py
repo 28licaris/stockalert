@@ -97,7 +97,7 @@ class Settings(BaseModel):
     # gate reason, never runs). Set the *_NIGHTLY_ENABLED env var to
     # "false" to opt a specific writer out.
     # ─────────────────────────────────────────────────────────
-    # Polygon flat-files → equities.polygon_raw (see nightly_polygon_refresh).
+    # Polygon flat-files → equities.polygon_raw (see nightly_equities_polygon_refresh).
     # 07:00 UTC = midnight Arizona; after Polygon's daily flat file is ready.
     polygon_nightly_enabled: bool = os.getenv("POLYGON_NIGHTLY_ENABLED", "true").lower() == "true"
     polygon_nightly_run_hour_utc: int = int(os.getenv("POLYGON_NIGHTLY_RUN_HOUR_UTC", "7"))

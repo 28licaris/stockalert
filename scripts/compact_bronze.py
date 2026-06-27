@@ -14,7 +14,7 @@ and safe to run during market hours (Iceberg's snapshot isolation
 keeps live writes consistent).
 
 **Recommended cadence:** daily at 03:00 ET (after market close +
-nightly_polygon_refresh + corp_actions_backfill, before market open).
+nightly_equities_polygon_refresh + corp_actions_backfill, before market open).
 
 **Usage:**
 

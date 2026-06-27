@@ -181,7 +181,7 @@ is config + an ingest job stopping/starting, not code.
 |---|---|---|
 | Schwab live stream → CH | ✅ live | bar_batcher → ohlcv_1m |
 | Live → bronze (every 5min) | ✅ TA-5.7 | live_lake_writer |
-| Polygon flat-files → bronze | ✅ live | nightly_polygon_refresh |
+| Polygon flat-files → bronze | ✅ live | nightly_equities_polygon_refresh |
 | Schwab REST nightly seed refresh → bronze | ✅ live | nightly_schwab_refresh |
 | Polygon corp-actions → bronze → silver | ✅ TA-5.0 | corp_actions/{polygon_ingest, build}.py |
 | **canonical adjusted OHLCV** (was v1 `silver.ohlcv_1m`) | ✅ v2 — superseded the v1 silver build | `equities.polygon_adjusted` (Spark `polygon_adjustment_job.py`) + `/api/v1/adjusted/*` + MCP `get_adjusted_bars` |
