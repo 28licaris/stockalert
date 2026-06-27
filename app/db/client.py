@@ -28,6 +28,7 @@ def _new_client() -> Client:
         username=settings.clickhouse_user,
         password=settings.clickhouse_password or "",
         database=settings.clickhouse_database,
+        connect_timeout=settings.clickhouse_connect_timeout,
     )
 
 
@@ -50,6 +51,7 @@ def get_admin_client() -> Client:
         username=settings.clickhouse_user,
         password=settings.clickhouse_password or "",
         database="default",
+        connect_timeout=settings.clickhouse_connect_timeout,
     )
 
 

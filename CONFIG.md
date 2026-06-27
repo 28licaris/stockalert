@@ -38,6 +38,7 @@ The provider also uses the Trader API for OAuth, accounts/orders/transactions (r
 - `CLICKHOUSE_USER` – default `default`.
 - `CLICKHOUSE_PASSWORD` – optional; empty for local dev.
 - `CLICKHOUSE_DATABASE` – default `stocks` (created on startup if missing).
+- `CLICKHOUSE_CONNECT_TIMEOUT` – connect timeout in seconds (default `10`). Startup hard-blocks on CH schema init; this makes a down/unreachable CH fail fast with a clear error instead of hanging the boot.
 - `DATA_SOURCE_TAG` – optional string stored on OHLCV rows; if unset, `DATA_PROVIDER` is used when saving bars.
 
 Start ClickHouse locally: `docker compose --profile ch up -d` (see [docker-compose.yml](docker-compose.yml)). If port `8123` is already in use, stop the other service or change `CLICKHOUSE_PORT`.
@@ -100,6 +101,21 @@ creating a StockAlert session.
 ## Technical analysis / divergence
 
 - `PIVOT_K`, `LOOKBACK_BARS`, `EMA_PERIOD`, `USE_TREND_FILTER`, `MIN_PRICE_CHANGE_PCT`, `MIN_INDICATOR_CHANGE_PCT`, `MIN_PIVOT_SEPARATION` – see app defaults in `app/config.py`.
+
+## Lake freshness (nightly ingest + reconcile)
+
+The lake stays fresh via in-process nightly jobs that **auto-catch-up**
+missing weekdays, plus a daily reconcile that heals ClickHouse from the
+lake. The nightly writers **default ON** for production-grade freshness;
+each is additionally gated by a non-empty `STOCK_LAKE_BUCKET` + valid
+provider credentials, so a dev/CI box without them is a clean no-op.
+
+- `POLYGON_NIGHTLY_ENABLED` (default `true`), `…_RUN_HOUR_UTC` (7), `POLYGON_NIGHTLY_SYMBOLS` (`all`) → `equities.polygon_raw`.
+- `SCHWAB_NIGHTLY_ENABLED` (default `true`), `…_RUN_HOUR_UTC` (22), `SCHWAB_NIGHTLY_SYMBOLS` (`active`) → `equities.schwab_universe`.
+- `FUTURES_NIGHTLY_ENABLED` (default `true`), `FUTURES_POLYGON_NIGHTLY_ENABLED` (default `true`) → futures lake tables.
+- `CH_RECONCILE_ENABLED` (default `true`), `…_RUN_HOUR_UTC` (23), `…_LOOKBACK_DAYS` (7) → heals `ohlcv_1m` from the lake.
+- **Not in-process:** `equities.polygon_adjusted` (the split-adjusted tier) is built by a **weekly external Spark job** (EMR/CodeBuild) — it has no auto-catchup, so wire it up + alert on failure separately.
+- **Verify freshness** anytime via the `get_lake_freshness` MCP tool / `LakeFreshnessReport`, which now reports the raw, **adjusted (`polygon_adjusted`)**, and futures tiers — the adjusted entry is the only signal that the external weekly Spark job has stalled.
 
 ## Alerts and monitoring
 

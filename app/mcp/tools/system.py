@@ -100,11 +100,14 @@ async def get_health() -> SystemHealthReport:
 
 @mcp.tool()
 def get_lake_freshness() -> LakeFreshnessReport:
-    """Latest trading day in each bronze table.
+    """Latest trading day in each lake table.
 
-    USE WHEN: an agent needs to verify "is bronze caught up?" before
-    running a training job that depends on T+1 freshness. Calls
-    `BronzeReader.latest_trading_day` for each known table.
+    USE WHEN: an agent (or an operator / cockpit tile) needs to verify
+    "is the lake caught up?" before running a training job or trusting a
+    chart's deep history. Reports the per-provider raw tables AND the
+    adjusted + futures tiers — critically `polygon_adjusted`, built by
+    the WEEKLY external Spark job, whose staleness no in-process
+    auto-catchup can heal (so this is the only place it shows up).
 
     Returns:
         LakeFreshnessReport with:
@@ -128,7 +131,45 @@ def get_lake_freshness() -> LakeFreshnessReport:
                 latest = None
             results[f"{provider}_minute"] = latest
 
+        # Surface the tiers the per-provider raw check misses — above all
+        # `polygon_adjusted`, built by the WEEKLY *external* Spark job
+        # (no in-process auto-catchup), so a stalled adjustment is
+        # otherwise invisible until a chart looks wrong. Plus the futures
+        # lake tables. Each degrades to None on its own; never raises.
+        results.update(_iceberg_table_freshness())
+
         return LakeFreshnessReport(
             tables=results,
             as_of=datetime.now(timezone.utc),
         )
+
+
+def _iceberg_table_freshness() -> dict:
+    """Latest ET trading day for lake tables the per-provider raw check
+    doesn't cover. Generous lookback so a genuinely stale tier surfaces
+    its real (old) date instead of masquerading as empty (None)."""
+    from app.services.equities.gaps import latest_loaded_date
+    from app.services.equities.schemas import equities_table_id
+    from app.services.futures.schemas import futures_table_id
+    from app.services.iceberg_catalog import get_catalog
+
+    specs = {
+        # The external weekly Spark tier — the key freshness blind spot.
+        "polygon_adjusted": equities_table_id("polygon_adjusted"),
+        "futures_schwab": futures_table_id("schwab_futures"),
+        "futures_continuous": futures_table_id("polygon_continuous"),
+    }
+    try:
+        cat = get_catalog()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("get_lake_freshness: catalog unavailable: %s", exc)
+        return {k: None for k in specs}
+
+    out: dict = {}
+    for short, table_id in specs.items():
+        try:
+            out[short] = latest_loaded_date(cat.load_table(table_id), lookback_days=35)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("get_lake_freshness(%s) failed: %s", short, exc)
+            out[short] = None
+    return out

@@ -89,12 +89,17 @@ class Settings(BaseModel):
     aws_session_token: str = os.getenv("AWS_SESSION_TOKEN", "")
     # ─────────────────────────────────────────────────────────
     # Nightly per-provider ingest jobs (CV7/CV8 — v2 lake writers).
-    # Both schedules run as asyncio background tasks from main_api.py
-    # startup. Gated by their *_NIGHTLY_ENABLED flag + valid credentials.
+    # Run as asyncio background tasks from main_api.py startup.
+    # DEFAULT ON (production-grade freshness): the lake self-heals nightly
+    # (each job auto-catches-up missing weekdays). Each is additionally
+    # gated by a non-empty STOCK_LAKE_BUCKET + valid provider credentials,
+    # so a dev/CI box without creds/bucket is a clean no-op (logs the
+    # gate reason, never runs). Set the *_NIGHTLY_ENABLED env var to
+    # "false" to opt a specific writer out.
     # ─────────────────────────────────────────────────────────
     # Polygon flat-files → equities.polygon_raw (see nightly_polygon_refresh).
     # 07:00 UTC = midnight Arizona; after Polygon's daily flat file is ready.
-    polygon_nightly_enabled: bool = os.getenv("POLYGON_NIGHTLY_ENABLED", "false").lower() == "true"
+    polygon_nightly_enabled: bool = os.getenv("POLYGON_NIGHTLY_ENABLED", "true").lower() == "true"
     polygon_nightly_run_hour_utc: int = int(os.getenv("POLYGON_NIGHTLY_RUN_HOUR_UTC", "7"))
     # Per docs/standards/data/symbol_lifecycle.md (LOCKED): Polygon is
     # the whole-market historical archive. "all" = no universe filter
@@ -126,7 +131,7 @@ class Settings(BaseModel):
 
     # Schwab REST pricehistory → equities.schwab_universe (see nightly_schwab_refresh).
     # 22:00 UTC = 3 PM Arizona; ~30 min after NYSE close.
-    schwab_nightly_enabled: bool = os.getenv("SCHWAB_NIGHTLY_ENABLED", "false").lower() == "true"
+    schwab_nightly_enabled: bool = os.getenv("SCHWAB_NIGHTLY_ENABLED", "true").lower() == "true"
     schwab_nightly_run_hour_utc: int = int(os.getenv("SCHWAB_NIGHTLY_RUN_HOUR_UTC", "22"))
     # Per docs/standards/data/symbol_lifecycle.md (LOCKED): Schwab is
     # the universe-bounded provider. "active" reads from stream_universe
@@ -138,16 +143,16 @@ class Settings(BaseModel):
     # separately so futures can be toggled independently. "active" reads
     # the continuous roots from stocks.futures_universe (∪ seed fallback);
     # "seed" forces the static FUTURES_SEED_ROOTS list.
-    futures_nightly_enabled: bool = os.getenv("FUTURES_NIGHTLY_ENABLED", "false").lower() == "true"
+    futures_nightly_enabled: bool = os.getenv("FUTURES_NIGHTLY_ENABLED", "true").lower() == "true"
     futures_nightly_run_hour_utc: int = int(os.getenv("FUTURES_NIGHTLY_RUN_HOUR_UTC", "22"))
     futures_nightly_symbols: str = os.getenv("FUTURES_NIGHTLY_SYMBOLS", "active")
 
     # Polygon flat-file → futures.polygon_raw → futures.polygon_continuous
     # (see nightly_futures_polygon_refresh). Keeps the authoritative back-
     # adjusted deep history fresh; complements the Schwab nightly (recent tip).
-    # Gated separately + OFF by default (heavy per-root rebuild). Default run
-    # hour 21 UTC — Polygon finalizes a day's files ~11:00 ET next morning.
-    futures_polygon_nightly_enabled: bool = os.getenv("FUTURES_POLYGON_NIGHTLY_ENABLED", "false").lower() == "true"
+    # Gated separately (heavy per-root rebuild). Default run hour 21 UTC —
+    # Polygon finalizes a day's files ~11:00 ET next morning.
+    futures_polygon_nightly_enabled: bool = os.getenv("FUTURES_POLYGON_NIGHTLY_ENABLED", "true").lower() == "true"
     futures_polygon_nightly_run_hour_utc: int = int(os.getenv("FUTURES_POLYGON_NIGHTLY_RUN_HOUR_UTC", "21"))
 
     # CH reconcile — push the authoritative, complete lake tables
@@ -292,6 +297,10 @@ class Settings(BaseModel):
     clickhouse_user: str = os.getenv("CLICKHOUSE_USER", "default")
     clickhouse_password: str = os.getenv("CLICKHOUSE_PASSWORD", "")
     clickhouse_database: str = os.getenv("CLICKHOUSE_DATABASE", "stocks")
+    # Connect timeout (seconds) so a down/unreachable ClickHouse fails the
+    # (blocking) startup schema-init FAST with a clear error instead of
+    # hanging the boot. Query timeout is separate (send_receive_timeout).
+    clickhouse_connect_timeout: int = int(os.getenv("CLICKHOUSE_CONNECT_TIMEOUT", "10"))
 
     # Customer identity / subscription operational database. This remains
     # separate from ClickHouse by design: PostgreSQL owns accounts, tenants,
