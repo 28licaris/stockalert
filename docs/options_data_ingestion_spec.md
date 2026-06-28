@@ -1,0 +1,366 @@
+# Options Data Ingestion Spec
+
+Status: draft for approval
+
+## Goal
+
+Add options market-data ingestion so StockAlert can support option alerts,
+market-opportunity scans, backtests, simulated trading, and agent access over
+the same hot/cold architecture used by equities and futures.
+
+The first provider is Schwab. The first durable dataset is option-chain
+snapshots, not historical option bars. Schwab exposes option-chain and
+expiration-chain REST endpoints today through `SchwabProvider`; real-time
+option streaming can follow once the snapshot contract is stable.
+
+## Non-Goals
+
+- No order placement or execution logic.
+- No options strategy engine in the first ingestion phase.
+- No assumption that Schwab can provide deep historical option minute bars.
+  Historical replay will come from our persisted chain snapshots unless a
+  separate provider/source is approved later.
+- No direct provider payload dependencies in alerts, simulations, MCP tools,
+  or API routes. All consumers use canonical contracts.
+
+## Current Repo Baseline
+
+Schwab option REST access already exists:
+
+- `SchwabProvider.get_option_chains(symbol, **kwargs)` calls
+  `GET /marketdata/v1/chains`.
+- `SchwabProvider.get_expiration_chain(symbol, **kwargs)` calls
+  `GET /marketdata/v1/expirationchain`.
+- `scripts/check_schwab_live.py` already smoke-checks both endpoints.
+- Schwab streamer docs list `LEVELONE_OPTIONS`, `OPTIONS_BOOK`, and
+  `SCREENER_OPTION`, but the repo currently implements equity/futures bar
+  streaming only.
+
+## Architecture
+
+Options become a peer domain beside equities and futures:
+
+```text
+app/services/options/
+  schemas.py      Pydantic DTOs for chain snapshots, contracts, reads
+  contract.py     Reader/ingestor protocols
+  tables.py       Iceberg table creation
+  sink.py         Iceberg write path
+  service.py      Schwab chain snapshot orchestration
+  gaps.py         Coverage/gap queries by underlying and snapshot cadence
+  README.md       Ownership, contract, test commands
+  tests/
+
+app/services/readers/
+  options_reader.py  Lake and hot-tier reader returning options DTOs
+
+app/api/
+  routes_options.py  Thin HTTP adapter over options reader/service
+
+app/mcp/
+  option tools      Thin MCP adapters over the same reader/service
+```
+
+This follows the repo service rules:
+
+- Consumers import `schemas.py` / `contract.py`, not `service.py`.
+- `from_settings()` is the only global-config entry point.
+- Provider-specific payloads stay at the edge.
+- Reads for backtests and training work directly from Iceberg.
+- Alerts can use ClickHouse hot tables for recent/latest data.
+- Agents get the same behavior through MCP and HTTP route adapters.
+
+## Data Model
+
+Use a separate Glue database and S3 prefix:
+
+- Glue database: `options`
+- S3 prefix: `iceberg/options/`
+
+### `options.schwab_chain_raw`
+
+Append-only audit table, one row per provider response.
+
+| Column | Type | Required | Notes |
+|---|---:|---:|---|
+| `underlying_symbol` | string | yes | Uppercase equity/index symbol requested. |
+| `snapshot_ts` | timestamptz | yes | UTC time the response was captured. |
+| `provider` | string | yes | `schwab`. |
+| `request_params` | string | yes | JSON query params used for reproducibility. |
+| `status` | string | yes | Provider response status/body status when present. |
+| `is_delayed` | boolean | no | Schwab chain-level delayed flag. |
+| `underlying_price` | double | no | Chain-level underlying price. |
+| `raw_payload` | string | yes | Full provider JSON. |
+| `ingestion_ts` | timestamptz | yes | Write timestamp. |
+| `ingestion_run_id` | string | yes | Batch/run identifier. |
+
+Partitioning: `month(snapshot_ts)`.
+
+Sort order: `underlying_symbol`, `snapshot_ts`.
+
+### `options.schwab_chain_contracts`
+
+Canonical contract snapshot table, one row per option contract per chain
+snapshot. This is the primary replay/backtest dataset.
+
+| Column | Type | Required | Notes |
+|---|---:|---:|---|
+| `underlying_symbol` | string | yes | Requested underlying. |
+| `option_symbol` | string | yes | Provider/OCC-style option symbol as returned by Schwab. |
+| `snapshot_ts` | timestamptz | yes | UTC capture time. |
+| `put_call` | string | yes | `CALL` or `PUT`. |
+| `expiration_date` | date | yes | Contract expiration. |
+| `strike` | double | yes | Strike price. |
+| `days_to_expiration` | int | no | Provider value at snapshot time. |
+| `bid` | double | no | Bid price. |
+| `ask` | double | no | Ask price. |
+| `last` | double | no | Last trade price. |
+| `mark` | double | no | Provider mark price. |
+| `bid_size` | long | no | Contract bid size. |
+| `ask_size` | long | no | Contract ask size. |
+| `last_size` | long | no | Last trade size. |
+| `volume` | long | no | Contract volume. |
+| `open_interest` | long | no | Open interest. |
+| `quote_time` | timestamptz | no | Provider quote timestamp if present. |
+| `trade_time` | timestamptz | no | Provider trade timestamp if present. |
+| `delta` | double | no | Greek. |
+| `gamma` | double | no | Greek. |
+| `theta` | double | no | Greek. |
+| `vega` | double | no | Greek. |
+| `rho` | double | no | Greek. |
+| `volatility` | double | no | Provider volatility/IV field. |
+| `theoretical_value` | double | no | Provider theoretical value when present. |
+| `intrinsic_value` | double | no | Provider intrinsic value. |
+| `time_value` | double | no | Provider time value. |
+| `in_the_money` | boolean | no | Provider ITM flag. |
+| `mini` | boolean | no | Mini option flag. |
+| `non_standard` | boolean | no | Non-standard deliverable flag. |
+| `penny_pilot` | boolean | no | Penny pilot flag. |
+| `multiplier` | double | no | Contract multiplier. |
+| `settlement_type` | string | no | Provider settlement type. |
+| `expiration_type` | string | no | Provider expiration type. |
+| `source` | string | yes | `schwab-chain`. |
+| `ingestion_ts` | timestamptz | yes | Write timestamp. |
+| `ingestion_run_id` | string | yes | Batch/run identifier. |
+
+Identifier fields: `underlying_symbol`, `option_symbol`, `snapshot_ts`.
+
+Partitioning: `bucket(16, underlying_symbol)`, `month(snapshot_ts)`.
+
+Sort order: `underlying_symbol`, `expiration_date`, `strike`, `put_call`,
+`snapshot_ts`.
+
+Rationale: most reads filter by underlying plus a time range for replay, or by
+underlying/expiration/strike for current-chain inspection. Bucketing avoids one
+large hot partition if the watch universe grows, while keeping file fanout
+lower than whole-market equities.
+
+### `options.schwab_expirations`
+
+Small reference table, one row per underlying expiration observed from Schwab.
+
+| Column | Type | Required | Notes |
+|---|---:|---:|---|
+| `underlying_symbol` | string | yes | Requested underlying. |
+| `expiration_date` | date | yes | Expiration date. |
+| `days_to_expiration` | int | no | Provider value at observation time. |
+| `expiration_type` | string | no | Weekly/monthly/quarterly when supplied. |
+| `settlement_type` | string | no | Provider settlement type when supplied. |
+| `source` | string | yes | `schwab-expirationchain`. |
+| `observed_ts` | timestamptz | yes | UTC observation time. |
+| `ingestion_ts` | timestamptz | yes | Write timestamp. |
+| `ingestion_run_id` | string | yes | Batch/run identifier. |
+
+Partitioning: `month(expiration_date)`.
+
+Sort order: `underlying_symbol`, `expiration_date`, `observed_ts`.
+
+## Hot Tier
+
+ClickHouse is for current/recent option alerting, not long-term replay.
+
+Initial hot tables:
+
+- `option_chain_latest`: latest canonical contract row per
+  `(underlying_symbol, option_symbol)`, using `ReplacingMergeTree(version)`.
+- `option_chain_snapshots_recent`: optional recent intraday snapshots retained
+  for fast alerts and dashboards. Iceberg remains the source for backtests.
+
+If first-phase scope needs to stay smaller, start with Iceberg-only plus API/MCP
+lake reads, then add ClickHouse once alert latency requirements are concrete.
+
+## Ingestion Behavior
+
+### Universe
+
+The first ingestion universe is configurable:
+
+- Explicit symbols from a CLI argument or config.
+- Active equity watchlist/universe for scheduled jobs.
+- Future scanner-selected underlyings from the screener service.
+
+Symbols are normalized uppercase before provider calls. Failures are recorded
+per underlying and do not abort unrelated symbols.
+
+### Schwab Query Defaults
+
+Default first-phase chain parameters:
+
+- `contractType=ALL`
+- `strikeCount=20`
+- `includeUnderlyingQuote=true`
+- `strategy=SINGLE`
+- Optional `fromDate` / `toDate` for near-term expiration windows.
+
+These defaults are intentionally conservative. Broader chains can explode row
+counts and provider calls; scans should request only the expirations/strikes
+needed for the alert or simulation use case.
+
+### Cadence
+
+Suggested starting cadences:
+
+- Expiration chain: once daily per underlying.
+- Chain snapshots: every 5 minutes during regular market hours for configured
+  watch symbols.
+- High-priority underlyings: optionally every 1 minute after rate-limit and
+  storage behavior are measured.
+
+All jobs log zero-row outcomes, per-underlying completion markers, provider
+errors, rows parsed, rows written, and run summary. Predictable failures return
+result objects with `ok`, `skipped`, or `error`.
+
+## Backtests and Simulated Trading
+
+Backtests and simulation read `options.schwab_chain_contracts` by:
+
+- underlying universe,
+- snapshot time range,
+- expiration range,
+- delta/strike/moneyness filters,
+- put/call side,
+- minimum volume/open-interest/liquidity thresholds.
+
+Simulation must use the chain snapshot available at or before the simulated
+decision timestamp. It must not look ahead to later Greeks, open interest,
+quotes, or expiration lists.
+
+Each simulation run records:
+
+- Iceberg table snapshot ID(s),
+- option reader parameters,
+- underlying price source and snapshot IDs,
+- alert/strategy version,
+- run timestamp and code version.
+
+This preserves the platform replay requirement.
+
+## Alerts and Opportunity Scans
+
+First alert/scanner use cases the schema must support:
+
+- unusual option volume versus open interest,
+- tight spread and liquidity filters,
+- delta/expiration-targeted contract discovery,
+- IV/volatility change between snapshots,
+- call/put skew and put-call activity,
+- contract price/underlying divergence,
+- upcoming expiration opportunity scans.
+
+Alert services consume canonical reader DTOs, not provider payloads. The alert
+path can choose ClickHouse latest/recent for low latency or Iceberg snapshots
+for replayable scans.
+
+## Agent, API, and MCP Surfaces
+
+Add thin adapters over a shared options reader/service:
+
+- HTTP:
+  - `GET /api/v1/options/chain/{underlying}`
+  - `GET /api/v1/options/contracts`
+  - `GET /api/v1/options/expirations/{underlying}`
+  - `GET /api/v1/options/coverage`
+- MCP:
+  - `get_option_chain`
+  - `search_option_contracts`
+  - `get_option_expirations`
+  - `get_options_coverage`
+
+MCP tools return Pydantic-shaped data and expose the same filters as HTTP.
+No MCP tool calls Schwab directly in normal operation; direct provider calls
+remain diagnostics or ingestion-only.
+
+## Testing
+
+Unit tests:
+
+- Pydantic schema validation and timestamp normalization.
+- Schwab chain flattening from fixture payloads.
+- Empty chain and zero-contract outcomes.
+- Per-underlying result objects for `ok`, `skipped`, and `error`.
+- Idempotent sink behavior against in-memory/fake table boundaries where
+  possible.
+
+Contract tests:
+
+- Options reader, HTTP route, and MCP tool return equivalent DTOs for the same
+  fixture-backed service.
+- Backtest-style reads never return records after the requested as-of time.
+
+Integration tests:
+
+- Live Schwab chain/expiration smoke test, marked `integration`.
+- Iceberg table write/read verification with a fresh catalog/client.
+- Optional ClickHouse hot-table write/read verification gated by
+  `clickhouse_ready`.
+
+## Delivery Phases
+
+### O1 — Spec and Fixture Contract
+
+- Approve this spec.
+- Add fixture Schwab chain payloads.
+- Add canonical Pydantic DTOs and parser tests.
+
+### O2 — Lake Tables and Sink
+
+- Add `app/services/options/{schemas,tables,sink,README}.py`.
+- Create `options.schwab_chain_raw`, `options.schwab_chain_contracts`, and
+  `options.schwab_expirations`.
+- Verify Iceberg writes by re-reading through a fresh catalog.
+
+### O3 — Schwab Snapshot Ingest
+
+- Add a CLI/scheduled job for option-chain snapshots.
+- Add per-underlying result summaries and loud zero-row logging.
+- Persist raw and canonical rows in one run.
+
+### O4 — Reader, API, and MCP
+
+- Add options reader contracts.
+- Add HTTP routes.
+- Add MCP tools with route/tool parity tests.
+
+### O5 — Alerts and Simulation Integration
+
+- Add scanner filters over canonical option snapshots.
+- Add backtest/simulation reader adapters with snapshot pinning.
+- Add first alert rules after liquidity and cadence are validated.
+
+### O6 — Streaming Hot Path
+
+- Evaluate Schwab `LEVELONE_OPTIONS` and `OPTIONS_BOOK`.
+- Add option streaming only if needed for alert latency.
+- Feed ClickHouse latest/recent tables while keeping Iceberg snapshots as the
+  replay source.
+
+## Open Questions
+
+1. What is the initial options universe: active watchlist, a fixed list, or a
+   top-liquidity equity universe?
+2. What first cadence is acceptable for storage and provider limits: 1 minute,
+   5 minutes, or daily-only snapshots?
+3. Should O2 include ClickHouse hot tables immediately, or should O2/O3 be
+   Iceberg-only until alert latency requirements are proven?
+4. Do we want to include index options such as SPX/NDX in the first phase, or
+   equity/ETF underlyings only?
