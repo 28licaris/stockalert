@@ -34,6 +34,7 @@ from app.services.live.watchlist_service import watchlist_service
 from app.services.stream import stream_service
 from app.api import (
     routes_backfill,
+    routes_calendar,
     routes_clickhouse,
     routes_corp_actions,
     routes_health,
@@ -722,6 +723,7 @@ app.include_router(routes_movers.router, prefix=_V1, tags=["Movers"])
 app.include_router(routes_backfill.router, prefix=_V1, tags=["Backfill"])
 app.include_router(routes_instruments.router, prefix=_V1, tags=["Instruments"])
 app.include_router(routes_market.router, prefix=_V1, tags=["Market"])
+app.include_router(routes_calendar.router, prefix=_V1, tags=["Calendar"])
 app.include_router(routes_journal.router, prefix=_V1, tags=["Journal"])
 app.include_router(routes_lake.router, prefix=_V1, tags=["Lake"])
 app.include_router(routes_indicators.router, prefix=_V1, tags=["Indicators"])

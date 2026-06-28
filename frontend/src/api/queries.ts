@@ -43,6 +43,10 @@ export type MarketBannerResponse =
 export type Mover = components["schemas"]["Mover"];
 export type MoversResponse = components["schemas"]["MoversResponse"];
 
+export type CalendarDay = components["schemas"]["CalendarDay"];
+export type CalendarResponse = components["schemas"]["CalendarResponse"];
+export type CalendarAssetClass = "equities" | "futures";
+
 // Watchlists + monitors (FE-CONTRACTS-3)
 export type Watchlist = components["schemas"]["Watchlist"];
 export type CreateWatchlistRequest =
@@ -127,6 +131,8 @@ export const queryKeys = {
   healthServices: ["health", "services"] as const,
   marketBanner: (symbols: string | undefined) =>
     ["market", "banner", symbols ?? "default"] as const,
+  calendar: (assetClass: string, start: string, end: string) =>
+    ["calendar", assetClass, start, end] as const,
   symbolBars: (symbol: string, interval: string, limit: number) =>
     ["symbol", "bars", symbol, interval, limit] as const,
   lakeBars: (symbol: string, interval: string, windowDays: number) =>
@@ -249,6 +255,27 @@ export function useMarketBanner(symbols?: string | undefined) {
     refetchInterval: 10_000,
     refetchOnWindowFocus: true,
     staleTime: 5_000,
+  });
+}
+
+/**
+ * Market calendar (open / closed / early-close) for a date range. Sessions
+ * are deterministic, so this caches aggressively.
+ */
+export function useCalendar(
+  assetClass: CalendarAssetClass,
+  start: string,
+  end: string,
+) {
+  return useQuery({
+    queryKey: queryKeys.calendar(assetClass, start, end),
+    queryFn: async (): Promise<CalendarResponse> => {
+      const { data } = await apiClient.GET("/api/v1/calendar", {
+        params: { query: { start, end, asset_class: assetClass } },
+      });
+      return data as CalendarResponse;
+    },
+    staleTime: 60 * 60 * 1000, // 1h — calendar rarely changes
   });
 }
 

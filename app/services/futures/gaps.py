@@ -80,6 +80,14 @@ def missing_futures_sessions(
     if start > through:
         return []
 
+    # Sun–Fri ET calendar dates (skip Saturday). NOTE: we deliberately do
+    # NOT use the market_calendar CMES sessions here — exchange_calendars
+    # labels CME sessions Mon–Fri (the Sunday-evening Globex session is
+    # labelled Monday), but futures.schwab_futures stores bars by ET
+    # calendar date where Sunday HAS bars. Using CMES labels would skip
+    # Sundays and never backfill them. The marginal cost of requesting the
+    # few full-CME-closure days/year (×16 roots) is negligible; correctness
+    # of the Sunday session matters more. See docs/market_calendar_spec.md.
     out: list[date] = []
     d = start
     while d <= through:
