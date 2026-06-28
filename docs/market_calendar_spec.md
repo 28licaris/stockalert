@@ -1,8 +1,19 @@
-# Spec — Market Session / Holiday Calendar
+# Spec — Market Calendar (sessions + events)
 
-Status: **DRAFT — awaiting approval** (engagement spec-first; no code until signed off)
+Status: **PHASE 1 IMPLEMENTED** (2026-06-27). Core session engine
+(`app/services/market_calendar.py`, exchange_calendars), calendar API
+(`/api/v1/calendar`), and frontend month view (`routes/calendar.tsx`) shipped.
+Equities gap detection wired to the calendar; **futures kept the Sun–Fri
+heuristic** (CMES labels sessions Mon–Fri but futures data is keyed by ET
+date incl. Sunday — see §4 note). Events layer (§11) = Phase 2.
 Author: ops/data
-Date: 2026-06-26
+Date: 2026-06-26 (expanded 2026-06-27 with the product-facing calendar:
+API + frontend + events layer)
+
+> **Scope note:** §1–8 are the *core session engine* (the gap-filler's
+> "is the market open?" need). §9–12 add the product calendar: a query API,
+> a frontend month view, and an extensible **events** layer (FOMC, CPI,
+> earnings) for the future. One core module backs both.
 
 ## 1. Problem
 
@@ -135,3 +146,77 @@ Unit tests against known dates (no network):
 2. Build the CH `market_sessions` cache now (§5) or defer to phase 2?
 3. Put the new module under `app/services/` directly, or a small
    `app/services/calendar/` package per the service-module template?
+
+---
+
+## 9. Product calendar — API (new)
+
+A read API over the core engine so the frontend (and agents) can render the
+calendar. Sessions are computed on-demand from the library per request (fast
+for a month range — no storage needed).
+
+```
+GET /api/v1/calendar?start=YYYY-MM-DD&end=YYYY-MM-DD&asset_class=equities|futures
+→ { "asset_class": "equities",
+    "days": [
+      { "date": "2026-06-18", "status": "open",        "early_close_et": null,    "events": [] },
+      { "date": "2026-06-19", "status": "closed",       "reason": "Juneteenth",    "events": [] },
+      { "date": "2026-11-28", "status": "early_close",  "early_close_et": "13:00", "events": [] },
+      ...
+    ] }
+```
+
+- `status` ∈ `open | closed | early_close`. `reason` is the holiday name when
+  closed (from the library), null otherwise.
+- `events` is always present (empty until §11 lands) so the frontend renders
+  event markers without an API change later.
+- New `app/api/routes_calendar.py`, registered in `main_api` like the other
+  `routes_*`. Pydantic response shape is the single contract for HTTP + MCP.
+- Cheap + cacheable (sessions for a year are deterministic) — add an
+  in-process/HTTP cache keyed on (asset_class, year) if needed.
+
+## 10. Frontend — calendar view (new)
+
+A new **Calendar** route in the cockpit (`frontend/src/routes/calendar.tsx`,
+added to `router.tsx` + `Sidebar`):
+- **Month grid**, equities/futures toggle (reuses the repo's tab pattern).
+- Each day cell shows session status: open / closed (greyed + holiday name) /
+  early-close (badge with the close time). Today highlighted.
+- Event markers (§11) render as dots/chips in the cell; empty for now.
+- Data via the §9 endpoint through the existing `openapi-fetch` client +
+  React Query (regen types with `npm run codegen`).
+
+## 11. Events layer (FUTURE — design now, build later)
+
+Extensible so "important events" (FOMC, CPI/NFP, OPEX, earnings) attach to
+calendar days without reworking the API/frontend.
+
+- **Shape:** `event(id, date[, time_et], asset_scope, type, title,
+  description, importance, source, url)`. `type` ∈ FOMC | econ_release |
+  earnings | opex | custom; `importance` ∈ low|medium|high.
+- **Store (decide when built):** low-volume curated reference data. Options:
+  PostgreSQL (identity DB — relational, admin-editable), a small CH table, or
+  a seed JSON checked into the repo + optional ingestion. Leaning PostgreSQL
+  (it's relational/curated, not market-tick data).
+- **Population:** seed manually first; later ingest FOMC dates (Fed publishes
+  the schedule), econ releases (BLS/Census calendars), earnings (provider).
+- The §9 API merges events into each day's `events[]`; §10 renders them.
+  **No API/UI rework needed when events arrive** — only the store + a join.
+
+## 12. Phasing
+
+- **Phase 1 (this work):** core session engine (§1–8) + calendar API (§9) +
+  frontend month view (§10). `events[]` ships empty. Optionally also wire the
+  gap-detection integration (§4 — same module, real win: no wasted holiday
+  pulls).
+- **Phase 2 (future):** events store + seed (FOMC first) + ingestion; the API
+  and frontend already carry events, so this is additive.
+
+## 13. Open questions (product)
+
+4. Phase 1 scope: calendar API + frontend **only**, or **also** wire the
+   gap-detection integration now (same core module)?
+5. Frontend home: a dedicated **Calendar** nav page (recommended), or fold it
+   into the existing Status page?
+6. Events store (when Phase 2 lands): PostgreSQL vs CH vs seed-JSON — defer,
+   or decide now?

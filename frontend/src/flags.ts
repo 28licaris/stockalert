@@ -30,6 +30,7 @@ const FLAGS: Record<string, FlagValue> = {
   "page.watchlists": true, // enabled in FE-CONTRACTS-3
   "page.seed": true, // enabled in FE-CONTRACTS-4
   "page.clickhouse": true, // enabled in FE-CONTRACTS-6a
+  "page.calendar": true, // market calendar (sessions; events Phase 2)
   "page.mcp": false,
   "page.settings": true,
 

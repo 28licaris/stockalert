@@ -258,6 +258,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/calendar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Calendar */
+        get: {
+            parameters: {
+                query: {
+                    start: string;
+                    end: string;
+                    asset_class?: "equities" | "futures";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CalendarResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/journal/accounts": {
         parameters: {
             query?: never;
@@ -1587,6 +1626,37 @@ export interface components {
          *     `since` lower for "what's been live recently?", higher for "what
          *     do we have at all?" — but the deeper you go the slower it gets.
          */
+        CalendarDay: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** @enum {string} */
+            status: "open" | "closed" | "early_close";
+            /** Early Close Et */
+            early_close_et?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Events */
+            events?: unknown[];
+        };
+        CalendarResponse: {
+            /** @enum {string} */
+            asset_class: "equities" | "futures";
+            /**
+             * Start
+             * Format: date
+             */
+            start: string;
+            /**
+             * End
+             * Format: date
+             */
+            end: string;
+            /** Days */
+            days: components["schemas"]["CalendarDay"][];
+        };
         AdjustedSymbolsResponse: {
             /**
              * Sources Scanned

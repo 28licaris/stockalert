@@ -2,6 +2,7 @@ import {
   Activity,
   BarChart3,
   Beaker,
+  CalendarDays,
   CandlestickChart,
   Database,
   FileBarChart,
@@ -46,6 +47,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: "Watchlists",  href: "/watchlists",  icon: ListChecks,       flag: "page.watchlists",  category: "Markets" },
   { label: "Stream",      href: "/stream",      icon: Radio,            flag: "page.seed",        category: "Markets" },
   { label: "Monitors",    href: "/monitors",    icon: Activity,         flag: "page.monitors",    category: "Markets" },
+  { label: "Calendar",    href: "/calendar",    icon: CalendarDays,     flag: "page.calendar",    category: "Markets" },
 
   { label: "Screener",    href: "/screener",    icon: Sparkles,         flag: "page.screener",    category: "Strategies" },
   { label: "Backtest",    href: "/backtest",    icon: Beaker,           flag: "page.backtest",    category: "Strategies" },

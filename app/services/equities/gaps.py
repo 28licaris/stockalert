@@ -115,13 +115,12 @@ def missing_weekdays(
     if start > through:
         return []
 
-    out: list[date] = []
-    d = start
-    while d <= through:
-        if d.weekday() < 5:
-            out.append(d)
-        d += timedelta(days=1)
-    return out
+    # Trading sessions only — the market calendar drops weekends AND holidays
+    # (e.g. Juneteenth), so a holiday isn't mistaken for a missing day and
+    # we don't waste a universe of provider calls on a closed session.
+    # Lazy import keeps exchange_calendars off this module's import path.
+    from app.services.market_calendar import equities_sessions
+    return equities_sessions(start, through)
 
 
 def loaded_dates_in_range(
