@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 #
 # upgrade_polygon_depth.sh — orchestrate the post-Polygon-subscription-upgrade
-# rebuild: extend polygon_raw with new years, re-run Spark adjustment over
-# the expanded range, hot-load CH so charts see the new depth.
+# rebuild: extend polygon_raw with new years, then rebuild CH from the expanded
+# lake so charts see the new depth. (Adjustment is computed at read time, so
+# there is no separate materialization step.)
 #
 # Trigger this AFTER Polygon has finished syncing the new historical years
 # to your S3 bucket. The script verifies S3 has the requested years before
 # touching anything else.
 #
-# Wall time for 15 added years (2003-2020 example): ~3-5 hours, broken down:
+# Wall time for 15 added years (2003-2020 example): ~2-4 hours, broken down:
 #   - Athena incremental import:  ~30 min
-#   - Spark adjustment (whole-market re-run, idempotent): ~2 hours
-#   - CH hot-load:                  ~1-3 hours (network-bound)
+#   - CH rebuild from lake:        ~1-3 hours (network-bound)
 #
 # Live tier keeps serving the EXISTING window throughout — no downtime.
 #
@@ -137,26 +137,21 @@ delta=$(( post_athena_rows - pre_rows ))
 [[ "${delta}" -gt 0 ]] || die "polygon_raw did not grow (was ${pre_rows}, now ${post_athena_rows}). Aborting."
 ok "polygon_raw now ${post_athena_rows} rows (+${delta})"
 
-# ─────────────────────────────────────────────────────────────────────────
-# Step 2: Spark adjustment (whole-market re-run; idempotent overwrite)
-# ─────────────────────────────────────────────────────────────────────────
-log "Step 2/3: Spark adjustment whole-market re-run"
-(
-  cd "${ROOT}" && \
-  scripts/aws/run_spark_job.sh --wait
-)
-ok "Spark adjustment done"
+# (Step 2 — the whole-market Spark adjustment — was RETIRED in v2: split
+#  adjustment is computed at READ time from polygon_raw + market_splits, so
+#  extending polygon_raw needs no re-materialization step.)
 
 # ─────────────────────────────────────────────────────────────────────────
-# Step 3: CH hot-load
+# Step 2: CH rebuild from the expanded lake (read_arrow union, read-time adjusted)
 # ─────────────────────────────────────────────────────────────────────────
-log "Step 3/3: CH hot-load from expanded lake"
+log "Step 2/2: CH rebuild from expanded lake"
 (
   cd "${ROOT}" && \
-  poetry run python scripts/hotload_ch_from_lake.py \
+  poetry run python scripts/rebuild_ch_from_lake.py \
+    --symbols active --wipe \
     --parallelism "${HOTLOAD_PARALLELISM}"
 )
-ok "CH hot-load done"
+ok "CH rebuild done"
 
 # ─────────────────────────────────────────────────────────────────────────
 # Done

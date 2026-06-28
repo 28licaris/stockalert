@@ -175,9 +175,10 @@ class Settings(BaseModel):
     iceberg_warehouse_prefix: str = os.getenv("ICEBERG_WAREHOUSE_PREFIX", "iceberg").strip("/")
 
     # Architecture v2 — separate Glue database for the equities namespace.
-    # Tables: polygon_raw, polygon_adjusted, schwab_universe,
-    # market_corp_actions. Fully-qualified as `lake.equities.<table>` when
-    # read via Spark/DuckDB; via PyIceberg as `<this_db>.<table>`.
+    # Tables: polygon_raw, market_splits, schwab_universe,
+    # market_corp_actions (polygon_adjusted retired — adjustment is computed
+    # at read time). Fully-qualified as `lake.equities.<table>` when
+    # read via DuckDB/Polars; via PyIceberg as `<this_db>.<table>`.
     # Created by `app/services/equities/tables.py::ensure_*`.
     # Spec: docs/architecture_v2/ (Gate 1 — equities database name).
     iceberg_equities_glue_database: str = os.getenv(
@@ -200,17 +201,14 @@ class Settings(BaseModel):
         os.getenv("BRONZE_HISTORY_START", "2021-01-04"),
     )
 
-    # Lake-warmup flow (was silver-derived add_members; CV15 rename).
-    # When True, stream_service.add fires the lake-warmup chain on
-    # newly-added symbols (CV12):
-    #   1. tip_fill (Schwab REST → equities.schwab_universe + CH; 48d)
-    #   2. lake_to_ch_backfill (equities.polygon_adjusted → CH; 730d)
+    # Lake-warmup flow for newly-added stream symbols.
+    # When True, stream_service.add fires the lake-warmup chain:
+    #   1. tip_fill  (Schwab REST → equities.schwab_universe + CH; recent ~48d)
+    #   2. lake_to_ch_backfill (polygon_raw, read-time adjusted → CH; deep ~730d)
     # Both run in parallel — new-symbol latency target <10s end-to-end.
     # When False (default), uses the legacy _enqueue_backfill 3-call
-    # path (provider REST → CH direct = Path ②). Flip to True once
-    # CV4 (Athena bulk-import) + CV6 (Spark adjustment) have run in
-    # production. Env var name retained for backwards compat with
-    # operator .env files; semantics replaced.
+    # path (provider REST → CH direct). Env var name retained for backwards
+    # compat with operator .env files; semantics replaced.
     lake_warmup_enabled: bool = (
         os.getenv(
             "LAKE_WARMUP_ENABLED",
@@ -398,7 +396,22 @@ class Settings(BaseModel):
     min_price_change_pct: float = float(os.getenv("MIN_PRICE_CHANGE_PCT", "0.003"))  # 0.3%
     min_indicator_change_pct: float = float(os.getenv("MIN_INDICATOR_CHANGE_PCT", "0.02"))  # 2%
     min_pivot_separation: int = int(os.getenv("MIN_PIVOT_SEPARATION", "12"))  # 12 minutes
-    
+
+    # ─────────────────────────────────────────────────────────
+    # Sector Rotation (RRG) Settings — see docs/sector_rotation_spec.md
+    # ─────────────────────────────────────────────────────────
+    # Daily-bar windows for the relative-strength (RS-Ratio) and its
+    # momentum (RS-Momentum). Both axes are centered at 100 (= in line
+    # with the benchmark). Named here so the math in
+    # app/services/sectors/rrg.py carries no magic literals.
+    rrg_benchmark: str = os.getenv("RRG_BENCHMARK", "SPY")
+    rrg_ratio_window: int = int(os.getenv("RRG_RATIO_WINDOW", "50"))   # ~10wk RS base
+    rrg_mom_window: int = int(os.getenv("RRG_MOM_WINDOW", "20"))       # momentum smoothing
+    rrg_tail_weeks: int = int(os.getenv("RRG_TAIL_WEEKS", "12"))       # weekly scatter tail
+    # History to warm the SMAs. Kept ≤ bars_gateway _MAX_FILL_LOOKBACK_DAYS
+    # (365) so the ClickHouse hot tier self-heals from the lake on a cold read.
+    rrg_lookback_days: int = int(os.getenv("RRG_LOOKBACK_DAYS", "360"))
+
     # ─────────────────────────────────────────────────────────
     # Historical Data Loading Settings
     # ─────────────────────────────────────────────────────────

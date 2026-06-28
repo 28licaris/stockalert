@@ -489,11 +489,9 @@ def _run_incremental(years: list[int]) -> None:
         print(f"  {k}: {v if not isinstance(v, int) or v < 10000 else f'{v:,}'}")
     print()
     print("Next steps:")
-    print("  1. Re-run Spark adjustment over the expanded raw window:")
-    print("     scripts/aws/run_spark_job.sh --wait")
-    print("  2. Hot-load CH from the expanded lake:")
-    print("     poetry run python scripts/hotload_ch_from_lake.py")
-    print("  (or just run scripts/aws/upgrade_polygon_depth.sh to chain all three)")
+    print("  - Reload CH from the expanded lake (adjustment is computed at")
+    print("    read time — no Spark step needed):")
+    print("     poetry run python scripts/rebuild_ch_from_lake.py --symbols active --wipe")
 
 
 if __name__ == "__main__":

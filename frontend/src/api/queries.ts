@@ -164,6 +164,8 @@ export const queryKeys = {
     ["instruments", "lookup", symbols] as const,
   clickhouseSchema: ["clickhouse", "schema"] as const,
   jobs: ["jobs"] as const,
+  sectorRotation: (benchmark: string, tailWeeks: number) =>
+    ["sectors", "rotation", benchmark, tailWeeks] as const,
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────
@@ -929,5 +931,34 @@ export function useExecuteClickHouseQuery() {
       });
       return data as ClickHouseQueryResponse;
     },
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// /api/v1/sectors/rotation — RRG sector-rotation dashboard
+// ─────────────────────────────────────────────────────────────────────
+
+export type RotationDashboard = components["schemas"]["RotationDashboard"];
+export type SectorRotationState =
+  components["schemas"]["SectorRotationState"];
+export type RotationPoint = components["schemas"]["RotationPoint"];
+export type RotationQuadrant = RotationPoint["quadrant"];
+
+/**
+ * Sector rotation (RRG) dashboard. The backend reads ClickHouse and the
+ * picture only changes once new daily bars land, so we keep it fresh but
+ * un-aggressive: refetch on a slow interval, generous staleTime.
+ */
+export function useSectorRotation(benchmark = "SPY", tailWeeks = 12) {
+  return useQuery({
+    queryKey: queryKeys.sectorRotation(benchmark, tailWeeks),
+    queryFn: async (): Promise<RotationDashboard> => {
+      const { data } = await apiClient.GET("/api/v1/sectors/rotation", {
+        params: { query: { benchmark, tail_weeks: tailWeeks } },
+      });
+      return data as RotationDashboard;
+    },
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
   });
 }

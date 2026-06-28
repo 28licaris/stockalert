@@ -184,8 +184,8 @@ is config + an ingest job stopping/starting, not code.
 | Polygon flat-files → bronze | ✅ live | nightly_equities_polygon_refresh |
 | Schwab REST nightly seed refresh → bronze | ✅ live | nightly_schwab_refresh |
 | Polygon corp-actions → bronze → silver | ✅ TA-5.0 | corp_actions/{polygon_ingest, build}.py |
-| **canonical adjusted OHLCV** (was v1 `silver.ohlcv_1m`) | ✅ v2 — superseded the v1 silver build | `equities.polygon_adjusted` (Spark `polygon_adjustment_job.py`) + `/api/v1/adjusted/*` + MCP `get_adjusted_bars` |
-| **lake → CH hydration** (was v1 silver→CH backfill) | ✅ v2 | `scripts/hotload_ch_from_lake.py` (bulk) + on-demand `app/services/equities/lake_to_ch_fill.py` + `schwab_tip_fill.py` |
+| **canonical adjusted OHLCV** (was v1 `silver.ohlcv_1m`) | ✅ v2 — superseded the v1 silver build | read-time adjustment from `equities.polygon_raw` + `equities.market_splits` (no materialized table; `polygon_adjusted` retired) + `/api/v1/adjusted/*` + MCP `get_adjusted_bars` |
+| **lake → CH hydration** (was v1 silver→CH backfill) | ✅ v2 | `scripts/rebuild_ch_from_lake.py` (bulk) + on-demand `app/services/equities/lake_to_ch_fill.py` (read_arrow union) + `schwab_tip_fill.py` |
 | `scripts/promote_to_seed.py` | ❌ planned | promote_to_seed.py (to build) |
 
 **Path forward:** TA-5.1.7 (operator validate + initial backfill) → TA-5.3 → CH wipe-and-rebuild → universe-expansion CLI.

@@ -50,6 +50,7 @@ from app.api import (
     routes_movers,
     routes_news,
     routes_screener,
+    routes_sector_rotation,
     routes_adjusted,
     routes_admin_auth,
     routes_auth,
@@ -769,6 +770,7 @@ app.include_router(routes_journal.router, prefix=_V1, tags=["Journal"])
 app.include_router(routes_lake.router, prefix=_V1, tags=["Lake"])
 app.include_router(routes_indicators.router, prefix=_V1, tags=["Indicators"])
 app.include_router(routes_screener.router, prefix=_V1, tags=["Screener"])
+app.include_router(routes_sector_rotation.router, prefix=_V1, tags=["SectorRotation"])
 app.include_router(routes_corp_actions.router, prefix=_V1, tags=["CorpActions"])
 app.include_router(routes_adjusted.router, prefix=_V1, tags=["Adjusted"])
 app.include_router(routes_monitors.router, prefix=_V1, tags=["Monitors"])

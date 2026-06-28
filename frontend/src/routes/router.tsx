@@ -10,6 +10,7 @@ import { ClickHousePage } from "./clickhouse";
 import { CalendarPage } from "./calendar";
 import { NewsPage } from "./news";
 import { EconomicPage } from "./economic";
+import { SectorsPage } from "./sectors";
 import { NotFoundPage } from "./not-found";
 import { LoginPage } from "./login";
 import { SettingsPage } from "./settings";
@@ -46,6 +47,7 @@ export const router = createBrowserRouter(
             { path: "calendar", element: <CalendarPage /> },
             { path: "news", element: <NewsPage /> },
             { path: "economic", element: <EconomicPage /> },
+            { path: "sectors", element: <SectorsPage /> },
             { path: "settings", element: <SettingsPage /> },
             { path: "*", element: <NotFoundPage /> },
           ],

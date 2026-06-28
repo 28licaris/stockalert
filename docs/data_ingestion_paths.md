@@ -373,10 +373,12 @@ will include other providers).
 ### ⑦ `bronze.*_minute` + `silver.corp_actions` → `silver.ohlcv_1m` (SUPERSEDED by v2)
 
 **Status: SUPERSEDED.** The v1 "silver build" described below was never
-shipped; v2 replaced it with the whole-market Spark adjustment job
-(`scripts/spark/polygon_adjustment_job.py` → `equities.polygon_adjusted`)
-plus on-demand `equities.polygon_adjusted` → ClickHouse hydration
-(`scripts/hotload_ch_from_lake.py`, `app/services/equities/lake_to_ch_fill.py`).
+shipped; v2 replaced it with **read-time** split adjustment (from
+`equities.polygon_raw` + `equities.market_splits` — no materialized
+`polygon_adjusted` table; the weekly Spark job was retired) plus lake →
+ClickHouse hydration via the `read_arrow` union (bulk
+`scripts/rebuild_ch_from_lake.py`, on-demand
+`app/services/equities/lake_to_ch_fill.py`).
 See [`docs/architecture_v2/`](architecture_v2/README.md). The planning
 notes below are retained for historical context only.
 

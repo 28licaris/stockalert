@@ -683,6 +683,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sectors/rotation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Sector Rotation
+         * @description RRG dashboard for the sector universe vs `benchmark`.
+         */
+        get: operations["get_sector_rotation_api_v1_sectors_rotation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/corp-actions/{symbol}": {
         parameters: {
             query?: never;
@@ -2756,6 +2776,16 @@ export interface components {
             /** Raw Value */
             raw_value: number;
         };
+        /**
+         * ExcludedGroup
+         * @description A group that could not be scored — surfaced, never silently dropped.
+         */
+        ExcludedGroup: {
+            /** Group Id */
+            group_id: string;
+            /** Reason */
+            reason: string;
+        };
         /** GapFillRequest */
         GapFillRequest: {
             /** Symbols */
@@ -3623,6 +3653,54 @@ export interface components {
          */
         Role: "owner" | "admin" | "member" | "viewer" | "support" | "developer";
         /**
+         * RotationDashboard
+         * @description The full payload for the rotation page.
+         */
+        RotationDashboard: {
+            /** Benchmark */
+            benchmark: string;
+            /**
+             * As Of
+             * Format: date
+             */
+            as_of: string;
+            /** Tail Weeks */
+            tail_weeks: number;
+            /** Sectors */
+            sectors?: components["schemas"]["SectorRotationState"][];
+            /**
+             * Excluded
+             * @description Groups dropped for insufficient/absent data, with reasons.
+             */
+            excluded?: components["schemas"]["ExcludedGroup"][];
+        };
+        /**
+         * RotationPoint
+         * @description One RRG sample: the two axes + the quadrant they fall in.
+         */
+        RotationPoint: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /**
+             * Rs Ratio
+             * @description Relative strength vs benchmark, ~100.
+             */
+            rs_ratio: number;
+            /**
+             * Rs Momentum
+             * @description Momentum of RS-Ratio, ~100.
+             */
+            rs_momentum: number;
+            /**
+             * Quadrant
+             * @enum {string}
+             */
+            quadrant: "leading" | "weakening" | "improving" | "lagging";
+        };
+        /**
          * ScreenerResult
          * @description Output of a screener scan. Returned by both the HTTP route and
          *     the MCP tool — single contract across surfaces.
@@ -3754,6 +3832,30 @@ export interface components {
              * @default 20
              */
             limit: number;
+        };
+        /**
+         * SectorRotationState
+         * @description A single group's current RRG position plus its recent trajectory.
+         */
+        SectorRotationState: {
+            /** Group Id */
+            group_id: string;
+            /** Name */
+            name: string;
+            current: components["schemas"]["RotationPoint"];
+            /**
+             * Tail
+             * @description Weekly RRG points, oldest → newest, for the scatter tail.
+             */
+            tail?: components["schemas"]["RotationPoint"][];
+            /**
+             * Relative Strength
+             * @description The raw relative-strength line (group/benchmark, indexed to 100 at the window start) for the trend chart.
+             */
+            relative_strength?: [
+                string,
+                number
+            ][];
         };
         /** SecurityEventListResponse */
         SecurityEventListResponse: {
@@ -5546,6 +5648,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScreenerResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_sector_rotation_api_v1_sectors_rotation_get: {
+        parameters: {
+            query?: {
+                /** @description Benchmark symbol; defaults to the configured RRG benchmark (SPY). */
+                benchmark?: string;
+                /** @description Weekly points in each sector's scatter tail; 0 ⇒ configured default. */
+                tail_weeks?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotationDashboard"];
                 };
             };
             /** @description Validation Error */

@@ -77,8 +77,9 @@ scripts/             Ops scripts:
                          futures.schwab_futures (continuous roots)
                        run_corp_actions_backfill.py — Polygon REST →
                          equities.market_corp_actions
-                       rebuild_ch_from_silver.py — bulk lake → CH
-                         (legacy filename, sources from v2 lake)
+                       rebuild_ch_from_lake.py — bulk lake → CH
+                         (canonical; per-symbol via fill_ch_from_lake /
+                          read_arrow union, schwab tip included)
 docs/                Plans, runbooks; docs/standards/ = rules
 tests/  tests/integration/
 ```

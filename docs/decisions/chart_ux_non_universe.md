@@ -187,7 +187,7 @@ from `equities.polygon_adjusted` via
 pre-warm a symbol manually instead:
 
 ```bash
-poetry run python scripts/hotload_ch_from_lake.py --symbols ZYXI
+poetry run python scripts/rebuild_ch_from_lake.py --symbols ZYXI
 ```
 
 The on-demand fill is bounded to the requested window (~seconds). The

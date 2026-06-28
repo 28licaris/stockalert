@@ -1,28 +1,27 @@
 """
 Schwab REST tip-fill (TA-5.3.2).
 
-Fills the gap between silver's per-symbol watermark and "now-1min" by
+Fills the gap between a symbol's deep-history watermark and "now-1min" by
 pulling 1-minute bars from Schwab's pricehistory endpoint and writing
 to BOTH:
   - equities.schwab_universe (idempotent; the immutable archive)
   - ClickHouse ohlcv_1m      (idempotent; chart available immediately)
 
-**Why dual-write to CH directly.** Per [streaming_universe_model.md][1]
-+ [silver_layer_plan §6][2], this is the ONE bounded exception to
-the "no historical → CH directly" rule:
+**Why dual-write to CH directly.** Per [streaming_universe_model.md][1],
+this is the ONE bounded exception to the "no historical → CH directly"
+rule:
   - The window is ≤48 days (Schwab REST's 1-min reach)
   - Near-live, not bulk archive
-  - Without it, a brand-new ad-hoc symbol's chart would be empty for
-    ~24h until the next weekly polygon_adjustment_job → lake_to_ch_backfill
-    chain caught up
+  - Without it, a brand-new ad-hoc symbol's chart would be empty until
+    the deep-history `lake_to_ch_backfill` (polygon, read-time adjusted)
+    caught up
 
-The bronze write is the long-term archive; the CH write makes the
-cockpit "warming up" UX instant. The next nightly silver_build picks
-up the new bronze rows and merges them into silver — at which point
-lake_to_ch_backfill (CV15) re-syncs CH from equities.polygon_adjusted.
+This is the recent-tip half of the add-symbol warmup; the deep polygon
+history is loaded in parallel by `lake_to_ch_backfill`. The schwab_universe
+write is the durable archive; the CH write makes the cockpit "warming up"
+UX instant.
 
 [1]: ../../../docs/streaming_universe_model.md
-[2]: ../../../docs/silver_layer_plan.md
 
 **Source tag.** Bronze + CH rows get `source = "schwab-tipfill"` to
 distinguish from:
