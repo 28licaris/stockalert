@@ -11,7 +11,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query
 
 from app.services.news.econ import (
-    BLS_SERIES,
+    ALL_SERIES,
     EconHistoryPoint,
     EconIndicator,
     EconService,
@@ -38,7 +38,7 @@ def get_economic_history(
     limit: int = Query(60, ge=1, le=600),
 ) -> list[EconHistoryPoint]:
     """Raw release history (newest first) for one indicator."""
-    if series_id not in BLS_SERIES:
+    if series_id not in ALL_SERIES:
         raise HTTPException(status_code=404, detail=f"unknown series: {series_id}")
     try:
         return EconService.from_settings().history(series_id, limit=limit)

@@ -370,8 +370,11 @@ class Settings(BaseModel):
     news_enrich_limit: int = int(os.getenv("NEWS_ENRICH_LIMIT", "25"))
 
     # BLS economic data — free; key optional (keyless = 25 req/day, a free
-    # registered key = 500/day). BEA (GDP/PCE) lands later and needs its own key.
+    # registered key = 500/day).
     bls_api_key: str = os.getenv("BLS_API_KEY", "")
+    # BEA economic data (GDP/PCE) — free but REQUIRES a key (register at
+    # apps.bea.gov/API/signup). Empty → GDP/PCE are skipped at ingest.
+    bea_api_key: str = os.getenv("BEA_API_KEY", "")
 
     # Optional tag stored on OHLCV rows (e.g. matches DATA_PROVIDER)
     data_source_tag: str = os.getenv("DATA_SOURCE_TAG", "")
