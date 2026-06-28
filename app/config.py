@@ -147,6 +147,21 @@ class Settings(BaseModel):
     futures_nightly_run_hour_utc: int = int(os.getenv("FUTURES_NIGHTLY_RUN_HOUR_UTC", "22"))
     futures_nightly_symbols: str = os.getenv("FUTURES_NIGHTLY_SYMBOLS", "active")
 
+    # Schwab REST option-chain snapshots → options.* Iceberg tables.
+    # OFF by default to avoid surprise provider/API load. When enabled,
+    # runs during FastAPI startup on a fixed interval and can also be
+    # triggered through the jobs API. Symbol specs match the CLI:
+    # "active", "watchlist:<name>", or explicit CSV.
+    options_snapshot_enabled: bool = (
+        os.getenv("OPTIONS_SNAPSHOT_ENABLED", "false").lower() == "true"
+    )
+    options_snapshot_interval_seconds: int = int(
+        os.getenv("OPTIONS_SNAPSHOT_INTERVAL_SECONDS", "300")
+    )
+    options_snapshot_symbols: str = os.getenv("OPTIONS_SNAPSHOT_SYMBOLS", "active")
+    options_snapshot_strike_count: int = int(os.getenv("OPTIONS_SNAPSHOT_STRIKE_COUNT", "20"))
+    options_snapshot_contract_type: str = os.getenv("OPTIONS_SNAPSHOT_CONTRACT_TYPE", "ALL")
+
     # Polygon flat-file → futures.polygon_raw → futures.polygon_continuous
     # (see nightly_futures_polygon_refresh). Keeps the authoritative back-
     # adjusted deep history fresh; complements the Schwab nightly (recent tip).

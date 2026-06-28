@@ -4,13 +4,8 @@ import argparse
 import asyncio
 
 from app.services.options.schemas import OptionSnapshotIngestResult
-from scripts.options_chain_snapshot import (
-    build_request_params,
-    parse_symbols,
-    result_line,
-    resolve_symbols,
-    run_snapshot,
-)
+from app.services.options.universe import parse_symbols, resolve_options_symbol_spec
+from scripts.options_chain_snapshot import build_request_params, result_line, run_snapshot
 
 
 def test_parse_symbols_normalizes_dedupes_and_sorts() -> None:
@@ -18,11 +13,11 @@ def test_parse_symbols_normalizes_dedupes_and_sorts() -> None:
 
 
 def test_resolve_symbols_accepts_explicit_csv() -> None:
-    assert resolve_symbols(" msft,AAPL,msft ") == ["AAPL", "MSFT"]
+    assert resolve_options_symbol_spec(" msft,AAPL,msft ") == ["AAPL", "MSFT"]
 
 
 def test_resolve_symbols_active_uses_injected_resolver() -> None:
-    symbols = resolve_symbols(
+    symbols = resolve_options_symbol_spec(
         "active",
         active_resolver=lambda: ["msft", "AAPL", "MSFT"],
     )
@@ -32,7 +27,7 @@ def test_resolve_symbols_active_uses_injected_resolver() -> None:
 
 def test_resolve_symbols_rejects_empty_active_universe() -> None:
     try:
-        resolve_symbols("active", active_resolver=lambda: [])
+        resolve_options_symbol_spec("active", active_resolver=lambda: [])
     except ValueError as exc:
         assert "active universe returned no symbols" in str(exc)
     else:
@@ -46,7 +41,10 @@ def test_resolve_symbols_watchlist_uses_injected_resolver() -> None:
         calls.append(name)
         return ["tsla", "AAPL", "TSLA"]
 
-    symbols = resolve_symbols("watchlist:momentum", watchlist_resolver=resolver)
+    symbols = resolve_options_symbol_spec(
+        "watchlist:momentum",
+        watchlist_resolver=resolver,
+    )
 
     assert symbols == ["AAPL", "TSLA"]
     assert calls == ["momentum"]
@@ -54,7 +52,7 @@ def test_resolve_symbols_watchlist_uses_injected_resolver() -> None:
 
 def test_resolve_symbols_rejects_unsupported_all() -> None:
     try:
-        resolve_symbols("all")
+        resolve_options_symbol_spec("all")
     except ValueError as exc:
         assert "not supported" in str(exc)
     else:

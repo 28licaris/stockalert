@@ -90,6 +90,7 @@ def _register_background_jobs(
     polygon_started: bool,
     schwab_started: bool,
     futures_started: bool,
+    options_snapshot_started: bool,
     live_lake_writer_started: bool,
     journal_started: bool,
 ) -> None:
@@ -190,6 +191,24 @@ def _register_background_jobs(
             schedule=f"every {int(_s.news_poll_minutes)} min",
             setting_key="NEWS_POLL_MINUTES",
             run_now=_run_news_ingest_once,
+        )
+
+    # Options snapshots — refresh_options_snapshots doesn't audit.
+    if options_snapshot_started:
+        async def _run_options_snapshot_once() -> None:
+            from app.services.ingest.options_snapshot_refresh import (
+                refresh_options_snapshots,
+            )
+
+            async with audit_run("options_snapshot_refresh"):
+                await refresh_options_snapshots()
+
+        job_registry.register(
+            name="options_snapshot_refresh",
+            display_name="Options snapshot refresh",
+            schedule=f"every {int(_s.options_snapshot_interval_seconds)}s",
+            setting_key="OPTIONS_SNAPSHOT_INTERVAL_SECONDS",
+            run_now=_run_options_snapshot_once,
         )
 
     # CV13: silver_ohlcv_build job removed. polygon_adjustment_job runs
@@ -388,6 +407,33 @@ async def lifespan(app: FastAPI):
                 exc,
             )
 
+    options_snapshot_task: asyncio.Task | None = None
+    if (
+        _settings.options_snapshot_enabled
+        and (_settings.stock_lake_bucket or "").strip()
+    ):
+        try:
+            from app.services.ingest.options_snapshot_refresh import (
+                run_options_snapshot_loop,
+            )
+
+            options_snapshot_task = asyncio.create_task(
+                run_options_snapshot_loop(),
+                name="options_snapshot_refresh",
+            )
+            app.state.options_snapshot_task = options_snapshot_task
+            logger.info(
+                "options_snapshot_refresh: background loop started "
+                "(OPTIONS_SNAPSHOT_INTERVAL_SECONDS=%s, symbols=%s)",
+                _settings.options_snapshot_interval_seconds,
+                _settings.options_snapshot_symbols,
+            )
+        except Exception as exc:
+            logger.exception(
+                "✗ options_snapshot_refresh failed to start: %s — continuing without it",
+                exc,
+            )
+
     # Nightly Polygon flat-file → futures.polygon_raw → futures.polygon_continuous
     # refresh (keeps the back-adjusted deep history fresh). OFF by default.
     nightly_futures_polygon_task: asyncio.Task | None = None
@@ -575,6 +621,7 @@ async def lifespan(app: FastAPI):
         polygon_started=nightly_lake_task is not None,
         schwab_started=nightly_schwab_task is not None,
         futures_started=nightly_futures_task is not None,
+        options_snapshot_started=options_snapshot_task is not None,
         live_lake_writer_started=_llw_settings.live_lake_writer_enabled,
         journal_started=_settings.journal_enabled and _journal_has_creds,
     )
@@ -614,6 +661,16 @@ async def lifespan(app: FastAPI):
             pass
         except Exception as e:
             logger.warning("nightly_futures_refresh task shutdown: %s", e)
+
+    ot = getattr(app.state, "options_snapshot_task", None)
+    if ot is not None and not ot.done():
+        ot.cancel()
+        try:
+            await ot
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning("options_snapshot_refresh task shutdown: %s", e)
 
     rt = getattr(app.state, "ch_reconcile_task", None)
     if rt is not None and not rt.done():

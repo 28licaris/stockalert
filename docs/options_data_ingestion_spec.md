@@ -4,7 +4,7 @@ Status: implementation in progress on branch `options`
 
 ## Implementation Checkpoint
 
-Last updated during O3c active/watchlist universe resolution.
+Last updated during O3d scheduled snapshot refresh.
 
 Completed:
 
@@ -42,23 +42,33 @@ Completed:
   - Unsupported `all`/`*` and empty resolved universes fail fast instead of
     producing a silent no-op.
   - Fake resolver tests cover active and watchlist behavior.
+- O3d scheduled/manual refresh slice:
+  - `app.services.options.universe` owns shared option symbol-spec resolution
+    for CLI and scheduled jobs.
+  - `app.services.ingest.options_snapshot_refresh` runs Schwab option-chain
+    snapshots through `OptionsSnapshotService`.
+  - FastAPI startup can run the loop when `OPTIONS_SNAPSHOT_ENABLED=true`.
+  - JobRegistry registers `options_snapshot_refresh` for operator-triggered
+    manual runs with the same audit pattern as equities/futures jobs.
+  - `.env.example` documents `OPTIONS_SNAPSHOT_*` controls.
 
 Current verification:
 
 ```bash
 /Users/licaris/dev/stockalert/.venv/bin/pytest app/services/options/tests
-# 36 passed
+# 41 passed
 
-/Users/licaris/dev/stockalert/.venv/bin/python -m compileall -q app/services/options scripts/options_chain_snapshot.py
+/Users/licaris/dev/stockalert/.venv/bin/python -m compileall -q app/services/options app/services/ingest/options_snapshot_refresh.py scripts/options_chain_snapshot.py app/main_api.py app/config.py
 # passed
 ```
 
-Previous O3b verification was 31 passing option tests plus compileall.
+Previous O3c verification was 36 passing option tests plus compileall.
 
 Next recommended pickup:
 
-1. O3d: register a manual/scheduled job only after O3c is stable.
-2. O4: add readers, HTTP routes, and MCP tools. MCP coverage remains a release
+1. O4a: add an options reader over `options.schwab_chain_contracts` and
+   `options.gamma_exposure_snapshots`.
+2. O4b: add HTTP routes and MCP tools. MCP coverage remains a release
    gate for every agent decision/alert surface.
 
 ## Goal

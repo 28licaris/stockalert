@@ -20,10 +20,11 @@ Current scope:
   derived GEX calculation, and sink write.
 - Operator CLI for explicit, active-universe, and watchlist snapshots:
   `scripts/options_chain_snapshot.py`.
+- Scheduled snapshot refresh wrapper:
+  `app/services/ingest/options_snapshot_refresh.py`.
 
 Not yet owned here:
 
-- Scheduled Schwab provider orchestration.
 - HTTP routes.
 - MCP tools.
 - ClickHouse hot tables or streaming.
