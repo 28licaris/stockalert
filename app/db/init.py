@@ -423,6 +423,33 @@ def init_schema() -> None:
         """
     )
 
+    # Market calendar events (FOMC, econ releases, OPEX, dividend/split
+    # ex-dates). Unified across event types: macro events have symbol=''.
+    # `external_id` dedups within a source; ReplacingMergeTree(version) lets
+    # re-syncs overwrite cleanly. ORDER BY leads with event_date so the
+    # calendar's "events on date D" read is index-pruned; symbol next so the
+    # symbol page's "events for X" is also fast. See market_calendar_spec §12a.
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS market_events (
+            event_date     Date,
+            event_time_et  String DEFAULT '',
+            symbol         LowCardinality(String) DEFAULT '',
+            event_type     LowCardinality(String),
+            title          String DEFAULT '',
+            importance     LowCardinality(String) DEFAULT 'medium',
+            source         LowCardinality(String) DEFAULT '',
+            external_id    String DEFAULT '',
+            payload        String DEFAULT '{}',
+            version        UInt64 DEFAULT 0
+        )
+        ENGINE = ReplacingMergeTree(version)
+        PARTITION BY toYYYYMM(event_date)
+        ORDER BY (event_date, symbol, event_type, external_id)
+        SETTINGS index_granularity = 8192
+        """
+    )
+
 
 def _read_legacy_watchlist(path: str) -> Optional[list[str]]:
     """Best-effort read of the old `data/watchlist.json` file. Returns None on any error."""

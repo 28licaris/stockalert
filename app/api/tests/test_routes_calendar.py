@@ -1,10 +1,19 @@
 """Contract tests for the /api/v1/calendar endpoint."""
 from __future__ import annotations
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import routes_calendar
+from app.services import market_events as me
+
+
+@pytest.fixture(autouse=True)
+def _no_ch_events(monkeypatch):
+    """Isolate from ClickHouse: computed + seeded events still flow; the CH
+    (corp-actions) source returns []. Keeps these API tests fast + hermetic."""
+    monkeypatch.setattr(me, "ch_events", lambda *a, **k: [])
 
 
 def _client() -> TestClient:
@@ -26,8 +35,19 @@ def test_calendar_range_marks_holiday_and_open_days():
     assert by_date["2026-06-19"]["status"] == "closed"           # Juneteenth
     assert "Juneteenth" in by_date["2026-06-19"]["reason"]
     assert by_date["2026-06-20"]["status"] == "closed"           # Saturday
-    # events present + empty (Phase 2 contract)
-    assert by_date["2026-06-18"]["events"] == []
+    # 6/18: 3rd-Friday OPEX shifted off Juneteenth → quad-witching (June).
+    types_618 = {e["event_type"] for e in by_date["2026-06-18"]["events"]}
+    assert "quad_witching" in types_618
+
+
+def test_calendar_includes_fomc_event():
+    c = _client()
+    r = c.get("/api/v1/calendar", params={
+        "start": "2026-06-01", "end": "2026-06-30", "asset_class": "equities",
+    })
+    by_date = {d["date"]: d for d in r.json()["days"]}
+    fomc = [e for e in by_date["2026-06-17"]["events"] if e["event_type"] == "fomc"]
+    assert fomc and fomc[0]["importance"] == "high" and fomc[0]["time_et"] == "14:00"
 
 
 def test_calendar_early_close_reported():

@@ -2160,9 +2160,36 @@ export interface components {
             reason?: string | null;
             /**
              * Events
-             * @description Calendar events for this day (Phase 2: FOMC, econ, earnings). Empty for now.
+             * @description Calendar events on this day (FOMC, OPEX, …).
              */
-            events?: unknown[];
+            events?: components["schemas"]["CalendarEvent"][];
+        };
+        /** CalendarEvent */
+        CalendarEvent: {
+            /**
+             * Event Type
+             * @description fomc | opex | quad_witching | dividend | split | …
+             */
+            event_type: string;
+            /** Title */
+            title: string;
+            /**
+             * Importance
+             * @description low | medium | high
+             */
+            importance: string;
+            /**
+             * Time Et
+             * @description ET time 'HH:MM', if known
+             */
+            time_et?: string | null;
+            /**
+             * Symbol
+             * @description Ticker for company events; null for market-wide
+             */
+            symbol?: string | null;
+            /** Source */
+            source: string;
         };
         /** CalendarResponse */
         CalendarResponse: {

@@ -212,6 +212,44 @@ calendar days without reworking the API/frontend.
 - **Phase 2 (future):** events store + seed (FOMC first) + ingestion; the API
   and frontend already carry events, so this is additive.
 
+## 12a. Phase 2 — FREE events (approved 2026-06-27)
+
+Constraint: **free sources only, production-robust.** Robustness rule: runtime
+reads ONLY *computed* values, *data we already own*, *committed seed files*, or
+*entitled APIs* — **never live HTML scraping**. Any scrape is a reviewed
+dev-time tool that emits a committed seed.
+
+**v1 sources (all free):**
+1. **Computed** — OPEX / quad-witching / quarter-end (pure function off the
+   session calendar; can't break, no dependency).
+2. **Owned** — dividend + split ex-dates from `market_corp_actions` /
+   `market_splits` (Polygon REST, already entitled + ingested).
+3. **Seeded** — FOMC + key macro (CPI, NFP, GDP, PCE) from a committed seed
+   file (`data/market_events_seed.json`), refreshed by a reviewed dev script +
+   the Fed/BLS published schedules.
+
+**Deferred:** earnings — no free + robust source (Schwab provider exposes no
+earnings; Polygon earnings = paid Benzinga). The model below already supports
+`event_type='earnings'` so it slots in later.
+
+**Store:** ClickHouse `market_events` — ReplacingMergeTree(version),
+`PARTITION BY toYYYYMM(event_date)`,
+`ORDER BY (event_date, symbol, event_type, external_id)`. Columns:
+event_date, event_time_et (nullable), symbol (''=macro), event_type, title,
+importance, source, external_id, payload(JSON), version. Idempotent on the
+ORDER BY key + version. Fast for the calendar AND the symbol page.
+
+**Populate:** `app/services/market_events.py` — computed generator + seed
+loader + corp-actions→events sync; idempotent. Scheduled like the nightly jobs
+(computed/seed cheap; corp-actions reads the small splits table + universe-
+scoped dividends so the grid isn't flooded with whole-market dividend rows).
+
+**Surface:** the calendar API joins events into each day's `events[]` (already
+in the contract); the frontend already renders markers.
+
+**Phasing within Phase 2:** (2a) table + computed + macro seed + API/UI join;
+(2b) corp-actions ex-date sync; (2c) earnings when a free/funded source exists.
+
 ## 13. Open questions (product)
 
 4. Phase 1 scope: calendar API + frontend **only**, or **also** wire the
