@@ -53,6 +53,42 @@ strike/expiry. Their docs also list historical option trades at `$250/month`
 for the full market, with a discount for more than one year. This spec treats
 that as a future optional provider, not the default ingestion source.
 
+## Coverage Compared With Unusual Whales
+
+The Schwab-first snapshot architecture covers the foundational chain and GEX
+surface, but it does not attempt to recreate every Unusual Whales data product
+in the first build.
+
+Covered in the Schwab-first path:
+
+- Option chains and expirations.
+- Bid, ask, last, mark, volume, open interest, and Greeks from chain snapshots.
+- Derived GEX by total, strike, expiry, and strike plus expiry.
+- Replayable chain/GEX snapshots for alerts, backtests, simulations, API, and
+  MCP.
+
+Missing unless added later through Schwab streaming, our own capture logic, or
+an external provider such as Unusual Whales:
+
+- Individual option trade tape, including sweeps, blocks, premium, exchange,
+  trade condition, and side/aggressor inference.
+- Historical full-market option trades before our own ingestion begins.
+- Dark pool and off-lit equity prints.
+- Lit-flow aggregates.
+- Greek flow from actual trade flow, not just open-interest snapshots.
+- Contract-level intraday OHLC/volume profile beyond periodic chain snapshots.
+- Market tide, net flow, and sector/ETF tide style sentiment aggregates.
+- Hottest chains, unusual activity scans, and flow-alert feeds.
+- IV rank, interpolated IV, skew/risk-reversal skew, variance risk premium,
+  volatility anomaly scores, and realized-volatility statistics.
+- Max pain and richer open-interest/volume breakdowns by expiry and strike.
+- Real-time WebSocket/Kafka channels for flow, GEX, lit/off-lit trades, and
+  market-wide alerts.
+
+Design implication: the first implementation should not overfit to Unusual
+Whales response shapes, but the lake should leave room for optional enrichment
+tables with provider-specific raw payloads and canonical derived outputs.
+
 ## Architecture
 
 Options become a peer domain beside equities and futures:
@@ -243,6 +279,62 @@ Then aggregate by total, strike, expiry, and strike plus expiry. The method is
 an approximation of spot gamma exposure from available chain data; it is not
 intended to replicate Unusual Whales' proprietary methodology exactly.
 
+### Future Optional Enrichment Tables
+
+These tables are not part of O1-O5. They reserve clear landing zones if we add
+Schwab option streaming, Unusual Whales, or another flow provider later.
+
+`options.option_flow_trades`
+
+- One row per option trade/print.
+- Candidate fields: `trade_ts`, `underlying_symbol`, `option_symbol`,
+  `put_call`, `expiration_date`, `strike`, `price`, `size`, `premium`,
+  `exchange`, `condition`, `side`, `aggressor`, `bid`, `ask`, `mark`,
+  `delta`, `gamma`, `vega`, `theta`, `open_interest`, `volume`, `source`,
+  `raw_payload`.
+- Enables unusual flow, sweeps/blocks, premium spikes, flow-derived Greek
+  exposure, and replay of trade-triggered alerts.
+
+`options.darkpool_trades`
+
+- One row per off-lit/dark-pool equity print.
+- Candidate fields: `trade_ts`, `symbol`, `price`, `size`, `notional`,
+  `venue`, `condition`, `market_center`, `source`, `raw_payload`.
+- Enables dark-pool overlays for option alerts and equity opportunity scans.
+
+`options.option_contract_intraday`
+
+- Intraday contract bars or volume profile by option symbol.
+- Candidate fields: `option_symbol`, `timestamp`, `open`, `high`, `low`,
+  `close`, `volume`, `vwap`, `trade_count`, `source`.
+- Enables contract-level intraday charts and backtests beyond periodic chain
+  snapshots.
+
+`options.option_flow_aggregates`
+
+- Derived flow aggregates by ticker, expiry, strike, side, interval, sector, or
+  market.
+- Candidate metrics: call/put premium, net premium, bullish/bearish premium,
+  sweep premium, block premium, contract count, unique contract count, net
+  delta/gamma/vega/theta flow.
+- Enables market-tide/net-flow style scanners while preserving reproducibility.
+
+`options.volatility_metrics`
+
+- Derived volatility and skew metrics by underlying and timestamp.
+- Candidate metrics: IV rank, IV percentile, interpolated IV, term structure,
+  risk reversal skew, realized volatility, variance risk premium, volatility
+  anomaly score, max pain.
+- Enables volatility-aware alerts and simulations.
+
+`options.provider_enrichment_raw`
+
+- Append-only raw payload table for optional paid/third-party providers.
+- Required columns: `provider`, `endpoint`, `request_params`, `snapshot_ts`,
+  `raw_payload`, `ingestion_ts`, `ingestion_run_id`.
+- Keeps third-party integrations auditable and reparseable without exposing
+  provider-native shapes to application consumers.
+
 ## Hot Tier
 
 ClickHouse is for current/recent option alerting, not long-term replay.
@@ -427,6 +519,9 @@ Integration tests:
 - Evaluate Unusual Whales API/MCP only after Schwab-derived GEX is working.
 - If approved, ingest into provider-specific raw tables plus canonical
   enrichment tables.
+- Prioritize gaps that Schwab snapshots cannot provide: option trade flow,
+  dark pool, Greek flow, market tide/net flow, volatility metrics, and
+  historical full-market option trades.
 - Keep alerts, simulation, API, and MCP on StockAlert canonical readers.
 
 ### O7 — Streaming Hot Path
