@@ -980,6 +980,26 @@ files = [
 all = ["adbc-driver-manager", "fsspec", "ipython", "numpy", "pandas", "pyarrow"]
 
 [[package]]
+name = "exchange-calendars"
+version = "4.13.2"
+description = "Calendars for securities exchanges"
+optional = false
+python-versions = "<4,>=3.10"
+groups = ["main"]
+files = [
+    {file = "exchange_calendars-4.13.2-py3-none-any.whl", hash = "sha256:fc5a2ad0d61b5c3a6539a3061cd4cbb55c59f4a903455cec7926e4b798919996"},
+    {file = "exchange_calendars-4.13.2.tar.gz", hash = "sha256:a9459425dd64142cd54fbc639847403c7e0c33d60fbc326c94fc1d6bd127f002"},
+]
+
+[package.dependencies]
+korean_lunar_calendar = ">=0.3.1"
+numpy = ">=1.26.4"
+pandas = ">=1.5.0"
+pyluach = ">=2.3.0"
+toolz = ">=1.0.0"
+tzdata = ">=2025.2"
+
+[[package]]
 name = "fastapi"
 version = "0.133.1"
 description = "FastAPI framework, high performance, easy to learn, fast to code, ready for production"
@@ -1595,6 +1615,18 @@ files = [
 
 [package.dependencies]
 referencing = ">=0.31.0"
+
+[[package]]
+name = "korean-lunar-calendar"
+version = "0.4.0"
+description = "Convert the Korean lunar calendar to/from the Gregorian solar calendar (KARI standard)."
+optional = false
+python-versions = ">=3.6"
+groups = ["main"]
+files = [
+    {file = "korean_lunar_calendar-0.4.0-py3-none-any.whl", hash = "sha256:c042e20de0bb702add6bec8d0f6da1ea8d3b170838e63846f70420cf341fe4e7"},
+    {file = "korean_lunar_calendar-0.4.0.tar.gz", hash = "sha256:be56f27bc0594fdbbdf7bbe00f504a9f929a31e311bd7d9bb93561b645afade7"},
+]
 
 [[package]]
 name = "lz4"
@@ -2436,7 +2468,7 @@ version = "1.41.2"
 description = "Blazingly fast DataFrame library"
 optional = false
 python-versions = ">=3.10"
-groups = ["spike"]
+groups = ["main"]
 files = [
     {file = "polars-1.41.2-py3-none-any.whl", hash = "sha256:23ce9a2910b6e3e8d4258770bf44aa17170958df7af6e85feedf4458a04d8d29"},
     {file = "polars-1.41.2.tar.gz", hash = "sha256:256d6731162371b77f3f29a55eacb8c0fc740ddb1a293a01d2ef5b5393c5c708"},
@@ -2480,7 +2512,7 @@ version = "1.41.2"
 description = "Blazingly fast DataFrame library"
 optional = false
 python-versions = ">=3.10"
-groups = ["spike"]
+groups = ["main"]
 files = [
     {file = "polars_runtime_32-1.41.2-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:95a08346dac337357cdb825c8076df7d36da54c4caa59a5cb41d0a30691c5edd"},
     {file = "polars_runtime_32-1.41.2-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:dedfaeec2c7f995298da7319dd9431d662e5dd1d0ec51b1459df4a0234ceff52"},
@@ -3115,6 +3147,22 @@ crypto = ["cryptography (>=3.4.0)"]
 dev = ["coverage[toml] (==7.10.7)", "cryptography (>=3.4.0)", "pre-commit", "pytest (>=8.4.2,<9.0.0)", "sphinx", "sphinx-rtd-theme", "zope.interface"]
 docs = ["sphinx", "sphinx-rtd-theme", "zope.interface"]
 tests = ["coverage[toml] (==7.10.7)", "pytest (>=8.4.2,<9.0.0)"]
+
+[[package]]
+name = "pyluach"
+version = "2.3.0"
+description = "A Python package for dealing with Hebrew (Jewish) calendar dates."
+optional = false
+python-versions = ">=3.8"
+groups = ["main"]
+files = [
+    {file = "pyluach-2.3.0-py3-none-any.whl", hash = "sha256:4497b731aef59508b079dbf5f00bc5bf4329ac45090a6cd37b5a83756f0e69ab"},
+    {file = "pyluach-2.3.0.tar.gz", hash = "sha256:ec6e30669d1df50c9ca160486da44a8195bb4c7a5d3d533990d0c5b03accd281"},
+]
+
+[package.extras]
+doc = ["sphinx (>=6.1.3,<6.2.0)", "sphinx_rtd_theme (>=1.2.0,<1.3.0)"]
+test = ["beautifulsoup4", "flake8", "pytest", "pytest-cov"]
 
 [[package]]
 name = "pyparsing"
@@ -3907,6 +3955,18 @@ doc = ["reno", "sphinx"]
 test = ["pytest", "tornado (>=4.5)", "typeguard"]
 
 [[package]]
+name = "toolz"
+version = "1.1.0"
+description = "List processing tools and functional utilities"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "toolz-1.1.0-py3-none-any.whl", hash = "sha256:15ccc861ac51c53696de0a5d6d4607f99c210739caf987b5d2054f3efed429d8"},
+    {file = "toolz-1.1.0.tar.gz", hash = "sha256:27a5c770d068c110d9ed9323f24f1543e83b2f300a687b7891c1a6d56b697b5b"},
+]
+
+[[package]]
 name = "typer"
 version = "0.25.1"
 description = "Typer, build great CLIs. Easy to code. Based on Python type hints."
@@ -3958,7 +4018,6 @@ description = "Provider of IANA time zone data"
 optional = false
 python-versions = ">=2"
 groups = ["main"]
-markers = "sys_platform == \"win32\" or sys_platform == \"emscripten\""
 files = [
     {file = "tzdata-2025.3-py2.py3-none-any.whl", hash = "sha256:06a47e5700f3081aab02b2e513160914ff0694bce9947d6b76ebd6bf57cfc5d1"},
     {file = "tzdata-2025.3.tar.gz", hash = "sha256:de39c2ca5dc7b0344f2eba86f49d614019d29f060fc4ebc8a417896a620b56a7"},
@@ -4629,4 +4688,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "50b773b1bb3c32beb82db3273b7a2a862b10b8a346e58163d41926a8099da95b"
+content-hash = "b1f1c6da140400eb36745781b05fa89331822539e19a224b26193a1be9d36341"
