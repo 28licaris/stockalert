@@ -213,3 +213,46 @@ class OptionSnapshotIngestResult(BaseModel):
     @classmethod
     def _normalize_ts(cls, value: datetime | None) -> datetime | None:
         return _utc(value) if value is not None else None
+
+
+class OptionContractsResponse(BaseModel):
+    """Response wrapper for canonical option contract snapshots."""
+
+    underlying_symbol: str
+    start: datetime
+    end: datetime
+    snapshot_id: str | None = None
+    contracts: list[OptionContractSnapshot] = Field(default_factory=list)
+    count: int = Field(..., description="Number of contracts returned.")
+
+    @field_validator("underlying_symbol", mode="before")
+    @classmethod
+    def _normalize_symbol(cls, value: str) -> str:
+        return _upper(str(value))
+
+    @field_validator("start", "end", mode="after")
+    @classmethod
+    def _normalize_bounds(cls, value: datetime) -> datetime:
+        return _utc(value)
+
+
+class GammaExposureResponse(BaseModel):
+    """Response wrapper for derived gamma exposure snapshots."""
+
+    underlying_symbol: str
+    start: datetime
+    end: datetime
+    aggregation_level: GammaAggregationLevel | None = None
+    snapshot_id: str | None = None
+    rows: list[GammaExposureSnapshot] = Field(default_factory=list)
+    count: int = Field(..., description="Number of gamma exposure rows returned.")
+
+    @field_validator("underlying_symbol", mode="before")
+    @classmethod
+    def _normalize_symbol(cls, value: str) -> str:
+        return _upper(str(value))
+
+    @field_validator("start", "end", mode="after")
+    @classmethod
+    def _normalize_bounds(cls, value: datetime) -> datetime:
+        return _utc(value)

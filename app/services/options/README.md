@@ -22,6 +22,8 @@ Current scope:
   `scripts/options_chain_snapshot.py`.
 - Scheduled snapshot refresh wrapper:
   `app/services/ingest/options_snapshot_refresh.py`.
+- Lake reader for canonical contracts and GEX:
+  `app/services/readers/options_reader.py`.
 
 Not yet owned here:
 

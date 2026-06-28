@@ -4,7 +4,7 @@ Status: implementation in progress on branch `options`
 
 ## Implementation Checkpoint
 
-Last updated during O3d scheduled snapshot refresh.
+Last updated during O4a options reader.
 
 Completed:
 
@@ -51,25 +51,34 @@ Completed:
   - JobRegistry registers `options_snapshot_refresh` for operator-triggered
     manual runs with the same audit pattern as equities/futures jobs.
   - `.env.example` documents `OPTIONS_SNAPSHOT_*` controls.
+- O4a reader slice:
+  - `app.services.readers.options_reader.OptionsReader` reads
+    `options.schwab_chain_contracts` and `options.gamma_exposure_snapshots`.
+  - Reader methods return canonical `OptionContractsResponse` and
+    `GammaExposureResponse` DTOs for reuse by API, MCP, alerts, backtests, and
+    simulated trading.
+  - Reads are symbol/time-window bounded, support Iceberg snapshot pinning,
+    and expose optional filters for expiration, side, and GEX aggregation
+    level.
+  - Fake Iceberg table tests cover projections, sorting, limits, pinned
+    snapshots, missing tables, blank symbols, and scan failures.
 
 Current verification:
 
 ```bash
-/Users/licaris/dev/stockalert/.venv/bin/pytest app/services/options/tests
-# 41 passed
+/Users/licaris/dev/stockalert/.venv/bin/pytest app/services/options/tests app/services/readers/tests/test_options_reader.py
+# 46 passed
 
-/Users/licaris/dev/stockalert/.venv/bin/python -m compileall -q app/services/options app/services/ingest/options_snapshot_refresh.py scripts/options_chain_snapshot.py app/main_api.py app/config.py
+/Users/licaris/dev/stockalert/.venv/bin/python -m compileall -q app/services/options app/services/readers/options_reader.py app/services/ingest/options_snapshot_refresh.py scripts/options_chain_snapshot.py app/main_api.py app/config.py
 # passed
 ```
 
-Previous O3c verification was 36 passing option tests plus compileall.
+Previous O3d verification was 41 passing option tests plus compileall.
 
 Next recommended pickup:
 
-1. O4a: add an options reader over `options.schwab_chain_contracts` and
-   `options.gamma_exposure_snapshots`.
-2. O4b: add HTTP routes and MCP tools. MCP coverage remains a release
-   gate for every agent decision/alert surface.
+1. O4b: add HTTP routes and MCP tools. MCP coverage remains a release gate for
+   every agent decision/alert surface.
 
 ## Goal
 
