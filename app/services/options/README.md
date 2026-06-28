@@ -16,10 +16,12 @@ Current scope:
   underlying price, and put/call side.
 - Idempotent Iceberg table creation for the `options` Glue namespace.
 - Iceberg sink for parsed Schwab chain snapshots and derived GEX rows.
+- Snapshot orchestration for one underlying: Schwab REST chain fetch, parse,
+  derived GEX calculation, and sink write.
 
 Not yet owned here:
 
-- Schwab provider orchestration.
+- CLI/scheduled Schwab provider orchestration.
 - HTTP routes.
 - MCP tools.
 - ClickHouse hot tables or streaming.

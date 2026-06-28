@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 PutCall = Literal["CALL", "PUT"]
 GammaAggregationLevel = Literal["total", "strike", "expiry", "strike_expiry"]
+IngestStatus = Literal["ok", "skipped", "error"]
 
 
 def _utc(dt: datetime) -> datetime:
@@ -183,6 +184,32 @@ class GammaExposureSnapshot(BaseModel):
         return _upper(str(value))
 
     @field_validator("snapshot_ts", "ingestion_ts", mode="after")
+    @classmethod
+    def _normalize_ts(cls, value: datetime | None) -> datetime | None:
+        return _utc(value) if value is not None else None
+
+
+class OptionSnapshotIngestResult(BaseModel):
+    """Per-underlying result for one option-chain snapshot ingest."""
+
+    symbol: str
+    status: IngestStatus
+    contracts_parsed: int = 0
+    expirations_parsed: int = 0
+    gamma_rows: int = 0
+    rows_written: int = 0
+    provider: str = "schwab"
+    sink_status: str | None = None
+    error: str | None = None
+    snapshot_ts: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def _normalize_symbol(cls, value: str) -> str:
+        return _upper(str(value))
+
+    @field_validator("snapshot_ts", mode="after")
     @classmethod
     def _normalize_ts(cls, value: datetime | None) -> datetime | None:
         return _utc(value) if value is not None else None
