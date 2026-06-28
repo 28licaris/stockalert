@@ -186,9 +186,49 @@ def require_csrf(
         )
 
 
+@lru_cache(maxsize=1)
+def get_billing_service():
+    """Construct the customer BillingService (Stripe + subscription repo).
+
+    Degrades to a 503 when billing isn't configured (no Stripe key) or the
+    identity DB is absent — mirrors get_identity_service so an unconfigured
+    deployment returns a clean error instead of failing at import/startup.
+    """
+    from app.config import settings
+
+    if not settings.stripe_secret_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Billing is not configured.",
+            headers={"X-Error-Code": "billing_not_configured"},
+        )
+    if not settings.identity_database_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Customer identity database is not configured.",
+            headers={"X-Error-Code": "auth_not_configured"},
+        )
+    from app.services.billing.gateway import StripeApiGateway
+    from app.services.billing.repository import SubscriptionRepository
+    from app.services.billing.service import BillingService
+
+    return BillingService(
+        gateway=StripeApiGateway(
+            api_key=settings.stripe_secret_key,
+            webhook_secret=settings.stripe_webhook_secret,
+        ),
+        repository=SubscriptionRepository.from_settings(),
+        price_monthly=settings.stripe_price_monthly,
+        price_annual=settings.stripe_price_annual,
+        trial_days=settings.billing_trial_days,
+        return_url=settings.billing_return_url,
+    )
+
+
 def clear_auth_dependency_caches() -> None:
     """Test/process-reset hook; closes are owned by app lifecycle later."""
     get_authentication_service.cache_clear()
     get_identity_service.cache_clear()
     get_provider_session_cipher.cache_clear()
     get_mfa_service.cache_clear()
+    get_billing_service.cache_clear()
