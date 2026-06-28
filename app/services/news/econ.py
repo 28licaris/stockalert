@@ -240,7 +240,7 @@ class BlsClient:
     @classmethod
     def from_settings(cls) -> "BlsClient":
         from app.config import settings
-        return cls(api_key=settings.bls_api_key)
+        return cls(api_key=settings.bls_api_key.strip())
 
     def fetch(self, series_ids: list[str], *, start_year: int, end_year: int) -> dict[str, list[EconPoint]]:
         import httpx
@@ -267,7 +267,7 @@ class BeaClient:
     @classmethod
     def from_settings(cls) -> "BeaClient":
         from app.config import settings
-        return cls(api_key=settings.bea_api_key)
+        return cls(api_key=settings.bea_api_key.strip())
 
     def fetch(self, meta: SeriesMeta, *, start_year: int, end_year: int) -> list[EconPoint]:
         if not self._key:
