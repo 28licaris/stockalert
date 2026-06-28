@@ -362,6 +362,13 @@ class Settings(BaseModel):
     # Uses ANTHROPIC_API_KEY (same env var as the assistant).
     news_enrich_model: str = os.getenv("NEWS_ENRICH_MODEL", "claude-haiku-4-5-20251001")
 
+    # News ingest job. Off by default — enable once EDGAR_USER_AGENT + an
+    # ANTHROPIC_API_KEY are set. Polls EDGAR on an interval (batch cadence) and
+    # enriches up to news_enrich_limit items/cycle (the per-run cost cap).
+    news_ingest_enabled: bool = os.getenv("NEWS_INGEST_ENABLED", "false").lower() == "true"
+    news_poll_minutes: int = int(os.getenv("NEWS_POLL_MINUTES", "30"))
+    news_enrich_limit: int = int(os.getenv("NEWS_ENRICH_LIMIT", "25"))
+
     # Optional tag stored on OHLCV rows (e.g. matches DATA_PROVIDER)
     data_source_tag: str = os.getenv("DATA_SOURCE_TAG", "")
     # Comma-separated symbols for the dashboard tape. Uses liquid ETFs that
