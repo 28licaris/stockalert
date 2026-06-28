@@ -13,6 +13,13 @@ snapshots, not historical option bars. Schwab exposes option-chain and
 expiration-chain REST endpoints today through `SchwabProvider`; real-time
 option streaming can follow once the snapshot contract is stable.
 
+Gamma exposure (GEX) is a first-class target use case. The default path is to
+compute our own GEX from Schwab chain snapshots using contract gamma, open
+interest, underlying price, put/call side, strike, expiration, and multiplier.
+Unusual Whales can be evaluated later as an enrichment source for proprietary
+flow, dark pool, precomputed GEX, and broader market scans, but it is not a
+required dependency for the first architecture.
+
 ## Non-Goals
 
 - No order placement or execution logic.
@@ -22,6 +29,9 @@ option streaming can follow once the snapshot contract is stable.
   separate provider/source is approved later.
 - No direct provider payload dependencies in alerts, simulations, MCP tools,
   or API routes. All consumers use canonical contracts.
+- No paid Unusual Whales dependency in the first implementation. If added
+  later, it must feed canonical tables/readers instead of becoming a separate
+  consumer-facing integration path.
 
 ## Current Repo Baseline
 
@@ -35,6 +45,13 @@ Schwab option REST access already exists:
 - Schwab streamer docs list `LEVELONE_OPTIONS`, `OPTIONS_BOOK`, and
   `SCREENER_OPTION`, but the repo currently implements equity/futures bar
   streaming only.
+
+Unusual Whales exposes API/MCP surfaces for option flow, dark pool data,
+Greek exposure/GEX, WebSocket, Kafka, and MCP. Their public API docs list GEX
+and Greek exposure endpoints, including spot GEX per-minute and by
+strike/expiry. Their docs also list historical option trades at `$250/month`
+for the full market, with a discount for more than one year. This spec treats
+that as a future optional provider, not the default ingestion source.
 
 ## Architecture
 
@@ -175,6 +192,57 @@ Partitioning: `month(expiration_date)`.
 
 Sort order: `underlying_symbol`, `expiration_date`, `observed_ts`.
 
+### `options.gamma_exposure_snapshots`
+
+Derived table computed from canonical chain snapshots. This table supports
+GEX charts, alerts, backtests, simulations, and MCP reads without requiring a
+third-party GEX provider.
+
+| Column | Type | Required | Notes |
+|---|---:|---:|---|
+| `underlying_symbol` | string | yes | Underlying ticker. |
+| `snapshot_ts` | timestamptz | yes | Source chain snapshot time. |
+| `expiration_date` | date | no | Null for all-expiration totals. |
+| `strike` | double | no | Null for all-strike totals. |
+| `put_call` | string | no | `CALL`, `PUT`, or null for net rows. |
+| `underlying_price` | double | yes | Price used in the calculation. |
+| `gamma_exposure` | double | yes | Signed dollar exposure per 1% underlying move. |
+| `call_gamma_exposure` | double | no | Positive call-side exposure total. |
+| `put_gamma_exposure` | double | no | Negative put-side exposure total. |
+| `net_gamma_exposure` | double | no | Net call plus put exposure. |
+| `open_interest` | long | no | OI used for the aggregation. |
+| `volume` | long | no | Volume used for volume-weighted views. |
+| `contract_count` | long | no | Contracts included in the aggregation. |
+| `aggregation_level` | string | yes | `total`, `strike`, `expiry`, or `strike_expiry`. |
+| `methodology` | string | yes | Versioned calculation label. |
+| `source` | string | yes | `stockalert-schwab-gex` initially. |
+| `source_snapshot_id` | string | no | Iceberg snapshot ID for reproducibility. |
+| `ingestion_ts` | timestamptz | yes | Write timestamp. |
+| `ingestion_run_id` | string | yes | Batch/run identifier. |
+
+Identifier fields: `underlying_symbol`, `snapshot_ts`, `aggregation_level`,
+`expiration_date`, `strike`, `put_call`.
+
+Partitioning: `bucket(16, underlying_symbol)`, `month(snapshot_ts)`.
+
+Sort order: `underlying_symbol`, `snapshot_ts`, `aggregation_level`,
+`expiration_date`, `strike`.
+
+Initial calculation:
+
+```text
+unsigned_contract_gex =
+  gamma * open_interest * multiplier * underlying_price * 0.01 * underlying_price
+
+signed_contract_gex =
+  unsigned_contract_gex for calls
+  -unsigned_contract_gex for puts
+```
+
+Then aggregate by total, strike, expiry, and strike plus expiry. The method is
+an approximation of spot gamma exposure from available chain data; it is not
+intended to replicate Unusual Whales' proprietary methodology exactly.
+
 ## Hot Tier
 
 ClickHouse is for current/recent option alerting, not long-term replay.
@@ -263,6 +331,9 @@ First alert/scanner use cases the schema must support:
 - tight spread and liquidity filters,
 - delta/expiration-targeted contract discovery,
 - IV/volatility change between snapshots,
+- positive/negative GEX regime detection,
+- largest GEX by strike, expiry, and strike plus expiry,
+- gamma wall / volatility amplification zones near spot price,
 - call/put skew and put-call activity,
 - contract price/underlying divergence,
 - upcoming expiration opportunity scans.
@@ -284,6 +355,8 @@ Add thin adapters over a shared options reader/service:
   - `get_option_chain`
   - `search_option_contracts`
   - `get_option_expirations`
+  - `get_gamma_exposure`
+  - `get_gamma_exposure_levels`
   - `get_options_coverage`
 
 MCP tools return Pydantic-shaped data and expose the same filters as HTTP.
@@ -296,6 +369,7 @@ Unit tests:
 
 - Pydantic schema validation and timestamp normalization.
 - Schwab chain flattening from fixture payloads.
+- GEX calculation from fixture contracts, including call/put sign handling.
 - Empty chain and zero-contract outcomes.
 - Per-underlying result objects for `ok`, `skipped`, and `error`.
 - Idempotent sink behavior against in-memory/fake table boundaries where
@@ -344,10 +418,18 @@ Integration tests:
 ### O5 — Alerts and Simulation Integration
 
 - Add scanner filters over canonical option snapshots.
+- Add derived GEX calculations and reader filters.
 - Add backtest/simulation reader adapters with snapshot pinning.
 - Add first alert rules after liquidity and cadence are validated.
 
-### O6 — Streaming Hot Path
+### O6 — Optional Unusual Whales Provider
+
+- Evaluate Unusual Whales API/MCP only after Schwab-derived GEX is working.
+- If approved, ingest into provider-specific raw tables plus canonical
+  enrichment tables.
+- Keep alerts, simulation, API, and MCP on StockAlert canonical readers.
+
+### O7 — Streaming Hot Path
 
 - Evaluate Schwab `LEVELONE_OPTIONS` and `OPTIONS_BOOK`.
 - Add option streaming only if needed for alert latency.
@@ -364,3 +446,5 @@ Integration tests:
    Iceberg-only until alert latency requirements are proven?
 4. Do we want to include index options such as SPX/NDX in the first phase, or
    equity/ETF underlyings only?
+5. Should the first GEX implementation compute exposure from open interest
+   only, or store both open-interest-based and volume-based GEX views?
