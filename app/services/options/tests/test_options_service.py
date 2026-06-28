@@ -109,6 +109,19 @@ def test_ingest_symbol_empty_chain_returns_skipped_but_writes_raw() -> None:
     assert result.metadata["chain_status"] == "SUCCESS"
 
 
+def test_ingest_symbol_dry_run_does_not_write_sink() -> None:
+    sink = _Sink()
+    svc = OptionsSnapshotService(provider=_Provider(), sink=sink)
+
+    result = asyncio.run(svc.ingest_symbol("AAPL", dry_run=True))
+
+    assert result.status == "ok"
+    assert result.sink_status == "dry_run"
+    assert result.rows_written == 0
+    assert result.metadata["dry_run"] is True
+    assert sink.calls == []
+
+
 def test_ingest_symbol_provider_error_returns_result() -> None:
     svc = OptionsSnapshotService(provider=_Provider(raises=RuntimeError("schwab down")), sink=_Sink())
 

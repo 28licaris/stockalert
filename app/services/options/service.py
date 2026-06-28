@@ -40,11 +40,12 @@ class OptionsSnapshotService:
         self._parser = parser
 
     @classmethod
-    def from_settings(cls) -> "OptionsSnapshotService":
+    def from_settings(cls, *, dry_run: bool = False) -> "OptionsSnapshotService":
         from app.config import get_provider
         from app.services.options.sink import OptionsIcebergSink
 
-        return cls(provider=get_provider("schwab"), sink=OptionsIcebergSink.from_settings())
+        sink = _DryRunSink() if dry_run else OptionsIcebergSink.from_settings()
+        return cls(provider=get_provider("schwab"), sink=sink)
 
     async def ingest_symbol(
         self,
@@ -53,6 +54,7 @@ class OptionsSnapshotService:
         snapshot_ts: datetime | None = None,
         request_params: dict[str, Any] | None = None,
         ingestion_run_id: str | None = None,
+        dry_run: bool = False,
     ) -> OptionSnapshotIngestResult:
         sym = (symbol or "").strip().upper()
         if not sym:
@@ -105,6 +107,23 @@ class OptionsSnapshotService:
                 parsed.raw_snapshot.status,
             )
 
+        if dry_run:
+            return OptionSnapshotIngestResult(
+                symbol=sym,
+                status="skipped" if parsed.contract_count == 0 else "ok",
+                contracts_parsed=parsed.contract_count,
+                expirations_parsed=len(parsed.expirations),
+                gamma_rows=len(gamma_rows),
+                rows_written=0,
+                sink_status="dry_run",
+                snapshot_ts=snapshot_ts,
+                metadata={
+                    "request_params": params,
+                    "chain_status": parsed.raw_snapshot.status,
+                    "dry_run": True,
+                },
+            )
+
         try:
             sink_result = await self._sink.write_parse_result(parsed, gamma_rows=gamma_rows)
         except Exception as e:
@@ -149,3 +168,8 @@ def _utc(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+class _DryRunSink:
+    async def write_parse_result(self, *_args, **_kwargs):
+        raise RuntimeError("dry-run sink should not be written")
