@@ -3,20 +3,21 @@ Market calendar API — sessions (open / closed / early-close) over a date
 range for equities or futures, backed by ``app.services.market_calendar``
 (exchange_calendars). Powers the frontend Calendar view.
 
-Each day carries an ``events`` list (empty for now). The events layer (FOMC,
-econ releases, earnings) is Phase 2 — see docs/market_calendar_spec.md — and
-will populate this field with NO change to this contract or the frontend.
+Each day carries an ``events`` list — FOMC + OPEX/quad-witching today, with
+dividend/split ex-dates and (later) earnings landing via the same contract.
+See docs/market_calendar_spec.md §12a.
 """
 from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Any, Literal, Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.services import market_calendar as mc
+from app.services import market_events as me
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,15 @@ router = APIRouter()
 
 # Guardrail: a calendar view never needs more than a couple years at once.
 _MAX_SPAN_DAYS = 800
+
+
+class CalendarEvent(BaseModel):
+    event_type: str = Field(description="fomc | opex | quad_witching | dividend | split | …")
+    title: str
+    importance: str = Field(description="low | medium | high")
+    time_et: Optional[str] = Field(None, description="ET time 'HH:MM', if known")
+    symbol: Optional[str] = Field(None, description="Ticker for company events; null for market-wide")
+    source: str
 
 
 class CalendarDay(BaseModel):
@@ -35,9 +45,8 @@ class CalendarDay(BaseModel):
     reason: Optional[str] = Field(
         None, description="Holiday/weekend name on closed days, else null"
     )
-    events: list[Any] = Field(
-        default_factory=list,
-        description="Calendar events for this day (Phase 2: FOMC, econ, earnings). Empty for now.",
+    events: list[CalendarEvent] = Field(
+        default_factory=list, description="Calendar events on this day (FOMC, OPEX, …)."
     )
 
 
@@ -74,13 +83,30 @@ def get_calendar(
         logger.exception("get_calendar failed for %s %s..%s", asset_class, start, end)
         raise HTTPException(status_code=500, detail=f"calendar error: {exc}")
 
+    # Group events by date (events failing must NOT break the sessions grid).
+    events_by_date: dict[date, list[CalendarEvent]] = {}
+    try:
+        for e in me.events_in_range(start, end):
+            events_by_date.setdefault(e["event_date"], []).append(
+                CalendarEvent(
+                    event_type=e["event_type"],
+                    title=e["title"],
+                    importance=e["importance"],
+                    time_et=e["event_time_et"] or None,
+                    symbol=e["symbol"] or None,
+                    source=e["source"],
+                )
+            )
+    except Exception:  # noqa: BLE001 — boundary; sessions still render
+        logger.exception("get_calendar: events lookup failed; returning sessions only")
+
     days = [
         CalendarDay(
             date=r["date"],
             status=r["status"],
             early_close_et=r["early_close_et"],
             reason=r["reason"],
-            events=[],
+            events=events_by_date.get(r["date"], []),
         )
         for r in rows
     ]

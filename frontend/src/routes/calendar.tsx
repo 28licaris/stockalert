@@ -169,12 +169,28 @@ export function CalendarPage() {
                 </div>
               ) : null}
 
-              {/* event markers (Phase 2) */}
+              {/* event chips (FOMC, OPEX, …) */}
               {day?.events?.length ? (
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {day.events.map((_e, i) => (
-                    <span key={i} className="h-1.5 w-1.5 rounded-full bg-accent" />
+                <div className="mt-1 flex flex-col gap-0.5">
+                  {day.events.slice(0, 3).map((e, i) => (
+                    <span
+                      key={i}
+                      title={`${e.title}${e.time_et ? ` · ${e.time_et} ET` : ""}`}
+                      className={cn(
+                        "truncate rounded px-1 text-[10px] font-medium leading-tight",
+                        e.importance === "high"
+                          ? "bg-accent/20 text-accent"
+                          : "bg-fg-muted/15 text-fg-muted",
+                      )}
+                    >
+                      {e.symbol ? `${e.symbol} ` : ""}{e.title}
+                    </span>
                   ))}
+                  {day.events.length > 3 ? (
+                    <span className="px-1 text-[10px] text-fg-muted">
+                      +{day.events.length - 3} more
+                    </span>
+                  ) : null}
                 </div>
               ) : null}
             </div>

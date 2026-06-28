@@ -44,6 +44,7 @@ export type Mover = components["schemas"]["Mover"];
 export type MoversResponse = components["schemas"]["MoversResponse"];
 
 export type CalendarDay = components["schemas"]["CalendarDay"];
+export type CalendarEvent = components["schemas"]["CalendarEvent"];
 export type CalendarResponse = components["schemas"]["CalendarResponse"];
 export type CalendarAssetClass = "equities" | "futures";
 

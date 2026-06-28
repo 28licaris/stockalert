@@ -1,0 +1,22 @@
+{
+  "_source": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+  "_note": "Hand-curated, committed seed (production-robust: no runtime scrape). 'date' = FOMC DECISION day (2nd day of the meeting); the statement drops 14:00 ET, press conference 14:30 ET. VERIFY annually against the Fed's published calendar before the year rolls over; CPI/NFP/GDP/PCE can be added here with the same shape once their dates are verified against BLS/BEA schedules.",
+  "events": [
+    {"date": "2025-01-29", "event_type": "fomc", "title": "FOMC rate decision", "importance": "high", "event_time_et": "14:00"},
+    {"date": "2025-03-19", "event_type": "fomc", "title": "FOMC rate decision", "importance": "high", "event_time_et": "14:00"},
+    {"date": "2025-05-07", "event_type": "fomc", "title": "FOMC rate decision", "importance": "high", "event_time_et": "14:00"},
+    {"date": "2025-06-18", "event_type": "fomc", "title": "FOMC rate decision", "importance": "high", "event_time_et": "14:00"},
+    {"date": "2025-07-30", "event_type": "fomc", "title": "FOMC rate decision", "importance": "high", "event_time_et": "14:00"},
+    {"date": "2025-09-17", "event_type": "fomc", "title": "FOMC rate decision", "importance": "high", "event_time_et": "14:00"},
+    {"date": "2025-10-29", "event_type": "fomc", "title": "FOMC rate decision", "importance": "high", "event_time_et": "14:00"},
+    {"date": "2025-12-10", "event_type": "fomc", "title": "FOMC rate decision", "importance": "high", "event_time_et": "14:00"},
+    {"date": "2026-01-28", "event_type": "fomc", "title": "FOMC rate decision", "importance": "high", "event_time_et": "14:00"},
+    {"date": "2026-03-18", "event_type": "fomc", "title": "FOMC rate decision", "importance": "high", "event_time_et": "14:00"},
+    {"date": "2026-04-29", "event_type": "fomc", "title": "FOMC rate decision", "importance": "high", "event_time_et": "14:00"},
+    {"date": "2026-06-17", "event_type": "fomc", "title": "FOMC rate decision", "importance": "high", "event_time_et": "14:00"},
+    {"date": "2026-07-29", "event_type": "fomc", "title": "FOMC rate decision", "importance": "high", "event_time_et": "14:00"},
+    {"date": "2026-09-16", "event_type": "fomc", "title": "FOMC rate decision", "importance": "high", "event_time_et": "14:00"},
+    {"date": "2026-10-28", "event_type": "fomc", "title": "FOMC rate decision", "importance": "high", "event_time_et": "14:00"},
+    {"date": "2026-12-09", "event_type": "fomc", "title": "FOMC rate decision", "importance": "high", "event_time_et": "14:00"}
+  ]
+}
