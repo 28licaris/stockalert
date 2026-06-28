@@ -8,12 +8,57 @@ from scripts.options_chain_snapshot import (
     build_request_params,
     parse_symbols,
     result_line,
+    resolve_symbols,
     run_snapshot,
 )
 
 
 def test_parse_symbols_normalizes_dedupes_and_sorts() -> None:
     assert parse_symbols(" msft,AAPL,msft ") == ["AAPL", "MSFT"]
+
+
+def test_resolve_symbols_accepts_explicit_csv() -> None:
+    assert resolve_symbols(" msft,AAPL,msft ") == ["AAPL", "MSFT"]
+
+
+def test_resolve_symbols_active_uses_injected_resolver() -> None:
+    symbols = resolve_symbols(
+        "active",
+        active_resolver=lambda: ["msft", "AAPL", "MSFT"],
+    )
+
+    assert symbols == ["AAPL", "MSFT"]
+
+
+def test_resolve_symbols_rejects_empty_active_universe() -> None:
+    try:
+        resolve_symbols("active", active_resolver=lambda: [])
+    except ValueError as exc:
+        assert "active universe returned no symbols" in str(exc)
+    else:
+        raise AssertionError("expected empty active universe to fail")
+
+
+def test_resolve_symbols_watchlist_uses_injected_resolver() -> None:
+    calls = []
+
+    def resolver(name: str) -> list[str]:
+        calls.append(name)
+        return ["tsla", "AAPL", "TSLA"]
+
+    symbols = resolve_symbols("watchlist:momentum", watchlist_resolver=resolver)
+
+    assert symbols == ["AAPL", "TSLA"]
+    assert calls == ["momentum"]
+
+
+def test_resolve_symbols_rejects_unsupported_all() -> None:
+    try:
+        resolve_symbols("all")
+    except ValueError as exc:
+        assert "not supported" in str(exc)
+    else:
+        raise AssertionError("expected all to fail")
 
 
 def test_build_request_params_applies_cli_overrides() -> None:

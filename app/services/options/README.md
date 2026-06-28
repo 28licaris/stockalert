@@ -18,12 +18,12 @@ Current scope:
 - Iceberg sink for parsed Schwab chain snapshots and derived GEX rows.
 - Snapshot orchestration for one underlying: Schwab REST chain fetch, parse,
   derived GEX calculation, and sink write.
-- Operator CLI for explicit-symbol snapshots:
+- Operator CLI for explicit, active-universe, and watchlist snapshots:
   `scripts/options_chain_snapshot.py`.
 
 Not yet owned here:
 
-- CLI/scheduled Schwab provider orchestration.
+- Scheduled Schwab provider orchestration.
 - HTTP routes.
 - MCP tools.
 - ClickHouse hot tables or streaming.
@@ -33,4 +33,6 @@ Test with:
 ```bash
 poetry run pytest app/services/options/tests
 poetry run python scripts/options_chain_snapshot.py --symbols AAPL,MSFT --dry-run
+poetry run python scripts/options_chain_snapshot.py --symbols active --dry-run
+poetry run python scripts/options_chain_snapshot.py --symbols watchlist:momentum --dry-run
 ```

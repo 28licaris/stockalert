@@ -4,7 +4,7 @@ Status: implementation in progress on branch `options`
 
 ## Implementation Checkpoint
 
-Last updated after commit `2120bec options: add chain snapshot cli`.
+Last updated during O3c active/watchlist universe resolution.
 
 Completed:
 
@@ -32,23 +32,33 @@ Completed:
     and `--dry-run`
   - CLI helper tests
   - Commit `2120bec options: add chain snapshot cli`
+- O3c universe-resolution slice:
+  - `--symbols active` resolves through the canonical
+    `app.services.universe.resolve_universe_spec("active")` path, which reads
+    the ClickHouse `stream_universe` source of truth and propagates read
+    failures.
+  - `--symbols watchlist:<name>` resolves through `watchlist_service` for
+    operator-scoped snapshots.
+  - Unsupported `all`/`*` and empty resolved universes fail fast instead of
+    producing a silent no-op.
+  - Fake resolver tests cover active and watchlist behavior.
 
 Current verification:
 
 ```bash
 /Users/licaris/dev/stockalert/.venv/bin/pytest app/services/options/tests
-# 31 passed
+# 36 passed
 
 /Users/licaris/dev/stockalert/.venv/bin/python -m compileall -q app/services/options scripts/options_chain_snapshot.py
 # passed
 ```
 
+Previous O3b verification was 31 passing option tests plus compileall.
+
 Next recommended pickup:
 
-1. O3c: add active/watchlist universe resolution for option snapshots
-   (`--symbols active`) with fake resolver tests.
-2. O3d: register a manual/scheduled job only after O3c is stable.
-3. O4: add readers, HTTP routes, and MCP tools. MCP coverage remains a release
+1. O3d: register a manual/scheduled job only after O3c is stable.
+2. O4: add readers, HTTP routes, and MCP tools. MCP coverage remains a release
    gate for every agent decision/alert surface.
 
 ## Goal
