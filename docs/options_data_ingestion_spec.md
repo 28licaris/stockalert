@@ -122,6 +122,9 @@ This follows the repo service rules:
 - Reads for backtests and training work directly from Iceberg.
 - Alerts can use ClickHouse hot tables for recent/latest data.
 - Agents get the same behavior through MCP and HTTP route adapters.
+- Every options feature that can influence a trading decision must have an MCP
+  surface before it is considered complete. API-only or internal-only decision
+  data is not acceptable for this domain.
 
 ## Data Model
 
@@ -491,11 +494,31 @@ Add thin adapters over a shared options reader/service:
   - `get_option_expirations`
   - `get_gamma_exposure`
   - `get_gamma_exposure_levels`
+  - `get_option_quote_latest`
+  - `get_option_book_latest`
+  - `get_option_screener_events`
+  - `create_option_alert`
+  - `list_option_alerts`
+  - `delete_option_alert`
   - `get_options_coverage`
 
 MCP tools return Pydantic-shaped data and expose the same filters as HTTP.
 No MCP tool calls Schwab directly in normal operation; direct provider calls
 remain diagnostics or ingestion-only.
+
+Agent decision rule: agents read option data only through canonical MCP tools
+backed by StockAlert services. Snapshot/replay decisions use Iceberg-backed
+reader tools. Live alert decisions use ClickHouse-backed latest/recent tools.
+Alert creation and mutation go through MCP alert tools that persist rule
+configuration, validation status, and provenance.
+
+Every new options capability must ship with:
+
+- a Pydantic contract,
+- a service/reader implementation,
+- an HTTP route when useful for UI/operator access,
+- an MCP tool for agent access,
+- route/tool parity tests for the same service behavior.
 
 ## Testing
 
@@ -514,6 +537,10 @@ Contract tests:
 - Options reader, HTTP route, and MCP tool return equivalent DTOs for the same
   fixture-backed service.
 - Backtest-style reads never return records after the requested as-of time.
+- Option alert MCP tools validate, persist, list, and delete alert rules without
+  direct provider calls.
+- Streaming hot-path MCP tools read from canonical latest/recent stores, not
+  Schwab sessions.
 
 Integration tests:
 
@@ -548,6 +575,8 @@ Integration tests:
 - Add options reader contracts.
 - Add HTTP routes.
 - Add MCP tools with route/tool parity tests.
+- Treat MCP coverage as a release gate for every reader/action that can affect
+  agent trading decisions.
 
 ### O5 — Alerts and Simulation Integration
 
@@ -555,6 +584,7 @@ Integration tests:
 - Add derived GEX calculations and reader filters.
 - Add backtest/simulation reader adapters with snapshot pinning.
 - Add first alert rules after liquidity and cadence are validated.
+- Add MCP alert management: create, list, and delete option alerts.
 
 ### O6 — Optional Unusual Whales Provider
 
@@ -574,6 +604,8 @@ Integration tests:
   canonical mappings.
 - Feed ClickHouse latest/recent quote, book, and screener tables while keeping
   Iceberg snapshots as the replay source.
+- Add MCP tools for latest option quote, latest option book, and screener
+  events before enabling agent-driven live alert decisions.
 
 ## Open Questions
 
