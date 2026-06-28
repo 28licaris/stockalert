@@ -47,6 +47,7 @@ from app.api import (
     routes_market,
     routes_monitors,
     routes_movers,
+    routes_news,
     routes_screener,
     routes_adjusted,
     routes_admin_auth,
@@ -725,6 +726,7 @@ app.include_router(routes_backfill.router, prefix=_V1, tags=["Backfill"])
 app.include_router(routes_instruments.router, prefix=_V1, tags=["Instruments"])
 app.include_router(routes_market.router, prefix=_V1, tags=["Market"])
 app.include_router(routes_calendar.router, prefix=_V1, tags=["Calendar"])
+app.include_router(routes_news.router, prefix=_V1, tags=["News"])
 app.include_router(routes_journal.router, prefix=_V1, tags=["Journal"])
 app.include_router(routes_lake.router, prefix=_V1, tags=["Lake"])
 app.include_router(routes_indicators.router, prefix=_V1, tags=["Indicators"])
