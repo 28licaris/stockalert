@@ -159,9 +159,15 @@ BLS first (keyless).
 - **Surfaces:** `GET /api/v1/economic` + `/economic/{series}/history`; cockpit
   **Economic** page (indicator cards → history table + sparkline); MCP
   `get_economic_data` tool for the AI. Folded into the ingest job (degrades safely).
+- **BEA (✅ live):** real GDP % change (NIPA `T10111` line 1, quarterly, level) +
+  PCE price index (`T20804` line 1, monthly, YoY) — validated against the live
+  NIPA API. Needs a free `BEA_API_KEY`; absent → GDP/PCE skipped, BLS unaffected.
+  `EconPoint` carries (period_key, period_label) so monthly + quarterly share one
+  path; yoy lag is frequency-aware (4 quarterly / 12 monthly).
+- **Activated 2026-06-28** — `NEWS_INGEST_ENABLED=true`; live feed serves EDGAR
+  filings + FOMC + 5 economic indicators (CPI, unemployment, payrolls, GDP, PCE).
 
 ## 15. Deferred (post-economic)
-- **BEA (GDP/PCE):** same shape; needs a free `BEA_API_KEY`.
 - **Per-user:** watchlist scoping of the feed/digest; alert state + tier gating.
 - **Delivery:** real-time push/email/webhook digest.
 - **Phase 2:** RSS media (headline + link + summary, terms-checked sources),
