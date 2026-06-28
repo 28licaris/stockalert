@@ -113,6 +113,7 @@ Futures lake (separate `futures.*` Glue DB + `iceberg/futures/` S3):
 | [`docs/architecture_v2/`](docs/architecture_v2/README.md) | v2 lake / ML design (canonical) |
 | `docs/ARCHITECTURE.md` | Redirect stub — points to the canonical docs after v1 deprecation |
 | `docs/ISSUES.md` | Known issues, flaky tests |
+| `docs/TODO.md` | Parked / deferred work (billing activation, calendar events 2b/2c, …) |
 | `docs/COMMANDS.md` | Cheatsheet |
 | `docs/architecture_v2/07_runbook.md` | Operator procedures |
 | `docs/trading_subsystem_design.md` | Trading subsystem contract |
