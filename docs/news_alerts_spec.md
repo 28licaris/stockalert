@@ -111,11 +111,30 @@ into the deferred billing entitlements.
 - **Phase 2:** RSS media (link-only), real-time push/email, embedding dedup,
   per-user alert state + tier gating, sentiment.
 
-## 10. Build order (v1)
-1. `EdgarClient` (provider) + unit tests (parse Atom, CIK map) — no network in tests.
-2. CH `news_items` table (init_schema).
-3. `news` service: ingest + relevance + idempotent store + tests.
-4. LLM enrichment (capped) wired through the assistant path + tests (mocked LLM).
-5. `routes_news` + Pydantic + tests.
-6. Frontend News page + nav/flag + codegen + build.
-7. Scheduled ingest job (like the nightly refreshes) + MCP tool.
+## 10. Build order (v1) — ✅ COMPLETE
+1. ✅ `EdgarClient` (provider) + unit tests (parse Atom, CIK map) — no network.
+2. ✅ CH `news_items` table (init_schema).
+3. ✅ `news` service: ingest + relevance + idempotent store + tests.
+4. ✅ LLM enrichment (cost-capped) + tests (injected LLM).
+5. ✅ `routes_news` (`GET /api/v1/news`) + reader + tests.
+6. ✅ Frontend News page + nav/flag + codegen + build.
+7. ✅ Scheduled ingest job + MCP `get_news` tool + tests.
+
+## 11. Activation (v1 is OFF by default)
+The pipeline ships disabled so it never runs without credentials. To turn on:
+1. `EDGAR_USER_AGENT="YourApp/1.0 (you@example.com)"` — EDGAR requires a real
+   contact email.
+2. `ANTHROPIC_API_KEY=…` — for the enrichment summaries (same key as the
+   assistant). Optional `NEWS_ENRICH_MODEL` (default claude-haiku-4-5).
+3. `NEWS_INGEST_ENABLED=true` (+ optional `NEWS_POLL_MINUTES`=30,
+   `NEWS_ENRICH_LIMIT`=25), then restart uvicorn.
+
+Verify: `POST /api/v1/jobs/news_ingest/run`, then `GET /api/v1/news` and the
+cockpit **News** page. Without activation the page renders its empty state.
+
+## 12. Deferred (post-v1)
+- **v1.1:** macro sources (Fed FOMC / BLS / BEA) into the same feed; daily
+  digest delivery; per-user watchlist scoping of the feed.
+- **Phase 2:** RSS media (headline + link + summary, terms-checked sources),
+  real-time push/email, embedding dedup, per-user alert state + tier gating,
+  sentiment surfaced in the UI.
