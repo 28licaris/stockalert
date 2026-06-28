@@ -551,11 +551,26 @@ Integration tests:
 
 ## Delivery Phases
 
+Each phase should be committed separately. Prefer small commits that leave the
+branch testable and reviewable after every phase. Do not start a later phase
+until the previous phase has passing targeted tests and the MCP acceptance gate
+for that phase is satisfied.
+
 ### O1 — Spec and Fixture Contract
 
 - Approve this spec.
 - Add fixture Schwab chain payloads.
 - Add canonical Pydantic DTOs and parser tests.
+
+Commit target: `options: add chain contracts and fixtures`.
+
+Acceptance:
+
+- Canonical option-chain DTOs validate Schwab fixture payloads.
+- Parser normalizes chain maps into contract rows with no provider payload
+  leakage.
+- Unit tests cover empty chains, malformed fields, timestamp normalization,
+  and GEX sign math.
 
 ### O2 — Lake Tables and Sink
 
@@ -564,11 +579,29 @@ Integration tests:
   `options.schwab_expirations`.
 - Verify Iceberg writes by re-reading through a fresh catalog.
 
+Commit target: `options: add iceberg tables and sink`.
+
+Acceptance:
+
+- Table creation is idempotent.
+- Sink logs zero-row and per-underlying outcomes.
+- Cross-side write verification reloads through a fresh catalog/client.
+- README documents ownership, public contracts, and test commands.
+
 ### O3 — Schwab Snapshot Ingest
 
 - Add a CLI/scheduled job for option-chain snapshots.
 - Add per-underlying result summaries and loud zero-row logging.
 - Persist raw and canonical rows in one run.
+
+Commit target: `options: ingest schwab chain snapshots`.
+
+Acceptance:
+
+- CLI supports explicit symbols and active-watchlist universe.
+- Default cadence is documented as 5-minute market-hours snapshots.
+- Failures are per-underlying result objects, not all-or-nothing crashes.
+- Integration smoke test is marked `integration`.
 
 ### O4 — Reader, API, and MCP
 
@@ -578,6 +611,15 @@ Integration tests:
 - Treat MCP coverage as a release gate for every reader/action that can affect
   agent trading decisions.
 
+Commit target: `options: expose chain readers through api and mcp`.
+
+Acceptance:
+
+- HTTP and MCP expose equivalent filters and DTOs for chain, contracts,
+  expirations, coverage, GEX, and GEX levels.
+- MCP tools do not call Schwab directly.
+- Route/tool parity tests pass without live provider credentials.
+
 ### O5 — Alerts and Simulation Integration
 
 - Add scanner filters over canonical option snapshots.
@@ -585,6 +627,15 @@ Integration tests:
 - Add backtest/simulation reader adapters with snapshot pinning.
 - Add first alert rules after liquidity and cadence are validated.
 - Add MCP alert management: create, list, and delete option alerts.
+
+Commit target: `options: add gex alerts and simulation readers`.
+
+Acceptance:
+
+- Simulations read only data available at or before the decision timestamp.
+- Alert rules persist validation status and provenance.
+- MCP alert tools create, list, and delete option alerts.
+- GEX outputs record methodology and source Iceberg snapshot IDs.
 
 ### O6 — Optional Unusual Whales Provider
 
@@ -596,6 +647,14 @@ Integration tests:
   historical full-market option trades.
 - Keep alerts, simulation, API, and MCP on StockAlert canonical readers.
 
+Commit target: `options: add optional provider enrichment` if approved.
+
+Acceptance:
+
+- Third-party raw payloads are stored in provider raw tables.
+- Canonical readers hide provider-specific response shapes.
+- Any purchased/paid provider dependency is config-gated and optional.
+
 ### O7 — Streaming Hot Path
 
 - Implement Schwab `LEVELONE_OPTIONS`, `OPTIONS_BOOK`, and `SCREENER_OPTION`.
@@ -606,6 +665,52 @@ Integration tests:
   Iceberg snapshots as the replay source.
 - Add MCP tools for latest option quote, latest option book, and screener
   events before enabling agent-driven live alert decisions.
+
+Commit target: `options: add schwab option streaming hot path`.
+
+Acceptance:
+
+- Streaming subscriptions are derived from chain/GEX/scanner selections.
+- Unknown Schwab fields are logged and preserved until mapped.
+- ClickHouse latest/recent tables back live MCP tools.
+- Live alerts use canonical hot stores, not Schwab sessions.
+
+### O8 — Frontend Cockpit
+
+Build a state-of-the-art operational options cockpit in the existing Vite/React
+frontend. The UI should be dense, fast, and trader-oriented, matching the
+current app shell rather than a marketing page.
+
+Frontend surfaces:
+
+- `/options` route with nav entry under `Markets` or `Data`.
+- Chain explorer with underlying search, expiry/strike filters, side toggles,
+  liquidity filters, and contract detail drawer.
+- GEX dashboard with total regime, largest positive/negative levels, strike
+  and expiry views, and methodology/snapshot metadata.
+- Streaming panel for latest level-one quote, book state, and screener events.
+- Alert builder for GEX levels, unusual volume/OI, spread/liquidity, IV change,
+  and streamed quote/book conditions.
+- Agent/MCP panel showing which MCP tools back each UI action and the last
+  tool-compatible payload for reproducibility.
+- Coverage/status panel showing latest snapshot time, ingestion health,
+  stream subscription count, stale symbols, and provider errors.
+
+Commit target: `frontend: add options cockpit`.
+
+Acceptance:
+
+- Uses generated OpenAPI types and existing `apiClient`/query patterns.
+- Adds a feature flag and nav item; disabled pages do not appear as shippable.
+- Includes loading, empty, error, stale, and permission states.
+- Uses icon buttons, filters, tables, tabs, and compact controls consistent
+  with the existing cockpit.
+- Does not duplicate backend decision logic in React; UI renders service/MCP
+  outputs and submits validated commands.
+- Route/API/MCP parity remains visible: every alert or decision action in the
+  UI maps to a canonical backend service and MCP tool.
+- Playwright screenshot verification covers desktop and mobile layouts before
+  shipping substantial UI work.
 
 ## Open Questions
 
