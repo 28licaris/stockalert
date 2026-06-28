@@ -36,11 +36,13 @@ class NewsIngestService:
         ch_client=None,
         universe_resolver: Optional[Callable[[], Sequence[str]]] = None,
         enricher=None,
+        fed=None,
     ) -> None:
         self._edgar = edgar
         self._ch = ch_client
         self._universe_resolver = universe_resolver
         self._enricher = enricher
+        self._fed = fed
 
     @classmethod
     def from_settings(cls) -> "NewsIngestService":
@@ -71,6 +73,35 @@ class NewsIngestService:
             from app.services.news.enrich import NewsEnricher
             self._enricher = NewsEnricher.from_settings()
         return self._enricher
+
+    def _fed_client(self):
+        if self._fed is None:
+            from app.services.news.macro import FedClient
+            self._fed = FedClient.from_settings()
+        return self._fed
+
+    def ingest_fomc(self) -> NewsIngestResult:
+        """Pull FOMC statements/minutes from the Fed RSS and store them as
+        market-wide (symbol='') news items, unenriched. Idempotent on item id.
+        Always relevant — macro items skip the universe filter."""
+        fed = self._fed_client()
+        items = fed.latest_fomc()
+        now = datetime.now(timezone.utc)
+        version = int(now.timestamp() * 1000)
+        rows = [
+            [
+                it.id, it.published_at or now, now, "fed", it.event_type,
+                "", "", it.title, it.url,
+                "", "", "unrated", "", 0, version,
+            ]
+            for it in items
+        ]
+        stored = 0
+        if rows:
+            self._ch_client().insert("news_items", rows, column_names=_NEWS_COLUMNS)
+            stored = len(rows)
+        logger.info("news ingest (fomc): fetched=%d stored=%d", len(items), stored)
+        return NewsIngestResult(fetched=len(items), matched=len(rows), stored=stored)
 
     # Columns re-selected to rebuild a full row when rewriting with enrichment.
     _READ_COLUMNS = [

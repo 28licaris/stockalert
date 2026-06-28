@@ -65,3 +65,37 @@ def test_reader_error_is_500(monkeypatch):
     r = _client().get("/api/v1/news")
     assert r.status_code == 500
     assert "news error" in r.json()["detail"]
+
+
+def test_digest_window_and_materiality(monkeypatch):
+    captured = {}
+
+    def fake_read_news(**kw):
+        captured.update(kw)
+        return []
+
+    monkeypatch.setattr(routes_news, "read_news", fake_read_news)
+    r = _client().get("/api/v1/news/digest?date=2026-06-17")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["date"] == "2026-06-17"
+    assert body["count"] == 0
+    # Defaults: high-only, enriched-only, one ET-day window.
+    assert captured["materiality"] == ["high"]
+    assert captured["enriched_only"] is True
+    assert captured["since"] is not None and captured["until"] is not None
+    assert captured["until"] > captured["since"]
+
+
+def test_digest_returns_items(monkeypatch):
+    item = NewsItem(
+        id="acc-1", published_at=datetime(2026, 6, 17, 16, 0, tzinfo=timezone.utc),
+        source="edgar", event_type="8-K", symbol="AAPL", title="t",
+        url="https://sec.gov/x", summary="S", why_it_matters="W",
+        materiality="high", sentiment="positive", enriched=True,
+    )
+    monkeypatch.setattr(routes_news, "read_news", lambda **_: [item])
+    r = _client().get("/api/v1/news/digest?date=2026-06-17")
+    body = r.json()
+    assert body["count"] == 1
+    assert body["items"][0]["symbol"] == "AAPL"

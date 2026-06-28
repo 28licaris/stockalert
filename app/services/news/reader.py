@@ -22,7 +22,10 @@ def read_news(
     *,
     symbols: Optional[Sequence[str]] = None,
     event_types: Optional[Sequence[str]] = None,
+    materiality: Optional[Sequence[str]] = None,
     since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+    enriched_only: bool = False,
     limit: int = 100,
     ch_client=None,
 ) -> list[NewsItem]:
@@ -40,9 +43,17 @@ def read_news(
     if event_types:
         params["types"] = [str(t) for t in event_types]
         where.append("event_type IN {types:Array(String)}")
+    if materiality:
+        params["mat"] = [str(m) for m in materiality]
+        where.append("materiality IN {mat:Array(String)}")
+    if enriched_only:
+        where.append("enriched = 1")
     if since is not None:
         params["since"] = since
         where.append("published_at >= {since:DateTime64(3)}")
+    if until is not None:
+        params["until"] = until
+        where.append("published_at < {until:DateTime64(3)}")
 
     n = max(1, min(int(limit), _MAX_LIMIT))
     sql = "SELECT " + ", ".join(_COLS) + " FROM news_items FINAL"

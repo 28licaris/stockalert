@@ -22,16 +22,26 @@ async def run_news_ingest_once() -> dict:
     async with audit_run("news_ingest"):
         svc = NewsIngestService.from_settings()
         ingest = await asyncio.to_thread(svc.ingest_filings)
+
+        # Macro (FOMC) — degrade safely: a Fed outage must not block filings.
+        fomc_stored = 0
+        try:
+            fomc = await asyncio.to_thread(svc.ingest_fomc)
+            fomc_stored = fomc.stored
+        except Exception:  # noqa: BLE001 — boundary
+            logger.exception("news_ingest: FOMC ingest failed; continuing")
+
         enrich = await asyncio.to_thread(svc.enrich_pending, settings.news_enrich_limit)
         logger.info(
-            "news_ingest: stored=%d (fetched=%d matched=%d) | enriched=%d/%d failed=%d",
-            ingest.stored, ingest.fetched, ingest.matched,
+            "news_ingest: filings_stored=%d (fetched=%d matched=%d) fomc_stored=%d "
+            "| enriched=%d/%d failed=%d",
+            ingest.stored, ingest.fetched, ingest.matched, fomc_stored,
             enrich.enriched, enrich.read, enrich.failed,
         )
         return {
             "fetched": ingest.fetched, "matched": ingest.matched,
-            "stored": ingest.stored, "enriched": enrich.enriched,
-            "enrich_failed": enrich.failed,
+            "stored": ingest.stored, "fomc_stored": fomc_stored,
+            "enriched": enrich.enriched, "enrich_failed": enrich.failed,
         }
 
 

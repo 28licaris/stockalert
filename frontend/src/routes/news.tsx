@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { ExternalLink, Lightbulb } from "lucide-react";
-import { useNews, type NewsItem } from "@/api/queries";
+import { useNews, useNewsDigest, type NewsItem } from "@/api/queries";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
 import { cn } from "@/lib/utils";
 
@@ -77,47 +77,89 @@ function NewsCard({ item }: { item: NewsItem }) {
  * Per-user watchlist scoping + push/digest alerts arrive in a later phase
  * (docs/news_alerts_spec.md).
  */
-export function NewsPage() {
-  const [typeFilter, setTypeFilter] = useState<string | undefined>(undefined);
-  const { data, isLoading, error } = useNews({ types: typeFilter, limit: 100 });
+type Mode = "all" | "digest";
 
-  const items = useMemo(() => data ?? [], [data]);
+export function NewsPage() {
+  const [mode, setMode] = useState<Mode>("all");
+  const [typeFilter, setTypeFilter] = useState<string | undefined>(undefined);
+
+  const feed = useNews({ types: typeFilter, limit: 100 });
+  const digest = useNewsDigest();
+
+  const active = mode === "digest" ? digest : feed;
+  const items = useMemo<NewsItem[]>(
+    () => (mode === "digest" ? digest.data?.items ?? [] : feed.data ?? []),
+    [mode, digest.data, feed.data],
+  );
+
+  const emptyMsg =
+    mode === "digest"
+      ? "Nothing material today. The digest shows the day's high-importance items."
+      : "No news yet. Filings appear here once the ingest job runs.";
 
   return (
     <div className="mx-auto max-w-3xl p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <h1 className="text-lg font-semibold">News &amp; alerts</h1>
-        <span className="text-xs text-fg-muted">official filings, AI-summarized</span>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <h1 className="text-lg font-semibold">News &amp; alerts</h1>
+          <span className="text-xs text-fg-muted">official filings, AI-summarized</span>
+        </div>
+        <div role="tablist" aria-label="View" className="flex rounded-md border border-border">
+          {(["all", "digest"] as const).map((m) => (
+            <button
+              key={m}
+              role="tab"
+              aria-selected={mode === m}
+              onClick={() => setMode(m)}
+              className={cn(
+                "px-3 py-1 text-sm transition-colors first:rounded-l-md last:rounded-r-md",
+                mode === m
+                  ? "bg-accent text-accent-fg"
+                  : "text-fg-muted hover:bg-bg-subtle",
+              )}
+            >
+              {m === "all" ? "All news" : "Today's digest"}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div className="mb-4 flex flex-wrap gap-1.5" role="tablist" aria-label="Event type">
-        {TYPE_FILTERS.map((f) => (
-          <button
-            key={f.label}
-            role="tab"
-            aria-selected={typeFilter === f.value}
-            onClick={() => setTypeFilter(f.value)}
-            className={cn(
-              "rounded-full border px-3 py-1 text-xs transition-colors",
-              typeFilter === f.value
-                ? "border-accent bg-accent/15 text-accent"
-                : "border-border text-fg-muted hover:bg-bg-subtle",
-            )}
-          >
-            {f.label}
-          </button>
-        ))}
-      </div>
+      {mode === "all" ? (
+        <div className="mb-4 flex flex-wrap gap-1.5" role="tablist" aria-label="Event type">
+          {TYPE_FILTERS.map((f) => (
+            <button
+              key={f.label}
+              role="tab"
+              aria-selected={typeFilter === f.value}
+              onClick={() => setTypeFilter(f.value)}
+              className={cn(
+                "rounded-full border px-3 py-1 text-xs transition-colors",
+                typeFilter === f.value
+                  ? "border-accent bg-accent/15 text-accent"
+                  : "border-border text-fg-muted hover:bg-bg-subtle",
+              )}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="mb-4 text-sm text-fg-muted">
+          {digest.data
+            ? `${digest.data.count} material ${digest.data.count === 1 ? "item" : "items"} today (${digest.data.date})`
+            : "Today's material items"}
+        </div>
+      )}
 
-      {error ? <ApiErrorAlert error={error} /> : null}
+      {active.error ? <ApiErrorAlert error={active.error} /> : null}
 
-      {!error && !isLoading && items.length === 0 ? (
+      {!active.error && !active.isLoading && items.length === 0 ? (
         <div className="rounded-xl border border-border bg-bg-subtle p-6 text-center text-sm text-fg-muted">
-          No news yet. Filings appear here once the ingest job runs.
+          {emptyMsg}
         </div>
       ) : null}
 
-      <div className={cn("flex flex-col gap-2.5", isLoading && "opacity-60")}>
+      <div className={cn("flex flex-col gap-2.5", active.isLoading && "opacity-60")}>
         {items.map((item) => (
           <NewsCard key={`${item.source}:${item.id}`} item={item} />
         ))}

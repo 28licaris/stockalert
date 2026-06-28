@@ -303,6 +303,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/news/digest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get News Digest
+         * @description The day's material items (enriched only), newest first — a digest of what
+         *     mattered. Window is one ET trading day; defaults to today ET.
+         */
+        get: operations["get_news_digest_api_v1_news_digest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/journal/accounts": {
         parameters: {
             query?: never;
@@ -3420,6 +3441,18 @@ export interface components {
             /** Movers */
             movers: components["schemas"]["Mover"][];
         };
+        /** NewsDigest */
+        NewsDigest: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Count */
+            count: number;
+            /** Items */
+            items: components["schemas"]["NewsItem"][];
+        };
         /**
          * NewsItem
          * @description One feed item — a filing/event with an optional AI summary + source link.
@@ -4937,6 +4970,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NewsItem"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_news_digest_api_v1_news_digest_get: {
+        parameters: {
+            query?: {
+                /** @description ET date; defaults to today (ET) */
+                date?: string | null;
+                /** @description Comma-separated materiality levels to include */
+                materiality?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NewsDigest"];
                 };
             };
             /** @description Validation Error */

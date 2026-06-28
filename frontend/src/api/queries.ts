@@ -50,6 +50,7 @@ export type CalendarAssetClass = "equities" | "futures";
 
 // News feed (official-record filings + govt; AI-summarized + source link)
 export type NewsItem = components["schemas"]["NewsItem"];
+export type NewsDigest = components["schemas"]["NewsDigest"];
 
 // Watchlists + monitors (FE-CONTRACTS-3)
 export type Watchlist = components["schemas"]["Watchlist"];
@@ -139,6 +140,7 @@ export const queryKeys = {
     ["calendar", assetClass, start, end] as const,
   news: (symbols: string | undefined, types: string | undefined) =>
     ["news", symbols ?? "all", types ?? "all"] as const,
+  newsDigest: ["news", "digest"] as const,
   symbolBars: (symbol: string, interval: string, limit: number) =>
     ["symbol", "bars", symbol, interval, limit] as const,
   lakeBars: (symbol: string, interval: string, windowDays: number) =>
@@ -303,6 +305,20 @@ export function useNews(opts?: {
         params: { query: { symbols, types, limit } },
       });
       return (data as NewsItem[]) ?? [];
+    },
+    staleTime: 5 * 60 * 1000, // 5m
+  });
+}
+
+/**
+ * Daily digest — today's material (high-importance) items, AI-summarized.
+ */
+export function useNewsDigest() {
+  return useQuery({
+    queryKey: queryKeys.newsDigest,
+    queryFn: async (): Promise<NewsDigest> => {
+      const { data } = await apiClient.GET("/api/v1/news/digest", {});
+      return data as NewsDigest;
     },
     staleTime: 5 * 60 * 1000, // 5m
   });

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from app.providers.edgar import EdgarFiling
 from app.services.news.enrich import Enrichment
+from app.services.news.macro import MacroItem
 from app.services.news.service import _NEWS_COLUMNS, NewsIngestService
 
 
@@ -162,3 +163,39 @@ def test_enrich_pending_item_failure_degrades():
     res = svc.enrich_pending()
     assert (res.read, res.enriched, res.failed) == (1, 0, 1)
     assert ch.inserts == []   # nothing written when the only item failed
+
+
+# ── ingest_fomc (macro) ────────────────────────────────────────────────
+
+class _FakeFed:
+    def __init__(self, items):
+        self._items = items
+
+    def latest_fomc(self):
+        return self._items
+
+
+def test_ingest_fomc_stores_market_wide_rows():
+    item = MacroItem(
+        id="fomc-1", title="Federal Reserve issues FOMC statement",
+        url="https://federalreserve.gov/x.htm",
+        published_at=datetime(2026, 6, 17, 18, 0, tzinfo=timezone.utc),
+    )
+    ch = _FakeCH()
+    svc = NewsIngestService(ch_client=ch, fed=_FakeFed([item]))
+
+    res = svc.ingest_fomc()
+
+    assert res.stored == 1
+    row = dict(zip(_NEWS_COLUMNS, ch.inserts[0][1][0]))
+    assert row["source"] == "fed"
+    assert row["event_type"] == "fomc"
+    assert row["symbol"] == ""          # market-wide
+    assert row["id"] == "fomc-1"
+    assert row["enriched"] == 0
+
+
+def test_ingest_fomc_empty_does_not_insert():
+    ch = _FakeCH()
+    res = NewsIngestService(ch_client=ch, fed=_FakeFed([])).ingest_fomc()
+    assert res.stored == 0 and ch.inserts == []

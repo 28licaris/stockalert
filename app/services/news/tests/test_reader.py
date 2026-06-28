@@ -65,3 +65,14 @@ def test_limit_is_clamped():
     assert "LIMIT 500" in ch.last_sql
     read_news(limit=0, ch_client=ch)
     assert "LIMIT 1" in ch.last_sql
+
+
+def test_materiality_until_and_enriched_filters():
+    ch = _FakeCH([])
+    until = datetime(2026, 6, 28, tzinfo=timezone.utc)
+    read_news(materiality=["high", "medium"], until=until, enriched_only=True, ch_client=ch)
+    assert "materiality IN {mat:Array(String)}" in ch.last_sql
+    assert ch.last_params["mat"] == ["high", "medium"]
+    assert "published_at < {until:DateTime64(3)}" in ch.last_sql
+    assert ch.last_params["until"] == until
+    assert "enriched = 1" in ch.last_sql

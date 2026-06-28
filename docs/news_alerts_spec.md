@@ -132,9 +132,21 @@ The pipeline ships disabled so it never runs without credentials. To turn on:
 Verify: `POST /api/v1/jobs/news_ingest/run`, then `GET /api/v1/news` and the
 cockpit **News** page. Without activation the page renders its empty state.
 
-## 12. Deferred (post-v1)
-- **v1.1:** macro sources (Fed FOMC / BLS / BEA) into the same feed; daily
-  digest delivery; per-user watchlist scoping of the feed.
+## 12. v1.1 — ✅ SHIPPED (macro FOMC + in-app digest)
+- **FOMC** — Fed monetary-policy press RSS (free, no key) →
+  `app/services/news/macro.py` (`FedClient` + pure `parse_fed_rss`) →
+  `NewsIngestService.ingest_fomc()` stores market-wide rows (source='fed',
+  event_type='fomc', symbol=''); enriched by the same LLM stage; folded into the
+  ingest job (degrades safely if the Fed feed is down).
+- **Digest** — `GET /api/v1/news/digest` (today's ET material/enriched items) +
+  a "Today's digest" toggle on the News page. In-app only (no external delivery).
+- Decisions (2026-06-27): FOMC-only to start; stored in `news_items` (not the
+  calendar's `market_events`); in-app digest (no webhook/email).
+
+## 13. Deferred (post-v1.1)
+- **Economic data:** BLS (CPI/jobs) + BEA (GDP/PCE) releases into the feed
+  (BEA needs a free key; numeric releases need formatting).
+- **Per-user:** watchlist scoping of the feed/digest; alert state + tier gating.
+- **Delivery:** real-time push/email/webhook digest.
 - **Phase 2:** RSS media (headline + link + summary, terms-checked sources),
-  real-time push/email, embedding dedup, per-user alert state + tier gating,
-  sentiment surfaced in the UI.
+  embedding dedup, sentiment surfaced in the UI.
