@@ -357,6 +357,11 @@ class Settings(BaseModel):
         "EDGAR_USER_AGENT", "StockAlert/1.0 (contact: set-EDGAR_USER_AGENT@example.com)"
     )
 
+    # News enrichment LLM — cheap model for filing triage + summary (cost-capped:
+    # only watchlist-relevant filings are enriched, body truncated, output capped).
+    # Uses ANTHROPIC_API_KEY (same env var as the assistant).
+    news_enrich_model: str = os.getenv("NEWS_ENRICH_MODEL", "claude-haiku-4-5-20251001")
+
     # Optional tag stored on OHLCV rows (e.g. matches DATA_PROVIDER)
     data_source_tag: str = os.getenv("DATA_SOURCE_TAG", "")
     # Comma-separated symbols for the dashboard tape. Uses liquid ETFs that

@@ -14,7 +14,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Callable, Optional, Sequence
 
-from app.services.news.schemas import NewsIngestResult
+from app.services.news.schemas import NewsEnrichResult, NewsIngestResult
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +35,12 @@ class NewsIngestService:
         edgar=None,
         ch_client=None,
         universe_resolver: Optional[Callable[[], Sequence[str]]] = None,
+        enricher=None,
     ) -> None:
         self._edgar = edgar
         self._ch = ch_client
         self._universe_resolver = universe_resolver
+        self._enricher = enricher
 
     @classmethod
     def from_settings(cls) -> "NewsIngestService":
@@ -63,6 +65,72 @@ class NewsIngestService:
             from app.services.universe.active_universe import resolve_universe_spec
             symbols = resolve_universe_spec("active")
         return {s.upper() for s in symbols}
+
+    def _enricher_obj(self):
+        if self._enricher is None:
+            from app.services.news.enrich import NewsEnricher
+            self._enricher = NewsEnricher.from_settings()
+        return self._enricher
+
+    # Columns re-selected to rebuild a full row when rewriting with enrichment.
+    _READ_COLUMNS = [
+        "id", "published_at", "ingested_at", "source", "event_type",
+        "symbol", "cik", "title", "url",
+    ]
+
+    def _read_unenriched(self, limit: int) -> list[dict]:
+        sql = (
+            "SELECT " + ", ".join(self._READ_COLUMNS) + " FROM news_items FINAL "
+            "WHERE enriched = 0 ORDER BY published_at DESC LIMIT " + str(int(limit))
+        )
+        result = self._ch_client().query(sql)
+        return [dict(zip(self._READ_COLUMNS, row)) for row in result.result_rows]
+
+    def enrich_pending(self, limit: int = 50) -> NewsEnrichResult:
+        """Summarize up to `limit` unenriched items: fetch the source doc, run
+        the LLM, and rewrite the row with summary/why/materiality/sentiment +
+        enriched=1 (ReplacingMergeTree updates in place). Per-item fetch/LLM
+        failures are logged and skipped — they never drop the run."""
+        rows = self._read_unenriched(limit)
+        if not rows:
+            logger.info("news enrich: nothing pending")
+            return NewsEnrichResult(read=0, enriched=0, failed=0)
+
+        edgar = self._edgar_client()
+        enricher = self._enricher_obj()
+        now = datetime.now(timezone.utc)
+        version = int(now.timestamp() * 1000)
+
+        out: list[list] = []
+        failed = 0
+        for r in rows:
+            try:
+                body = edgar.fetch_filing_text(r["url"]) if r.get("url") else ""
+                e = enricher.enrich(
+                    title=r.get("title", ""),
+                    form_type=r.get("event_type", ""),
+                    body_text=body,
+                )
+            except Exception as ex:  # noqa: BLE001 — degrade safely, don't drop the run
+                failed += 1
+                logger.warning("news enrich: skipped id=%s (%s)", r.get("id"), ex)
+                continue
+            out.append([
+                r["id"], r["published_at"], r["ingested_at"], r["source"],
+                r["event_type"], r["symbol"], r["cik"], r["title"], r["url"],
+                e.summary, e.why_it_matters, e.materiality, e.sentiment,
+                1, version,
+            ])
+
+        if out:
+            self._ch_client().insert("news_items", out, column_names=_NEWS_COLUMNS)
+
+        result = NewsEnrichResult(read=len(rows), enriched=len(out), failed=failed)
+        logger.info(
+            "news enrich: read=%d enriched=%d failed=%d",
+            result.read, result.enriched, result.failed,
+        )
+        return result
 
     def ingest_filings(
         self,

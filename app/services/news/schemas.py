@@ -39,3 +39,12 @@ class NewsIngestResult:
     stored: int = 0                # rows written to news_items
     skipped_no_ticker: int = 0     # filing CIK had no ticker mapping
     skipped_not_universe: int = 0  # ticker not in the active universe
+
+
+@dataclass(frozen=True)
+class NewsEnrichResult:
+    """Outcome of one enrichment run — every count surfaced."""
+
+    read: int = 0       # unenriched rows pulled
+    enriched: int = 0   # rows summarized + rewritten with enriched=1
+    failed: int = 0     # rows that errored (fetch/LLM) and were skipped this run
