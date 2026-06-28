@@ -42,9 +42,9 @@ Schwab option REST access already exists:
 - `SchwabProvider.get_expiration_chain(symbol, **kwargs)` calls
   `GET /marketdata/v1/expirationchain`.
 - `scripts/check_schwab_live.py` already smoke-checks both endpoints.
-- Schwab streamer docs list `LEVELONE_OPTIONS`, `OPTIONS_BOOK`, and
-  `SCREENER_OPTION`, but the repo currently implements equity/futures bar
-  streaming only.
+- Schwab streamer docs and provider constants list `LEVELONE_OPTIONS`,
+  `OPTIONS_BOOK`, and `SCREENER_OPTION`, but the repo currently implements
+  equity/futures bar streaming only.
 
 Unusual Whales exposes API/MCP surfaces for option flow, dark pool data,
 Greek exposure/GEX, WebSocket, Kafka, and MCP. Their public API docs list GEX
@@ -345,9 +345,51 @@ Initial hot tables:
   `(underlying_symbol, option_symbol)`, using `ReplacingMergeTree(version)`.
 - `option_chain_snapshots_recent`: optional recent intraday snapshots retained
   for fast alerts and dashboards. Iceberg remains the source for backtests.
+- `option_levelone_latest`: latest streamed quote state per option contract.
+- `option_book_latest`: latest streamed book state per option contract when
+  `OPTIONS_BOOK` is enabled.
+- `option_screener_events`: latest/rolling streamed option screener events
+  from `SCREENER_OPTION`.
 
 If first-phase scope needs to stay smaller, start with Iceberg-only plus API/MCP
 lake reads, then add ClickHouse once alert latency requirements are concrete.
+
+## Schwab Streaming Support
+
+Schwab streaming is a hot-path complement to REST chain snapshots, not a
+replacement. The system should support all three Schwab option streamer
+services exposed in the repo constants:
+
+- `LEVELONE_OPTIONS` — live level-one quote updates for selected option
+  contracts. Use for low-latency bid/ask/last/mark-style monitoring and
+  contract-specific alerts.
+- `OPTIONS_BOOK` — live option book/depth updates where Schwab entitlement and
+  field support allow it. Use for spread/depth/liquidity-sensitive alerts.
+- `SCREENER_OPTION` — streamed option screener keys such as call/put/all
+  advances/decliners or volume/change views. Use for discovery and watchlist
+  expansion.
+
+Streaming requires a contract universe. The first implementation should derive
+stream subscriptions from REST snapshots and scanner rules:
+
+- chain snapshot discovers contracts, expirations, strikes, Greeks, and open
+  interest;
+- GEX/scanner rules select contracts or strikes worth watching;
+- streamer subscribes to the selected option symbols;
+- ClickHouse stores latest/recent quote/book/screener state for alerts;
+- Iceberg chain/GEX snapshots remain the replayable source for simulations.
+
+Key difference from 5-minute snapshots:
+
+- REST snapshots are broad, replayable, and metadata-rich, but periodic.
+- Streaming is narrow, low-latency, and event/update driven, but only for
+  subscribed contracts/services and may not carry open interest or full-chain
+  metadata on each update.
+
+Implementation must empirically validate Schwab option streaming field IDs
+before production use, the same way `CHART_EQUITY` fields were validated for
+equity bars. Unknown fields must be logged and preserved in raw event payloads
+until the canonical mapping is verified.
 
 ## Ingestion Behavior
 
@@ -526,10 +568,12 @@ Integration tests:
 
 ### O7 — Streaming Hot Path
 
-- Evaluate Schwab `LEVELONE_OPTIONS` and `OPTIONS_BOOK`.
-- Add option streaming only if needed for alert latency.
-- Feed ClickHouse latest/recent tables while keeping Iceberg snapshots as the
-  replay source.
+- Implement Schwab `LEVELONE_OPTIONS`, `OPTIONS_BOOK`, and `SCREENER_OPTION`.
+- Derive subscriptions from chain snapshots, GEX levels, and scanner rules.
+- Validate streamer field IDs against live Schwab payloads before relying on
+  canonical mappings.
+- Feed ClickHouse latest/recent quote, book, and screener tables while keeping
+  Iceberg snapshots as the replay source.
 
 ## Open Questions
 
