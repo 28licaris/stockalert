@@ -35,11 +35,23 @@ def test_run_once_ingests_then_enriches(monkeypatch):
         lambda: fake,
     )
 
+    class _FakeEconResult:
+        releases = 1
+
+    class _FakeEconSvc:
+        def ingest(self):
+            return _FakeEconResult()
+
+    monkeypatch.setattr(
+        "app.services.news.econ.EconService.from_settings", lambda: _FakeEconSvc()
+    )
+
     res = asyncio.run(job.run_news_ingest_once())
 
     assert res["stored"] == 2
     assert res["matched"] == 2
     assert res["fomc_stored"] == 1
+    assert res["econ_releases"] == 1
     assert res["enriched"] == 3
     assert res["enrich_failed"] == 0
     # enrich limit comes from settings.news_enrich_limit (the per-run cost cap).

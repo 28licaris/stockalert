@@ -59,3 +59,36 @@ async def get_news(
             logger.exception("get_news failed (symbols=%s types=%s)", symbols, types)
             return {"items": []}
         return {"items": [i.model_dump(mode="json") for i in items]}
+
+
+@mcp.tool()
+async def get_economic_data(series_id: Optional[str] = None) -> dict[str, Any]:
+    """Latest US economic indicators (CPI, jobs, unemployment), with history.
+
+    USE WHEN: an agent needs macro context for a trade/thesis — "what's the
+    latest CPI?", "is the labor market cooling?", "recent inflation trend".
+
+    Args:
+        series_id: BLS series id for history (e.g. 'CUUR0000SA0' CPI,
+          'LNS14000000' unemployment, 'CES0000000001' nonfarm payrolls).
+          Omit to get the latest figure for every tracked indicator.
+
+    Returns:
+        Without series_id: `{"indicators": [{name, value, value_label, change,
+        period_label, unit}, ...]}`. With series_id: `{"series_id": ...,
+        "history": [{period_label, value}, ...]}` (newest first).
+
+    Errors: returns the empty shape in degraded mode rather than raising.
+    """
+    with tool_call("get_economic_data", series_id=series_id):
+        from app.services.news.econ import EconService
+
+        try:
+            svc = EconService.from_settings()
+            if series_id:
+                hist = svc.history(series_id)
+                return {"series_id": series_id, "history": [h.model_dump(mode="json") for h in hist]}
+            return {"indicators": [i.model_dump(mode="json") for i in svc.latest()]}
+        except Exception:  # noqa: BLE001 — degrade
+            logger.exception("get_economic_data failed (series_id=%s)", series_id)
+            return {"indicators": []} if not series_id else {"series_id": series_id, "history": []}

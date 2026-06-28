@@ -481,6 +481,28 @@ def init_schema() -> None:
         """
     )
 
+    # Economic indicators — raw time series of government releases (BLS now;
+    # BEA later). Source of truth for the Economic page + the AI; derived
+    # figures (YoY, MoM change) are computed at read time (kept lean — not
+    # stored). `period` = '2026-05' (monthly) / '2026-Q1' (quarterly); dedup on
+    # (series_id, period). See docs/news_alerts_spec.md §14.
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS economic_data (
+            series_id     LowCardinality(String),
+            period        String,
+            period_label  String DEFAULT '',
+            value         Float64,
+            source        LowCardinality(String) DEFAULT 'bls',
+            ingested_at   DateTime64(3, 'UTC') DEFAULT now64(3),
+            version       UInt64 DEFAULT 0
+        )
+        ENGINE = ReplacingMergeTree(version)
+        ORDER BY (series_id, period)
+        SETTINGS index_granularity = 8192
+        """
+    )
+
 
 def _read_legacy_watchlist(path: str) -> Optional[list[str]]:
     """Best-effort read of the old `data/watchlist.json` file. Returns None on any error."""
