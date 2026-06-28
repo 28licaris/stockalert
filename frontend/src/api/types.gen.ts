@@ -265,30 +265,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Calendar */
-        get: {
-            parameters: {
-                query: {
-                    start: string;
-                    end: string;
-                    asset_class?: "equities" | "futures";
-                };
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["CalendarResponse"];
-                    };
-                };
-            };
-        };
+        /**
+         * Get Calendar
+         * @description Per-day market status for ``[start, end]`` (inclusive).
+         *
+         *     Every calendar day is returned (not just sessions) so a frontend grid can
+         *     render closed days too. Sessions are computed on-demand from the calendar
+         *     library — deterministic and cheap for month/year ranges.
+         */
+        get: operations["get_calendar_api_v1_calendar_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -572,9 +557,11 @@ export interface paths {
          *     component (e.g. `bollinger_upper`, `bollinger_middle`,
          *     `bollinger_lower`, `bollinger_bandwidth`, `bollinger_percent_b`).
          *
-         *     Reading from bronze (`interval='1m'`) pins `snapshot_id` for
-         *     reproducibility; CH-backed reads (other intervals) return
-         *     `snapshot_id: null`.
+         *     All intervals (1m included) read from ClickHouse — the hot cache —
+         *     so indicators stay aligned with the candles the chart shows.
+         *     `snapshot_id` is always null (CH has no Iceberg snapshots); a missing
+         *     1m window is healed out-of-band by the lake→CH sync, not by reading
+         *     the lake here.
          */
         post: operations["post_chart_data_api_v1_indicators_chart_data_post"];
         delete?: never;
@@ -847,6 +834,69 @@ export interface paths {
          * @description Stop monitoring specified symbols.
          */
         post: operations["stop_monitor_api_v1_monitors_stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/monitors/wave": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Wave Scanners
+         * @description List active Elliott Wave live scanners.
+         */
+        get: operations["list_wave_scanners_api_v1_monitors_wave_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/monitors/wave/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Wave Scanner
+         * @description Start a live Elliott Wave scanner for the given symbols and interval.
+         *
+         *     Alerts fire through the WebSocket signal multiplex (same channel as
+         *     divergence alerts) so the frontend needs no new subscription.
+         */
+        post: operations["start_wave_scanner_api_v1_monitors_wave_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/monitors/wave/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop Wave Scanner
+         * @description Stop a running Elliott Wave scanner.
+         */
+        post: operations["stop_wave_scanner_api_v1_monitors_wave_stop_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1336,6 +1386,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/customer/mfa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Mfa Status */
+        get: operations["mfa_status_api_v1_customer_mfa_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/customer/mfa/enrollment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Begin Mfa Enrollment */
+        post: operations["begin_mfa_enrollment_api_v1_customer_mfa_enrollment_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/customer/mfa/enrollment/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Verify Mfa Enrollment */
+        post: operations["verify_mfa_enrollment_api_v1_customer_mfa_enrollment_verify_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/customer/sessions/{session_id}": {
         parameters: {
             query?: never;
@@ -1370,6 +1471,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/customer/billing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Billing Status */
+        get: operations["billing_status_api_v1_customer_billing_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/customer/billing/checkout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Checkout */
+        post: operations["create_checkout_api_v1_customer_billing_checkout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/customer/billing/portal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Portal */
+        post: operations["create_portal_api_v1_customer_billing_portal_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/customer/billing/webhook": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stripe Webhook */
+        post: operations["stripe_webhook_api_v1_customer_billing_webhook_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/me": {
         parameters: {
             query?: never;
@@ -1398,6 +1567,81 @@ export interface paths {
         put?: never;
         /** Logout */
         post: operations["logout_auth_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/wave/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Wave Alerts */
+        get: operations["get_wave_alerts_api_v1_wave_alerts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/wave/alerts/intraday": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Intraday Wave Alerts
+         * @description EW-7: On-demand intraday wave alert scan.
+         *
+         *     Bars are pulled from ClickHouse (hot cache) — sub-100ms per symbol.
+         *     Returns alerts where the primary count is in an impulse wave 3 or 5,
+         *     probability >= min_probability, and R:R >= min_risk_reward.
+         */
+        get: operations["get_intraday_wave_alerts_api_v1_wave_alerts_intraday_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/wave/{symbol}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Wave History */
+        get: operations["get_wave_history_api_v1_wave__symbol__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/wave/{symbol}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Wave State */
+        get: operations["get_wave_state_api_v1_wave__symbol__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1626,37 +1870,6 @@ export interface components {
          *     `since` lower for "what's been live recently?", higher for "what
          *     do we have at all?" — but the deeper you go the slower it gets.
          */
-        CalendarDay: {
-            /**
-             * Date
-             * Format: date
-             */
-            date: string;
-            /** @enum {string} */
-            status: "open" | "closed" | "early_close";
-            /** Early Close Et */
-            early_close_et?: string | null;
-            /** Reason */
-            reason?: string | null;
-            /** Events */
-            events?: unknown[];
-        };
-        CalendarResponse: {
-            /** @enum {string} */
-            asset_class: "equities" | "futures";
-            /**
-             * Start
-             * Format: date
-             */
-            start: string;
-            /**
-             * End
-             * Format: date
-             */
-            end: string;
-            /** Days */
-            days: components["schemas"]["CalendarDay"][];
-        };
         AdjustedSymbolsResponse: {
             /**
              * Sources Scanned
@@ -1923,6 +2136,54 @@ export interface components {
             /** Columns */
             columns: components["schemas"]["CHColumn"][];
         };
+        /** CalendarDay */
+        CalendarDay: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "closed" | "early_close";
+            /**
+             * Early Close Et
+             * @description ET close time 'HH:MM' on early-close days, else null
+             */
+            early_close_et?: string | null;
+            /**
+             * Reason
+             * @description Holiday/weekend name on closed days, else null
+             */
+            reason?: string | null;
+            /**
+             * Events
+             * @description Calendar events for this day (Phase 2: FOMC, econ, earnings). Empty for now.
+             */
+            events?: unknown[];
+        };
+        /** CalendarResponse */
+        CalendarResponse: {
+            /**
+             * Asset Class
+             * @enum {string}
+             */
+            asset_class: "equities" | "futures";
+            /**
+             * Start
+             * Format: date
+             */
+            start: string;
+            /**
+             * End
+             * Format: date
+             */
+            end: string;
+            /** Days */
+            days: components["schemas"]["CalendarDay"][];
+        };
         /**
          * Candidate
          * @description One symbol that passed all rules, with its diagnostic metrics.
@@ -1976,12 +2237,22 @@ export interface components {
             interval: string;
             /**
              * Provider
-             * @description Bronze provider (only used when interval='1m').
+             * @description Legacy/ignored — all intervals now read from ClickHouse.
              * @default polygon
              */
             provider: string;
             /** Indicators */
             indicators: components["schemas"]["IndicatorSpecRequest"][];
+        };
+        /** CheckoutRequest */
+        CheckoutRequest: {
+            /** Plan */
+            plan: string;
+        };
+        /** CheckoutSessionResponse */
+        CheckoutSessionResponse: {
+            /** Url */
+            url: string;
         };
         /**
          * ClickHouseQueryRequest
@@ -2892,6 +3163,32 @@ export interface components {
              */
             errors?: components["schemas"]["BannerError"][];
         };
+        /** MfaEnrollmentResponse */
+        MfaEnrollmentResponse: {
+            /** Secret Code */
+            secret_code: string;
+            /** Otpauth Uri */
+            otpauth_uri: string;
+        };
+        /** MfaStatusResponse */
+        MfaStatusResponse: {
+            /** Supported */
+            supported: boolean;
+            /** Enabled */
+            enabled: boolean;
+            /** Preferred */
+            preferred: boolean;
+            /**
+             * Reauthentication Required
+             * @default false
+             */
+            reauthentication_required: boolean;
+        };
+        /** MfaVerificationResponse */
+        MfaVerificationResponse: {
+            /** Enabled */
+            enabled: boolean;
+        };
         /**
          * MonitorActionResponse
          * @description Response from start/stop mutations.
@@ -3098,6 +3395,11 @@ export interface components {
              */
             note: string;
         };
+        /** PortalSessionResponse */
+        PortalSessionResponse: {
+            /** Url */
+            url: string;
+        };
         /**
          * RenameWatchlistRequest
          * @description Body for `PATCH /api/v1/watchlists/{name}`.
@@ -3280,72 +3582,6 @@ export interface components {
          * @enum {string}
          */
         SecurityEventType: "login_succeeded" | "logout_succeeded" | "session_revoked" | "other_sessions_revoked" | "mfa_enabled";
-        /** MfaStatusResponse */
-        MfaStatusResponse: {
-            /** Supported */
-            supported: boolean;
-            /** Enabled */
-            enabled: boolean;
-            /** Preferred */
-            preferred: boolean;
-            /**
-             * Reauthentication Required
-             * @default false
-             */
-            reauthentication_required: boolean;
-        };
-        /** MfaEnrollmentResponse */
-        MfaEnrollmentResponse: {
-            /** Secret Code */
-            secret_code: string;
-            /** Otpauth Uri */
-            otpauth_uri: string;
-        };
-        /** MfaVerificationResponse */
-        MfaVerificationResponse: {
-            /** Enabled */
-            enabled: boolean;
-        };
-        /** VerifyMfaEnrollmentRequest */
-        VerifyMfaEnrollmentRequest: {
-            /** Code */
-            code: string;
-        };
-        /** SubscriptionStatusResponse */
-        SubscriptionStatusResponse: {
-            /** Status */
-            status: string;
-            /** Active */
-            active: boolean;
-            /** Plan */
-            plan?: string | null;
-            /** Price Id */
-            price_id?: string | null;
-            /** Current Period End */
-            current_period_end?: string | null;
-            /**
-             * Cancel At Period End
-             * @default false
-             */
-            cancel_at_period_end: boolean;
-            /** Entitlements */
-            entitlements?: string[];
-        };
-        /** CheckoutRequest */
-        CheckoutRequest: {
-            /** Plan */
-            plan: string;
-        };
-        /** CheckoutSessionResponse */
-        CheckoutSessionResponse: {
-            /** Url */
-            url: string;
-        };
-        /** PortalSessionResponse */
-        PortalSessionResponse: {
-            /** Url */
-            url: string;
-        };
         /** ServiceHealth */
         ServiceHealth: {
             /**
@@ -3743,6 +3979,32 @@ export interface components {
             count: number;
         };
         /**
+         * SubscriptionStatusResponse
+         * @description Current billing state for the authenticated tenant.
+         */
+        SubscriptionStatusResponse: {
+            /** Status */
+            status: string;
+            /** Active */
+            active: boolean;
+            /** Plan */
+            plan?: string | null;
+            /** Price Id */
+            price_id?: string | null;
+            /** Current Period End */
+            current_period_end?: string | null;
+            /**
+             * Cancel At Period End
+             * @default false
+             */
+            cancel_at_period_end: boolean;
+            /**
+             * Entitlements
+             * @default []
+             */
+            entitlements: string[];
+        };
+        /**
          * SymbolCoverageResponse
          * @description What the v2 lake knows about `symbol` (CV26).
          *
@@ -3797,6 +4059,11 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** VerifyMfaEnrollmentRequest */
+        VerifyMfaEnrollmentRequest: {
+            /** Code */
+            code: string;
         };
         /**
          * Watchlist
@@ -3965,6 +4232,181 @@ export interface components {
              * @description Total active watchlists (default + user + baseline + adhoc).
              */
             watchlist_count: number;
+        };
+        /** WaveAlert */
+        WaveAlert: {
+            /** Symbol */
+            symbol: string;
+            /** Asset Class */
+            asset_class: string;
+            /** Interval */
+            interval: string;
+            /** Setup */
+            setup: string;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "long" | "short";
+            /**
+             * Trade Type
+             * @enum {string}
+             */
+            trade_type: "day" | "swing";
+            /** Probability */
+            probability: number;
+            /** Entry */
+            entry: number;
+            /** Stop */
+            stop: number;
+            /** Target 1 */
+            target_1: number;
+            /** Target 2 */
+            target_2?: number | null;
+            /** Risk Reward */
+            risk_reward: number;
+            /** Current Wave */
+            current_wave: string;
+            /** As Of Date */
+            as_of_date?: string | null;
+            /**
+             * Rationale
+             * @default
+             */
+            rationale: string;
+        };
+        /** WaveCountView */
+        WaveCountView: {
+            /** Structure */
+            structure: string;
+            /** Direction */
+            direction: string;
+            /** Current Wave */
+            current_wave: string;
+            /** Degree */
+            degree?: number | null;
+            /**
+             * Probability
+             * @default 0
+             */
+            probability: number;
+            /**
+             * Confidence
+             * @default 0
+             */
+            confidence: number;
+            /** Invalidation */
+            invalidation?: number | null;
+            /** Targets */
+            targets?: {
+                [key: string]: number;
+            };
+            /**
+             * Rationale
+             * @default
+             */
+            rationale: string;
+            /**
+             * Nesting Score
+             * @default 1
+             */
+            nesting_score: number;
+            /** Forward */
+            forward?: {
+                [key: string]: unknown;
+            };
+            /** Pivots */
+            pivots?: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** WaveScanRequest */
+        WaveScanRequest: {
+            /** Symbols */
+            symbols: string[];
+            /**
+             * Interval
+             * @default 5m
+             */
+            interval: string;
+            /**
+             * Min Probability
+             * @default 0.6
+             */
+            min_probability: number;
+            /**
+             * Min Risk Reward
+             * @default 2
+             */
+            min_risk_reward: number;
+        };
+        /**
+         * WaveScenario
+         * @description Trader-facing scenario summary for one count.
+         *
+         *     V3-3 (R5): each surfaced count — primary + secondary + alternates — is
+         *     packaged as a tradeable scenario with explicit gate prices. A count "flips"
+         *     to the next when the current count's `invalidation` is breached.
+         */
+        WaveScenario: {
+            /** Rank */
+            rank: number;
+            /** Label */
+            label: string;
+            /** Structure */
+            structure: string;
+            /** Direction */
+            direction: string;
+            /** Current Wave */
+            current_wave: string;
+            /** Probability */
+            probability: number;
+            /** Invalidation */
+            invalidation: number;
+            /** Confirms At */
+            confirms_at: number | null;
+            /** Next Target */
+            next_target: number | null;
+            /** What Confirms */
+            what_confirms: string;
+            /** What Invalidates */
+            what_invalidates: string;
+            /** Rationale */
+            rationale: string;
+        };
+        /** WaveStateResponse */
+        WaveStateResponse: {
+            /** Symbol */
+            symbol: string;
+            /** Interval */
+            interval: string;
+            /** Asset Class */
+            asset_class: string;
+            /** As Of Date */
+            as_of_date?: string | null;
+            /** As Of Ts */
+            as_of_ts?: string | null;
+            /** As Of Price */
+            as_of_price?: number | null;
+            primary?: components["schemas"]["WaveCountView"] | null;
+            secondary?: components["schemas"]["WaveCountView"] | null;
+            /**
+             * Uncertainty
+             * @default 1
+             */
+            uncertainty: number;
+            /**
+             * Engine Ver
+             * @default
+             */
+            engine_ver: string;
+            /**
+             * Source
+             * @default
+             */
+            source: string;
+            /** Scenarios */
+            scenarios?: components["schemas"]["WaveScenario"][];
         };
     };
     responses: never;
@@ -4328,6 +4770,41 @@ export interface operations {
             };
         };
     };
+    get_calendar_api_v1_calendar_get: {
+        parameters: {
+            query: {
+                /** @description Inclusive start date (YYYY-MM-DD) */
+                start: string;
+                /** @description Inclusive end date (YYYY-MM-DD) */
+                end: string;
+                asset_class?: "equities" | "futures";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_accounts_api_v1_journal_accounts_get: {
         parameters: {
             query?: never;
@@ -4651,7 +5128,7 @@ export interface operations {
                 indicator: string;
                 /** @description Bar interval: '1m', '5m', '15m', '30m', '1h', '4h', '1d'. */
                 interval?: string;
-                /** @description Bronze provider (only used when interval='1m'). */
+                /** @description Legacy/ignored — all intervals now read from ClickHouse. */
                 provider?: string;
                 /** @description JSON-encoded indicator constructor kwargs, e.g. `{"period":20}` for SMA. Empty / omitted means use the indicator's default constructor. */
                 params?: string | null;
@@ -5001,6 +5478,94 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["MonitorRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MonitorActionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_wave_scanners_api_v1_monitors_wave_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    start_wave_scanner_api_v1_monitors_wave_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WaveScanRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MonitorActionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_wave_scanner_api_v1_monitors_wave_stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WaveScanRequest"];
             };
         };
         responses: {
@@ -5831,6 +6396,79 @@ export interface operations {
             };
         };
     };
+    mfa_status_api_v1_customer_mfa_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MfaStatusResponse"];
+                };
+            };
+        };
+    };
+    begin_mfa_enrollment_api_v1_customer_mfa_enrollment_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MfaEnrollmentResponse"];
+                };
+            };
+        };
+    };
+    verify_mfa_enrollment_api_v1_customer_mfa_enrollment_verify_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerifyMfaEnrollmentRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MfaVerificationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     revoke_session_api_v1_customer_sessions__session_id__delete: {
         parameters: {
             query?: never;
@@ -5882,6 +6520,99 @@ export interface operations {
             };
         };
     };
+    billing_status_api_v1_customer_billing_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionStatusResponse"];
+                };
+            };
+        };
+    };
+    create_checkout_api_v1_customer_billing_checkout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckoutRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckoutSessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_portal_api_v1_customer_billing_portal_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PortalSessionResponse"];
+                };
+            };
+        };
+    };
+    stripe_webhook_api_v1_customer_billing_webhook_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     current_operator_api_v1_admin_me_get: {
         parameters: {
             query?: never;
@@ -5918,6 +6649,143 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LogoutResponse"];
+                };
+            };
+        };
+    };
+    get_wave_alerts_api_v1_wave_alerts_get: {
+        parameters: {
+            query?: {
+                interval?: string;
+                min_probability?: number;
+                min_risk_reward?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WaveAlert"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_intraday_wave_alerts_api_v1_wave_alerts_intraday_get: {
+        parameters: {
+            query: {
+                /** @description Comma-separated symbols, e.g. AAPL,TSLA,/GC */
+                symbols: string;
+                interval?: string;
+                min_probability?: number;
+                min_risk_reward?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WaveAlert"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_wave_history_api_v1_wave__symbol__history_get: {
+        parameters: {
+            query?: {
+                interval?: string;
+                start?: string | null;
+                end?: string | null;
+            };
+            header?: never;
+            path: {
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WaveStateResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_wave_state_api_v1_wave__symbol__get: {
+        parameters: {
+            query?: {
+                interval?: string;
+                backend?: string;
+            };
+            header?: never;
+            path: {
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WaveStateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
