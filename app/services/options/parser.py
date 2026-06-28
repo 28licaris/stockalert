@@ -119,6 +119,7 @@ def aggregate_gamma_exposure(
         _gamma_row(
             usable,
             aggregation_level="total",
+            level_key="total",
             source_snapshot_id=source_snapshot_id,
             methodology=methodology,
             ingestion_run_id=ingestion_run_id,
@@ -130,6 +131,7 @@ def aggregate_gamma_exposure(
             _gamma_row(
                 group,
                 aggregation_level="strike",
+                level_key=f"strike:{strike:g}",
                 strike=strike,
                 source_snapshot_id=source_snapshot_id,
                 methodology=methodology,
@@ -142,6 +144,7 @@ def aggregate_gamma_exposure(
             _gamma_row(
                 group,
                 aggregation_level="expiry",
+                level_key=f"expiry:{expiration_date.isoformat()}",
                 expiration_date=expiration_date,
                 source_snapshot_id=source_snapshot_id,
                 methodology=methodology,
@@ -156,6 +159,7 @@ def aggregate_gamma_exposure(
             _gamma_row(
                 group,
                 aggregation_level="strike_expiry",
+                level_key=f"strike_expiry:{expiration_date.isoformat()}:{strike:g}",
                 expiration_date=expiration_date,
                 strike=strike,
                 source_snapshot_id=source_snapshot_id,
@@ -266,6 +270,7 @@ def _gamma_row(
     group: list[tuple[OptionContractSnapshot, float]],
     *,
     aggregation_level: str,
+    level_key: str,
     source_snapshot_id: str | None,
     methodology: str,
     ingestion_run_id: str | None,
@@ -290,6 +295,7 @@ def _gamma_row(
         volume=sum(contract.volume or 0 for contract, _ in group),
         contract_count=len(group),
         aggregation_level=aggregation_level,
+        level_key=level_key,
         methodology=methodology,
         source_snapshot_id=source_snapshot_id,
         ingestion_ts=datetime.now(timezone.utc),

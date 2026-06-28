@@ -189,6 +189,12 @@ class Settings(BaseModel):
     iceberg_futures_glue_database: str = os.getenv(
         "ICEBERG_FUTURES_GLUE_DATABASE", "futures"
     )
+    # Options live in their own Glue DB + S3 folder (iceberg/options/),
+    # separate from equities and futures. First tables hold Schwab chain
+    # snapshots, canonical contracts, expirations, and derived GEX.
+    iceberg_options_glue_database: str = os.getenv(
+        "ICEBERG_OPTIONS_GLUE_DATABASE", "options"
+    )
 
     # Earliest date for which we have OHLCV coverage. Operator scripts
     # (Athena bulk-import, history backfill) use this as the lower

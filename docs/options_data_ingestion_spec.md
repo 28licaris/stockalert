@@ -253,6 +253,7 @@ third-party GEX provider.
 | `volume` | long | no | Volume used for volume-weighted views. |
 | `contract_count` | long | no | Contracts included in the aggregation. |
 | `aggregation_level` | string | yes | `total`, `strike`, `expiry`, or `strike_expiry`. |
+| `level_key` | string | yes | Stable key for the level, e.g. `total`, `strike:210`, `expiry:2026-07-17`. |
 | `methodology` | string | yes | Versioned calculation label. |
 | `source` | string | yes | `stockalert-schwab-gex` initially. |
 | `source_snapshot_id` | string | no | Iceberg snapshot ID for reproducibility. |
@@ -260,7 +261,7 @@ third-party GEX provider.
 | `ingestion_run_id` | string | yes | Batch/run identifier. |
 
 Identifier fields: `underlying_symbol`, `snapshot_ts`, `aggregation_level`,
-`expiration_date`, `strike`, `put_call`.
+`level_key`.
 
 Partitioning: `bucket(16, underlying_symbol)`, `month(snapshot_ts)`.
 

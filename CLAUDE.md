@@ -52,6 +52,8 @@ app/services/        Domain modules (see standards/service_modules.md)
   equities/          v2 lake: schemas + sink + tables + gaps + models
   futures/           v2 futures mirror: schemas/sink/tables/gaps +
                      universe + symbols (/-prefix routing) + lake_to_ch_fill
+  options/           Options lake: Schwab chain schemas/parser + tables/sink;
+                     derived GEX snapshots (MCP/API readers follow)
   ingest/            Provider → lake writers (Polygon flat-files,
                      Schwab REST/live, corp-actions, nightly_futures_refresh)
   readers/           Lake → consumer Pydantic shapes
@@ -105,6 +107,15 @@ Futures lake (separate `futures.*` Glue DB + `iceberg/futures/` S3):
 | Table | Source | Notes |
 |---|---|---|
 | `futures.schwab_futures` | Schwab live (F2) + REST nightly (F3) | Continuous roots (/ES,…); no adjustment tier; month(timestamp) partition |
+
+Options lake (separate `options.*` Glue DB + `iceberg/options/` S3):
+
+| Table | Source | Notes |
+|---|---|---|
+| `options.schwab_chain_raw` | Schwab REST `/chains` | Raw provider payload per chain snapshot; audit/reparse source |
+| `options.schwab_chain_contracts` | Schwab REST `/chains` | Canonical contract rows per snapshot; replay/backtest source |
+| `options.schwab_expirations` | Schwab chain/expiration data | Observed expirations per underlying |
+| `options.gamma_exposure_snapshots` | Derived from canonical contracts | GEX totals/levels by underlying, strike, expiry, strike+expiry |
 
 ## Docs
 

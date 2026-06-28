@@ -170,6 +170,7 @@ class GammaExposureSnapshot(BaseModel):
     volume: int | None = None
     contract_count: int | None = None
     aggregation_level: GammaAggregationLevel
+    level_key: str
     methodology: str = "stockalert-schwab-gex-v1"
     source: str = "stockalert-schwab-gex"
     source_snapshot_id: str | None = None

@@ -132,9 +132,11 @@ def test_aggregate_gamma_exposure_outputs_replayable_levels() -> None:
         "strike_expiry",
     }
     assert total.source_snapshot_id == "snapshot-123"
+    assert total.level_key == "total"
     assert total.contract_count == 3
     assert total.open_interest == 7500
     assert total.call_gamma_exposure is not None and total.call_gamma_exposure > 0
     assert total.put_gamma_exposure is not None and total.put_gamma_exposure < 0
     assert total.net_gamma_exposure == pytest.approx(total.gamma_exposure)
     assert strike_210.contract_count == 2
+    assert strike_210.level_key == "strike:210"

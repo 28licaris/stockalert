@@ -14,10 +14,11 @@ Current scope:
 - Offline Schwab chain parser from fixture/provider payloads.
 - Gamma exposure calculation from contract gamma, open interest, multiplier,
   underlying price, and put/call side.
+- Idempotent Iceberg table creation for the `options` Glue namespace.
+- Iceberg sink for parsed Schwab chain snapshots and derived GEX rows.
 
 Not yet owned here:
 
-- Iceberg table creation or writes.
 - Schwab provider orchestration.
 - HTTP routes.
 - MCP tools.
