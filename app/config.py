@@ -351,6 +351,12 @@ class Settings(BaseModel):
     billing_return_url: str = os.getenv(
         "BILLING_RETURN_URL", "http://localhost:8000/app/settings"
     )
+    # SEC EDGAR news/filings feed. EDGAR requires a User-Agent with a real
+    # contact email (≤10 req/s). Free, no key. See app/providers/edgar.py.
+    edgar_user_agent: str = os.getenv(
+        "EDGAR_USER_AGENT", "StockAlert/1.0 (contact: set-EDGAR_USER_AGENT@example.com)"
+    )
+
     # Optional tag stored on OHLCV rows (e.g. matches DATA_PROVIDER)
     data_source_tag: str = os.getenv("DATA_SOURCE_TAG", "")
     # Comma-separated symbols for the dashboard tape. Uses liquid ETFs that

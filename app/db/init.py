@@ -450,6 +450,37 @@ def init_schema() -> None:
         """
     )
 
+    # News feed — official-record items (SEC EDGAR filings, govt releases),
+    # AI-summarized with a link to the source. `id` = EDGAR accession (or
+    # source uid), the dedup key. `summary`/`why_it_matters`/`materiality` are
+    # filled by LLM enrichment (enriched=1); '' until then. We never store the
+    # source body — only our summary + the `url` link. See docs/news_alerts_spec.md.
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS news_items (
+            id              String,
+            published_at    DateTime64(3, 'UTC'),
+            ingested_at     DateTime64(3, 'UTC') DEFAULT now64(3),
+            source          LowCardinality(String) DEFAULT 'edgar',
+            event_type      LowCardinality(String) DEFAULT '',
+            symbol          LowCardinality(String) DEFAULT '',
+            cik             String DEFAULT '',
+            title           String DEFAULT '',
+            url             String DEFAULT '',
+            summary         String DEFAULT '',
+            why_it_matters  String DEFAULT '',
+            materiality     LowCardinality(String) DEFAULT 'unrated',
+            sentiment       LowCardinality(String) DEFAULT '',
+            enriched        UInt8 DEFAULT 0,
+            version         UInt64 DEFAULT 0
+        )
+        ENGINE = ReplacingMergeTree(version)
+        PARTITION BY toYYYYMM(published_at)
+        ORDER BY (published_at, source, id)
+        SETTINGS index_granularity = 8192
+        """
+    )
+
 
 def _read_legacy_watchlist(path: str) -> Optional[list[str]]:
     """Best-effort read of the old `data/watchlist.json` file. Returns None on any error."""
