@@ -143,9 +143,25 @@ cockpit **News** page. Without activation the page renders its empty state.
 - Decisions (2026-06-27): FOMC-only to start; stored in `news_items` (not the
   calendar's `market_events`); in-app digest (no webhook/email).
 
-## 13. Deferred (post-v1.1)
-- **Economic data:** BLS (CPI/jobs) + BEA (GDP/PCE) releases into the feed
-  (BEA needs a free key; numeric releases need formatting).
+## 14. Economic-data hub — ✅ SHIPPED (BLS) / BEA pending
+A persistent indicator hub (not just feed items): the source of truth the trader
+and the AI share. Decisions (2026-06-27): econ-data hub (dedicated table + page);
+BLS first (keyless).
+- **Storage:** CH `economic_data` — raw release time series. Derived figures
+  (YoY, MoM change) computed at read time (lean — not stored).
+- **Source:** `app/services/news/econ.py` — BLS catalog (CPI `CUUR0000SA0`,
+  unemployment `LNS14000000`, payrolls `CES0000000001`), pure
+  `parse_bls_response` + `compute_indicator` (level/yoy/mom_delta), `BlsClient`
+  (keyless; optional free `BLS_API_KEY`), `EconService` (ingest + latest/history).
+- **New-release → news:** ingest emits a market-wide `news_items` row per
+  genuinely-new release (deterministic headline, `enriched=1`, materiality high)
+  so it also hits the feed/digest.
+- **Surfaces:** `GET /api/v1/economic` + `/economic/{series}/history`; cockpit
+  **Economic** page (indicator cards → history table + sparkline); MCP
+  `get_economic_data` tool for the AI. Folded into the ingest job (degrades safely).
+
+## 15. Deferred (post-economic)
+- **BEA (GDP/PCE):** same shape; needs a free `BEA_API_KEY`.
 - **Per-user:** watchlist scoping of the feed/digest; alert state + tier gating.
 - **Delivery:** real-time push/email/webhook digest.
 - **Phase 2:** RSS media (headline + link + summary, terms-checked sources),

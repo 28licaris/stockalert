@@ -324,6 +324,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/economic": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Economic
+         * @description Latest figure + change for each tracked indicator (CPI, jobs, …).
+         */
+        get: operations["get_economic_api_v1_economic_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/economic/{series_id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Economic History
+         * @description Raw release history (newest first) for one indicator.
+         */
+        get: operations["get_economic_history_api_v1_economic__series_id__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/journal/accounts": {
         parameters: {
             query?: never;
@@ -2688,6 +2728,34 @@ export interface components {
              */
             deleted: string;
         };
+        /** EconHistoryPoint */
+        EconHistoryPoint: {
+            /** Period */
+            period: string;
+            /** Period Label */
+            period_label: string;
+            /** Value */
+            value: number;
+        };
+        /** EconIndicator */
+        EconIndicator: {
+            /** Series Id */
+            series_id: string;
+            /** Name */
+            name: string;
+            /** Unit */
+            unit: string;
+            /** Period Label */
+            period_label: string;
+            /** Value */
+            value: number | null;
+            /** Value Label */
+            value_label: string;
+            /** Change */
+            change: number | null;
+            /** Raw Value */
+            raw_value: number;
+        };
         /** GapFillRequest */
         GapFillRequest: {
             /** Symbols */
@@ -5005,6 +5073,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NewsDigest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_economic_api_v1_economic_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EconIndicator"][];
+                };
+            };
+        };
+    };
+    get_economic_history_api_v1_economic__series_id__history_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                series_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EconHistoryPoint"][];
                 };
             };
             /** @description Validation Error */
