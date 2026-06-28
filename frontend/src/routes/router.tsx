@@ -8,6 +8,7 @@ import { WatchlistsPage } from "./watchlists";
 import { StreamPage } from "./stream";
 import { ClickHousePage } from "./clickhouse";
 import { CalendarPage } from "./calendar";
+import { NewsPage } from "./news";
 import { NotFoundPage } from "./not-found";
 import { LoginPage } from "./login";
 import { SettingsPage } from "./settings";
@@ -42,6 +43,7 @@ export const router = createBrowserRouter(
             { path: "seed", element: <Navigate to="/stream" replace /> },
             { path: "clickhouse", element: <ClickHousePage /> },
             { path: "calendar", element: <CalendarPage /> },
+            { path: "news", element: <NewsPage /> },
             { path: "settings", element: <SettingsPage /> },
             { path: "*", element: <NotFoundPage /> },
           ],

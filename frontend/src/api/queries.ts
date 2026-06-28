@@ -48,6 +48,9 @@ export type CalendarEvent = components["schemas"]["CalendarEvent"];
 export type CalendarResponse = components["schemas"]["CalendarResponse"];
 export type CalendarAssetClass = "equities" | "futures";
 
+// News feed (official-record filings + govt; AI-summarized + source link)
+export type NewsItem = components["schemas"]["NewsItem"];
+
 // Watchlists + monitors (FE-CONTRACTS-3)
 export type Watchlist = components["schemas"]["Watchlist"];
 export type CreateWatchlistRequest =
@@ -134,6 +137,8 @@ export const queryKeys = {
     ["market", "banner", symbols ?? "default"] as const,
   calendar: (assetClass: string, start: string, end: string) =>
     ["calendar", assetClass, start, end] as const,
+  news: (symbols: string | undefined, types: string | undefined) =>
+    ["news", symbols ?? "all", types ?? "all"] as const,
   symbolBars: (symbol: string, interval: string, limit: number) =>
     ["symbol", "bars", symbol, interval, limit] as const,
   lakeBars: (symbol: string, interval: string, windowDays: number) =>
@@ -277,6 +282,29 @@ export function useCalendar(
       return data as CalendarResponse;
     },
     staleTime: 60 * 60 * 1000, // 1h — calendar rarely changes
+  });
+}
+
+/**
+ * News feed — official-record items (SEC EDGAR filings + govt), AI-summarized
+ * with a link to the source. `symbols`/`types` are optional comma-separated
+ * filters; market-wide items always come back. Newest first.
+ */
+export function useNews(opts?: {
+  symbols?: string;
+  types?: string;
+  limit?: number;
+}) {
+  const { symbols, types, limit = 100 } = opts ?? {};
+  return useQuery({
+    queryKey: queryKeys.news(symbols, types),
+    queryFn: async (): Promise<NewsItem[]> => {
+      const { data } = await apiClient.GET("/api/v1/news", {
+        params: { query: { symbols, types, limit } },
+      });
+      return (data as NewsItem[]) ?? [];
+    },
+    staleTime: 5 * 60 * 1000, // 5m
   });
 }
 

@@ -31,6 +31,7 @@ const FLAGS: Record<string, FlagValue> = {
   "page.seed": true, // enabled in FE-CONTRACTS-4
   "page.clickhouse": true, // enabled in FE-CONTRACTS-6a
   "page.calendar": true, // market calendar (sessions; events Phase 2)
+  "page.news": true, // news & alerts feed (EDGAR filings, AI-summarized)
   "page.mcp": false,
   "page.settings": true,
 

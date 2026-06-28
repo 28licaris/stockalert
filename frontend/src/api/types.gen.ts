@@ -282,6 +282,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/news": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get News
+         * @description Most-recent news items, newest first. Unenriched items (``enriched=false``)
+         *     appear with empty summary fields until the enrichment pass fills them.
+         */
+        get: operations["get_news_api_v1_news_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/journal/accounts": {
         parameters: {
             query?: never;
@@ -3399,6 +3420,66 @@ export interface components {
             /** Movers */
             movers: components["schemas"]["Mover"][];
         };
+        /**
+         * NewsItem
+         * @description One feed item — a filing/event with an optional AI summary + source link.
+         *
+         *     `summary`/`why_it_matters`/`materiality`/`sentiment` are filled by the LLM
+         *     enrichment stage; they stay at their defaults (``enriched=False``) until then.
+         *     We never carry the source body — only our summary + the `url` link.
+         */
+        NewsItem: {
+            /** Id */
+            id: string;
+            /**
+             * Published At
+             * Format: date-time
+             */
+            published_at: string;
+            /** Source */
+            source: string;
+            /** Event Type */
+            event_type: string;
+            /**
+             * Symbol
+             * @default
+             */
+            symbol: string;
+            /**
+             * Cik
+             * @default
+             */
+            cik: string;
+            /** Title */
+            title: string;
+            /** Url */
+            url: string;
+            /**
+             * Summary
+             * @default
+             */
+            summary: string;
+            /**
+             * Why It Matters
+             * @default
+             */
+            why_it_matters: string;
+            /**
+             * Materiality
+             * @default unrated
+             */
+            materiality: string;
+            /**
+             * Sentiment
+             * @default
+             */
+            sentiment: string;
+            /**
+             * Enriched
+             * @default false
+             */
+            enriched: boolean;
+        };
         /** NoteUpdate */
         NoteUpdate: {
             /**
@@ -4819,6 +4900,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CalendarResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_news_api_v1_news_get: {
+        parameters: {
+            query?: {
+                /** @description Comma-separated tickers; market-wide items always included */
+                symbols?: string | null;
+                /** @description Comma-separated event types, e.g. '8-K,4' */
+                types?: string | null;
+                /** @description Only items published at/after this UTC timestamp */
+                since?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NewsItem"][];
                 };
             };
             /** @description Validation Error */
