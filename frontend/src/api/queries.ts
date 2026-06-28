@@ -48,6 +48,14 @@ export type CalendarEvent = components["schemas"]["CalendarEvent"];
 export type CalendarResponse = components["schemas"]["CalendarResponse"];
 export type CalendarAssetClass = "equities" | "futures";
 
+// News feed (official-record filings + govt; AI-summarized + source link)
+export type NewsItem = components["schemas"]["NewsItem"];
+export type NewsDigest = components["schemas"]["NewsDigest"];
+
+// Economic indicators (free government data — BLS now)
+export type EconIndicator = components["schemas"]["EconIndicator"];
+export type EconHistoryPoint = components["schemas"]["EconHistoryPoint"];
+
 // Watchlists + monitors (FE-CONTRACTS-3)
 export type Watchlist = components["schemas"]["Watchlist"];
 export type CreateWatchlistRequest =
@@ -134,6 +142,11 @@ export const queryKeys = {
     ["market", "banner", symbols ?? "default"] as const,
   calendar: (assetClass: string, start: string, end: string) =>
     ["calendar", assetClass, start, end] as const,
+  news: (symbols: string | undefined, types: string | undefined) =>
+    ["news", symbols ?? "all", types ?? "all"] as const,
+  newsDigest: ["news", "digest"] as const,
+  economic: ["economic"] as const,
+  economicHistory: (seriesId: string) => ["economic", "history", seriesId] as const,
   symbolBars: (symbol: string, interval: string, limit: number) =>
     ["symbol", "bars", symbol, interval, limit] as const,
   lakeBars: (symbol: string, interval: string, windowDays: number) =>
@@ -277,6 +290,70 @@ export function useCalendar(
       return data as CalendarResponse;
     },
     staleTime: 60 * 60 * 1000, // 1h — calendar rarely changes
+  });
+}
+
+/**
+ * News feed — official-record items (SEC EDGAR filings + govt), AI-summarized
+ * with a link to the source. `symbols`/`types` are optional comma-separated
+ * filters; market-wide items always come back. Newest first.
+ */
+export function useNews(opts?: {
+  symbols?: string;
+  types?: string;
+  limit?: number;
+}) {
+  const { symbols, types, limit = 100 } = opts ?? {};
+  return useQuery({
+    queryKey: queryKeys.news(symbols, types),
+    queryFn: async (): Promise<NewsItem[]> => {
+      const { data } = await apiClient.GET("/api/v1/news", {
+        params: { query: { symbols, types, limit } },
+      });
+      return (data as NewsItem[]) ?? [];
+    },
+    staleTime: 5 * 60 * 1000, // 5m
+  });
+}
+
+/**
+ * Daily digest — today's material (high-importance) items, AI-summarized.
+ */
+export function useNewsDigest() {
+  return useQuery({
+    queryKey: queryKeys.newsDigest,
+    queryFn: async (): Promise<NewsDigest> => {
+      const { data } = await apiClient.GET("/api/v1/news/digest", {});
+      return data as NewsDigest;
+    },
+    staleTime: 5 * 60 * 1000, // 5m
+  });
+}
+
+/** Economic indicators — latest figure + change per series. */
+export function useEconomic() {
+  return useQuery({
+    queryKey: queryKeys.economic,
+    queryFn: async (): Promise<EconIndicator[]> => {
+      const { data } = await apiClient.GET("/api/v1/economic", {});
+      return (data as EconIndicator[]) ?? [];
+    },
+    staleTime: 30 * 60 * 1000, // 30m — releases are infrequent
+  });
+}
+
+/** Release history for one economic series (newest first). */
+export function useEconomicHistory(seriesId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.economicHistory(seriesId ?? ""),
+    enabled: !!seriesId,
+    queryFn: async (): Promise<EconHistoryPoint[]> => {
+      const { data } = await apiClient.GET("/api/v1/economic/{series_id}/history", {
+        params: { path: { series_id: seriesId as string } },
+      });
+      return (data as EconHistoryPoint[]) ?? [];
+    },
+    staleTime: 30 * 60 * 1000,
   });
 }
 

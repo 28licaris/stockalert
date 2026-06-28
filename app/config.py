@@ -351,6 +351,31 @@ class Settings(BaseModel):
     billing_return_url: str = os.getenv(
         "BILLING_RETURN_URL", "http://localhost:8000/app/settings"
     )
+    # SEC EDGAR news/filings feed. EDGAR requires a User-Agent with a real
+    # contact email (≤10 req/s). Free, no key. See app/providers/edgar.py.
+    edgar_user_agent: str = os.getenv(
+        "EDGAR_USER_AGENT", "StockAlert/1.0 (contact: set-EDGAR_USER_AGENT@example.com)"
+    )
+
+    # News enrichment LLM — cheap model for filing triage + summary (cost-capped:
+    # only watchlist-relevant filings are enriched, body truncated, output capped).
+    # Uses ANTHROPIC_API_KEY (same env var as the assistant).
+    news_enrich_model: str = os.getenv("NEWS_ENRICH_MODEL", "claude-haiku-4-5-20251001")
+
+    # News ingest job. Off by default — enable once EDGAR_USER_AGENT + an
+    # ANTHROPIC_API_KEY are set. Polls EDGAR on an interval (batch cadence) and
+    # enriches up to news_enrich_limit items/cycle (the per-run cost cap).
+    news_ingest_enabled: bool = os.getenv("NEWS_INGEST_ENABLED", "false").lower() == "true"
+    news_poll_minutes: int = int(os.getenv("NEWS_POLL_MINUTES", "30"))
+    news_enrich_limit: int = int(os.getenv("NEWS_ENRICH_LIMIT", "25"))
+
+    # BLS economic data — free; key optional (keyless = 25 req/day, a free
+    # registered key = 500/day).
+    bls_api_key: str = os.getenv("BLS_API_KEY", "")
+    # BEA economic data (GDP/PCE) — free but REQUIRES a key (register at
+    # apps.bea.gov/API/signup). Empty → GDP/PCE are skipped at ingest.
+    bea_api_key: str = os.getenv("BEA_API_KEY", "")
+
     # Optional tag stored on OHLCV rows (e.g. matches DATA_PROVIDER)
     data_source_tag: str = os.getenv("DATA_SOURCE_TAG", "")
     # Comma-separated symbols for the dashboard tape. Uses liquid ETFs that

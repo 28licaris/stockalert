@@ -14,6 +14,30 @@ counterpart to the ephemeral in-app task chips). Bugs/flaky tests live in
   verify the endpoints for an authed session. Code: `app/services/billing/`,
   `app/api/auth_dependencies.py::get_billing_service`.
 
+## News → Alerts + Economic hub (design: [`news_alerts_spec.md`](news_alerts_spec.md))
+Shipped + **activated 2026-06-28** (`NEWS_INGEST_ENABLED=true`): EDGAR filings
+(relevance-filtered, AI-summarized) + FOMC (Fed RSS) + BLS (CPI/jobs/unemployment)
++ BEA (GDP/PCE) → CH `news_items` / `economic_data`, served to the News feed +
+daily digest, the Economic page, and the AI via the `get_news` / `get_economic_data`
+MCP tools. Free sources only; licensing-clean (link, never republish).
+Deferred next steps:
+- **Per-user scoping + tiering.** Today the feed/digest are global. Add per-user
+  watchlist scoping (the relevance filter already resolves the active universe;
+  extend to a customer's watchlist) + per-user alert state (read/unread, dedup)
+  in Postgres, and plan-tier entitlements (watchlist-only vs all-markets, alerts/
+  day, AI-summary access, real-time vs digest). Ties into Stripe billing above.
+  The natural next step toward monetization.
+- **Delivery channels.** v1 digest is in-app only. Add push/email/webhook
+  delivery of the daily digest + high-materiality alerts (reuse
+  `ALERT_WEBHOOK_URL` for a Slack/Discord-style post; email needs a provider).
+- **More macro (optional).** Same `EconService` pattern: BLS PPI/retail sales,
+  BEA personal income. Add a series to the catalog + (BEA) a NIPA table/line.
+- **Phase 2 (optional).** RSS media headlines (link + AI summary, terms-checked
+  sources only — no scraping); embedding-based dedup; sentiment surfaced in the
+  News UI; earnings (needs a free/robust source — see calendar 2c).
+- **Ops:** BLS is keyless (25 req/day) — add a free `BLS_API_KEY` for 500/day if
+  polling more often. `BEA_API_KEY` required for GDP/PCE (set in `.env`).
+
 ## Market calendar — events (design: [`market_calendar_spec.md` §12a](market_calendar_spec.md))
 Shipped (Phase 2a): computed OPEX/quad-witching + seeded FOMC on the calendar.
 Free + production-robust only (no runtime HTML scraping).

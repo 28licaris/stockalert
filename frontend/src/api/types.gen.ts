@@ -282,6 +282,88 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/news": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get News
+         * @description Most-recent news items, newest first. Unenriched items (``enriched=false``)
+         *     appear with empty summary fields until the enrichment pass fills them.
+         */
+        get: operations["get_news_api_v1_news_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/news/digest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get News Digest
+         * @description The day's material items (enriched only), newest first — a digest of what
+         *     mattered. Window is one ET trading day; defaults to today ET.
+         */
+        get: operations["get_news_digest_api_v1_news_digest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/economic": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Economic
+         * @description Latest figure + change for each tracked indicator (CPI, jobs, …).
+         */
+        get: operations["get_economic_api_v1_economic_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/economic/{series_id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Economic History
+         * @description Raw release history (newest first) for one indicator.
+         */
+        get: operations["get_economic_history_api_v1_economic__series_id__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/journal/accounts": {
         parameters: {
             query?: never;
@@ -2646,6 +2728,34 @@ export interface components {
              */
             deleted: string;
         };
+        /** EconHistoryPoint */
+        EconHistoryPoint: {
+            /** Period */
+            period: string;
+            /** Period Label */
+            period_label: string;
+            /** Value */
+            value: number;
+        };
+        /** EconIndicator */
+        EconIndicator: {
+            /** Series Id */
+            series_id: string;
+            /** Name */
+            name: string;
+            /** Unit */
+            unit: string;
+            /** Period Label */
+            period_label: string;
+            /** Value */
+            value: number | null;
+            /** Value Label */
+            value_label: string;
+            /** Change */
+            change: number | null;
+            /** Raw Value */
+            raw_value: number;
+        };
         /** GapFillRequest */
         GapFillRequest: {
             /** Symbols */
@@ -3398,6 +3508,78 @@ export interface components {
             fetched_at: string;
             /** Movers */
             movers: components["schemas"]["Mover"][];
+        };
+        /** NewsDigest */
+        NewsDigest: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Count */
+            count: number;
+            /** Items */
+            items: components["schemas"]["NewsItem"][];
+        };
+        /**
+         * NewsItem
+         * @description One feed item — a filing/event with an optional AI summary + source link.
+         *
+         *     `summary`/`why_it_matters`/`materiality`/`sentiment` are filled by the LLM
+         *     enrichment stage; they stay at their defaults (``enriched=False``) until then.
+         *     We never carry the source body — only our summary + the `url` link.
+         */
+        NewsItem: {
+            /** Id */
+            id: string;
+            /**
+             * Published At
+             * Format: date-time
+             */
+            published_at: string;
+            /** Source */
+            source: string;
+            /** Event Type */
+            event_type: string;
+            /**
+             * Symbol
+             * @default
+             */
+            symbol: string;
+            /**
+             * Cik
+             * @default
+             */
+            cik: string;
+            /** Title */
+            title: string;
+            /** Url */
+            url: string;
+            /**
+             * Summary
+             * @default
+             */
+            summary: string;
+            /**
+             * Why It Matters
+             * @default
+             */
+            why_it_matters: string;
+            /**
+             * Materiality
+             * @default unrated
+             */
+            materiality: string;
+            /**
+             * Sentiment
+             * @default
+             */
+            sentiment: string;
+            /**
+             * Enriched
+             * @default false
+             */
+            enriched: boolean;
         };
         /** NoteUpdate */
         NoteUpdate: {
@@ -4819,6 +5001,131 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CalendarResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_news_api_v1_news_get: {
+        parameters: {
+            query?: {
+                /** @description Comma-separated tickers; market-wide items always included */
+                symbols?: string | null;
+                /** @description Comma-separated event types, e.g. '8-K,4' */
+                types?: string | null;
+                /** @description Only items published at/after this UTC timestamp */
+                since?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NewsItem"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_news_digest_api_v1_news_digest_get: {
+        parameters: {
+            query?: {
+                /** @description ET date; defaults to today (ET) */
+                date?: string | null;
+                /** @description Comma-separated materiality levels to include */
+                materiality?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NewsDigest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_economic_api_v1_economic_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EconIndicator"][];
+                };
+            };
+        };
+    };
+    get_economic_history_api_v1_economic__series_id__history_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                series_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EconHistoryPoint"][];
                 };
             };
             /** @description Validation Error */

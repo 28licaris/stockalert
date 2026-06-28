@@ -37,6 +37,7 @@ from app.api import (
     routes_billing,
     routes_calendar,
     routes_clickhouse,
+    routes_economic,
     routes_corp_actions,
     routes_health,
     routes_indicators,
@@ -47,6 +48,7 @@ from app.api import (
     routes_market,
     routes_monitors,
     routes_movers,
+    routes_news,
     routes_screener,
     routes_adjusted,
     routes_admin_auth,
@@ -172,6 +174,21 @@ def _register_background_jobs(
             schedule=f"daily at {int(_s.futures_nightly_run_hour_utc):02d}:00 UTC",
             setting_key="FUTURES_NIGHTLY_RUN_HOUR_UTC",
             run_now=_run_futures_once,
+        )
+
+    # News ingest — run_news_ingest_once is self-auditing (audit_run inside).
+    if _s.news_ingest_enabled:
+        async def _run_news_ingest_once() -> None:
+            from app.services.news.job import run_news_ingest_once
+
+            await run_news_ingest_once()
+
+        job_registry.register(
+            name="news_ingest",
+            display_name="News ingest (EDGAR)",
+            schedule=f"every {int(_s.news_poll_minutes)} min",
+            setting_key="NEWS_POLL_MINUTES",
+            run_now=_run_news_ingest_once,
         )
 
     # CV13: silver_ohlcv_build job removed. polygon_adjustment_job runs
@@ -383,6 +400,27 @@ async def lifespan(app: FastAPI):
             logger.exception(
                 "✗ nightly_futures_polygon_refresh failed to start: %s — continuing without it",
                 exc,
+            )
+
+    # News ingest (EDGAR filings → relevance → enrich) — OFF unless
+    # NEWS_INGEST_ENABLED. Interval loop (batch cadence).
+    news_ingest_task: asyncio.Task | None = None
+    if _settings.news_ingest_enabled:
+        try:
+            from app.services.news.job import run_news_ingest_loop
+
+            news_ingest_task = asyncio.create_task(
+                run_news_ingest_loop(),
+                name="news_ingest",
+            )
+            app.state.news_ingest_task = news_ingest_task
+            logger.info(
+                "news_ingest: background loop started (NEWS_POLL_MINUTES=%s)",
+                _settings.news_poll_minutes,
+            )
+        except Exception as exc:
+            logger.exception(
+                "✗ news_ingest failed to start: %s — continuing without it", exc,
             )
 
     # Nightly Elliott Wave recompute (EW-3) — OFF unless ELLIOTT_RECOMPUTE_ENABLED.
@@ -725,6 +763,8 @@ app.include_router(routes_backfill.router, prefix=_V1, tags=["Backfill"])
 app.include_router(routes_instruments.router, prefix=_V1, tags=["Instruments"])
 app.include_router(routes_market.router, prefix=_V1, tags=["Market"])
 app.include_router(routes_calendar.router, prefix=_V1, tags=["Calendar"])
+app.include_router(routes_news.router, prefix=_V1, tags=["News"])
+app.include_router(routes_economic.router, prefix=_V1, tags=["Economic"])
 app.include_router(routes_journal.router, prefix=_V1, tags=["Journal"])
 app.include_router(routes_lake.router, prefix=_V1, tags=["Lake"])
 app.include_router(routes_indicators.router, prefix=_V1, tags=["Indicators"])
