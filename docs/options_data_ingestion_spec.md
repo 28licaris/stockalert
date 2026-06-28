@@ -1,6 +1,55 @@
 # Options Data Ingestion Spec
 
-Status: draft for approval
+Status: implementation in progress on branch `options`
+
+## Implementation Checkpoint
+
+Last updated after commit `2120bec options: add chain snapshot cli`.
+
+Completed:
+
+- O1 fixture/contract slice:
+  - `app/services/options/schemas.py`
+  - `app/services/options/contract.py`
+  - `app/services/options/parser.py`
+  - Schwab chain fixture and parser/GEX tests
+  - Commit `7c0b4ad options: add chain contracts and fixtures`
+- O2 lake table/sink slice:
+  - `app/services/options/tables.py`
+  - `app/services/options/sink.py`
+  - `ICEBERG_OPTIONS_GLUE_DATABASE`
+  - idempotent `chunked_upsert` writes for raw, contracts, expirations, and GEX
+  - stable GEX `level_key` identifier
+  - Commit `342fea7 options: add iceberg tables and sink`
+- O3a orchestration slice:
+  - `OptionsSnapshotService.ingest_symbol(...)`
+  - default Schwab chain params
+  - fake-provider/fake-sink tests
+  - Commit `9e15984 options: ingest schwab chain snapshots`
+- O3b operator CLI slice:
+  - `scripts/options_chain_snapshot.py`
+  - explicit `--symbols`, `--strike-count`, `--contract-type`, date filters,
+    and `--dry-run`
+  - CLI helper tests
+  - Commit `2120bec options: add chain snapshot cli`
+
+Current verification:
+
+```bash
+/Users/licaris/dev/stockalert/.venv/bin/pytest app/services/options/tests
+# 31 passed
+
+/Users/licaris/dev/stockalert/.venv/bin/python -m compileall -q app/services/options scripts/options_chain_snapshot.py
+# passed
+```
+
+Next recommended pickup:
+
+1. O3c: add active/watchlist universe resolution for option snapshots
+   (`--symbols active`) with fake resolver tests.
+2. O3d: register a manual/scheduled job only after O3c is stable.
+3. O4: add readers, HTTP routes, and MCP tools. MCP coverage remains a release
+   gate for every agent decision/alert surface.
 
 ## Goal
 
