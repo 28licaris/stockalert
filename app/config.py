@@ -339,6 +339,18 @@ class Settings(BaseModel):
     auth_provider_token_kms_region: str = os.getenv(
         "AUTH_PROVIDER_TOKEN_KMS_REGION", "us-east-1"
     )
+    # Stripe billing (customer subscriptions). Empty by default → the billing
+    # API degrades to a clean 503 "billing_not_configured" rather than failing
+    # at import/startup. Requires the identity PostgreSQL DB (subscription
+    # state lives there). See app/services/billing/.
+    stripe_secret_key: str = os.getenv("STRIPE_SECRET_KEY", "")
+    stripe_webhook_secret: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    stripe_price_monthly: str = os.getenv("STRIPE_PRICE_MONTHLY", "")
+    stripe_price_annual: str = os.getenv("STRIPE_PRICE_ANNUAL", "")
+    billing_trial_days: int = int(os.getenv("BILLING_TRIAL_DAYS", "0") or 0)
+    billing_return_url: str = os.getenv(
+        "BILLING_RETURN_URL", "http://localhost:8000/app/settings"
+    )
     # Optional tag stored on OHLCV rows (e.g. matches DATA_PROVIDER)
     data_source_tag: str = os.getenv("DATA_SOURCE_TAG", "")
     # Comma-separated symbols for the dashboard tape. Uses liquid ETFs that

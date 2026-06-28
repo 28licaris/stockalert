@@ -34,6 +34,7 @@ from app.services.live.watchlist_service import watchlist_service
 from app.services.stream import stream_service
 from app.api import (
     routes_backfill,
+    routes_billing,
     routes_calendar,
     routes_clickhouse,
     routes_corp_actions,
@@ -736,6 +737,7 @@ app.include_router(routes_stream.router, prefix=_V1, tags=["Stream"])
 app.include_router(routes_jobs.router, prefix=_V1, tags=["Jobs"])
 app.include_router(routes_clickhouse.router, prefix=_V1, tags=["ClickHouse"])
 app.include_router(routes_customer_auth.router, prefix=_V1, tags=["CustomerAuth"])
+app.include_router(routes_billing.router, prefix=_V1, tags=["Billing"])
 app.include_router(routes_admin_auth.router, prefix=_V1, tags=["AdminAuth"])
 app.include_router(routes_auth.router, tags=["Auth"])
 app.include_router(routes_wave.router, prefix=_V1, tags=["Elliott Wave"])
