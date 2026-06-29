@@ -49,6 +49,7 @@ from app.api import (
     routes_monitors,
     routes_movers,
     routes_news,
+    routes_options,
     routes_screener,
     routes_sector_rotation,
     routes_adjusted,
@@ -840,6 +841,7 @@ app.include_router(routes_screener.router, prefix=_V1, tags=["Screener"])
 app.include_router(routes_sector_rotation.router, prefix=_V1, tags=["SectorRotation"])
 app.include_router(routes_corp_actions.router, prefix=_V1, tags=["CorpActions"])
 app.include_router(routes_adjusted.router, prefix=_V1, tags=["Adjusted"])
+app.include_router(routes_options.router, prefix=_V1, tags=["Options"])
 app.include_router(routes_monitors.router, prefix=_V1, tags=["Monitors"])
 app.include_router(routes_watchlist.router, prefix=_V1, tags=["Watchlist"])
 app.include_router(routes_stream.router, prefix=_V1, tags=["Stream"])

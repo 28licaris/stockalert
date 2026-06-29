@@ -24,11 +24,11 @@ Current scope:
   `app/services/ingest/options_snapshot_refresh.py`.
 - Lake reader for canonical contracts and GEX:
   `app/services/readers/options_reader.py`.
+- HTTP and MCP read surfaces:
+  `app/api/routes_options.py` and `app/mcp/tools/options.py`.
 
 Not yet owned here:
 
-- HTTP routes.
-- MCP tools.
 - ClickHouse hot tables or streaming.
 
 Test with:

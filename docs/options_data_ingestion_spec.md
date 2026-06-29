@@ -4,7 +4,7 @@ Status: implementation in progress on branch `options`
 
 ## Implementation Checkpoint
 
-Last updated during O4a options reader.
+Last updated during O4b HTTP and MCP options surfaces.
 
 Completed:
 
@@ -62,23 +62,34 @@ Completed:
     level.
   - Fake Iceberg table tests cover projections, sorting, limits, pinned
     snapshots, missing tables, blank symbols, and scan failures.
+- O4b HTTP/MCP slice:
+  - `app.api.routes_options` exposes `/options/contracts` and `/options/gex`
+    over `OptionsReader`.
+  - `app.mcp.tools.options` exposes `get_option_contracts` and
+    `get_option_gamma_exposure` with the same canonical response DTOs.
+  - `app.mcp.server.register_all_tools()` imports the options tool module so
+    agents discover the tools through MCP.
+  - Route and MCP tests cover response shapes, parameter pass-through, and
+    route error mapping.
 
 Current verification:
 
 ```bash
-/Users/licaris/dev/stockalert/.venv/bin/pytest app/services/options/tests app/services/readers/tests/test_options_reader.py
-# 46 passed
+/Users/licaris/dev/stockalert/.venv/bin/pytest app/services/options/tests app/services/readers/tests/test_options_reader.py app/api/tests/test_routes_options.py app/mcp/tests/test_mcp_options.py
+# 53 passed
 
-/Users/licaris/dev/stockalert/.venv/bin/python -m compileall -q app/services/options app/services/readers/options_reader.py app/services/ingest/options_snapshot_refresh.py scripts/options_chain_snapshot.py app/main_api.py app/config.py
+/Users/licaris/dev/stockalert/.venv/bin/python -m compileall -q app/services/options app/services/readers/options_reader.py app/services/ingest/options_snapshot_refresh.py app/api/routes_options.py app/mcp/tools/options.py app/mcp/server.py scripts/options_chain_snapshot.py app/main_api.py app/config.py
 # passed
 ```
 
-Previous O3d verification was 41 passing option tests plus compileall.
+Previous O4a verification was 46 focused tests plus compileall.
 
 Next recommended pickup:
 
-1. O4b: add HTTP routes and MCP tools. MCP coverage remains a release gate for
-   every agent decision/alert surface.
+1. O5a: add ClickHouse hot-tier projections for latest option contracts/GEX if
+   low-latency alerts need sub-lake response times.
+2. O5b: add frontend options cockpit views backed by the HTTP routes and MCP
+   parity checks for any new decision-support data.
 
 ## Goal
 

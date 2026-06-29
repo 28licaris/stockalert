@@ -57,6 +57,7 @@ def register_all_tools() -> None:
     from app.mcp.tools import market  # noqa: F401
     from app.mcp.tools import movers  # noqa: F401
     from app.mcp.tools import news  # noqa: F401
+    from app.mcp.tools import options  # noqa: F401
     from app.mcp.tools import quotes  # noqa: F401
     from app.mcp.tools import screener  # noqa: F401
     from app.mcp.tools import sectors  # noqa: F401
