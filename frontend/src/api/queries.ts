@@ -88,6 +88,93 @@ export type StreamMutationResponse =
 export type AddStreamRequest = components["schemas"]["AddStreamRequest"];
 export type ImportStreamRequest = components["schemas"]["ImportStreamRequest"];
 
+// Options hot-tier reads (manual until the OpenAPI client is regenerated)
+export type PutCall = "CALL" | "PUT";
+export type GammaAggregationLevel =
+  | "total"
+  | "strike"
+  | "expiry"
+  | "strike_expiry";
+
+export interface OptionContractSnapshot {
+  underlying_symbol: string;
+  option_symbol: string;
+  snapshot_ts: string;
+  put_call: PutCall;
+  expiration_date: string;
+  strike: number;
+  underlying_price: number | null;
+  days_to_expiration: number | null;
+  bid: number | null;
+  ask: number | null;
+  last: number | null;
+  mark: number | null;
+  bid_size: number | null;
+  ask_size: number | null;
+  last_size: number | null;
+  volume: number | null;
+  open_interest: number | null;
+  quote_time: string | null;
+  trade_time: string | null;
+  delta: number | null;
+  gamma: number | null;
+  theta: number | null;
+  vega: number | null;
+  rho: number | null;
+  volatility: number | null;
+  theoretical_value: number | null;
+  intrinsic_value: number | null;
+  time_value: number | null;
+  in_the_money: boolean | null;
+  mini: boolean | null;
+  non_standard: boolean | null;
+  penny_pilot: boolean | null;
+  multiplier: number | null;
+  settlement_type: string | null;
+  expiration_type: string | null;
+  source: string;
+  ingestion_ts: string | null;
+  ingestion_run_id: string | null;
+}
+
+export interface GammaExposureSnapshot {
+  underlying_symbol: string;
+  snapshot_ts: string;
+  expiration_date: string | null;
+  strike: number | null;
+  put_call: PutCall | null;
+  underlying_price: number;
+  gamma_exposure: number;
+  call_gamma_exposure: number | null;
+  put_gamma_exposure: number | null;
+  net_gamma_exposure: number | null;
+  open_interest: number | null;
+  volume: number | null;
+  contract_count: number | null;
+  aggregation_level: GammaAggregationLevel;
+  level_key: string;
+  methodology: string;
+  source: string;
+  source_snapshot_id: string | null;
+  ingestion_ts: string | null;
+  ingestion_run_id: string | null;
+}
+
+export interface LatestOptionContractsResponse {
+  underlying_symbol: string;
+  contracts: OptionContractSnapshot[];
+  count: number;
+  source: string;
+}
+
+export interface LatestGammaExposureResponse {
+  underlying_symbol: string;
+  aggregation_level: GammaAggregationLevel | null;
+  rows: GammaExposureSnapshot[];
+  count: number;
+  source: string;
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // /api/health/services — composite Status page health
 // (response_model arriving in a later sub-phase; for now we keep the
@@ -163,6 +250,34 @@ export const queryKeys = {
   instrumentLookup: (symbols: string) =>
     ["instruments", "lookup", symbols] as const,
   clickhouseSchema: ["clickhouse", "schema"] as const,
+  latestOptionContracts: (
+    symbol: string,
+    expirationDate: string | undefined,
+    putCall: string | undefined,
+    limit: number,
+  ) =>
+    [
+      "options",
+      "contracts",
+      "latest",
+      symbol,
+      expirationDate ?? "",
+      putCall ?? "",
+      limit,
+    ] as const,
+  latestOptionGex: (
+    symbol: string,
+    aggregationLevel: string | undefined,
+    limit: number,
+  ) =>
+    [
+      "options",
+      "gex",
+      "latest",
+      symbol,
+      aggregationLevel ?? "",
+      limit,
+    ] as const,
   jobs: ["jobs"] as const,
   sectorRotation: (benchmark: string, tailWeeks: number) =>
     ["sectors", "rotation", benchmark, tailWeeks] as const,
@@ -392,6 +507,82 @@ export function useLatestBars(symbolsCsv: string | undefined) {
     enabled: Boolean(symbolsCsv),
     refetchInterval: 10_000,
     staleTime: 5_000,
+  });
+}
+
+export interface LatestOptionContractsParams {
+  symbol: string | undefined;
+  expirationDate?: string | undefined;
+  putCall?: PutCall | undefined;
+  limit: number;
+}
+
+export function useLatestOptionContracts({
+  symbol,
+  expirationDate,
+  putCall,
+  limit,
+}: LatestOptionContractsParams) {
+  const normalized = symbol?.trim().toUpperCase();
+  return useQuery({
+    queryKey: queryKeys.latestOptionContracts(
+      normalized ?? "",
+      expirationDate,
+      putCall,
+      limit,
+    ),
+    queryFn: async (): Promise<LatestOptionContractsResponse> => {
+      if (!normalized) throw new Error("symbol required");
+      const params = new URLSearchParams({
+        symbol: normalized,
+        limit: String(limit),
+      });
+      if (expirationDate) params.set("expiration_date", expirationDate);
+      if (putCall) params.set("put_call", putCall);
+      return fetchJson<LatestOptionContractsResponse>(
+        `/api/v1/options/contracts/latest?${params.toString()}`,
+      );
+    },
+    enabled: Boolean(normalized),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+    staleTime: 10_000,
+  });
+}
+
+export interface LatestOptionGexParams {
+  symbol: string | undefined;
+  aggregationLevel?: GammaAggregationLevel | undefined;
+  limit: number;
+}
+
+export function useLatestOptionGex({
+  symbol,
+  aggregationLevel,
+  limit,
+}: LatestOptionGexParams) {
+  const normalized = symbol?.trim().toUpperCase();
+  return useQuery({
+    queryKey: queryKeys.latestOptionGex(
+      normalized ?? "",
+      aggregationLevel,
+      limit,
+    ),
+    queryFn: async (): Promise<LatestGammaExposureResponse> => {
+      if (!normalized) throw new Error("symbol required");
+      const params = new URLSearchParams({
+        symbol: normalized,
+        limit: String(limit),
+      });
+      if (aggregationLevel) params.set("aggregation_level", aggregationLevel);
+      return fetchJson<LatestGammaExposureResponse>(
+        `/api/v1/options/gex/latest?${params.toString()}`,
+      );
+    },
+    enabled: Boolean(normalized),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+    staleTime: 10_000,
   });
 }
 

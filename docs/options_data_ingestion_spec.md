@@ -4,7 +4,7 @@ Status: implementation in progress on branch `options`
 
 ## Implementation Checkpoint
 
-Last updated during O5a options hot tier.
+Last updated during O5b options cockpit frontend.
 
 Completed:
 
@@ -86,6 +86,16 @@ Completed:
     `get_latest_option_contracts` and `get_latest_option_gamma_exposure`.
   - Tests cover hot inserts, latest ClickHouse reads, route/MCP latest tools,
     and hot-sink failure propagation.
+- O5b frontend options cockpit slice:
+  - `frontend/src/routes/options.tsx` adds a hot-tier Options page for latest
+    Schwab chain snapshots.
+  - The page supports symbol search, side/expiry/limit filters, GEX
+    aggregation-level controls, manual refresh, summary metrics, GEX pressure
+    rows, and contract-level scan tables.
+  - `frontend/src/api/queries.ts` exposes typed React Query hooks for
+    `/api/v1/options/contracts/latest` and `/api/v1/options/gex/latest`.
+  - Sidebar routing is enabled through `page.options` so operators can reach
+    the cockpit from Markets.
 
 Current verification:
 
@@ -95,15 +105,21 @@ Current verification:
 
 /Users/licaris/dev/stockalert/.venv/bin/python -m compileall -q app/services/options app/services/readers/options_reader.py app/services/readers/options_hot_reader.py app/services/ingest/options_snapshot_refresh.py app/api/routes_options.py app/mcp/tools/options.py app/mcp/server.py scripts/options_chain_snapshot.py app/main_api.py app/config.py app/db/init.py
 # passed
+
+cd frontend && npm run build
+# passed
+
+cd frontend && npx eslint src/routes/options.tsx src/api/queries.ts src/routes/router.tsx src/components/layout/nav-items.ts src/flags.ts --max-warnings=0
+# passed
 ```
 
-Previous O4b verification was 53 focused tests plus compileall.
+Full frontend lint is currently blocked by a pre-existing warning in
+`frontend/src/routes/stream.tsx` (`react-hooks/exhaustive-deps` for the
+`entries` expression). The O5b changed files pass targeted lint.
 
 Next recommended pickup:
 
-1. O5b: add frontend options cockpit views backed by the HTTP routes and MCP
-   parity checks for any new decision-support data.
-2. O6: add alert/scanner rules that consume latest GEX and contract metrics
+1. O6: add alert/scanner rules that consume latest GEX and contract metrics
    from the hot tier.
 
 ## Goal

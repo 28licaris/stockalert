@@ -6,6 +6,7 @@ import { EwtPage } from "./ewt";
 import { EwtGuidePage } from "./ewt-guide";
 import { WatchlistsPage } from "./watchlists";
 import { StreamPage } from "./stream";
+import { OptionsPage } from "./options";
 import { ClickHousePage } from "./clickhouse";
 import { CalendarPage } from "./calendar";
 import { NewsPage } from "./news";
@@ -42,6 +43,7 @@ export const router = createBrowserRouter(
             { path: "ewt/:ticker", element: <EwtPage /> },
             { path: "watchlists", element: <WatchlistsPage /> },
             { path: "stream", element: <StreamPage /> },
+            { path: "options", element: <OptionsPage /> },
             { path: "seed", element: <Navigate to="/stream" replace /> },
             { path: "clickhouse", element: <ClickHousePage /> },
             { path: "calendar", element: <CalendarPage /> },
