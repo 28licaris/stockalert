@@ -236,12 +236,16 @@ export const queryKeys = {
   economicHistory: (seriesId: string) => ["economic", "history", seriesId] as const,
   symbolBars: (symbol: string, interval: string, limit: number) =>
     ["symbol", "bars", symbol, interval, limit] as const,
-  lakeBars: (symbol: string, interval: string, windowDays: number) =>
-    ["lake", "bars", symbol, interval, windowDays] as const,
+  lakeBars: (
+    symbol: string,
+    interval: string,
+    windowDays: number,
+    source: "auto" | "lake",
+  ) => ["lake", "bars", symbol, interval, windowDays, source] as const,
   symbolSignals: (symbol: string, limit: number) =>
     ["symbol", "signals", symbol, limit] as const,
-  indicators: (symbol: string, interval: string, ids: string) =>
-    ["symbol", "indicators", symbol, interval, ids] as const,
+  indicators: (symbol: string, interval: string, windowDays: number, ids: string, settings: string) =>
+    ["symbol", "indicators", symbol, interval, windowDays, ids, settings] as const,
   watchlists: ["watchlists"] as const,
   watchlist: (name: string) => ["watchlist", name] as const,
   streamUniverse: ["stream", "universe"] as const,
@@ -626,15 +630,26 @@ export function useSymbolBars(
 // `toStartOfInterval` — no client-side resampling.
 // ─────────────────────────────────────────────────────────────────────
 
-/** How many days of history to request per display interval. */
-const LAKE_WINDOW_DAYS: Record<string, number> = {
-  "1m":  7,
-  "5m":  30,
-  "15m": 60,
-  "30m": 90,
-  "1h":  180,
-  "1d":  365,
+export const CHART_RANGES = ["1D", "5D", "30D", "180D", "1Y", "5Y", "MAX"] as const;
+export type ChartRange = (typeof CHART_RANGES)[number];
+
+export const CHART_RANGE_DAYS: Record<ChartRange, number> = {
+  "1D": 1,
+  "5D": 5,
+  "30D": 30,
+  "180D": 180,
+  "1Y": 365,
+  "5Y": 365 * 5,
+  // Operational "max" for the current lake-backed chart surface: ~20 years.
+  MAX: 365 * 20,
 };
+
+function chartBarsSource(_interval: string, _range: ChartRange): "auto" | "lake" {
+  // Keep interactive charts on the hot gateway. True 5Y/MAX daily history
+  // needs a fast daily lake aggregate/materialized tier; the raw lake path
+  // currently scans minute bars and is too slow for the UI.
+  return "auto";
+}
 
 /**
  * Auto-refresh cadence per interval. Bars resample from live `ohlcv_1m`, so
@@ -663,11 +678,16 @@ const REFETCH_MS: Record<string, number> = {
  * symbol page + watchlists import it). The implementation now routes
  * through CH so the chart hits the hot path on every subsequent load.
  */
-export function useLakeBars(symbol: string | undefined, interval: string) {
-  const windowDays = LAKE_WINDOW_DAYS[interval] ?? 30;
+export function useLakeBars(
+  symbol: string | undefined,
+  interval: string,
+  range: ChartRange = "30D",
+) {
+  const windowDays = CHART_RANGE_DAYS[range] ?? 30;
+  const source = chartBarsSource(interval, range);
 
   return useQuery({
-    queryKey: queryKeys.lakeBars(symbol ?? "", interval, windowDays),
+    queryKey: queryKeys.lakeBars(symbol ?? "", interval, windowDays, source),
     queryFn: async (): Promise<Bar[]> => {
       if (!symbol) throw new Error("symbol required");
       const { data } = await apiClient.GET("/api/v1/bars", {
@@ -676,6 +696,7 @@ export function useLakeBars(symbol: string | undefined, interval: string) {
             symbol,
             interval,
             lookback_days: windowDays,
+            source,
           },
         },
       });
@@ -712,22 +733,28 @@ export function useSymbolSignals(symbol: string | undefined, limit = 100) {
 // /api/v1/indicators/chart-data — overlay + oscillator series for the
 // chart. We reuse the SAME window-days + refetch cadence as `useLakeBars`
 // so the indicator series stay aligned with the candles they annotate
-// and refresh in lockstep. We send `params: {}` per spec — defaults-only
-// first pass — and read only `series` (bars come from `useLakeBars`).
+// and refresh in lockstep. Indicator settings are passed through as backend
+// params (for example SMA/EMA/WMA `period`) and we read only `series`
+// (bars come from `useLakeBars`).
 // ─────────────────────────────────────────────────────────────────────
 
 export function useIndicators(
   symbol: string | undefined,
   interval: string,
   indicatorIds: ReadonlyArray<string>,
+  range: ChartRange = "30D",
+  indicatorSettings: Record<string, Record<string, number>> = {},
 ) {
-  const windowDays = LAKE_WINDOW_DAYS[interval] ?? 30;
+  const windowDays = CHART_RANGE_DAYS[range] ?? 30;
   // Stable, order-independent key so re-ordering selections doesn't refetch.
   const ids = [...indicatorIds].sort();
   const idsKey = ids.join(",");
+  const settingsKey = JSON.stringify(
+    Object.fromEntries(ids.map((id) => [id, indicatorSettings[id] ?? {}])),
+  );
 
   return useQuery({
-    queryKey: queryKeys.indicators(symbol ?? "", interval, idsKey),
+    queryKey: queryKeys.indicators(symbol ?? "", interval, windowDays, idsKey, settingsKey),
     queryFn: async (): Promise<IndicatorSeries[]> => {
       if (!symbol) throw new Error("symbol required");
       const end = new Date();
@@ -739,7 +766,10 @@ export function useIndicators(
           end: end.toISOString(),
           interval,
           provider: "polygon",
-          indicators: ids.map((name) => ({ name, params: {} })),
+          indicators: ids.map((name) => ({
+            name,
+            params: indicatorSettings[name] ?? {},
+          })),
         },
       });
       return data?.series ?? [];

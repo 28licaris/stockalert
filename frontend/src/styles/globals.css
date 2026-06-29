@@ -6,35 +6,35 @@
  * Color tokens as HSL triples so Tailwind's <alpha-value> syntax works:
  *   bg-bg-base/50  →  hsl(var(--bg-base) / 50%)
  *
- * Defaults: dark theme (Bloomberg-terminal aesthetic, slate-with-indigo).
+ * Defaults: dark theme (premium market cockpit, graphite-with-cyan).
  * Light theme overrides under `.light`. Component code never references
  * raw color values; everything goes through Tailwind's semantic tokens.
  */
 @layer base {
   :root,
   .dark {
-    --bg-base: 222 18% 7%;
-    --bg-subtle: 222 16% 10%;
-    --bg-muted: 222 14% 14%;
-    --bg-elevated: 222 14% 17%;
+    --bg-base: 210 10% 3%;
+    --bg-subtle: 204 20% 6%;
+    --bg-muted: 204 16% 10%;
+    --bg-elevated: 204 13% 13%;
 
-    --fg-base: 220 14% 95%;
-    --fg-muted: 220 10% 70%;
-    --fg-subtle: 220 8% 50%;
-    --fg-inverted: 222 18% 7%;
+    --fg-base: 196 38% 94%;
+    --fg-muted: 200 15% 70%;
+    --fg-subtle: 204 10% 48%;
+    --fg-inverted: 210 10% 3%;
 
-    --border: 222 14% 22%;
-    --border-subtle: 222 14% 16%;
+    --border: 200 18% 18%;
+    --border-subtle: 204 14% 12%;
 
-    --accent: 239 84% 67%;
-    --accent-fg: 220 14% 98%;
+    --accent: 197 100% 59%;
+    --accent-fg: 210 10% 3%;
 
-    --success: 142 71% 45%;
-    --warning: 38 92% 50%;
-    --danger: 0 84% 60%;
+    --success: 159 72% 44%;
+    --warning: 42 92% 58%;
+    --danger: 356 76% 60%;
 
-    --up: 142 71% 45%;
-    --down: 0 84% 60%;
+    --up: 159 72% 44%;
+    --down: 356 76% 60%;
   }
 
   .light {
@@ -51,7 +51,7 @@
     --border: 220 14% 85%;
     --border-subtle: 220 14% 92%;
 
-    --accent: 239 84% 60%;
+    --accent: 197 94% 44%;
     --accent-fg: 0 0% 100%;
 
     --success: 142 71% 38%;
@@ -69,6 +69,10 @@
   }
 
   body {
+    background:
+      radial-gradient(circle at 18% 0%, rgba(46, 196, 255, 0.11), transparent 28rem),
+      radial-gradient(circle at 92% 28%, rgba(30, 198, 154, 0.08), transparent 30rem),
+      hsl(var(--bg-base));
     font-feature-settings:
       "rlig" 1,
       "calt" 1;
@@ -84,6 +88,45 @@
   }
   *::-webkit-scrollbar-track {
     background: transparent;
+  }
+}
+
+@layer components {
+  .app-grid {
+    background-image:
+      linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+    background-size: 56px 56px;
+  }
+
+  .surface-panel {
+    border: 1px solid hsl(var(--border));
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012)),
+      hsl(var(--bg-subtle));
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.045),
+      0 18px 54px rgba(0, 0, 0, 0.28);
+  }
+
+  .surface-panel-soft {
+    border: 1px solid hsl(var(--border-subtle));
+    background: hsl(var(--bg-subtle) / 0.74);
+  }
+
+  .accent-rail {
+    position: relative;
+  }
+
+  .accent-rail::before {
+    background: hsl(var(--accent));
+    border-radius: 9999px;
+    bottom: 0.55rem;
+    content: "";
+    left: 0.35rem;
+    position: absolute;
+    top: 0.55rem;
+    width: 2px;
   }
 }
 
@@ -108,13 +151,13 @@
 .auth-glow-one {
   left: -15rem;
   top: -16rem;
-  background: rgba(99, 102, 241, 0.2);
+  background: rgba(46, 196, 255, 0.16);
 }
 
 .auth-glow-two {
   bottom: -22rem;
   right: 18%;
-  background: rgba(139, 92, 246, 0.13);
+  background: rgba(30, 198, 154, 0.1);
 }
 
 @keyframes auth-card-enter {

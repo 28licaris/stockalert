@@ -46,7 +46,7 @@ export interface NavItem {
 export const NAV_ITEMS: readonly NavItem[] = [
   { label: "Status",      href: "/",            icon: Gauge,            flag: "page.status",      category: "Overview" },
 
-  { label: "Symbol",      href: "/symbol",      icon: CandlestickChart, flag: "page.symbol",      category: "Markets" },
+  { label: "Charts",      href: "/charts",      icon: CandlestickChart, flag: "page.symbol",      category: "Markets" },
   { label: "Elliott Wave", href: "/ewt",        icon: Waves,            flag: "page.ewt",         category: "Markets" },
   { label: "Watchlists",  href: "/watchlists",  icon: ListChecks,       flag: "page.watchlists",  category: "Markets" },
   { label: "Stream",      href: "/stream",      icon: Radio,            flag: "page.seed",        category: "Markets" },

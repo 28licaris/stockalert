@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TZ_OPTIONS, type TzSetting } from "@/lib/timezone";
+import { CHART_RANGES, type ChartRange } from "@/api/queries";
 import {
   INDICATOR_CATALOG,
   indicatorChipLabel,
@@ -20,6 +21,8 @@ interface ChartToolbarProps {
   interval: string;
   intervals: readonly string[];
   onIntervalChange: (i: string) => void;
+  range: ChartRange;
+  onRangeChange: (range: ChartRange) => void;
   chartType: ChartType;
   onChartTypeChange: (t: ChartType) => void;
   tz: TzSetting;
@@ -28,13 +31,15 @@ interface ChartToolbarProps {
   selected: ReadonlyArray<string>;
   onToggleIndicator: (id: string) => void;
   onClearIndicators: () => void;
+  indicatorSettings: Record<string, Record<string, number>>;
+  onIndicatorSettingChange: (id: string, key: string, value: number) => void;
 }
 
 /** Shared styling for the segmented control groups. */
-const GROUP = "inline-flex rounded-md border border-border bg-bg-subtle p-0.5";
-const SEG_BASE = "rounded-sm px-2.5 py-1 font-mono text-xs transition-colors";
-const SEG_ON = "bg-accent text-accent-fg";
-const SEG_OFF = "text-fg-muted hover:bg-bg-muted hover:text-fg-base";
+const GROUP = "inline-flex rounded-md border border-border bg-bg-base/55 p-1";
+const SEG_BASE = "rounded px-2.5 py-1 font-mono text-xs transition-colors";
+const SEG_ON = "bg-accent text-accent-fg shadow-[0_0_22px_rgba(46,196,255,0.14)]";
+const SEG_OFF = "text-fg-muted hover:bg-bg-muted/70 hover:text-fg-base";
 
 /**
  * Chart control bar — chart type, interval, timezone, and the indicator
@@ -45,6 +50,8 @@ export function ChartToolbar({
   interval,
   intervals,
   onIntervalChange,
+  range,
+  onRangeChange,
   chartType,
   onChartTypeChange,
   tz,
@@ -52,6 +59,8 @@ export function ChartToolbar({
   selected,
   onToggleIndicator,
   onClearIndicators,
+  indicatorSettings,
+  onIndicatorSettingChange,
 }: ChartToolbarProps) {
   return (
     <div className="flex flex-col gap-2">
@@ -73,6 +82,21 @@ export function ChartToolbar({
           ))}
         </div>
 
+        <div role="tablist" aria-label="Range" className={GROUP}>
+          {CHART_RANGES.map((r) => (
+            <button
+              key={r}
+              type="button"
+              role="tab"
+              aria-selected={range === r}
+              onClick={() => onRangeChange(r)}
+              className={cn(SEG_BASE, range === r ? SEG_ON : SEG_OFF)}
+            >
+              {r}
+            </button>
+          ))}
+        </div>
+
         <div role="tablist" aria-label="Timezone" className={GROUP}>
           {TZ_OPTIONS.map((opt) => (
             <button
@@ -88,12 +112,18 @@ export function ChartToolbar({
           ))}
         </div>
 
-        <IndicatorMenu selected={selected} onToggle={onToggleIndicator} />
+        <IndicatorMenu
+          selected={selected}
+          settings={indicatorSettings}
+          onToggle={onToggleIndicator}
+          onSettingChange={onIndicatorSettingChange}
+        />
       </div>
 
       {selected.length > 0 ? (
         <IndicatorChips
           selected={selected}
+          settings={indicatorSettings}
           onRemove={onToggleIndicator}
           onClear={onClearIndicators}
         />
@@ -154,10 +184,14 @@ const KIND_LABEL: Record<IndicatorKind, string> = {
 
 function IndicatorMenu({
   selected,
+  settings,
   onToggle,
+  onSettingChange,
 }: {
   selected: ReadonlyArray<string>;
+  settings: Record<string, Record<string, number>>;
   onToggle: (id: string) => void;
+  onSettingChange: (id: string, key: string, value: number) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -190,8 +224,8 @@ function IndicatorMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         className={cn(
-          "inline-flex items-center gap-1 rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 text-xs text-fg-muted transition-colors hover:bg-bg-muted hover:text-fg-base",
-          open && "bg-bg-muted text-fg-base",
+          "inline-flex items-center gap-1 rounded-md border border-border bg-bg-base/55 px-2.5 py-1.5 text-xs text-fg-muted transition-colors hover:border-accent/40 hover:bg-bg-muted/70 hover:text-fg-base",
+          open && "border-accent/40 bg-bg-muted text-fg-base",
         )}
       >
         <Plus className="h-3.5 w-3.5" aria-hidden />
@@ -207,7 +241,7 @@ function IndicatorMenu({
       {open ? (
         <div
           role="menu"
-          className="absolute right-0 z-20 mt-1 w-60 rounded-md border border-border bg-bg-elevated p-1 shadow-lg"
+          className="absolute right-0 z-20 mt-1 w-60 rounded-md border border-border bg-bg-elevated p-1 shadow-2xl shadow-black/40"
         >
           {kinds.map((kind) => (
             <div key={kind} className="py-1">
@@ -217,32 +251,56 @@ function IndicatorMenu({
               {INDICATOR_CATALOG.filter((d) => d.kind === kind).map((d) => {
                 const on = selectedSet.has(d.id);
                 return (
-                  <button
-                    key={d.id}
-                    type="button"
-                    role="menuitemcheckbox"
-                    aria-checked={on}
-                    onClick={() => onToggle(d.id)}
-                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-fg-base hover:bg-bg-muted"
-                  >
-                    <span
-                      className={cn(
-                        "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border",
-                        on
-                          ? "border-accent bg-accent text-accent-fg"
-                          : "border-border",
-                      )}
-                      aria-hidden
+                  <div key={d.id}>
+                    <button
+                      type="button"
+                      role="menuitemcheckbox"
+                      aria-checked={on}
+                      onClick={() => onToggle(d.id)}
+                      className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-fg-base hover:bg-bg-muted"
                     >
-                      {on ? "✓" : ""}
-                    </span>
-                    <span className="flex flex-col">
-                      <span className="font-medium">{d.label}</span>
-                      <span className="text-[10px] text-fg-subtle">
-                        {d.description}
+                      <span
+                        className={cn(
+                          "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border",
+                          on
+                            ? "border-accent bg-accent text-accent-fg"
+                            : "border-border",
+                        )}
+                        aria-hidden
+                      >
+                        {on ? "✓" : ""}
                       </span>
-                    </span>
-                  </button>
+                      <span className="flex flex-col">
+                        <span className="font-medium">{d.label}</span>
+                        <span className="text-[10px] text-fg-subtle">
+                          {d.description}
+                        </span>
+                      </span>
+                    </button>
+                    {on && supportsPeriodSetting(d.id) ? (
+                      <label className="mx-2 mb-1 flex items-center justify-between gap-3 rounded bg-bg-base/50 px-2 py-1.5 text-[11px] text-fg-muted">
+                        <span>Period</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={500}
+                          step={1}
+                          value={settings[d.id]?.period ?? 20}
+                          onChange={(event) => {
+                            const next = Number(event.target.value);
+                            if (Number.isFinite(next)) {
+                              onSettingChange(
+                                d.id,
+                                "period",
+                                Math.max(1, Math.round(next)),
+                              );
+                            }
+                          }}
+                          className="h-7 w-20 rounded border border-border bg-bg-base px-2 text-right font-mono text-xs text-fg-base focus:border-accent focus:outline-none"
+                        />
+                      </label>
+                    ) : null}
+                  </div>
                 );
               })}
             </div>
@@ -253,35 +311,47 @@ function IndicatorMenu({
   );
 }
 
+function supportsPeriodSetting(id: string): boolean {
+  return id === "sma" || id === "ema" || id === "wma";
+}
+
 // ─────────────────────────────────────────────────────────────────────
 
 function IndicatorChips({
   selected,
+  settings,
   onRemove,
   onClear,
 }: {
   selected: ReadonlyArray<string>;
+  settings: Record<string, Record<string, number>>;
   onRemove: (id: string) => void;
   onClear: () => void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      {selected.map((id) => (
-        <span
-          key={id}
-          className="inline-flex items-center gap-1 rounded-full border border-border bg-bg-subtle py-0.5 pl-2 pr-1 font-mono text-[11px] text-fg-base"
-        >
-          {indicatorChipLabel(id)}
-          <button
-            type="button"
-            aria-label={`Remove ${indicatorChipLabel(id)}`}
-            onClick={() => onRemove(id)}
-            className="flex h-3.5 w-3.5 items-center justify-center rounded-full text-fg-subtle hover:bg-bg-muted hover:text-fg-base"
+      {selected.map((id) => {
+        const period = supportsPeriodSetting(id) ? settings[id]?.period : null;
+        return (
+          <span
+            key={id}
+            className="inline-flex items-center gap-1 rounded-full border border-border bg-bg-subtle py-0.5 pl-2 pr-1 font-mono text-[11px] text-fg-base"
           >
-            <X className="h-2.5 w-2.5" aria-hidden />
-          </button>
-        </span>
-      ))}
+            {indicatorChipLabel(id)}
+            {period ? (
+              <span className="text-[10px] text-fg-subtle">{period}</span>
+            ) : null}
+            <button
+              type="button"
+              aria-label={`Remove ${indicatorChipLabel(id)}`}
+              onClick={() => onRemove(id)}
+              className="flex h-3.5 w-3.5 items-center justify-center rounded-full text-fg-subtle hover:bg-bg-muted hover:text-fg-base"
+            >
+              <X className="h-2.5 w-2.5" aria-hidden />
+            </button>
+          </span>
+        );
+      })}
       {selected.length > 1 ? (
         <button
           type="button"

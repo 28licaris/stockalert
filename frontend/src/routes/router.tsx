@@ -1,7 +1,7 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatusPage } from "./status";
-import { SymbolPage } from "./symbol";
+import { RecentBarsPage, SymbolPage } from "./symbol";
 import { EwtPage } from "./ewt";
 import { EwtGuidePage } from "./ewt-guide";
 import { WatchlistsPage } from "./watchlists";
@@ -36,7 +36,10 @@ export const router = createBrowserRouter(
           element: <AppShell />,
           children: [
             { index: true, element: <StatusPage /> },
-            { path: "symbol", element: <SymbolPage /> },
+            { path: "charts", element: <SymbolPage /> },
+            { path: "charts/:ticker", element: <SymbolPage /> },
+            { path: "charts/:ticker/bars", element: <RecentBarsPage /> },
+            { path: "symbol", element: <Navigate to="/charts" replace /> },
             { path: "symbol/:ticker", element: <SymbolPage /> },
             { path: "ewt", element: <EwtPage /> },
             { path: "ewt/guide", element: <EwtGuidePage /> },

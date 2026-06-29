@@ -37,7 +37,7 @@ export function AppShell() {
   }, [setChatOpen]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="app-grid flex h-full min-h-0 flex-col bg-bg-base">
       <div className="flex min-h-0 flex-1">
         <Sidebar
           collapsed={collapsed}
@@ -60,7 +60,7 @@ export function AppShell() {
             chatOpen={chatOpen}
             onToggleChat={() => setChatOpen((o) => !o)}
           />
-          <main className="min-h-0 flex-1 overflow-auto bg-bg-base">
+          <main className="min-h-0 flex-1 overflow-auto bg-transparent">
             <Outlet />
           </main>
         </div>
@@ -69,7 +69,7 @@ export function AppShell() {
             reflows smoothly; hidden on mobile for now. */}
         <aside
           className={cn(
-            "hidden shrink-0 overflow-hidden border-l border-border transition-[width] duration-200 md:block",
+            "hidden shrink-0 overflow-hidden border-l border-border bg-bg-base/80 shadow-[-24px_0_60px_rgba(0,0,0,0.22)] backdrop-blur-xl transition-[width] duration-200 md:block",
             chatOpen ? "md:w-[380px]" : "md:w-0",
           )}
           aria-hidden={!chatOpen}

@@ -9,10 +9,8 @@
 
 export const branding = {
   productName: "StockAlert",
-  productTagline: "Trading intelligence",
-  // Single-character glyph used in the sidebar collapse state. Replace
-  // with a logo SVG when we have one.
-  shortMark: "S",
+  productTagline: "Market intelligence workspace",
+  shortMark: "SA",
   // Marketing site URL (will be set when SaaS lands; harmless empty).
   marketingUrl: "",
   // Support / docs URLs (point at GitHub repo for now).
