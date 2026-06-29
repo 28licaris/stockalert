@@ -29,6 +29,7 @@ class OptionsSnapshotService:
         *,
         provider: Any,
         sink: Any,
+        hot_sink: Any | None = None,
         parser: Callable[..., Any] = parse_schwab_option_chain,
     ) -> None:
         if provider is None:
@@ -37,15 +38,18 @@ class OptionsSnapshotService:
             raise ValueError("OptionsSnapshotService: sink is required")
         self._provider = provider
         self._sink = sink
+        self._hot_sink = hot_sink
         self._parser = parser
 
     @classmethod
     def from_settings(cls, *, dry_run: bool = False) -> "OptionsSnapshotService":
         from app.config import get_provider
+        from app.services.options.hot_sink import OptionsClickHouseSink
         from app.services.options.sink import OptionsIcebergSink
 
         sink = _DryRunSink() if dry_run else OptionsIcebergSink.from_settings()
-        return cls(provider=get_provider("schwab"), sink=sink)
+        hot_sink = None if dry_run else OptionsClickHouseSink.from_settings()
+        return cls(provider=get_provider("schwab"), sink=sink, hot_sink=hot_sink)
 
     async def ingest_symbol(
         self,
@@ -146,6 +150,48 @@ class OptionsSnapshotService:
         else:
             status = "ok"
 
+        hot_result = None
+        if status != "error" and self._hot_sink is not None:
+            try:
+                hot_result = await self._hot_sink.write_parse_result(
+                    parsed,
+                    gamma_rows=gamma_rows,
+                )
+            except Exception as e:
+                log.exception("options_snapshot: hot sink raised symbol=%s", sym)
+                return OptionSnapshotIngestResult(
+                    symbol=sym,
+                    status="error",
+                    contracts_parsed=parsed.contract_count,
+                    expirations_parsed=len(parsed.expirations),
+                    gamma_rows=len(gamma_rows),
+                    rows_written=sink_result.bars_written,
+                    sink_status=sink_result.status,
+                    error=str(e),
+                    snapshot_ts=snapshot_ts,
+                    metadata={
+                        "stage": "hot_sink",
+                        "sink": sink_result.metadata,
+                    },
+                )
+            if hot_result.status == "error":
+                return OptionSnapshotIngestResult(
+                    symbol=sym,
+                    status="error",
+                    contracts_parsed=parsed.contract_count,
+                    expirations_parsed=len(parsed.expirations),
+                    gamma_rows=len(gamma_rows),
+                    rows_written=sink_result.bars_written,
+                    sink_status=sink_result.status,
+                    error=hot_result.error,
+                    snapshot_ts=snapshot_ts,
+                    metadata={
+                        "stage": "hot_sink",
+                        "sink": sink_result.metadata,
+                        "hot_sink": hot_result.metadata,
+                    },
+                )
+
         return OptionSnapshotIngestResult(
             symbol=sym,
             status=status,
@@ -159,6 +205,7 @@ class OptionsSnapshotService:
             metadata={
                 "request_params": params,
                 "sink": sink_result.metadata,
+                "hot_sink": hot_result.metadata if hot_result is not None else None,
                 "chain_status": parsed.raw_snapshot.status,
             },
         )

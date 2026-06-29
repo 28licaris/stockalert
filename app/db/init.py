@@ -235,6 +235,78 @@ def init_schema() -> None:
         """
     )
 
+    # ---------- Options hot tier ----------
+    # Cache-only latest projections of the canonical options lake rows.
+    # Iceberg remains the source of truth for replay/backtests; these
+    # tables serve low-latency alerts, UI screens, and MCP "latest"
+    # context reads.
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS options_contracts_latest (
+            underlying_symbol LowCardinality(String),
+            option_symbol     String,
+            snapshot_ts       DateTime64(3, 'UTC'),
+            put_call          LowCardinality(String),
+            expiration_date   Date,
+            strike            Float64,
+            underlying_price  Nullable(Float64),
+            days_to_expiration Nullable(Int32),
+            bid               Nullable(Float64),
+            ask               Nullable(Float64),
+            last              Nullable(Float64),
+            mark              Nullable(Float64),
+            volume            Nullable(UInt64),
+            open_interest     Nullable(UInt64),
+            delta             Nullable(Float64),
+            gamma             Nullable(Float64),
+            theta             Nullable(Float64),
+            vega              Nullable(Float64),
+            rho               Nullable(Float64),
+            volatility        Nullable(Float64),
+            in_the_money      Nullable(UInt8),
+            multiplier        Nullable(Float64),
+            source            LowCardinality(String) DEFAULT 'schwab-chain',
+            ingestion_ts      DateTime64(3, 'UTC') DEFAULT now64(3),
+            ingestion_run_id  String DEFAULT '',
+            version           UInt64 DEFAULT 0
+        )
+        ENGINE = ReplacingMergeTree(version)
+        ORDER BY (underlying_symbol, option_symbol)
+        SETTINGS index_granularity = 8192
+        """
+    )
+
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS options_gex_latest (
+            underlying_symbol      LowCardinality(String),
+            snapshot_ts            DateTime64(3, 'UTC'),
+            aggregation_level      LowCardinality(String),
+            level_key              String,
+            expiration_date        Nullable(Date),
+            strike                 Nullable(Float64),
+            put_call               Nullable(String),
+            underlying_price       Float64,
+            gamma_exposure         Float64,
+            call_gamma_exposure    Nullable(Float64),
+            put_gamma_exposure     Nullable(Float64),
+            net_gamma_exposure     Nullable(Float64),
+            open_interest          Nullable(UInt64),
+            volume                 Nullable(UInt64),
+            contract_count         Nullable(UInt64),
+            methodology            LowCardinality(String),
+            source                 LowCardinality(String),
+            source_snapshot_id     Nullable(String),
+            ingestion_ts           DateTime64(3, 'UTC') DEFAULT now64(3),
+            ingestion_run_id       String DEFAULT '',
+            version                UInt64 DEFAULT 0
+        )
+        ENGINE = ReplacingMergeTree(version)
+        ORDER BY (underlying_symbol, aggregation_level, level_key)
+        SETTINGS index_granularity = 8192
+        """
+    )
+
     # ---------- Journal (Phase 3) ----------
     # account_snapshots: timestamped balance snapshots from /accounts. One row
     # per (account_hash, snapshot_time). Useful for an equity curve later.

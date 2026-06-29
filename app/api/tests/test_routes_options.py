@@ -6,10 +6,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import routes_options
-from app.api.routes_options import get_options_reader
+from app.api.routes_options import get_options_hot_reader, get_options_reader
 from app.services.options.schemas import (
     GammaExposureResponse,
     GammaExposureSnapshot,
+    LatestGammaExposureResponse,
+    LatestOptionContractsResponse,
     OptionContractsResponse,
     OptionContractSnapshot,
 )
@@ -71,6 +73,96 @@ class _Reader:
                 )
             ],
         )
+
+
+class _HotReader:
+    def __init__(self, *, raises: Exception | None = None) -> None:
+        self.raises = raises
+        self.calls = []
+
+    def get_latest_contracts(self, symbol, **kwargs):
+        self.calls.append(("latest_contracts", symbol, kwargs))
+        if self.raises:
+            raise self.raises
+        return LatestOptionContractsResponse(
+            underlying_symbol=symbol,
+            count=1,
+            contracts=[
+                OptionContractSnapshot(
+                    underlying_symbol=symbol,
+                    option_symbol="AAPL  260717C00150000",
+                    snapshot_ts="2026-06-27T14:00:00Z",
+                    put_call="CALL",
+                    expiration_date=date(2026, 7, 17),
+                    strike=150.0,
+                    source="schwab-chain",
+                )
+            ],
+        )
+
+    def get_latest_gamma_exposure(self, symbol, **kwargs):
+        self.calls.append(("latest_gex", symbol, kwargs))
+        if self.raises:
+            raise self.raises
+        return LatestGammaExposureResponse(
+            underlying_symbol=symbol,
+            aggregation_level=kwargs.get("aggregation_level"),
+            count=1,
+            rows=[
+                GammaExposureSnapshot(
+                    underlying_symbol=symbol,
+                    snapshot_ts="2026-06-27T14:00:00Z",
+                    underlying_price=150.0,
+                    gamma_exposure=1000.0,
+                    aggregation_level=kwargs.get("aggregation_level") or "total",
+                    level_key="total",
+                )
+            ],
+        )
+
+
+def test_latest_options_contracts_route_delegates_to_hot_reader() -> None:
+    app = _make_app()
+    reader = _HotReader()
+    app.dependency_overrides[get_options_hot_reader] = lambda: reader
+
+    with TestClient(app) as client:
+        resp = client.get(
+            "/api/options/contracts/latest",
+            params={
+                "symbol": "AAPL",
+                "expiration_date": "2026-07-17",
+                "put_call": "CALL",
+                "limit": 10,
+            },
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["count"] == 1
+    assert body["source"] == "clickhouse"
+    assert reader.calls[0][2]["expiration_date"] == date(2026, 7, 17)
+    assert reader.calls[0][2]["put_call"] == "CALL"
+    assert reader.calls[0][2]["limit"] == 10
+
+
+def test_latest_options_gex_route_delegates_to_hot_reader() -> None:
+    app = _make_app()
+    reader = _HotReader()
+    app.dependency_overrides[get_options_hot_reader] = lambda: reader
+
+    with TestClient(app) as client:
+        resp = client.get(
+            "/api/options/gex/latest",
+            params={"symbol": "AAPL", "aggregation_level": "total", "limit": 5},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["aggregation_level"] == "total"
+    assert body["source"] == "clickhouse"
+    assert reader.calls[0][2]["aggregation_level"] == "total"
+    assert reader.calls[0][2]["limit"] == 5
 
 
 def test_options_contracts_route_delegates_to_reader() -> None:

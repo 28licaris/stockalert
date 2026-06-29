@@ -26,10 +26,13 @@ Current scope:
   `app/services/readers/options_reader.py`.
 - HTTP and MCP read surfaces:
   `app/api/routes_options.py` and `app/mcp/tools/options.py`.
+- ClickHouse hot-tier latest cache:
+  `app/services/options/hot_sink.py` and
+  `app/services/readers/options_hot_reader.py`.
 
 Not yet owned here:
 
-- ClickHouse hot tables or streaming.
+- Schwab option streaming.
 
 Test with:
 

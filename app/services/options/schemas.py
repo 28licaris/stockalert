@@ -256,3 +256,32 @@ class GammaExposureResponse(BaseModel):
     @classmethod
     def _normalize_bounds(cls, value: datetime) -> datetime:
         return _utc(value)
+
+
+class LatestOptionContractsResponse(BaseModel):
+    """Latest hot-tier option contracts for one underlying."""
+
+    underlying_symbol: str
+    contracts: list[OptionContractSnapshot] = Field(default_factory=list)
+    count: int = Field(..., description="Number of contracts returned.")
+    source: str = "clickhouse"
+
+    @field_validator("underlying_symbol", mode="before")
+    @classmethod
+    def _normalize_symbol(cls, value: str) -> str:
+        return _upper(str(value))
+
+
+class LatestGammaExposureResponse(BaseModel):
+    """Latest hot-tier gamma exposure rows for one underlying."""
+
+    underlying_symbol: str
+    aggregation_level: GammaAggregationLevel | None = None
+    rows: list[GammaExposureSnapshot] = Field(default_factory=list)
+    count: int = Field(..., description="Number of gamma exposure rows returned.")
+    source: str = "clickhouse"
+
+    @field_validator("underlying_symbol", mode="before")
+    @classmethod
+    def _normalize_symbol(cls, value: str) -> str:
+        return _upper(str(value))

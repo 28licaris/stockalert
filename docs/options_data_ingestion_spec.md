@@ -4,7 +4,7 @@ Status: implementation in progress on branch `options`
 
 ## Implementation Checkpoint
 
-Last updated during O4b HTTP and MCP options surfaces.
+Last updated during O5a options hot tier.
 
 Completed:
 
@@ -71,25 +71,40 @@ Completed:
     agents discover the tools through MCP.
   - Route and MCP tests cover response shapes, parameter pass-through, and
     route error mapping.
+- O5a ClickHouse hot-tier slice:
+  - `app.db.init_schema()` creates `options_contracts_latest` and
+    `options_gex_latest` as cache-only `ReplacingMergeTree(version)` tables.
+  - `app.services.options.hot_sink.OptionsClickHouseSink` projects each
+    successful Schwab chain snapshot into the hot cache after the canonical
+    Iceberg write succeeds.
+  - `OptionsSnapshotService` now writes Iceberg first, then updates the hot
+    cache; hot write failures surface as ingest errors instead of silent
+    success.
+  - `app.services.readers.options_hot_reader.OptionsHotReader` serves latest
+    contract and GEX reads from ClickHouse.
+  - HTTP adds `/options/contracts/latest` and `/options/gex/latest`; MCP adds
+    `get_latest_option_contracts` and `get_latest_option_gamma_exposure`.
+  - Tests cover hot inserts, latest ClickHouse reads, route/MCP latest tools,
+    and hot-sink failure propagation.
 
 Current verification:
 
 ```bash
-/Users/licaris/dev/stockalert/.venv/bin/pytest app/services/options/tests app/services/readers/tests/test_options_reader.py app/api/tests/test_routes_options.py app/mcp/tests/test_mcp_options.py
-# 53 passed
+/Users/licaris/dev/stockalert/.venv/bin/pytest app/services/options/tests app/services/readers/tests/test_options_reader.py app/services/readers/tests/test_options_hot_reader.py app/api/tests/test_routes_options.py app/mcp/tests/test_mcp_options.py
+# 65 passed
 
-/Users/licaris/dev/stockalert/.venv/bin/python -m compileall -q app/services/options app/services/readers/options_reader.py app/services/ingest/options_snapshot_refresh.py app/api/routes_options.py app/mcp/tools/options.py app/mcp/server.py scripts/options_chain_snapshot.py app/main_api.py app/config.py
+/Users/licaris/dev/stockalert/.venv/bin/python -m compileall -q app/services/options app/services/readers/options_reader.py app/services/readers/options_hot_reader.py app/services/ingest/options_snapshot_refresh.py app/api/routes_options.py app/mcp/tools/options.py app/mcp/server.py scripts/options_chain_snapshot.py app/main_api.py app/config.py app/db/init.py
 # passed
 ```
 
-Previous O4a verification was 46 focused tests plus compileall.
+Previous O4b verification was 53 focused tests plus compileall.
 
 Next recommended pickup:
 
-1. O5a: add ClickHouse hot-tier projections for latest option contracts/GEX if
-   low-latency alerts need sub-lake response times.
-2. O5b: add frontend options cockpit views backed by the HTTP routes and MCP
+1. O5b: add frontend options cockpit views backed by the HTTP routes and MCP
    parity checks for any new decision-support data.
+2. O6: add alert/scanner rules that consume latest GEX and contract metrics
+   from the hot tier.
 
 ## Goal
 

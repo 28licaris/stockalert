@@ -47,10 +47,22 @@ class _Sink:
         return self.result
 
 
+class _HotSink(_Sink):
+    pass
+
+
 def test_ingest_symbol_fetches_parses_and_writes_snapshot() -> None:
     provider = _Provider()
     sink = _Sink()
-    svc = OptionsSnapshotService(provider=provider, sink=sink)
+    hot_sink = _HotSink(
+        result=SinkResult(
+            sink="options_clickhouse_hot",
+            status="ok",
+            bars_written=9,
+            metadata={"rows": {"contracts": 3, "gex": 6}},
+        )
+    )
+    svc = OptionsSnapshotService(provider=provider, sink=sink, hot_sink=hot_sink)
     ts = datetime(2026, 6, 27, 14, 30, tzinfo=timezone.utc)
 
     result = asyncio.run(svc.ingest_symbol("aapl", snapshot_ts=ts, ingestion_run_id="run-1"))
@@ -67,6 +79,9 @@ def test_ingest_symbol_fetches_parses_and_writes_snapshot() -> None:
     assert parsed.raw_snapshot.request_params["symbol"] == "AAPL"
     assert parsed.raw_snapshot.ingestion_run_id == "run-1"
     assert len(gamma_rows) == 6
+    assert hot_sink.calls[0][0] is parsed
+    assert len(hot_sink.calls[0][1]) == 6
+    assert result.metadata["hot_sink"]["rows"] == {"contracts": 3, "gex": 6}
 
 
 def test_ingest_symbol_merges_request_params_over_defaults() -> None:
@@ -152,6 +167,27 @@ def test_ingest_symbol_sink_error_status_returns_result() -> None:
     assert result.status == "error"
     assert result.sink_status == "error"
     assert result.error == "write failed"
+
+
+def test_ingest_symbol_hot_sink_error_returns_result() -> None:
+    hot_sink = _HotSink(
+        result=SinkResult(
+            sink="options_clickhouse_hot",
+            status="error",
+            error="ch write failed",
+        )
+    )
+    svc = OptionsSnapshotService(
+        provider=_Provider(),
+        sink=_Sink(),
+        hot_sink=hot_sink,
+    )
+
+    result = asyncio.run(svc.ingest_symbol("AAPL"))
+
+    assert result.status == "error"
+    assert result.error == "ch write failed"
+    assert result.metadata["stage"] == "hot_sink"
 
 
 def test_ingest_symbol_blank_symbol_is_error_without_provider_call() -> None:
