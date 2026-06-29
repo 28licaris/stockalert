@@ -158,7 +158,7 @@ function StreamTabs({
  */
 function FuturesPanel() {
   const query = useFuturesUniverse();
-  const entries = query.data?.items ?? [];
+  const entries = useMemo(() => query.data?.items ?? [], [query.data?.items]);
 
   const symbolsCsv = useMemo(
     () => entries.map((e) => e.symbol).join(","),
