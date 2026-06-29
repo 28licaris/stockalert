@@ -80,8 +80,8 @@ interface OhlcvChartProps {
    */
   indicators?: ReadonlyArray<IndicatorSeries>;
   chartType?: ChartType;
-  /** Price-pane height in px. Oscillator panes add to the total. */
-  height?: number;
+  /** Price-pane height in px, or "fill" to occupy the parent height. */
+  height?: number | "fill";
   /**
    * IANA timezone for the time axis + crosshair, or `undefined` for the
    * viewer's local zone. Must stay in sync with the Recent Bars table so
@@ -153,7 +153,8 @@ export function OhlcvChart({
   // pane keeps its real estate. Drives the container; ResizeObserver
   // propagates the new size to the chart.
   const oscCount = useMemo(() => countOscillatorPanes(indicators), [indicators]);
-  const totalHeight = height + oscCount * OSC_PANE_PX;
+  const totalHeight =
+    height === "fill" ? "100%" : height + oscCount * OSC_PANE_PX;
 
   // ── Chart lifecycle (create once) ──────────────────────────────────
   useEffect(() => {
@@ -489,7 +490,7 @@ export function OhlcvChart({
     // Keep the price pane dominant; oscillator panes share the rest.
     const panesNow = chart.panes();
     if (panesNow.length > 1) {
-      panesNow[0].setStretchFactor(height);
+      panesNow[0].setStretchFactor(height === "fill" ? 640 : height);
       for (let i = 1; i < panesNow.length; i++) {
         panesNow[i].setStretchFactor(OSC_PANE_PX);
       }
@@ -510,7 +511,7 @@ export function OhlcvChart({
     <div
       ref={containerRef}
       style={{ height: totalHeight }}
-      className="w-full shrink-0 rounded-md border border-border bg-bg-base"
+      className="h-full min-h-[420px] w-full rounded-md border border-border bg-bg-base"
       aria-label="OHLCV chart"
     />
   );

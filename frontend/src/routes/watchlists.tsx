@@ -44,10 +44,16 @@ export function WatchlistsPage() {
   const [selected, setSelected] = useState<string | null>(null);
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 p-6">
-      <header className="flex items-end justify-between gap-4">
+    <div className="mx-auto max-w-6xl space-y-6 p-4 md:p-6">
+      <header className="surface-panel rounded-lg p-5">
+        <div className="flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-fg-base">Watchlists</h1>
+          <p className="text-xs font-semibold uppercase tracking-wider text-accent">
+            market workspace
+          </p>
+          <h1 className="mt-2 font-display text-2xl font-semibold text-fg-base">
+            Watchlists
+          </h1>
           <p className="mt-1 text-sm text-fg-muted">
             Organize symbols into named lists. Adding to a watchlist will
             subscribe the live stream for symbols not already in the universe.
@@ -65,6 +71,7 @@ export function WatchlistsPage() {
           />
           Refresh
         </Button>
+        </div>
       </header>
 
       {query.error ? <ApiErrorAlert error={query.error} /> : null}
@@ -112,7 +119,7 @@ function WatchlistList({
         {Array.from({ length: 3 }).map((_, i) => (
           <li
             key={i}
-            className="h-12 animate-pulse rounded-md border border-border bg-bg-subtle"
+            className="h-12 animate-pulse rounded-md border border-border bg-bg-subtle/80"
           />
         ))}
       </ul>
@@ -121,7 +128,7 @@ function WatchlistList({
 
   if (watchlists.length === 0) {
     return (
-      <div className="rounded-md border border-border bg-bg-subtle p-4 text-sm text-fg-muted">
+      <div className="rounded-lg border border-border bg-bg-subtle/70 p-4 text-sm text-fg-muted">
         No watchlists yet. Create one above.
       </div>
     );
@@ -137,8 +144,8 @@ function WatchlistList({
             className={cn(
               "flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition-colors",
               selected === wl.name
-                ? "border-accent bg-bg-elevated"
-                : "border-border bg-bg-subtle hover:bg-bg-muted",
+                ? "border-accent/60 bg-accent/10 shadow-[0_0_28px_rgba(46,196,255,0.08)]"
+                : "border-border bg-bg-subtle/70 hover:border-border hover:bg-bg-muted/70",
             )}
           >
             <span>
@@ -159,7 +166,7 @@ function WatchlistList({
 
 function EmptyDetail() {
   return (
-    <div className="grid h-full min-h-[200px] place-items-center rounded-md border border-dashed border-border bg-bg-subtle text-sm text-fg-subtle">
+    <div className="grid h-full min-h-[200px] place-items-center rounded-lg border border-dashed border-border bg-bg-subtle/65 text-sm text-fg-subtle">
       Select a watchlist on the left
     </div>
   );
@@ -178,7 +185,7 @@ function WatchlistDetail({ watchlist }: { watchlist: Watchlist | null }) {
   const isDefault = watchlist.name === "default";
 
   return (
-    <div className="rounded-lg border border-border bg-bg-subtle">
+    <div className="surface-panel overflow-hidden rounded-lg">
       <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
         <div>
           <h2 className="font-semibold text-fg-base">{watchlist.name}</h2>
@@ -291,7 +298,7 @@ function CreateWatchlistForm() {
   return (
     <form
       onSubmit={submit}
-      className="space-y-2 rounded-md border border-border bg-bg-subtle p-4"
+      className="surface-panel-soft space-y-2 rounded-lg p-4"
     >
       <div className="flex flex-wrap gap-2">
         <input
@@ -301,7 +308,7 @@ function CreateWatchlistForm() {
           placeholder="watchlist name"
           autoFocus
           maxLength={64}
-          className="h-9 flex-1 rounded-md border border-border bg-bg-base px-3 text-sm text-fg-base focus:border-accent focus:outline-none"
+          className="h-9 flex-1 rounded-md border border-border bg-bg-base/70 px-3 text-sm text-fg-base focus:border-accent focus:outline-none"
         />
         <input
           name="description"
@@ -309,7 +316,7 @@ function CreateWatchlistForm() {
           onChange={(e) => setDescription(e.target.value)}
           placeholder="description (optional)"
           maxLength={500}
-          className="h-9 flex-[2] rounded-md border border-border bg-bg-base px-3 text-sm text-fg-base focus:border-accent focus:outline-none"
+          className="h-9 flex-[2] rounded-md border border-border bg-bg-base/70 px-3 text-sm text-fg-base focus:border-accent focus:outline-none"
         />
         <Button type="submit" disabled={!name.trim() || create.isPending}>
           Create

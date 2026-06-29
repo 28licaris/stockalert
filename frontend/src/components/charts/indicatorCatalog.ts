@@ -4,9 +4,9 @@
  *
  * Registry parity: `id` values match the backend indicator registry
  * (`app/indicators/registry.py`) so a selection maps 1:1 to a
- * `/api/v1/indicators/chart-data` spec. We send `params: {}` and let
- * the backend apply each indicator's defaults (the "defaults only"
- * first pass) — the human-readable label comes back on the series.
+ * `/api/v1/indicators/chart-data` spec. The toolbar can send backend
+ * `params` for configurable indicators (for example moving-average
+ * `period`), while unchanged indicators keep their backend defaults.
  *
  * Two render targets:
  *   - overlay     → drawn on the price pane (moving averages, bands)

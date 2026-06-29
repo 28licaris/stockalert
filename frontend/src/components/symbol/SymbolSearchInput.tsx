@@ -166,7 +166,7 @@ export function SymbolSearchInput({
 
   return (
     <div ref={wrapperRef} className={cn("relative", className)}>
-      <div className="flex h-9 items-center gap-2 rounded-md border border-border bg-bg-subtle px-3 focus-within:border-accent">
+      <div className="flex h-9 items-center gap-2 rounded-md border border-border bg-bg-base/60 px-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition focus-within:border-accent/70 focus-within:shadow-[0_0_0_1px_rgba(46,196,255,0.12),0_0_28px_rgba(46,196,255,0.1)]">
         <Search className="h-4 w-4 shrink-0 text-fg-subtle" aria-hidden />
         <input
           value={value}
@@ -188,7 +188,7 @@ export function SymbolSearchInput({
               : undefined
           }
           className={cn(
-            "h-full flex-1 bg-transparent text-sm uppercase tracking-wide text-fg-base placeholder:normal-case placeholder:tracking-normal focus:outline-none",
+            "h-full flex-1 bg-transparent text-sm uppercase tracking-normal text-fg-base placeholder:normal-case placeholder:tracking-normal focus:outline-none",
             inputClassName,
           )}
         />
@@ -204,7 +204,7 @@ export function SymbolSearchInput({
         <ul
           id={listboxId}
           role="listbox"
-          className="absolute left-0 right-0 top-full z-30 mt-1 max-h-72 overflow-y-auto rounded-md border border-border bg-bg-elevated shadow-lg"
+          className="absolute left-0 right-0 top-full z-30 mt-1 max-h-72 overflow-y-auto rounded-md border border-border bg-bg-elevated shadow-2xl shadow-black/40"
         >
           {results.map((match, idx) => {
             const selected = idx === highlight;
@@ -223,7 +223,7 @@ export function SymbolSearchInput({
                 }}
                 className={cn(
                   "flex cursor-pointer items-center justify-between gap-3 px-3 py-2 text-sm",
-                  selected ? "bg-bg-muted" : "hover:bg-bg-muted/60",
+                  selected ? "bg-accent/10 text-fg-base" : "hover:bg-bg-muted/60",
                 )}
               >
                 <span className="flex min-w-0 items-center gap-3">

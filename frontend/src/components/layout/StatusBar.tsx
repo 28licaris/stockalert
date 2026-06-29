@@ -1,3 +1,4 @@
+import { Activity } from "lucide-react";
 import { useHealthServices, type HealthState } from "@/api/queries";
 import { cn } from "@/lib/utils";
 
@@ -28,13 +29,17 @@ export function StatusBar() {
 
   return (
     <footer
-      className="flex h-7 shrink-0 items-center gap-4 border-t border-border bg-bg-subtle px-3 font-mono text-[11px] text-fg-subtle"
+      className="flex h-8 shrink-0 items-center gap-2 border-t border-border bg-bg-base/90 px-3 font-mono text-[11px] text-fg-subtle backdrop-blur-xl"
       aria-label="Platform status"
     >
+      <span className="mr-1 hidden items-center gap-1.5 text-fg-muted sm:flex">
+        <Activity className="h-3.5 w-3.5 text-accent" />
+        ops
+      </span>
       {services.map((s) => (
         <span
           key={s.name}
-          className="flex items-center gap-1.5"
+          className="flex items-center gap-1.5 rounded-full border border-border-subtle bg-bg-subtle/70 px-2 py-0.5"
           title={s.detail || s.name}
         >
           <span
@@ -45,9 +50,13 @@ export function StatusBar() {
         </span>
       ))}
       {error ? (
-        <span className="text-danger">probe error</span>
+        <span className="rounded-full border border-danger/30 bg-danger/10 px-2 py-0.5 text-danger">
+          probe error
+        </span>
       ) : null}
-      <span className="ml-auto">FE-1.5 · dev</span>
+      <span className="ml-auto rounded-full border border-border-subtle bg-bg-subtle/70 px-2 py-0.5">
+        cockpit · dev
+      </span>
     </footer>
   );
 }

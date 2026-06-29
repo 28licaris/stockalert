@@ -54,10 +54,14 @@ export function StreamPage() {
   const active = tab === "equities" ? query : futures;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-6">
-      <header className="flex items-end justify-between gap-4">
+    <div className="mx-auto max-w-6xl space-y-6 p-4 md:p-6">
+      <header className="surface-panel rounded-lg p-5">
+        <div className="flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-fg-base">
+          <p className="text-xs font-semibold uppercase tracking-wider text-accent">
+            live universe
+          </p>
+          <h1 className="mt-2 font-display text-2xl font-semibold text-fg-base">
             Stream Service
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-fg-muted">
@@ -78,6 +82,7 @@ export function StreamPage() {
           />
           Refresh
         </Button>
+        </div>
       </header>
 
       <StreamTabs
@@ -123,7 +128,7 @@ function StreamTabs({
     <div
       role="tablist"
       aria-label="Asset class"
-      className="inline-flex rounded-md border border-border bg-bg-subtle p-0.5"
+      className="inline-flex rounded-md border border-border bg-bg-base/60 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
     >
       {tabs.map((t) => (
         <button
@@ -133,10 +138,10 @@ function StreamTabs({
           aria-selected={value === t.id}
           onClick={() => onChange(t.id)}
           className={cn(
-            "rounded-sm px-3 py-1 text-sm font-medium transition-colors",
+            "rounded px-3 py-1.5 text-sm font-medium transition-colors",
             value === t.id
-              ? "bg-accent text-accent-fg"
-              : "text-fg-muted hover:bg-bg-muted hover:text-fg-base",
+              ? "bg-accent text-accent-fg shadow-[0_0_24px_rgba(46,196,255,0.14)]"
+              : "text-fg-muted hover:bg-bg-muted/70 hover:text-fg-base",
           )}
         >
           {t.label}
@@ -210,7 +215,7 @@ function FuturesAddRow() {
   };
 
   return (
-    <div className="space-y-2 rounded-md border border-border bg-bg-subtle p-4">
+    <div className="surface-panel-soft space-y-2 rounded-lg p-4">
       <div className="flex flex-wrap items-start gap-2">
         <FuturesSearchInput
           value={symbol}
@@ -304,7 +309,7 @@ function FuturesSearchInput({
 
   return (
     <div ref={wrapperRef} className="relative w-72">
-      <div className="flex h-9 items-center gap-2 rounded-md border border-border bg-bg-base px-3 focus-within:border-accent">
+      <div className="flex h-9 items-center gap-2 rounded-md border border-border bg-bg-base/60 px-3 transition focus-within:border-accent/70">
         <Search className="h-4 w-4 shrink-0 text-fg-subtle" aria-hidden />
         <input
           value={value}
@@ -325,7 +330,7 @@ function FuturesSearchInput({
       {showDropdown ? (
         <ul
           role="listbox"
-          className="absolute left-0 right-0 top-full z-30 mt-1 max-h-72 overflow-y-auto rounded-md border border-border bg-bg-elevated shadow-lg"
+          className="absolute left-0 right-0 top-full z-30 mt-1 max-h-72 overflow-y-auto rounded-md border border-border bg-bg-elevated shadow-2xl shadow-black/40"
         >
           {matches.map((m, idx) => (
             <li
@@ -339,7 +344,7 @@ function FuturesSearchInput({
               }}
               className={cn(
                 "flex cursor-pointer items-center justify-between gap-3 px-3 py-2 text-sm",
-                idx === highlight ? "bg-bg-muted" : "hover:bg-bg-muted/60",
+                idx === highlight ? "bg-accent/10" : "hover:bg-bg-muted/60",
               )}
             >
               <span className="font-mono font-semibold text-fg-base">
@@ -375,7 +380,7 @@ function FuturesList({
         {Array.from({ length: 8 }).map((_, i) => (
           <li
             key={i}
-            className="h-10 animate-pulse rounded-md border border-border bg-bg-subtle"
+            className="h-10 animate-pulse rounded-md border border-border bg-bg-subtle/80"
           />
         ))}
       </ul>
@@ -384,16 +389,16 @@ function FuturesList({
 
   if (entries.length === 0) {
     return (
-      <div className="rounded-md border border-dashed border-border bg-bg-subtle p-6 text-center text-sm text-fg-subtle">
+      <div className="rounded-lg border border-dashed border-border bg-bg-subtle/65 p-6 text-center text-sm text-fg-subtle">
         No futures roots are streaming yet. Add one above.
       </div>
     );
   }
 
   return (
-    <div className="overflow-hidden rounded-md border border-border bg-bg-subtle">
+    <div className="surface-panel overflow-hidden rounded-lg">
       <table className="w-full text-sm">
-        <thead className="bg-bg-muted text-xs uppercase tracking-wider text-fg-subtle">
+        <thead className="bg-bg-muted/65 text-xs uppercase tracking-wider text-fg-subtle">
           <tr>
             <th className="px-4 py-2 text-left font-medium">Root</th>
             <th className="px-4 py-2 text-left font-medium">Contract</th>
@@ -464,7 +469,7 @@ function SearchBar({
   onChange: (next: string) => void;
 }) {
   return (
-    <div className="flex h-9 items-center gap-2 rounded-md border border-border bg-bg-subtle px-3">
+    <div className="flex h-9 items-center gap-2 rounded-md border border-border bg-bg-base/60 px-3">
       <Search className="h-4 w-4 text-fg-subtle" />
       <input
         value={value}
@@ -506,7 +511,7 @@ function AddRow() {
   };
 
   return (
-    <div className="space-y-2 rounded-md border border-border bg-bg-subtle p-4">
+    <div className="surface-panel-soft space-y-2 rounded-lg p-4">
       <div className="flex flex-wrap gap-2">
         <SymbolSearchInput
           value={symbol}
@@ -573,7 +578,7 @@ function ImportPanel() {
   return (
     <form
       onSubmit={submit}
-      className="space-y-2 rounded-md border border-border bg-bg-subtle p-4"
+      className="surface-panel-soft space-y-2 rounded-lg p-4"
     >
       <div className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
         Bulk import — paste symbols (comma, space, or newline separated)
@@ -583,7 +588,7 @@ function ImportPanel() {
         onChange={(e) => setText(e.target.value)}
         placeholder="AAPL, NVDA, GOOGL&#10;TSLA AMZN"
         rows={4}
-        className="w-full rounded-md border border-border bg-bg-base px-3 py-2 font-mono text-sm text-fg-base focus:border-accent focus:outline-none"
+        className="w-full rounded-md border border-border bg-bg-base/70 px-3 py-2 font-mono text-sm text-fg-base focus:border-accent focus:outline-none"
       />
       <div className="flex gap-2">
         <Button type="submit" disabled={!text.trim() || imp.isPending}>
@@ -655,7 +660,7 @@ function StreamList({
         {Array.from({ length: 5 }).map((_, i) => (
           <li
             key={i}
-            className="h-10 animate-pulse rounded-md border border-border bg-bg-subtle"
+            className="h-10 animate-pulse rounded-md border border-border bg-bg-subtle/80"
           />
         ))}
       </ul>
@@ -664,16 +669,16 @@ function StreamList({
 
   if (entries.length === 0) {
     return (
-      <div className="rounded-md border border-dashed border-border bg-bg-subtle p-6 text-center text-sm text-fg-subtle">
+      <div className="rounded-lg border border-dashed border-border bg-bg-subtle/65 p-6 text-center text-sm text-fg-subtle">
         No symbols match the filter.
       </div>
     );
   }
 
   return (
-    <div className="overflow-hidden rounded-md border border-border bg-bg-subtle">
+    <div className="surface-panel overflow-hidden rounded-lg">
       <table className="w-full text-sm">
-        <thead className="bg-bg-muted text-xs uppercase tracking-wider text-fg-subtle">
+        <thead className="bg-bg-muted/65 text-xs uppercase tracking-wider text-fg-subtle">
           <tr>
             <th className="px-4 py-2 text-left font-medium">Symbol</th>
             <th className="px-4 py-2 text-left font-medium">Company</th>

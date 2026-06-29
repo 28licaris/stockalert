@@ -1,4 +1,13 @@
-import { Play, RefreshCw } from "lucide-react";
+import {
+  Activity,
+  Database,
+  Play,
+  Radio,
+  RefreshCw,
+  ShieldCheck,
+  type LucideIcon,
+} from "lucide-react";
+import { LogoMark } from "@/components/brand/LogoMark";
 import { Button } from "@/components/ui/button";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
 import {
@@ -21,45 +30,93 @@ import { cn } from "@/lib/utils";
  */
 export function StatusPage() {
   const query = useHealthServices();
+  const services = query.data?.services ?? loadingSkeleton(4);
+  const healthCounts = services.reduce(
+    (acc, svc) => {
+      acc[svc.state] += 1;
+      return acc;
+    },
+    { ok: 0, warn: 0, error: 0, unknown: 0 } as Record<HealthState, number>,
+  );
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 p-6">
-      <header className="flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-fg-base">Status</h1>
-          <p className="mt-1 text-sm text-fg-muted">
-            System-wide health, refreshed every 10 seconds.
-          </p>
-        </div>
-        <div className="flex items-center gap-3 text-xs text-fg-subtle">
-          <span>
-            {query.dataUpdatedAt
-              ? `Updated ${fmtAgo(new Date(query.dataUpdatedAt).toISOString())}`
-              : "Loading…"}
-          </span>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => query.refetch()}
-            disabled={query.isFetching}
-            aria-label="Refresh now"
-          >
-            <RefreshCw
-              className={cn(
-                "h-3.5 w-3.5",
-                query.isFetching && "animate-spin",
-              )}
+    <div className="mx-auto max-w-7xl space-y-6 p-4 md:p-6">
+      <section className="surface-panel overflow-hidden rounded-lg">
+        <div className="relative p-5 md:p-6">
+          <div className="absolute right-6 top-6 hidden h-28 w-28 rounded-full border border-accent/20 bg-accent/5 shadow-[0_0_80px_rgba(46,196,255,0.12)] lg:block" />
+          <div className="relative flex flex-wrap items-start justify-between gap-5">
+            <div className="max-w-2xl">
+              <LogoMark wordmark className="mb-5" />
+              <p className="text-xs font-semibold uppercase tracking-wider text-accent">
+                operations overview
+              </p>
+              <h1 className="mt-2 font-display text-3xl font-semibold tracking-normal text-fg-base md:text-4xl">
+                Market intelligence, live systems, and data operations.
+              </h1>
+              <p className="mt-3 max-w-xl text-sm leading-6 text-fg-muted">
+                A compact view of the services, streams, and background jobs
+                keeping the trading workspace current.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3 text-xs text-fg-subtle">
+              <span>
+                {query.dataUpdatedAt
+                  ? `Updated ${fmtAgo(new Date(query.dataUpdatedAt).toISOString())}`
+                  : "Loading..."}
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => query.refetch()}
+                disabled={query.isFetching}
+                aria-label="Refresh now"
+              >
+                <RefreshCw
+                  className={cn(
+                    "h-3.5 w-3.5",
+                    query.isFetching && "animate-spin",
+                  )}
+                />
+                Refresh
+              </Button>
+            </div>
+          </div>
+
+          <div className="relative mt-6 grid gap-4 border-t border-border pt-5 sm:grid-cols-2 lg:grid-cols-4">
+            <HeroMetric
+              icon={ShieldCheck}
+              label="Healthy"
+              value={fmtInt(healthCounts.ok)}
+              detail={`${fmtInt(healthCounts.warn + healthCounts.error)} need attention`}
             />
-            Refresh
-          </Button>
+            <HeroMetric
+              icon={Radio}
+              label="Streaming"
+              value={fmtInt(query.data?.stream?.streaming_count)}
+              detail={query.data?.stream?.provider ?? "provider pending"}
+            />
+            <HeroMetric
+              icon={Database}
+              label="Backfill queue"
+              value={fmtInt(query.data?.backfill.queued)}
+              detail={`${fmtInt(query.data?.backfill.in_flight)} in flight`}
+            />
+            <HeroMetric
+              icon={Activity}
+              label="Monitors"
+              value={fmtInt(query.data?.monitors.started)}
+              detail={`${fmtInt(query.data?.monitors.errors)} errors`}
+            />
+          </div>
         </div>
-      </header>
+      </section>
 
       {query.error ? <ApiErrorAlert error={query.error} /> : null}
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {(query.data?.services ?? loadingSkeleton(4)).map((svc) => (
+        {services.map((svc) => (
           <ServiceCard key={svc.name} svc={svc} />
         ))}
       </section>
@@ -91,6 +148,31 @@ export function StatusPage() {
   );
 }
 
+function HeroMetric({
+  icon: Icon,
+  label,
+  value,
+  detail,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <div className="min-w-0 border-l border-border pl-4 first:border-l-0 first:pl-0">
+      <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">
+        <Icon className="h-3.5 w-3.5 text-accent" />
+        {label}
+      </div>
+      <div className="mt-2 font-mono text-2xl font-semibold text-fg-base">
+        {value}
+      </div>
+      <div className="mt-1 truncate text-xs text-fg-muted">{detail}</div>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Scheduled jobs — registry of background loops with a play button.
 // ─────────────────────────────────────────────────────────────────────
@@ -103,14 +185,9 @@ function ScheduledJobsSection() {
     <section className="space-y-3">
       <div className="flex items-end justify-between gap-4">
         <div>
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-fg-subtle">
+          <h2 className="font-display text-sm font-semibold uppercase tracking-wider text-fg-subtle">
             Scheduled jobs
           </h2>
-          <p className="mt-1 text-xs text-fg-muted">
-            Background loops that keep the data layer fresh. Click ▶ to
-            trigger a manual run; the registry refuses to start a job
-            that's already in flight.
-          </p>
         </div>
         {jobs.isFetching ? (
           <span className="text-[10px] uppercase tracking-wider text-fg-subtle">
@@ -122,9 +199,9 @@ function ScheduledJobsSection() {
       {jobs.error ? <ApiErrorAlert error={jobs.error} /> : null}
       {run.error ? <ApiErrorAlert error={run.error} /> : null}
 
-      <div className="overflow-hidden rounded-lg border border-border bg-bg-subtle">
+      <div className="surface-panel overflow-hidden rounded-lg">
         <table className="w-full text-sm">
-          <thead className="bg-bg-muted text-xs uppercase tracking-wider text-fg-subtle">
+          <thead className="bg-bg-muted/65 text-xs uppercase tracking-wider text-fg-subtle">
             <tr>
               <th className="px-4 py-2 text-left font-medium">Job</th>
               <th className="px-4 py-2 text-left font-medium">Schedule</th>
@@ -259,14 +336,14 @@ const STATE_LABEL: Record<HealthState, string> = {
 
 function ServiceCard({ svc }: { svc: ServiceHealth }) {
   return (
-    <div className="rounded-lg border border-border bg-bg-subtle p-4">
+    <div className="surface-panel-soft rounded-lg p-4 transition hover:border-accent/30 hover:bg-bg-muted/55">
       <div className="flex items-center gap-2">
         <span
           aria-hidden
           className={cn("h-2.5 w-2.5 rounded-full", STATE_BG[svc.state])}
         />
-        <span className="text-sm font-semibold text-fg-base">{svc.name}</span>
-        <span className="ml-auto text-[10px] uppercase tracking-wider text-fg-subtle">
+        <span className="font-display text-sm font-semibold text-fg-base">{svc.name}</span>
+        <span className="ml-auto rounded-full border border-border-subtle bg-bg-base/45 px-2 py-0.5 text-[10px] uppercase tracking-wider text-fg-subtle">
           {STATE_LABEL[svc.state]}
         </span>
       </div>
@@ -288,8 +365,8 @@ function SummaryCard({
   rows: ReadonlyArray<readonly [string, string]>;
 }) {
   return (
-    <div className="rounded-lg border border-border bg-bg-subtle p-5">
-      <h2 className="text-sm font-semibold uppercase tracking-wider text-fg-subtle">
+    <div className="surface-panel-soft rounded-lg p-5">
+      <h2 className="font-display text-sm font-semibold uppercase tracking-wider text-fg-subtle">
         {title}
       </h2>
       <dl className="mt-3 space-y-1.5 text-sm">

@@ -38,7 +38,16 @@ export default {
         down: "hsl(var(--down) / <alpha-value>)",
       },
       fontFamily: {
+        display: [
+          "Sora",
+          "Space Grotesk",
+          "Aptos Display",
+          "ui-sans-serif",
+          "system-ui",
+          "sans-serif",
+        ],
         sans: [
+          "Geist",
           "Inter",
           "ui-sans-serif",
           "system-ui",

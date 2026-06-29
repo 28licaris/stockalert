@@ -8,12 +8,12 @@ import {
   Mail,
   ShieldCheck,
   Sparkles,
-  TrendingUp,
 } from "lucide-react";
 import { Navigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/auth/auth-context";
 import { loginUrl, passwordResetUrl } from "@/auth/client";
 import { branding } from "@/branding";
+import { LogoMark } from "@/components/brand/LogoMark";
 
 function GoogleMark() {
   return (
@@ -63,13 +63,13 @@ function SignalCanvas() {
       >
         <defs>
           <linearGradient id="signal-line" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0" stopColor="#818cf8" stopOpacity=".35" />
-            <stop offset=".55" stopColor="#a78bfa" />
-            <stop offset="1" stopColor="#34d399" />
+            <stop offset="0" stopColor="#2ec4ff" stopOpacity=".28" />
+            <stop offset=".6" stopColor="#2ec4ff" />
+            <stop offset="1" stopColor="#1ec69a" />
           </linearGradient>
           <linearGradient id="signal-fill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="#8b5cf6" stopOpacity=".24" />
-            <stop offset="1" stopColor="#8b5cf6" stopOpacity="0" />
+            <stop offset="0" stopColor="#2ec4ff" stopOpacity=".18" />
+            <stop offset="1" stopColor="#2ec4ff" stopOpacity="0" />
           </linearGradient>
         </defs>
         {[35, 75, 115, 155].map((y) => (
@@ -140,7 +140,7 @@ export function LoginPage() {
   if (auth.status === "authenticated") return <Navigate to="/" replace />;
 
   return (
-    <main className="auth-surface relative min-h-full overflow-hidden bg-[#080a12] text-white">
+    <main className="auth-surface relative min-h-full overflow-hidden bg-bg-base text-white">
       <div className="auth-grid absolute inset-0 opacity-50" />
       <div className="auth-glow auth-glow-one" />
       <div className="auth-glow auth-glow-two" />
@@ -148,24 +148,22 @@ export function LoginPage() {
       <div className="relative mx-auto grid min-h-screen max-w-[1440px] lg:grid-cols-[1.12fr_0.88fr]">
         <section className="hidden min-h-screen flex-col justify-between px-12 py-10 lg:flex xl:px-20 xl:py-14">
           <div className="flex items-center gap-3">
-            <div className="grid h-10 w-10 place-items-center rounded-xl border border-white/15 bg-white/10 shadow-lg shadow-violet-950/30 backdrop-blur">
-              <TrendingUp className="h-5 w-5 text-violet-300" />
-            </div>
+            <LogoMark />
             <div>
               <p className="text-sm font-semibold tracking-tight">
                 {branding.productName}
               </p>
               <p className="text-[10px] uppercase tracking-[0.24em] text-white/40">
-                Signal intelligence
+                Market intelligence
               </p>
             </div>
           </div>
 
           <div className="my-auto max-w-2xl py-16">
-            <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-violet-300/15 bg-violet-300/5 px-3 py-1.5 text-[11px] font-medium text-violet-200">
+            <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-accent/20 bg-accent/10 px-3 py-1.5 text-[11px] font-medium text-accent">
               <Sparkles className="h-3.5 w-3.5" /> Built for decisive traders
             </div>
-            <h1 className="max-w-xl text-5xl font-semibold leading-[1.04] tracking-[-0.045em] xl:text-6xl">
+            <h1 className="max-w-xl font-display text-5xl font-semibold leading-[1.04] tracking-normal xl:text-6xl">
               Trade with signal,
               <br />
               not noise.
@@ -190,21 +188,19 @@ export function LoginPage() {
         <section className="flex min-h-screen items-center justify-center border-white/10 px-5 py-10 lg:border-l lg:bg-white/[0.015] lg:px-12">
           <div className="auth-card-enter w-full max-w-[440px]">
             <div className="mb-10 flex items-center gap-3 lg:hidden">
-              <div className="grid h-10 w-10 place-items-center rounded-xl bg-violet-500/15 text-violet-300">
-                <TrendingUp className="h-5 w-5" />
-              </div>
+              <LogoMark />
               <div>
                 <p className="text-sm font-semibold">{branding.productName}</p>
                 <p className="text-[10px] uppercase tracking-[0.2em] text-white/40">
-                  Signal intelligence
+                  Market intelligence
                 </p>
               </div>
             </div>
 
-            <div className="rounded-[28px] border border-white/10 bg-white/[0.055] p-6 shadow-2xl shadow-black/40 backdrop-blur-2xl sm:p-8">
+            <div className="rounded-lg border border-white/10 bg-white/[0.055] p-6 shadow-2xl shadow-black/40 backdrop-blur-2xl sm:p-8">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="text-xs font-medium text-violet-300">
+                  <p className="text-xs font-medium text-accent">
                     Welcome back
                   </p>
                   <h2 className="mt-2 text-2xl font-semibold tracking-[-0.025em]">
@@ -229,14 +225,14 @@ export function LoginPage() {
               <div className="mt-7 space-y-3">
                 <a
                   href={loginUrl(returnTo, "Google")}
-                  className="group flex h-12 w-full items-center justify-center gap-3 rounded-xl bg-white px-4 text-sm font-semibold text-[#141620] shadow-lg shadow-black/15 transition duration-200 hover:-translate-y-0.5 hover:bg-white/95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#10121b]"
+                  className="group flex h-12 w-full items-center justify-center gap-3 rounded-md bg-white px-4 text-sm font-semibold text-[#141620] shadow-lg shadow-black/15 transition duration-200 hover:-translate-y-0.5 hover:bg-white/95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-[#10121b]"
                 >
                   <GoogleMark /> Continue with Google
                   <ArrowRight className="ml-auto h-4 w-4 text-black/35 transition-transform group-hover:translate-x-0.5" />
                 </a>
                 <a
                   href={loginUrl(returnTo)}
-                  className="border-white/12 group flex h-12 w-full items-center justify-center gap-3 rounded-xl border bg-white/[0.045] px-4 text-sm font-medium text-white/90 transition duration-200 hover:-translate-y-0.5 hover:border-violet-300/30 hover:bg-violet-300/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+                  className="border-white/12 group flex h-12 w-full items-center justify-center gap-3 rounded-md border bg-white/[0.045] px-4 text-sm font-medium text-white/90 transition duration-200 hover:-translate-y-0.5 hover:border-accent/35 hover:bg-accent/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                 >
                   <Mail className="h-4 w-4 text-white/55" /> Continue with email
                   <ArrowRight className="ml-auto h-4 w-4 text-white/25 transition-transform group-hover:translate-x-0.5" />
@@ -246,14 +242,14 @@ export function LoginPage() {
               <div className="mt-4 grid gap-2 sm:grid-cols-2">
                 <a
                   href={loginUrl(returnTo, undefined, "signup")}
-                  className="group flex h-11 items-center justify-center gap-2 rounded-xl border border-white/12 bg-white/[0.03] px-4 text-sm font-medium text-white/80 transition hover:-translate-y-0.5 hover:border-violet-300/30 hover:bg-violet-300/[0.07]"
+                  className="group flex h-11 items-center justify-center gap-2 rounded-md border border-white/12 bg-white/[0.03] px-4 text-sm font-medium text-white/80 transition hover:-translate-y-0.5 hover:border-accent/35 hover:bg-accent/[0.07]"
                 >
                   Create account
                   <ArrowRight className="h-4 w-4 text-white/25 transition-transform group-hover:translate-x-0.5" />
                 </a>
                 <a
                   href={passwordResetUrl()}
-                  className="group flex h-11 items-center justify-center gap-2 rounded-xl border border-white/12 bg-white/[0.03] px-4 text-sm font-medium text-white/80 transition hover:-translate-y-0.5 hover:border-violet-300/30 hover:bg-violet-300/[0.07]"
+                  className="group flex h-11 items-center justify-center gap-2 rounded-md border border-white/12 bg-white/[0.03] px-4 text-sm font-medium text-white/80 transition hover:-translate-y-0.5 hover:border-accent/35 hover:bg-accent/[0.07]"
                 >
                   <KeyRound className="h-4 w-4 text-white/45" />
                   Reset password
@@ -290,7 +286,7 @@ export function LoginPage() {
                   </div>
                 </div>
                 <div className="flex items-start gap-2.5 rounded-xl bg-black/15 p-3">
-                  <BellRing className="mt-0.5 h-3.5 w-3.5 shrink-0 text-violet-300" />
+                  <BellRing className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />
                   <div>
                     <p className="text-[11px] font-medium text-white/75">
                       Instant alerts

@@ -1,12 +1,18 @@
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useCallback, useState } from "react";
+import { Table2 } from "lucide-react";
 import { OhlcvChart, type ChartType } from "@/components/charts/OhlcvChart";
 import { ChartToolbar } from "@/components/charts/ChartToolbar";
 import { BarsTable } from "@/components/tables/BarsTable";
 import { Button } from "@/components/ui/button";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
 import { SymbolSearchInput } from "@/components/symbol/SymbolSearchInput";
-import { useIndicators, useLakeBars, useSymbolSignals } from "@/api/queries";
+import {
+  useIndicators,
+  useLakeBars,
+  useSymbolSignals,
+  type ChartRange,
+} from "@/api/queries";
 import { useUserSetting } from "@/lib/storage";
 import {
   DEFAULT_TZ,
@@ -20,10 +26,12 @@ const INTERVALS = ["1m", "5m", "15m", "30m", "1h", "1d"] as const;
 type Interval = (typeof INTERVALS)[number];
 
 const DEFAULT_INTERVAL: Interval = "5m";
+const DEFAULT_RANGE: ChartRange = "30D";
 const DEFAULT_CHART_TYPE: ChartType = "candles";
+type IndicatorSettings = Record<string, Record<string, number>>;
 
 /**
- * Symbol page — chart + indicators (FE-2.1).
+ * Charts page — chart + indicators (FE-2.1).
  *
  * OHLCV (candles / line / area) + volume + signal markers, with
  * configurable indicator overlays (moving averages, Bollinger) and
@@ -42,8 +50,12 @@ export function SymbolPage() {
   const ticker = (params.ticker ?? "").toUpperCase();
 
   const [interval, setInterval] = useUserSetting<Interval>(
-    "symbol.interval",
+    "charts.interval",
     DEFAULT_INTERVAL,
+  );
+  const [range, setRange] = useUserSetting<ChartRange>(
+    "charts.range",
+    DEFAULT_RANGE,
   );
   const [chartType, setChartType] = useUserSetting<ChartType>(
     "chart.type",
@@ -54,13 +66,25 @@ export function SymbolPage() {
     "chart.indicators",
     [],
   );
+  const [indicatorSettings, setIndicatorSettings] =
+    useUserSetting<IndicatorSettings>("chart.indicatorSettings", {
+      sma: { period: 20 },
+      ema: { period: 20 },
+      wma: { period: 20 },
+    });
   // Global display timezone for the chart axis + Recent Bars table.
   const [tz, setTz] = useUserSetting<TzSetting>("chart.timezone", DEFAULT_TZ);
   const zone = resolveZone(tz);
 
-  const bars = useLakeBars(ticker || undefined, interval);
+  const bars = useLakeBars(ticker || undefined, interval, range);
   const signals = useSymbolSignals(ticker || undefined, 100);
-  const indicators = useIndicators(ticker || undefined, interval, indicatorIds);
+  const indicators = useIndicators(
+    ticker || undefined,
+    interval,
+    indicatorIds,
+    range,
+    indicatorSettings,
+  );
 
   const toggleIndicator = useCallback(
     (id: string) =>
@@ -73,6 +97,17 @@ export function SymbolPage() {
     () => setIndicatorIds([]),
     [setIndicatorIds],
   );
+  const setIndicatorParam = useCallback(
+    (id: string, key: string, value: number) =>
+      setIndicatorSettings((prev) => ({
+        ...prev,
+        [id]: {
+          ...(prev[id] ?? {}),
+          [key]: value,
+        },
+      })),
+    [setIndicatorSettings],
+  );
 
   if (!ticker) {
     return <SymbolPicker />;
@@ -84,33 +119,44 @@ export function SymbolPage() {
     latest && prevClose ? ((latest.close - prevClose) / prevClose) * 100 : null;
 
   return (
-    <div className="flex h-full flex-col gap-3 p-4 md:p-6">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-fg-base">
-            {ticker}
-          </h1>
-          <div className="mt-1 flex items-baseline gap-3 text-sm">
-            <span className="font-mono text-lg text-fg-base">
-              {fmtPrice(latest?.close)}
-            </span>
-            {change !== null ? (
-              <span
-                className={cn(
-                  "font-mono",
-                  change >= 0 ? "text-up" : "text-down",
-                )}
-              >
-                {change >= 0 ? "+" : ""}
-                {change.toFixed(2)}%
+    <div className="flex h-full min-h-0 flex-col gap-3 p-4 md:p-6">
+      <header className="surface-panel rounded-lg p-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-accent">
+              chart workspace
+            </p>
+            <h1 className="mt-1 font-display text-3xl font-semibold tracking-normal text-fg-base">
+              {ticker}
+            </h1>
+            <div className="mt-1 flex items-baseline gap-3 text-sm">
+              <span className="font-mono text-lg text-fg-base">
+                {fmtPrice(latest?.close)}
               </span>
-            ) : null}
-            <span className="text-xs text-fg-subtle">
-              {bars.dataUpdatedAt
-                ? fmtAgo(new Date(bars.dataUpdatedAt).toISOString())
-                : "Loading…"}
-            </span>
+              {change !== null ? (
+                <span
+                  className={cn(
+                    "font-mono",
+                    change >= 0 ? "text-up" : "text-down",
+                  )}
+                >
+                  {change >= 0 ? "+" : ""}
+                  {change.toFixed(2)}%
+                </span>
+              ) : null}
+              <span className="text-xs text-fg-subtle">
+                {bars.dataUpdatedAt
+                  ? fmtAgo(new Date(bars.dataUpdatedAt).toISOString())
+                  : "Loading..."}
+              </span>
+            </div>
           </div>
+          <Button type="button" variant="outline" size="sm" asChild>
+            <Link to={`/charts/${encodeURIComponent(ticker)}/bars`}>
+              <Table2 className="h-4 w-4" />
+              Recent bars
+            </Link>
+          </Button>
         </div>
       </header>
 
@@ -118,6 +164,8 @@ export function SymbolPage() {
         interval={interval}
         intervals={INTERVALS}
         onIntervalChange={(i) => setInterval(i as Interval)}
+        range={range}
+        onRangeChange={setRange}
         chartType={chartType}
         onChartTypeChange={setChartType}
         tz={tz}
@@ -125,6 +173,8 @@ export function SymbolPage() {
         selected={indicatorIds}
         onToggleIndicator={toggleIndicator}
         onClearIndicators={clearIndicators}
+        indicatorSettings={indicatorSettings}
+        onIndicatorSettingChange={setIndicatorParam}
       />
 
       {bars.error ? <ApiErrorAlert error={bars.error} /> : null}
@@ -134,13 +184,14 @@ export function SymbolPage() {
           which takes a few seconds. Overlay the (still-mounted) chart so we
           don't fight its lifecycle, then fall back to an explicit empty state
           when the fetch settles with no data (e.g. an unknown ticker). */}
-      <div className="relative">
+      <div className="surface-panel relative min-h-0 flex-1 overflow-visible rounded-lg p-2">
         <OhlcvChart
           bars={bars.data ?? []}
           signals={signals.data ?? []}
           indicators={indicators.data ?? []}
           chartType={chartType}
           timezone={zone}
+          height="fill"
         />
         {!bars.data || bars.data.length === 0 ? (
           <div className="absolute inset-0 flex items-center justify-center rounded-md bg-bg-base/60 text-sm text-fg-muted backdrop-blur-[1px]">
@@ -151,19 +202,6 @@ export function SymbolPage() {
         ) : null}
       </div>
 
-      <section className="space-y-2">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
-          Recent bars
-        </h2>
-        {/* A compact "is it live?" snapshot — the chart is the main view, so we
-            cap this to the latest ~20 bars rather than let it grow the page. */}
-        <BarsTable
-          bars={bars.data ?? []}
-          limit={20}
-          interval={interval}
-          timeZone={zone}
-        />
-      </section>
     </div>
   );
 }
@@ -182,16 +220,20 @@ function SymbolPicker() {
       const next = [norm, ...prev.filter((p) => p !== norm)].slice(0, 12);
       return next;
     });
-    navigate(`/symbol/${encodeURIComponent(norm)}`);
+    navigate(`/charts/${encodeURIComponent(norm)}`);
   };
 
   return (
-    <div className="mx-auto max-w-xl space-y-6 p-8">
-      <header>
-        <h1 className="text-2xl font-semibold text-fg-base">Symbol</h1>
+    <div className="mx-auto max-w-xl space-y-6 p-6 md:p-8">
+      <header className="surface-panel rounded-lg p-5">
+        <p className="text-xs font-semibold uppercase tracking-wider text-accent">
+          chart workspace
+        </p>
+        <h1 className="mt-2 font-display text-2xl font-semibold text-fg-base">
+          Charts
+        </h1>
         <p className="mt-1 text-sm text-fg-muted">
-          Search by ticker or company name. Pick a suggestion or hit Enter on
-          what you've typed.
+          Search by ticker or company name to open the full chart workspace.
         </p>
       </header>
 
@@ -218,7 +260,7 @@ function SymbolPicker() {
             {recent.map((sym) => (
               <Link
                 key={sym}
-                to={`/symbol/${encodeURIComponent(sym)}`}
+                to={`/charts/${encodeURIComponent(sym)}`}
                 className="rounded-md border border-border bg-bg-subtle px-3 py-1.5 font-mono text-xs text-fg-base hover:bg-bg-muted"
               >
                 {sym}
@@ -227,6 +269,55 @@ function SymbolPicker() {
           </div>
         </section>
       ) : null}
+    </div>
+  );
+}
+
+export function RecentBarsPage() {
+  const params = useParams();
+  const ticker = (params.ticker ?? "").toUpperCase();
+  const [interval] = useUserSetting<Interval>("charts.interval", DEFAULT_INTERVAL);
+  const [range] = useUserSetting<ChartRange>("charts.range", DEFAULT_RANGE);
+  const [tz] = useUserSetting<TzSetting>("chart.timezone", DEFAULT_TZ);
+  const zone = resolveZone(tz);
+  const bars = useLakeBars(ticker || undefined, interval, range);
+
+  if (!ticker) {
+    return <SymbolPicker />;
+  }
+
+  return (
+    <div className="mx-auto max-w-7xl space-y-4 p-4 md:p-6">
+      <header className="surface-panel rounded-lg p-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-accent">
+              developer data
+            </p>
+            <h1 className="mt-1 font-display text-2xl font-semibold text-fg-base">
+              {ticker} recent bars
+            </h1>
+            <p className="mt-1 text-sm text-fg-muted">
+              {interval} bars shown in {tz}. This view is for development and
+              production diagnostics.
+            </p>
+          </div>
+          <Button type="button" variant="outline" size="sm" asChild>
+            <Link to={`/charts/${encodeURIComponent(ticker)}`}>
+              Back to chart
+            </Link>
+          </Button>
+        </div>
+      </header>
+
+      {bars.error ? <ApiErrorAlert error={bars.error} /> : null}
+
+      <BarsTable
+        bars={bars.data ?? []}
+        limit={200}
+        interval={interval}
+        timeZone={zone}
+      />
     </div>
   );
 }
