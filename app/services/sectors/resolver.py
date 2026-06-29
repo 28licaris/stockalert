@@ -107,13 +107,63 @@ def resolve(group: RotationGroup, *, lookback_days: int | None = None) -> pd.Ser
         return series
 
     if group.kind == "basket":
-        # Phase 2 seam: normalize each constituent to a base date, apply
-        # `group.weights` (equal-weight when None), and sum into an index
-        # series. Defined + tested now; implemented when the theme catalog
-        # lands. Not a silent stub — it fails loudly if reached early.
-        raise NotImplementedError(
-            "basket resolution is a Phase-2 feature; "
-            f"group {group.id!r} has kind='basket'. See docs/sector_rotation_spec.md."
-        )
+        return _basket_close_series(group, lookback)
 
     raise GroupResolutionError(f"unknown group kind {group.kind!r} for {group.id!r}")
+
+
+def _normalize_weights(group: RotationGroup, available: list[str]) -> dict[str, float]:
+    """Per-member weights summing to 1 over the members that resolved.
+    Uses `group.weights` when given (renormalized over what's available),
+    else equal weight."""
+    if group.weights:
+        w = {s: float(group.weights.get(s, 0.0)) for s in available}
+        total = sum(w.values())
+        if total > 0:
+            return {s: v / total for s, v in w.items()}
+    n = len(available)
+    return {s: 1.0 / n for s in available}
+
+
+def _basket_close_series(group: RotationGroup, lookback_days: int) -> pd.Series:
+    """Composite index for a basket: normalize each constituent's daily
+    close to its window-start value, then take the weighted average. The
+    index level is arbitrary (RS-Ratio divides it out); only the *shape*
+    vs the benchmark matters.
+
+    Members that have no lake/CH data are dropped (logged) rather than
+    failing the whole basket. Dates are the intersection across resolved
+    members, so the composite has no gaps from a single late lister.
+    """
+    series_by_sym: dict[str, pd.Series] = {}
+    missing: list[str] = []
+    for sym in group.members:
+        s = _daily_close_series(sym, lookback_days)
+        if s.empty:
+            missing.append(sym)
+        else:
+            series_by_sym[sym] = s
+
+    if not series_by_sym:
+        raise GroupResolutionError(
+            f"basket {group.id!r}: no data for any of {len(group.members)} members"
+        )
+
+    df = pd.DataFrame(series_by_sym).sort_index().dropna()
+    if len(df) < 2:
+        raise GroupResolutionError(
+            f"basket {group.id!r}: <2 common dates across members "
+            f"({len(series_by_sym)} resolved)"
+        )
+
+    weights = _normalize_weights(group, list(df.columns))
+    # Rebase each member to 1.0 at the first common date, weight, sum → ×100.
+    norm = df.divide(df.iloc[0])
+    composite = norm.mul(pd.Series(weights)).sum(axis=1) * 100.0
+
+    if missing:
+        logger.info(
+            "basket %s: %d/%d members resolved (dropped: %s)",
+            group.id, len(series_by_sym), len(group.members), ", ".join(missing),
+        )
+    return composite

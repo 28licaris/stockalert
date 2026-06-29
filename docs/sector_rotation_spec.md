@@ -316,7 +316,18 @@ same payload.
 ## 9. Phase boundaries
 
 - **Phase 1 (this spec):** data prereq + backend module + API + scatter / list
-  / relative-strength chart for the 11 ETFs.
-- **Phase 1.5:** donut + rotation-timeline heatmap (presentation only).
-- **Phase 2:** `BasketGroup` resolution + the ~50-theme catalog (constituent
-  curation + index construction). No engine/API/UI rewrite required.
+  / relative-strength chart for the 11 ETFs. ✅ shipped.
+- **Phase 1.5:** rotation-table redesign (clean scatter + focus-to-trail +
+  per-sector quadrant-journey cells + RS sparklines). ✅ shipped.
+- **Phase 2 (shipped 2026-06-28):** `BasketGroup` resolution implemented
+  (`resolver._basket_close_series` — equal-weight/weighted composite of
+  normalized member closes, missing-member drop, date intersection). First
+  theme registered: `MINERS` (Precious Metals Miners, 12 constituents).
+  `SectorRotationState` gained `kind` + `members`; the UI shows a per-basket
+  holdings expander. **No engine/API/UI rewrite was required — a theme is one
+  entry in `definitions._THEMES`.**
+- **Tracked-in-universe rule:** `universe_sync.ensure_tracked_in_universe()`
+  (scheduled at app startup) reconciles all sector + theme constituents into
+  the stream universe and Schwab-tip-fills new ones, so a registered theme is
+  streamed/tip-filled with no data gaps and grows `equities.schwab_universe`.
+- **Future:** scale the theme catalog (more baskets); optional cap-weighting.

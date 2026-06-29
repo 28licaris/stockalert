@@ -3842,6 +3842,17 @@ export interface components {
             group_id: string;
             /** Name */
             name: string;
+            /**
+             * Kind
+             * @default etf
+             * @enum {string}
+             */
+            kind: "etf" | "basket";
+            /**
+             * Members
+             * @description Constituent tickers (the ETF itself for kind='etf'; the basket holdings for kind='basket') — lets the UI show what's inside.
+             */
+            members?: string[];
             current: components["schemas"]["RotationPoint"];
             /**
              * Tail

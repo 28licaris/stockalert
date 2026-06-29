@@ -263,6 +263,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("stream_service.status() failed: %s", e)
 
+    # Tracked instruments live in the universe: reconcile sector ETFs + theme
+    # constituents into the stream universe (adds + Schwab tip-fill any new
+    # ones, growing schwab_universe). Idempotent; runs in the background so it
+    # never blocks or breaks startup. See app/services/sectors/universe_sync.py.
+    try:
+        from app.services.sectors.universe_sync import schedule_universe_sync
+        schedule_universe_sync()
+    except Exception as e:  # noqa: BLE001 — never break startup
+        logger.warning("sector universe-sync scheduling failed: %s", e)
+
     await _safe_start("Watchlist service", lambda: watchlist_service.start())
     try:
         status = watchlist_service.status()

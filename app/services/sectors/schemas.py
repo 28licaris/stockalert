@@ -56,6 +56,12 @@ class SectorRotationState(BaseModel):
 
     group_id: str
     name: str
+    kind: GroupKind = "etf"
+    members: list[str] = Field(
+        default_factory=list,
+        description="Constituent tickers (the ETF itself for kind='etf'; the "
+        "basket holdings for kind='basket') — lets the UI show what's inside.",
+    )
     current: RotationPoint
     tail: list[RotationPoint] = Field(
         default_factory=list,

@@ -112,6 +112,8 @@ class SectorRotationService:
                 SectorRotationState(
                     group_id=group.id,
                     name=group.name,
+                    kind=group.kind,
+                    members=group.members,
                     current=result.current,
                     tail=result.tail,
                     relative_strength=result.relative_strength,

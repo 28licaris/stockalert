@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { ChevronDown, Layers } from "lucide-react";
 import {
   useSectorRotation,
   type RotationDashboard,
@@ -266,11 +267,19 @@ function RotationTable({
   onHover: (id: string | null) => void;
   onToggle: (id: string) => void;
 }) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleExpand = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
   const maxCells = Math.max(1, ...sectors.map((s) => s.tail?.length ?? 0));
   return (
     <div className="overflow-hidden rounded-lg border border-border">
       <div className="flex items-center gap-3 border-b border-border bg-bg-subtle px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-fg-subtle">
-        <span className="w-32 shrink-0">Sector</span>
+        <span className="w-40 shrink-0">Sector</span>
         <span className="flex-1">12-week rotation <span className="text-fg-subtle/60">(older → now)</span></span>
         <span className="hidden w-24 text-right sm:block">RS vs SPY</span>
         <span className="w-32 text-right">Now</span>
@@ -281,28 +290,54 @@ function RotationTable({
         const tail = s.tail ?? [];
         const pad = maxCells - tail.length;
         const meta = QUADRANTS[s.current.quadrant];
+        const isBasket = s.kind === "basket";
+        const members = s.members ?? [];
+        const open = expanded.has(s.group_id);
         return (
-          <button key={s.group_id} type="button"
-            onMouseEnter={() => onHover(s.group_id)} onMouseLeave={() => onHover(null)} onClick={() => onToggle(s.group_id)}
-            className={cn("flex w-full items-center gap-3 border-b border-border/40 px-3 py-2 text-left transition-colors last:border-0",
-              on ? "bg-bg-muted" : "hover:bg-bg-subtle", dim && "opacity-45")}>
-            <span className="flex w-32 shrink-0 items-baseline gap-2">
-              <span className="font-mono text-sm font-semibold text-fg-base">{s.group_id}</span>
-              <span className="truncate text-xs text-fg-subtle">{s.name}</span>
-            </span>
-            <span className="flex flex-1 items-center gap-[3px]">
-              {Array.from({ length: pad }).map((_, i) => <span key={`p${i}`} className="h-3.5 w-3.5 rounded-sm bg-bg-muted/40" />)}
-              {tail.map((p, i) => (
-                <span key={i} title={`${p.date} · ${QUADRANTS[p.quadrant].label}`} className="h-3.5 w-3.5 rounded-sm"
-                  style={{ background: QUADRANTS[p.quadrant].color, opacity: 0.3 + 0.7 * (tail.length > 1 ? i / (tail.length - 1) : 1) }} />
-              ))}
-            </span>
-            <span className="hidden w-24 justify-end sm:flex"><MiniRs points={(s.relative_strength ?? []) as [string, number][]} color={meta.color} /></span>
-            <span className="flex w-32 items-center justify-end gap-2">
-              <span className="tabular-nums text-xs text-fg-subtle">{s.current.rs_ratio.toFixed(1)}</span>
-              <QuadrantBadge quadrant={s.current.quadrant} />
-            </span>
-          </button>
+          <div key={s.group_id} className="border-b border-border/40 last:border-0">
+            <div role="button" tabIndex={0}
+              onMouseEnter={() => onHover(s.group_id)} onMouseLeave={() => onHover(null)}
+              onClick={() => onToggle(s.group_id)}
+              onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onToggle(s.group_id)}
+              className={cn("flex w-full cursor-pointer items-center gap-3 px-3 py-2 text-left transition-colors",
+                on ? "bg-bg-muted" : "hover:bg-bg-subtle", dim && "opacity-45")}>
+              <span className="flex w-40 shrink-0 flex-col">
+                <span className="flex items-baseline gap-2">
+                  <span className="font-mono text-sm font-semibold text-fg-base">{s.group_id}</span>
+                  <span className="truncate text-xs text-fg-subtle">{s.name}</span>
+                </span>
+                {isBasket && (
+                  <button type="button"
+                    onClick={(e) => { e.stopPropagation(); toggleExpand(s.group_id); }}
+                    className="mt-0.5 flex w-fit items-center gap-1 rounded text-[11px] text-accent hover:underline">
+                    <Layers className="h-3 w-3" />
+                    {members.length} holdings
+                    <ChevronDown className={cn("h-3 w-3 transition-transform", open && "rotate-180")} />
+                  </button>
+                )}
+              </span>
+              <span className="flex flex-1 items-center gap-[3px]">
+                {Array.from({ length: pad }).map((_, i) => <span key={`p${i}`} className="h-3.5 w-3.5 rounded-sm bg-bg-muted/40" />)}
+                {tail.map((p, i) => (
+                  <span key={i} title={`${p.date} · ${QUADRANTS[p.quadrant].label}`} className="h-3.5 w-3.5 rounded-sm"
+                    style={{ background: QUADRANTS[p.quadrant].color, opacity: 0.3 + 0.7 * (tail.length > 1 ? i / (tail.length - 1) : 1) }} />
+                ))}
+              </span>
+              <span className="hidden w-24 justify-end sm:flex"><MiniRs points={(s.relative_strength ?? []) as [string, number][]} color={meta.color} /></span>
+              <span className="flex w-32 items-center justify-end gap-2">
+                <span className="tabular-nums text-xs text-fg-subtle">{s.current.rs_ratio.toFixed(1)}</span>
+                <QuadrantBadge quadrant={s.current.quadrant} />
+              </span>
+            </div>
+            {isBasket && open && (
+              <div className="flex flex-wrap gap-1.5 bg-bg-base/60 px-3 pb-2.5 pl-3">
+                <span className="mr-1 text-[11px] text-fg-subtle">Holdings (equal weight):</span>
+                {members.map((m) => (
+                  <span key={m} className="rounded border border-border bg-bg-subtle px-1.5 py-0.5 font-mono text-[11px] text-fg-muted">{m}</span>
+                ))}
+              </div>
+            )}
+          </div>
         );
       })}
     </div>
@@ -339,7 +374,7 @@ export function SectorsPage() {
       <header className="mb-4 flex flex-wrap items-end justify-between gap-2">
         <div>
           <h1 className="text-xl font-semibold text-fg-base">Sector Rotation</h1>
-          <p className="text-sm text-fg-muted">The 11 S&amp;P sectors vs {dash?.benchmark ?? "SPY"} — relative strength &amp; momentum (RRG).</p>
+          <p className="text-sm text-fg-muted">S&amp;P sectors &amp; themes vs {dash?.benchmark ?? "SPY"} — relative strength &amp; momentum (RRG).</p>
         </div>
         {dash && (
           <div className="text-right text-xs text-fg-subtle">

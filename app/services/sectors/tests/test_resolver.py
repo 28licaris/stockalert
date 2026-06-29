@@ -66,13 +66,53 @@ def test_despike_preserves_genuine_step(monkeypatch):
     assert list(s.values) == [100.0, 160.0, 162.0, 161.0]  # nothing despiked
 
 
-def test_basket_seam_raises_not_implemented():
-    g = RotationGroup(
-        id="ai-datacenters",
-        name="AI Datacenters",
-        kind="basket",
-        benchmark="SPY",
-        members=["NVDA", "AMD", "AVGO"],
-    )
-    with pytest.raises(NotImplementedError):
+def _series_bars(values, day0=2):
+    return [_bar(day0 + i, v) for i, v in enumerate(values)]
+
+
+def test_basket_equal_weight_composite(monkeypatch):
+    # Two members: one flat at 100, one doubling 100→200 over 3 days.
+    # Equal-weight rebased composite: day0=100, then avg(1.0, growth)*100.
+    data = {
+        "AAA": _series_bars([100.0, 100.0, 100.0]),
+        "BBB": _series_bars([100.0, 150.0, 200.0]),
+    }
+    monkeypatch.setattr(resolver, "get_chart_bars", lambda symbol, **k: data[symbol])
+    g = RotationGroup(id="MINERS", name="Miners", kind="basket", benchmark="SPY",
+                      members=["AAA", "BBB"])
+    s = resolve(g)
+    # day0: (1.0 + 1.0)/2 * 100 = 100
+    assert s.iloc[0] == pytest.approx(100.0)
+    # day2: (1.0 + 2.0)/2 * 100 = 150
+    assert s.iloc[-1] == pytest.approx(150.0)
+
+
+def test_basket_drops_missing_members(monkeypatch):
+    data = {"AAA": _series_bars([10.0, 11.0, 12.0]), "GHOST": []}
+    monkeypatch.setattr(resolver, "get_chart_bars", lambda symbol, **k: data.get(symbol, []))
+    g = RotationGroup(id="MINERS", name="Miners", kind="basket", benchmark="SPY",
+                      members=["AAA", "GHOST"])
+    s = resolve(g)  # GHOST dropped (no data); AAA carries the basket
+    assert len(s) == 3
+    assert s.iloc[0] == pytest.approx(100.0)  # rebased
+
+
+def test_basket_all_missing_raises(monkeypatch):
+    monkeypatch.setattr(resolver, "get_chart_bars", lambda symbol, **k: [])
+    g = RotationGroup(id="MINERS", name="Miners", kind="basket", benchmark="SPY",
+                      members=["X", "Y"])
+    with pytest.raises(GroupResolutionError):
         resolve(g)
+
+
+def test_basket_weighted(monkeypatch):
+    # AAA flat, BBB doubles; weight BBB at 0.75 → day2 = 1.0*0.25 + 2.0*0.75 = 1.75
+    data = {
+        "AAA": _series_bars([100.0, 100.0, 100.0]),
+        "BBB": _series_bars([100.0, 150.0, 200.0]),
+    }
+    monkeypatch.setattr(resolver, "get_chart_bars", lambda symbol, **k: data[symbol])
+    g = RotationGroup(id="MINERS", name="Miners", kind="basket", benchmark="SPY",
+                      members=["AAA", "BBB"], weights={"AAA": 0.25, "BBB": 0.75})
+    s = resolve(g)
+    assert s.iloc[-1] == pytest.approx(175.0)
