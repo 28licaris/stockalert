@@ -28,8 +28,9 @@ class RotationGroup(BaseModel):
     schema change — only a resolver implementation.
     """
 
-    id: str = Field(..., description="Stable key, e.g. 'XLK'.")
+    id: str = Field(..., description="Stable key, e.g. 'XLK' or 'gold-miners'.")
     name: str = Field(..., description="Display name, e.g. 'Technology'.")
+    label: str = Field("", description="Short chart label for the scatter dot; falls back to id.")
     kind: GroupKind = "etf"
     benchmark: str = Field(..., description="Benchmark symbol, e.g. 'SPY'.")
     members: list[str] = Field(
@@ -56,6 +57,7 @@ class SectorRotationState(BaseModel):
 
     group_id: str
     name: str
+    label: str = ""
     kind: GroupKind = "etf"
     members: list[str] = Field(
         default_factory=list,
@@ -92,3 +94,38 @@ class RotationDashboard(BaseModel):
         default_factory=list,
         description="Groups dropped for insufficient/absent data, with reasons.",
     )
+
+
+# ── Themes as data (editable at runtime via API / MCP / UI) ──────────
+
+
+class ThemeRecord(BaseModel):
+    """A persisted thematic basket (a row in the `sector_themes` store)."""
+
+    theme_id: str
+    name: str
+    label: str
+    members: list[str]
+    weights: dict[str, float] = Field(default_factory=dict, description="Empty ⇒ equal weight.")
+    benchmark: str = "SPY"
+    is_active: bool = True
+
+
+class ThemeCreateRequest(BaseModel):
+    """Create a theme. `members` are tickers; equal-weight unless `weights`
+    given. `label` (short chart code) and `theme_id` default from `name`."""
+
+    name: str = Field(..., min_length=1, description="Display name, e.g. 'Copper Miners'.")
+    members: list[str] = Field(..., min_length=1, description="Constituent tickers.")
+    label: str | None = Field(None, description="Short chart label; defaults from name.")
+    weights: dict[str, float] | None = None
+    benchmark: str = "SPY"
+
+
+class ThemeMutationResponse(BaseModel):
+    theme: ThemeRecord | None = None
+    onboarded: list[str] = Field(
+        default_factory=list,
+        description="Constituents newly added to the streaming universe.",
+    )
+    themes: list[ThemeRecord] = Field(default_factory=list)

@@ -25,12 +25,82 @@ def tracked_symbols() -> list[str]:
     return list(out)
 
 
-async def ensure_tracked_in_universe(*, tip_fill: bool = True) -> dict:
-    """Add any tracked sector/theme symbol missing from the stream universe,
-    then Schwab-tip-fill the newly-added ones so they're current and
-    `schwab_universe` grows. Best-effort + idempotent — safe to call at every
-    startup; never raises (a failure is logged, the rest proceed)."""
+# Symbols currently being onboarded — dedupe concurrent onboards (e.g. several
+# theme creates touching overlapping tickers) so we never run the work twice.
+_inflight: set[str] = set()
+
+
+async def _onboard(symbols, *, tip_fill: bool, deep_history: bool) -> dict:
+    """Onboard a SPECIFIC list of symbols: membership (stream-universe add +
+    live subscribe) → Schwab tip-fill (recent ~48d, grows schwab_universe) →
+    deep history (read_arrow union, enough bars for RRG). Skips symbols already
+    in flight. Best-effort; never raises. This is the shared worker."""
     from app.services.stream import stream_service
+
+    syms = [s for s in dict.fromkeys(symbols) if s and s not in _inflight]
+    if not syms:
+        return {"added": [], "tip_filled": [], "deep_filled": []}
+    _inflight.update(syms)
+    try:
+        added: list[str] = []
+        for sym in syms:
+            try:
+                await asyncio.to_thread(
+                    stream_service.add, sym,
+                    added_by="sector-rotation", notes="tracked sector/theme",
+                )
+                added.append(sym)
+            except Exception as exc:  # noqa: BLE001 — best-effort
+                logger.error("sector onboard: add %s failed: %s", sym, exc)
+
+        tip_filled: list[str] = []
+        if tip_fill and added:
+            from app.services.ingest.schwab_tip_fill import SchwabTipFill
+
+            tip = SchwabTipFill.from_settings()
+            for sym in added:
+                try:
+                    res = await tip.tip_fill(sym)
+                    if getattr(res, "error", None):
+                        logger.warning("sector onboard: tip_fill %s: %s", sym, res.error)
+                    else:
+                        tip_filled.append(sym)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("sector onboard: tip_fill %s failed: %s", sym, exc)
+
+        deep_filled: list[str] = []
+        if deep_history and added:
+            from datetime import datetime, timedelta, timezone
+
+            from app.config import settings
+            from app.services.equities.lake_to_ch_fill import fill_ch_from_lake_sync
+
+            end = datetime.now(timezone.utc)
+            start = end - timedelta(days=settings.rrg_lookback_days)
+            for sym in added:
+                try:
+                    rows = await asyncio.to_thread(fill_ch_from_lake_sync, sym, start, end)
+                    if rows:
+                        deep_filled.append(sym)
+                    logger.info("sector onboard: deep_history %s rows=%d", sym, rows)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("sector onboard: deep_history %s failed: %s", sym, exc)
+
+        logger.info(
+            "sector onboard: added=%d tip_filled=%d deep_filled=%d (%s)",
+            len(added), len(tip_filled), len(deep_filled), ", ".join(added) or "—",
+        )
+        return {"added": added, "tip_filled": tip_filled, "deep_filled": deep_filled}
+    finally:
+        _inflight.difference_update(syms)
+
+
+async def ensure_tracked_in_universe(
+    *, tip_fill: bool = True, deep_history: bool = True
+) -> dict:
+    """Reconcile ALL tracked sector/theme symbols into the universe: onboard
+    any that are missing. Idempotent — steady state (nothing new) is a cheap
+    no-op. Use at startup."""
     from app.services.universe import get_active_universe
 
     tracked = tracked_symbols()
@@ -38,53 +108,35 @@ async def ensure_tracked_in_universe(*, tip_fill: bool = True) -> dict:
     missing = [s for s in tracked if s not in active]
     if not missing:
         logger.info("sector universe-sync: all %d tracked symbols already active", len(tracked))
-        return {"tracked": len(tracked), "added": [], "tip_filled": []}
+        return {"tracked": len(tracked), "added": [], "tip_filled": [], "deep_filled": []}
+    res = await _onboard(missing, tip_fill=tip_fill, deep_history=deep_history)
+    res["tracked"] = len(tracked)
+    return res
 
-    added: list[str] = []
-    for sym in missing:
+
+def _schedule(coro_factory, name: str) -> None:
+    async def _runner() -> None:
         try:
-            await asyncio.to_thread(
-                stream_service.add, sym,
-                added_by="sector-rotation", notes="tracked sector/theme",
-            )
-            added.append(sym)
-        except Exception as exc:  # noqa: BLE001 — best-effort onboarding
-            logger.error("sector universe-sync: add %s failed: %s", sym, exc)
+            await coro_factory()
+        except Exception as exc:  # noqa: BLE001 — never break the caller
+            logger.error("sector %s failed: %s", name, exc, exc_info=True)
 
-    tip_filled: list[str] = []
-    if tip_fill and added:
-        from app.services.ingest.schwab_tip_fill import SchwabTipFill
-
-        tip = SchwabTipFill.from_settings()
-        for sym in added:
-            try:
-                res = await tip.tip_fill(sym)
-                if getattr(res, "error", None):
-                    logger.warning("sector universe-sync: tip_fill %s: %s", sym, res.error)
-                else:
-                    tip_filled.append(sym)
-            except Exception as exc:  # noqa: BLE001
-                logger.error("sector universe-sync: tip_fill %s failed: %s", sym, exc)
-
-    logger.info(
-        "sector universe-sync: tracked=%d added=%d tip_filled=%d (added: %s)",
-        len(tracked), len(added), len(tip_filled), ", ".join(added) or "—",
-    )
-    return {"tracked": len(tracked), "added": added, "tip_filled": tip_filled}
+    try:
+        asyncio.get_running_loop().create_task(_runner(), name=name)
+    except RuntimeError:
+        logger.warning("sector %s: no running loop; skipped", name)
 
 
 def schedule_universe_sync() -> None:
-    """Fire-and-forget the reconcile on the running event loop. Wraps it so a
-    failure can never take down app startup. Call once from the app lifespan
-    after the stream service is up."""
+    """Fire-and-forget the full reconcile (startup). Best-effort."""
+    _schedule(ensure_tracked_in_universe, "universe_sync")
 
-    async def _runner() -> None:
-        try:
-            await ensure_tracked_in_universe()
-        except Exception as exc:  # noqa: BLE001 — never break startup
-            logger.error("sector universe-sync: reconcile failed: %s", exc, exc_info=True)
 
-    try:
-        asyncio.get_running_loop().create_task(_runner(), name="sector_universe_sync")
-    except RuntimeError:
-        logger.warning("sector universe-sync: no running loop; reconcile skipped")
+def schedule_onboard(symbols, *, tip_fill: bool = True, deep_history: bool = True) -> None:
+    """Fire-and-forget onboarding of a SPECIFIC symbol list — e.g. a newly
+    created theme's constituents. Targeted (no full reconcile) + deduped via the
+    in-flight guard, so N theme creates don't storm the onboarding path."""
+    syms = list(symbols)
+    if not syms:
+        return
+    _schedule(lambda: _onboard(syms, tip_fill=tip_fill, deep_history=deep_history), "onboard")

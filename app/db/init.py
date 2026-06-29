@@ -160,6 +160,35 @@ def init_schema() -> None:
         """
     )
 
+    # ─────────────────────────────────────────────────────────────────
+    # Sector-rotation themes — data-driven thematic baskets shown on the
+    # Sectors page. Editable at runtime (API / MCP / UI) instead of in
+    # code, so an agent or operator can add a theme without a deploy.
+    # ThemeStore owns this table; creating a theme also reconciles its
+    # constituents into stream_universe (never prunes). Soft-delete via
+    # is_active=0 keeps history. `members` is the holdings list; `weights`
+    # is a JSON map (empty ⇒ equal weight).
+    # ─────────────────────────────────────────────────────────────────
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS sector_themes (
+            theme_id    LowCardinality(String),
+            name        String DEFAULT '',
+            label       String DEFAULT '',
+            members     Array(LowCardinality(String)),
+            weights     String DEFAULT '',
+            benchmark   LowCardinality(String) DEFAULT 'SPY',
+            created_by  LowCardinality(String) DEFAULT '',
+            is_active   UInt8 DEFAULT 1,
+            updated_at  DateTime64(3, 'UTC') DEFAULT now64(3),
+            version     UInt64 DEFAULT 0
+        )
+        ENGINE = ReplacingMergeTree(version)
+        ORDER BY (theme_id)
+        SETTINGS index_granularity = 8192
+        """
+    )
+
     # ---------- Futures (separate hot table; CME futures, continuous roots) ----------
     # Same shape as ohlcv_1m so the bar reader / resampler / gateway work
     # unchanged when pointed here. Kept separate from equities because

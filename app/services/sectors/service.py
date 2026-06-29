@@ -25,6 +25,9 @@ from app.services.sectors.schemas import (
     RotationDashboard,
     RotationGroup,
     SectorRotationState,
+    ThemeCreateRequest,
+    ThemeMutationResponse,
+    ThemeRecord,
 )
 
 logger = logging.getLogger(__name__)
@@ -112,6 +115,7 @@ class SectorRotationService:
                 SectorRotationState(
                     group_id=group.id,
                     name=group.name,
+                    label=group.label or group.id,
                     kind=group.kind,
                     members=group.members,
                     current=result.current,
@@ -131,3 +135,49 @@ class SectorRotationService:
             sectors=sectors,
             excluded=excluded,
         )
+
+
+# ── Theme CRUD (data-driven baskets) ─────────────────────────────────
+
+
+def list_themes() -> list[ThemeRecord]:
+    from app.services.sectors import theme_store
+    return theme_store.list_themes()
+
+
+async def create_theme(req: ThemeCreateRequest) -> ThemeMutationResponse:
+    """Create/replace a theme, then onboard any brand-new constituents into the
+    streaming universe (membership + tip-fill + deep history) IN THE BACKGROUND
+    so the call returns immediately. The theme appears on the dashboard once its
+    members have enough history."""
+    from app.services.sectors import theme_store, universe_sync
+    from app.services.universe import get_active_universe
+
+    rec = theme_store.upsert_theme(
+        name=req.name, members=req.members, label=req.label,
+        weights=req.weights, benchmark=req.benchmark, created_by="api",
+    )
+    # Which members are brand-new to the universe?
+    try:
+        active = set(get_active_universe())
+        onboarded = [m for m in rec.members if m not in active]
+    except Exception:  # noqa: BLE001 — informational only
+        onboarded = []
+
+    # Onboard ONLY this theme's new members in the background (targeted —
+    # membership + tip-fill + deep history; add-only, never prunes). Not a full
+    # reconcile, so creating several themes doesn't storm the onboarding path.
+    if onboarded:
+        universe_sync.schedule_onboard(onboarded)
+
+    logger.info("create_theme: %s (%d members, onboarding %d new)",
+                rec.theme_id, len(rec.members), len(onboarded))
+    return ThemeMutationResponse(theme=rec, onboarded=onboarded, themes=theme_store.list_themes())
+
+
+def delete_theme(theme_id: str) -> ThemeMutationResponse:
+    """Soft-delete a theme. Constituents stay in the streaming universe (we
+    never prune) — only the rotation grouping is removed."""
+    from app.services.sectors import theme_store
+    theme_store.delete_theme(theme_id)
+    return ThemeMutationResponse(theme=None, onboarded=[], themes=theme_store.list_themes())

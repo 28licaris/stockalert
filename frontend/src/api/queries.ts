@@ -962,3 +962,43 @@ export function useSectorRotation(benchmark = "SPY", tailWeeks = 12) {
     refetchOnWindowFocus: false,
   });
 }
+
+// Themes as data — create/delete thematic baskets at runtime.
+export type ThemeRecord = components["schemas"]["ThemeRecord"];
+export type ThemeCreateRequest = components["schemas"]["ThemeCreateRequest"];
+export type ThemeMutationResponse = components["schemas"]["ThemeMutationResponse"];
+
+export function useSectorThemes() {
+  return useQuery({
+    queryKey: ["sectors", "themes"] as const,
+    queryFn: async (): Promise<ThemeRecord[]> => {
+      const { data } = await apiClient.GET("/api/v1/sectors/themes");
+      return (data as ThemeRecord[]) ?? [];
+    },
+    staleTime: 60_000,
+  });
+}
+
+export function useCreateTheme() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (req: ThemeCreateRequest): Promise<ThemeMutationResponse> => {
+      const { data } = await apiClient.POST("/api/v1/sectors/themes", { body: req });
+      return data as ThemeMutationResponse;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["sectors"] }),
+  });
+}
+
+export function useDeleteTheme() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (themeId: string): Promise<ThemeMutationResponse> => {
+      const { data } = await apiClient.DELETE("/api/v1/sectors/themes/{theme_id}", {
+        params: { path: { theme_id: themeId } },
+      });
+      return data as ThemeMutationResponse;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["sectors"] }),
+  });
+}

@@ -1,14 +1,19 @@
 """Registry of rotation groups.
 
-Phase 1: the 11 S&P 500 SPDR sector ETFs, each an `EtfGroup` (single-member
-passthrough) scored against SPY. The registry is the seam for Phase 2 — a
-theme catalog appends `RotationGroup(kind="basket", members=[…])` entries
-here (and `resolver` learns to aggregate them); nothing else changes.
+The 11 S&P 500 SPDR sector ETFs are **built-in** (`_SPDR_SECTORS`, fixed/
+standard). Thematic baskets are **data** — loaded from the `sector_themes`
+ClickHouse store (`theme_store`), so they're created/edited at runtime via the
+API / MCP / UI without a code change. Both kinds become `RotationGroup`s the
+engine/API/UI consume identically.
 """
 from __future__ import annotations
 
+import logging
+
 from app.config import settings
 from app.services.sectors.schemas import RotationGroup
+
+logger = logging.getLogger(__name__)
 
 # (symbol, display name) for the 11 SPDR sectors. Order is the conventional
 # GICS ordering used in most sector dashboards.
@@ -27,64 +32,60 @@ _SPDR_SECTORS: list[tuple[str, str]] = [
 ]
 
 
-# Thematic baskets (Phase 2): each resolves to an equal-weighted composite of
-# its constituents vs the benchmark. `id` is a short, ticker-style label used
-# on the scatter; `name` is the display name; `members` are the holdings shown
-# on the page. Add a theme = one entry here (no engine/API/UI change).
-_THEMES: list[dict] = [
-    {
-        "id": "MINERS",
-        "name": "Precious Metals Miners",
-        "members": [
-            # gold miners + royalty/streamers
-            "NEM", "GOLD", "AEM", "KGC", "AU", "FNV", "WPM", "RGLD",
-            # silver miners
-            "PAAS", "CDE", "HL", "AG",
-        ],
-    },
-]
-
-
 def benchmark_symbol() -> str:
     """The benchmark every group is measured against (default SPY)."""
     return settings.rrg_benchmark
 
 
-def theme_groups(benchmark: str | None = None) -> list[RotationGroup]:
-    """The thematic baskets (Phase 2) — equal-weighted composites."""
+def sector_etf_groups(benchmark: str | None = None) -> list[RotationGroup]:
+    """The 11 built-in SPDR sector ETF groups."""
     bench = benchmark or benchmark_symbol()
     return [
+        RotationGroup(id=sym, name=name, label=sym, kind="etf",
+                      benchmark=bench, members=[sym])
+        for sym, name in _SPDR_SECTORS
+    ]
+
+
+def theme_groups(benchmark: str | None = None) -> list[RotationGroup]:
+    """Thematic baskets from the `sector_themes` store. Returns [] (logged) if
+    the store is unreachable — sectors still render."""
+    bench = benchmark or benchmark_symbol()
+    try:
+        from app.services.sectors import theme_store
+        records = theme_store.list_themes()
+    except Exception as exc:  # noqa: BLE001 — degrade to sectors-only
+        logger.error("theme_groups: could not load themes: %s", exc)
+        return []
+    return [
         RotationGroup(
-            id=t["id"],
-            name=t["name"],
+            id=r.theme_id,
+            name=r.name,
+            label=r.label or r.theme_id,
             kind="basket",
-            benchmark=bench,
-            members=list(t["members"]),
+            benchmark=r.benchmark or bench,
+            members=list(r.members),
+            weights=r.weights or None,
         )
-        for t in _THEMES
+        for r in records
     ]
 
 
 def default_groups(benchmark: str | None = None) -> list[RotationGroup]:
-    """The full group set: 11 SPDR sector ETFs + thematic baskets vs SPY."""
+    """The full group set: 11 SPDR sector ETFs + stored thematic baskets."""
     bench = benchmark or benchmark_symbol()
-    etfs = [
-        RotationGroup(id=sym, name=name, kind="etf", benchmark=bench, members=[sym])
-        for sym, name in _SPDR_SECTORS
-    ]
-    return etfs + theme_groups(bench)
+    return sector_etf_groups(bench) + theme_groups(bench)
 
 
 def sector_symbols() -> list[str]:
-    """Flat symbol list (sectors + benchmark) — used by the universe-add
-    and coverage-verification ops steps."""
+    """Flat symbol list (sectors + benchmark) — built-in, no store I/O."""
     return [sym for sym, _ in _SPDR_SECTORS] + [benchmark_symbol()]
 
 
 def theme_symbols() -> list[str]:
-    """Flat list of all theme constituents — used by the onboarding step."""
+    """Flat list of all stored theme constituents — for onboarding/sync."""
     seen: dict[str, None] = {}
-    for t in _THEMES:
-        for s in t["members"]:
+    for g in theme_groups():
+        for s in g.members:
             seen.setdefault(s, None)
     return list(seen)

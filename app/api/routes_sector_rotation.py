@@ -13,6 +13,12 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.config import settings
 from app.services.sectors import RotationDashboard, SectorRotationService
+from app.services.sectors import service as sectors_service
+from app.services.sectors.schemas import (
+    ThemeCreateRequest,
+    ThemeMutationResponse,
+    ThemeRecord,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,3 +44,41 @@ def get_sector_rotation(
     except Exception as exc:  # noqa: BLE001 — boundary; surface, don't mask
         logger.exception("get_sector_rotation failed (benchmark=%s)", bench)
         raise HTTPException(status_code=500, detail=f"sector rotation error: {exc}")
+
+
+# ── Themes as data — runtime-editable thematic baskets ───────────────
+
+
+@router.get("/sectors/themes", response_model=list[ThemeRecord])
+def list_sector_themes() -> list[ThemeRecord]:
+    """The thematic baskets currently defined (data-driven, from the store)."""
+    try:
+        return sectors_service.list_themes()
+    except Exception as exc:  # noqa: BLE001 — boundary
+        logger.exception("list_sector_themes failed")
+        raise HTTPException(status_code=500, detail=f"themes error: {exc}")
+
+
+@router.post("/sectors/themes", response_model=ThemeMutationResponse, status_code=201)
+async def create_sector_theme(req: ThemeCreateRequest) -> ThemeMutationResponse:
+    """Create (or replace) a theme. New constituents are onboarded into the
+    streaming universe in the background (membership + tip-fill + deep history)
+    — nothing is ever removed from the universe."""
+    try:
+        return await sectors_service.create_theme(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001 — boundary
+        logger.exception("create_sector_theme failed (%s)", req.name)
+        raise HTTPException(status_code=500, detail=f"theme create error: {exc}")
+
+
+@router.delete("/sectors/themes/{theme_id}", response_model=ThemeMutationResponse)
+def delete_sector_theme(theme_id: str) -> ThemeMutationResponse:
+    """Soft-delete a theme. Its constituents stay in the streaming universe
+    (we never prune) — only the rotation grouping is removed."""
+    try:
+        return sectors_service.delete_theme(theme_id)
+    except Exception as exc:  # noqa: BLE001 — boundary
+        logger.exception("delete_sector_theme failed (%s)", theme_id)
+        raise HTTPException(status_code=500, detail=f"theme delete error: {exc}")

@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
-import { ChevronDown, Layers } from "lucide-react";
+import { ChevronDown, Layers, Plus, Trash2, X } from "lucide-react";
 import {
+  useCreateTheme,
+  useDeleteTheme,
   useSectorRotation,
   type RotationDashboard,
   type RotationQuadrant,
@@ -91,6 +93,7 @@ function RrgScatter({
   const labels = useMemo(() => {
     const arr = sectors.map((s) => ({
       id: s.group_id,
+      text: s.label || s.group_id,
       dx: sx(s.current.rs_ratio),
       dy: sy(s.current.rs_momentum),
       color: QUADRANTS[s.current.quadrant].color,
@@ -178,7 +181,7 @@ function RrgScatter({
         return (
           <g key={`lbl-${l.id}`} opacity={dim ? 0.28 : 1} className="pointer-events-none">
             {Math.abs(l.ly - l.dy) > 5 && <line x1={l.dx + 5} y1={l.dy} x2={lx - 1} y2={l.ly - 3} stroke={l.color} strokeOpacity={0.35} strokeWidth={1} />}
-            <text x={lx} y={l.ly} fontSize={12} fontWeight={active.has(l.id) ? 700 : 600} fill={l.color}>{l.id}</text>
+            <text x={lx} y={l.ly} fontSize={12} fontWeight={active.has(l.id) ? 700 : 600} fill={l.color}>{l.text}</text>
           </g>
         );
       })}
@@ -214,7 +217,7 @@ function QuadrantSummary({ sectors }: { sectors: SectorRotationState[] }) {
 /** A plain-language read of the board — the "so what". */
 function MarketRead({ sectors }: { sectors: SectorRotationState[] }) {
   const by = (q: RotationQuadrant) =>
-    sectors.filter((s) => s.current.quadrant === q).sort((a, b) => b.current.rs_ratio - a.current.rs_ratio).map((s) => s.group_id);
+    sectors.filter((s) => s.current.quadrant === q).sort((a, b) => b.current.rs_ratio - a.current.rs_ratio).map((s) => s.label || s.group_id);
   const rows: { q: RotationQuadrant; ids: string[] }[] = QUAD_ORDER.map((q) => ({ q, ids: by(q) })).filter((r) => r.ids.length);
   return (
     <div className="rounded-lg border border-border bg-bg-subtle p-3">
@@ -261,11 +264,13 @@ function RotationTable({
   active,
   onHover,
   onToggle,
+  onDelete,
 }: {
   sectors: SectorRotationState[];
   active: Set<string>;
   onHover: (id: string | null) => void;
   onToggle: (id: string) => void;
+  onDelete: (id: string, name: string) => void;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggleExpand = (id: string) =>
@@ -303,8 +308,8 @@ function RotationTable({
                 on ? "bg-bg-muted" : "hover:bg-bg-subtle", dim && "opacity-45")}>
               <span className="flex w-40 shrink-0 flex-col">
                 <span className="flex items-baseline gap-2">
-                  <span className="font-mono text-sm font-semibold text-fg-base">{s.group_id}</span>
-                  <span className="truncate text-xs text-fg-subtle">{s.name}</span>
+                  <span className="font-mono text-sm font-semibold text-fg-base">{s.label || s.group_id}</span>
+                  {s.name !== (s.label || s.group_id) && <span className="truncate text-xs text-fg-subtle">{s.name}</span>}
                 </span>
                 {isBasket && (
                   <button type="button"
@@ -330,11 +335,16 @@ function RotationTable({
               </span>
             </div>
             {isBasket && open && (
-              <div className="flex flex-wrap gap-1.5 bg-bg-base/60 px-3 pb-2.5 pl-3">
+              <div className="flex flex-wrap items-center gap-1.5 bg-bg-base/60 px-3 pb-2.5 pl-3">
                 <span className="mr-1 text-[11px] text-fg-subtle">Holdings (equal weight):</span>
                 {members.map((m) => (
                   <span key={m} className="rounded border border-border bg-bg-subtle px-1.5 py-0.5 font-mono text-[11px] text-fg-muted">{m}</span>
                 ))}
+                <button type="button"
+                  onClick={() => onDelete(s.group_id, s.name)}
+                  className="ml-auto flex items-center gap-1 rounded border border-rose-500/30 px-1.5 py-0.5 text-[11px] text-rose-400 hover:bg-rose-500/10">
+                  <Trash2 className="h-3 w-3" /> Remove theme
+                </button>
               </div>
             )}
           </div>
@@ -344,10 +354,79 @@ function RotationTable({
   );
 }
 
+/** Create a theme inline — name + tickers → a live thematic basket (data op). */
+function AddThemeForm() {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [label, setLabel] = useState("");
+  const [tickers, setTickers] = useState("");
+  const create = useCreateTheme();
+
+  const members = tickers.split(/[\s,]+/).map((t) => t.trim().toUpperCase()).filter(Boolean);
+  const canSubmit = name.trim().length > 0 && members.length > 0 && !create.isPending;
+  const submit = () => {
+    if (!canSubmit) return;
+    create.mutate(
+      { name: name.trim(), label: label.trim() || null, members, benchmark: "SPY" },
+      { onSuccess: () => { setName(""); setLabel(""); setTickers(""); } },
+    );
+  };
+
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)}
+        className="flex items-center gap-1.5 rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 text-sm text-fg-muted hover:bg-bg-muted">
+        <Plus className="h-4 w-4" /> Add theme
+      </button>
+    );
+  }
+  return (
+    <div className="w-full rounded-lg border border-border bg-bg-subtle p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-sm font-medium text-fg-base">New theme</span>
+        <button type="button" onClick={() => setOpen(false)} className="text-fg-subtle hover:text-fg-base"><X className="h-4 w-4" /></button>
+      </div>
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="flex flex-col gap-1 text-[11px] text-fg-subtle">Name
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Uranium Miners"
+            className="w-44 rounded border border-border bg-bg-base px-2 py-1 text-sm text-fg-base" />
+        </label>
+        <label className="flex flex-col gap-1 text-[11px] text-fg-subtle">Chart label
+          <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Uranium"
+            className="w-28 rounded border border-border bg-bg-base px-2 py-1 text-sm text-fg-base" />
+        </label>
+        <label className="flex flex-1 flex-col gap-1 text-[11px] text-fg-subtle">Tickers
+          <input value={tickers} onChange={(e) => setTickers(e.target.value)} placeholder="CCJ, UEC, DNN, NXE"
+            onKeyDown={(e) => e.key === "Enter" && submit()}
+            className="w-full rounded border border-border bg-bg-base px-2 py-1 font-mono text-sm text-fg-base" />
+        </label>
+        <button type="button" onClick={submit} disabled={!canSubmit}
+          className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg disabled:opacity-50">
+          {create.isPending ? "Creating…" : "Create"}
+        </button>
+      </div>
+      {members.length > 0 && <p className="mt-1.5 text-[11px] text-fg-subtle">{members.length} holdings: {members.join(" ")}</p>}
+      {create.isError && <p className="mt-1.5 text-[11px] text-rose-400">Failed to create theme.</p>}
+      {!!create.data?.onboarded?.length && (
+        <p className="mt-1.5 text-[11px] text-blue-400">
+          Onboarding {create.data.onboarded.length} new symbol(s): {create.data.onboarded.join(" ")} — appears once data loads.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function SectorsPage() {
   const { data, isLoading, error } = useSectorRotation();
+  const deleteTheme = useDeleteTheme();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [hovered, setHovered] = useState<string | null>(null);
+
+  const onDelete = (id: string, name: string) => {
+    if (window.confirm(`Remove the "${name}" theme? Its tickers stay in the universe.`)) {
+      deleteTheme.mutate(id);
+    }
+  };
 
   const dash = data as RotationDashboard | undefined;
   const sectors = useMemo<SectorRotationState[]>(() => {
@@ -403,7 +482,11 @@ export function SectorsPage() {
           </div>
 
           <div className="mt-4">
-            <RotationTable sectors={sectors} active={active} onHover={setHovered} onToggle={toggle} />
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-fg-base">Sectors &amp; themes</h2>
+              <AddThemeForm />
+            </div>
+            <RotationTable sectors={sectors} active={active} onHover={setHovered} onToggle={toggle} onDelete={onDelete} />
           </div>
 
           {dash.excluded && dash.excluded.length > 0 && (

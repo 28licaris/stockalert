@@ -703,6 +703,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sectors/themes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Sector Themes
+         * @description The thematic baskets currently defined (data-driven, from the store).
+         */
+        get: operations["list_sector_themes_api_v1_sectors_themes_get"];
+        put?: never;
+        /**
+         * Create Sector Theme
+         * @description Create (or replace) a theme. New constituents are onboarded into the
+         *     streaming universe in the background (membership + tip-fill + deep history)
+         *     — nothing is ever removed from the universe.
+         */
+        post: operations["create_sector_theme_api_v1_sectors_themes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sectors/themes/{theme_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Sector Theme
+         * @description Soft-delete a theme. Its constituents stay in the streaming universe
+         *     (we never prune) — only the rotation grouping is removed.
+         */
+        delete: operations["delete_sector_theme_api_v1_sectors_themes__theme_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/corp-actions/{symbol}": {
         parameters: {
             query?: never;
@@ -3843,6 +3890,11 @@ export interface components {
             /** Name */
             name: string;
             /**
+             * Label
+             * @default
+             */
+            label: string;
+            /**
              * Kind
              * @default etf
              * @enum {string}
@@ -4368,6 +4420,79 @@ export interface components {
              * @default true
              */
             force: boolean;
+        };
+        /**
+         * ThemeCreateRequest
+         * @description Create a theme. `members` are tickers; equal-weight unless `weights`
+         *     given. `label` (short chart code) and `theme_id` default from `name`.
+         */
+        ThemeCreateRequest: {
+            /**
+             * Name
+             * @description Display name, e.g. 'Copper Miners'.
+             */
+            name: string;
+            /**
+             * Members
+             * @description Constituent tickers.
+             */
+            members: string[];
+            /**
+             * Label
+             * @description Short chart label; defaults from name.
+             */
+            label?: string | null;
+            /** Weights */
+            weights?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Benchmark
+             * @default SPY
+             */
+            benchmark: string;
+        };
+        /** ThemeMutationResponse */
+        ThemeMutationResponse: {
+            theme?: components["schemas"]["ThemeRecord"] | null;
+            /**
+             * Onboarded
+             * @description Constituents newly added to the streaming universe.
+             */
+            onboarded?: string[];
+            /** Themes */
+            themes?: components["schemas"]["ThemeRecord"][];
+        };
+        /**
+         * ThemeRecord
+         * @description A persisted thematic basket (a row in the `sector_themes` store).
+         */
+        ThemeRecord: {
+            /** Theme Id */
+            theme_id: string;
+            /** Name */
+            name: string;
+            /** Label */
+            label: string;
+            /** Members */
+            members: string[];
+            /**
+             * Weights
+             * @description Empty ⇒ equal weight.
+             */
+            weights?: {
+                [key: string]: number;
+            };
+            /**
+             * Benchmark
+             * @default SPY
+             */
+            benchmark: string;
+            /**
+             * Is Active
+             * @default true
+             */
+            is_active: boolean;
         };
         /** ValidationError */
         ValidationError: {
@@ -5693,6 +5818,90 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RotationDashboard"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_sector_themes_api_v1_sectors_themes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThemeRecord"][];
+                };
+            };
+        };
+    };
+    create_sector_theme_api_v1_sectors_themes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ThemeCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThemeMutationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_sector_theme_api_v1_sectors_themes__theme_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                theme_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThemeMutationResponse"];
                 };
             };
             /** @description Validation Error */
