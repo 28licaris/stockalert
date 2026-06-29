@@ -50,6 +50,7 @@ from app.api import (
     routes_movers,
     routes_news,
     routes_screener,
+    routes_sector_rotation,
     routes_adjusted,
     routes_admin_auth,
     routes_auth,
@@ -261,6 +262,16 @@ async def lifespan(app: FastAPI):
             logger.warning("Stream provider error: %s", s_status["provider_error"])
     except Exception as e:
         logger.warning("stream_service.status() failed: %s", e)
+
+    # Tracked instruments live in the universe: reconcile sector ETFs + theme
+    # constituents into the stream universe (adds + Schwab tip-fill any new
+    # ones, growing schwab_universe). Idempotent; runs in the background so it
+    # never blocks or breaks startup. See app/services/sectors/universe_sync.py.
+    try:
+        from app.services.sectors.universe_sync import schedule_universe_sync
+        schedule_universe_sync()
+    except Exception as e:  # noqa: BLE001 — never break startup
+        logger.warning("sector universe-sync scheduling failed: %s", e)
 
     await _safe_start("Watchlist service", lambda: watchlist_service.start())
     try:
@@ -769,6 +780,7 @@ app.include_router(routes_journal.router, prefix=_V1, tags=["Journal"])
 app.include_router(routes_lake.router, prefix=_V1, tags=["Lake"])
 app.include_router(routes_indicators.router, prefix=_V1, tags=["Indicators"])
 app.include_router(routes_screener.router, prefix=_V1, tags=["Screener"])
+app.include_router(routes_sector_rotation.router, prefix=_V1, tags=["SectorRotation"])
 app.include_router(routes_corp_actions.router, prefix=_V1, tags=["CorpActions"])
 app.include_router(routes_adjusted.router, prefix=_V1, tags=["Adjusted"])
 app.include_router(routes_monitors.router, prefix=_V1, tags=["Monitors"])

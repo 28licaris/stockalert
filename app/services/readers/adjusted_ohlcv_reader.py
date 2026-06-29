@@ -286,21 +286,21 @@ class AdjustedOhlcvReader:
     ) -> SilverBarsResponse:
         """Adjusted bars for `[start, end)` UNIONing the two v2 sources.
 
-        Reads BOTH `equities.polygon_adjusted` (canonical adjusted deep
-        history) AND `equities.schwab_universe` (live + tip-fill, also
-        pre-adjusted with `adj_factor=1.0`) and stitches them on
-        `(symbol, timestamp)` with polygon winning duplicates.
+        Reads BOTH the polygon source — `equities.polygon_raw` with the
+        split adjustment computed at READ time from `equities.market_splits`
+        (the materialized `polygon_adjusted` table was retired in v2) — AND
+        `equities.schwab_universe` (live + tip-fill, pre-adjusted with
+        `adj_factor=1.0`), stitching them on `(symbol, timestamp)` with
+        polygon winning duplicates (shared dedup via `read_arrow.union_arrow`).
 
-        Why polygon wins: the Spark adjustment job (CV5) is the source
-        of truth for adj_factor across history. Schwab rows in the
-        overlap window are accurate but redundant; choosing polygon
-        keeps adj_factor consistent for downstream consumers (chart,
-        backtest math).
+        Why polygon wins: read-time adjustment off polygon_raw + the split
+        history is the source of truth for adj_factor. Schwab rows in the
+        overlap window are accurate but redundant; choosing polygon keeps
+        adj_factor consistent for downstream consumers (chart, backtest math).
 
         Use when:
-          - Chart "deep zoom that includes today" — polygon_adjusted
-            lags real-time by up to one weekly Spark run; schwab_universe
-            fills the trailing window.
+          - Chart "deep zoom that includes today" — polygon flat-files lag
+            real-time by up to a day; schwab_universe fills the trailing window.
           - ML training set whose last day is today's date.
           - Cross-provider continuity validation.
 

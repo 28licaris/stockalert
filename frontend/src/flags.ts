@@ -33,6 +33,7 @@ const FLAGS: Record<string, FlagValue> = {
   "page.calendar": true, // market calendar (sessions; events Phase 2)
   "page.news": true, // news & alerts feed (EDGAR filings, AI-summarized)
   "page.economic": true, // economic indicators (BLS: CPI, jobs, unemployment)
+  "page.sectors": true, // sector rotation (RRG) — 11 SPDR sectors vs SPY
   "page.mcp": false,
   "page.settings": true,
 

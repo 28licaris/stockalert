@@ -164,6 +164,8 @@ export const queryKeys = {
     ["instruments", "lookup", symbols] as const,
   clickhouseSchema: ["clickhouse", "schema"] as const,
   jobs: ["jobs"] as const,
+  sectorRotation: (benchmark: string, tailWeeks: number) =>
+    ["sectors", "rotation", benchmark, tailWeeks] as const,
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────
@@ -929,5 +931,74 @@ export function useExecuteClickHouseQuery() {
       });
       return data as ClickHouseQueryResponse;
     },
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// /api/v1/sectors/rotation — RRG sector-rotation dashboard
+// ─────────────────────────────────────────────────────────────────────
+
+export type RotationDashboard = components["schemas"]["RotationDashboard"];
+export type SectorRotationState =
+  components["schemas"]["SectorRotationState"];
+export type RotationPoint = components["schemas"]["RotationPoint"];
+export type RotationQuadrant = RotationPoint["quadrant"];
+
+/**
+ * Sector rotation (RRG) dashboard. The backend reads ClickHouse and the
+ * picture only changes once new daily bars land, so we keep it fresh but
+ * un-aggressive: refetch on a slow interval, generous staleTime.
+ */
+export function useSectorRotation(benchmark = "SPY", tailWeeks = 12) {
+  return useQuery({
+    queryKey: queryKeys.sectorRotation(benchmark, tailWeeks),
+    queryFn: async (): Promise<RotationDashboard> => {
+      const { data } = await apiClient.GET("/api/v1/sectors/rotation", {
+        params: { query: { benchmark, tail_weeks: tailWeeks } },
+      });
+      return data as RotationDashboard;
+    },
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+  });
+}
+
+// Themes as data — create/delete thematic baskets at runtime.
+export type ThemeRecord = components["schemas"]["ThemeRecord"];
+export type ThemeCreateRequest = components["schemas"]["ThemeCreateRequest"];
+export type ThemeMutationResponse = components["schemas"]["ThemeMutationResponse"];
+
+export function useSectorThemes() {
+  return useQuery({
+    queryKey: ["sectors", "themes"] as const,
+    queryFn: async (): Promise<ThemeRecord[]> => {
+      const { data } = await apiClient.GET("/api/v1/sectors/themes");
+      return (data as ThemeRecord[]) ?? [];
+    },
+    staleTime: 60_000,
+  });
+}
+
+export function useCreateTheme() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (req: ThemeCreateRequest): Promise<ThemeMutationResponse> => {
+      const { data } = await apiClient.POST("/api/v1/sectors/themes", { body: req });
+      return data as ThemeMutationResponse;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["sectors"] }),
+  });
+}
+
+export function useDeleteTheme() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (themeId: string): Promise<ThemeMutationResponse> => {
+      const { data } = await apiClient.DELETE("/api/v1/sectors/themes/{theme_id}", {
+        params: { path: { theme_id: themeId } },
+      });
+      return data as ThemeMutationResponse;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["sectors"] }),
   });
 }

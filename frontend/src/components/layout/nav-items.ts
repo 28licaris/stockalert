@@ -12,6 +12,7 @@ import {
   LineChart,
   ListChecks,
   NotebookPen,
+  Orbit,
   Radio,
   Settings,
   Sparkles,
@@ -52,6 +53,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: "Calendar",    href: "/calendar",    icon: CalendarDays,     flag: "page.calendar",    category: "Markets" },
   { label: "News",        href: "/news",        icon: Newspaper,        flag: "page.news",        category: "Markets" },
   { label: "Economic",    href: "/economic",    icon: TrendingUp,       flag: "page.economic",    category: "Markets" },
+  { label: "Sectors",     href: "/sectors",     icon: Orbit,            flag: "page.sectors",     category: "Markets" },
 
   { label: "Screener",    href: "/screener",    icon: Sparkles,         flag: "page.screener",    category: "Strategies" },
   { label: "Backtest",    href: "/backtest",    icon: Beaker,           flag: "page.backtest",    category: "Strategies" },

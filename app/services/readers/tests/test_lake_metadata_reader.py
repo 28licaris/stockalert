@@ -130,7 +130,7 @@ class TestListSnapshots:
         table = _fake_table([snap_a, snap_b])
         catalog = _fake_catalog({
             "equities.polygon_raw": table,
-            "equities.polygon_adjusted": table,
+            "equities.market_splits": table,
             "equities.schwab_universe": table,
             "equities.market_corp_actions": table,
         })
@@ -138,10 +138,10 @@ class TestListSnapshots:
 
         resp = reader.list_snapshots()
 
-        # Every default table requested.
+        # Every default table requested (polygon_adjusted retired in v2).
         assert resp.requested_tables == [
             "equities.polygon_raw",
-            "equities.polygon_adjusted",
+            "equities.market_splits",
             "equities.schwab_universe",
             "equities.market_corp_actions",
         ]
@@ -201,26 +201,26 @@ class TestListSnapshots:
             _fake_snapshot(snapshot_id=11, timestamp_ms=1_700_086_400_000),  # +1 day
             _fake_snapshot(snapshot_id=12, timestamp_ms=1_700_172_800_000),  # +2 days
         ]
-        # polygon_adjusted: 1 snap from yesterday
+        # market_splits: 1 snap from yesterday
         adj_snaps = [
             _fake_snapshot(snapshot_id=20, timestamp_ms=1_700_129_600_000),
         ]
         catalog = _fake_catalog({
             "equities.polygon_raw": _fake_table(raw_snaps),
-            "equities.polygon_adjusted": _fake_table(adj_snaps),
+            "equities.market_splits": _fake_table(adj_snaps),
         })
         reader = LakeMetadataReader(catalog=catalog)
 
         resp = reader.list_snapshots(
-            tables=["polygon_raw", "polygon_adjusted"], limit=2,
+            tables=["polygon_raw", "market_splits"], limit=2,
         )
 
         # Per-table limit=2: polygon_raw contributes its 2 NEWEST
-        # (snapshot_id 12, 11). polygon_adjusted contributes its 1.
+        # (snapshot_id 12, 11). market_splits contributes its 1.
         # Total 3 snapshots, sorted DESC across tables.
         assert resp.count == 3
         ids = [s.snapshot_id for s in resp.snapshots]
-        # 12 (raw, newest), 20 (adjusted), 11 (raw)
+        # 12 (raw, newest), 20 (splits), 11 (raw)
         assert ids == [12, 20, 11]
 
     def test_cross_table_sort_is_committed_at_desc(self):
@@ -228,12 +228,12 @@ class TestListSnapshots:
         new = _fake_snapshot(snapshot_id=2, timestamp_ms=1_700_500_000_000)
         catalog = _fake_catalog({
             "equities.polygon_raw": _fake_table([old]),
-            "equities.polygon_adjusted": _fake_table([new]),
+            "equities.market_splits": _fake_table([new]),
         })
         reader = LakeMetadataReader(catalog=catalog)
 
         resp = reader.list_snapshots(
-            tables=["polygon_raw", "polygon_adjusted"], limit=10,
+            tables=["polygon_raw", "market_splits"], limit=10,
         )
         assert resp.snapshots[0].snapshot_id == 2  # newer first
         assert resp.snapshots[1].snapshot_id == 1

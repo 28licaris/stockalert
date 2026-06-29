@@ -1,39 +1,35 @@
 """
-Lake → ClickHouse backfill (was silver→CH; CV11 retargeted at
-equities.polygon_adjusted).
+Lake → ClickHouse backfill — the deep-history half of the live
+add-symbol / nightly flow (the recent ~48d tip is handled separately by
+`schwab_tip_fill.SchwabTipFill`).
 
-Reads adjusted 1-minute bars via `AdjustedOhlcvReader` (which post-CV11
-sources from `equities.polygon_adjusted`) and bulk-inserts into
-ClickHouse `ohlcv_1m`. The **canonical fast path** for populating CH
-from deep history — replaces the legacy provider-REST-direct-to-CH
-path when triggered.
+Reads adjusted 1-minute bars via `AdjustedOhlcvReader.get_bars`, which
+computes split adjustment at READ time from `equities.polygon_raw` +
+`equities.market_splits` (the materialized `polygon_adjusted` table was
+retired — see docs/adjusted_lean_storage_spec.md), and bulk-inserts into
+ClickHouse `ohlcv_1m`.
 
 Per the v2 consumer contract:
-  equities.polygon_adjusted = canonical (immutable, snapshot-pinned,
-                              corp-action-adj'd, ~5y deep history)
-  ClickHouse                = derived hot cache (re-buildable from
-                              the lake any time)
+  the lake (polygon_raw + market_splits, adjusted on read) = canonical
+  ClickHouse                                               = derived hot
+                              cache, re-buildable from the lake any time.
 
-polygon_adjusted stores split-adjusted prices with adj_factor on
-every row. That's what CH ohlcv_1m needs (the chart, indicators,
-screener, backtest all consume the adjusted view). Consumers needing
-raw prices multiply by adj_factor — math is local, no extra read.
+The adjusted view is what CH ohlcv_1m needs (chart, indicators, screener,
+backtest all consume adjusted prices); adj_factor rides on every row for
+consumers that want raw.
 
 Wall-clock notes:
-  - Cold-start NVDA × 730 days ≈ 200K bars → ~5-8 seconds end-to-end
-    on a warm Iceberg cache + local CH. polygon_adjusted's bucket(32,
-    symbol) partitioning means single-symbol scans read ~1/32 of each
-    month's data (v1 silver was month-only partitioning, read whole
-    month). Actual CH insert is sub-second for 200K rows.
+  - Cold-start NVDA × 730 days ≈ 200K bars → seconds on a warm Iceberg
+    cache + local CH. `polygon_raw`'s bucket(32, symbol) partitioning
+    means single-symbol scans read ~1/32 of each month's data. CH insert
+    is sub-second for 200K rows.
   - Idempotent: CH `ohlcv_1m` is a `ReplacingMergeTree(version)` — re-
-    running with the same data produces no duplicates after the next
-    merge.
+    running with the same data produces no duplicates after the next merge.
 
-CV15 rename pass: module + class renamed from silver_to_ch_backfill /
-SilverToChBackfill. The body is kept stable for
-caller compatibility — Phase 1C is the read-side cutover, not the
-big rename pass. The full rename to `lake_to_ch_backfill` happens in
-CV14 alongside silver-module deletion.
+Note: this is the DEEP-HISTORY backfill (polygon, read-time adjusted). It
+does NOT include the recent schwab tip; the bulk operator rebuild that DOES
+want the full union (incl. tip) is `scripts/rebuild_ch_from_lake.py`, which
+loops `lake_to_ch_fill.fill_ch_from_lake` (read_arrow union) instead.
 """
 from __future__ import annotations
 

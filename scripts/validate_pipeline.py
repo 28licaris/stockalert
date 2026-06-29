@@ -124,7 +124,7 @@ def test_t1_hot_cache(symbol: str) -> TestResult:
             name="T1", passed=False, duration_s=time.time() - started,
             failure_reason=(
                 f"{symbol} has 0 bars in CH for the last 30d. Was it loaded? "
-                "Run scripts/hotload_ch_from_lake.py --symbols " + symbol
+                "Run scripts/rebuild_ch_from_lake.py --symbols " + symbol
             ),
         )
 

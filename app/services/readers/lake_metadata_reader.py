@@ -34,7 +34,9 @@ logger = logging.getLogger(__name__)
 # Glue doesn't know about so a config drift is logged, not fatal.
 _EQUITIES_TABLES = (
     "polygon_raw",
-    "polygon_adjusted",
+    # polygon_adjusted RETIRED (v2): adjustment is computed at read time from
+    # polygon_raw + market_splits — there is no materialized adjusted table.
+    "market_splits",
     "schwab_universe",
     "market_corp_actions",
 )
