@@ -378,6 +378,19 @@ class TestMarketDataGet:
         assert call_kwargs["params"] == {"symbols": "AAPL"}
 
     @pytest.mark.asyncio
+    async def test_serializes_bool_query_params(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        p._access_token = "tok"
+        session = make_session(get_resp=make_resp(200, {"key": "value"}))
+        with patch("app.providers.schwab_provider.aiohttp.ClientSession", return_value=make_session_cm(session)):
+            await p._market_data_get(
+                "/chains",
+                {"symbol": "AAPL", "includeUnderlyingQuote": True, "unused": None},
+            )
+        params = session.get.call_args.kwargs["params"]
+        assert params == {"symbol": "AAPL", "includeUnderlyingQuote": "true"}
+
+    @pytest.mark.asyncio
     async def test_returns_empty_dict_on_non_200(self):
         p = SchwabProvider("cid", "secret", refresh_token="rt")
         p._access_token = "tok"

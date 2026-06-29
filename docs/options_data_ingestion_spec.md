@@ -4,7 +4,7 @@ Status: implementation in progress on branch `options`
 
 ## Implementation Checkpoint
 
-Last updated during O5b options cockpit frontend.
+Last updated during O5c options Glue grant and live snapshot smoke.
 
 Completed:
 
@@ -96,6 +96,20 @@ Completed:
     `/api/v1/options/contracts/latest` and `/api/v1/options/gex/latest`.
   - Sidebar routing is enabled through `page.options` so operators can reach
     the cockpit from Markets.
+- O5c IAM/live snapshot smoke:
+  - `StockLakeOptionsGlueRW` was created and attached to `stock-lake-ingest`
+    so the existing lake writer can create/read/update `options` Glue
+    databases and tables.
+  - `scripts/aws/iam_policies/stock-lake-rw.json` now includes `options`
+    resources for the canonical full lake policy, and
+    `scripts/aws/iam_policies/options-glue-rw.json` captures the smaller
+    additive managed-policy shape used in dev.
+  - Schwab market-data query params now serialize bools as lowercase strings
+    at the provider boundary so option-chain requests with
+    `includeUnderlyingQuote=true` do not fail in `aiohttp/yarl`.
+  - Live AAPL snapshot smoke wrote 1 raw row, 1,000 contract rows, 25
+    expiration rows, and 566 GEX rows, then the phone-facing hot-tier API
+    returned non-empty contracts and total GEX.
 
 Current verification:
 
@@ -111,6 +125,12 @@ cd frontend && npm run build
 
 cd frontend && npx eslint src/routes/options.tsx src/api/queries.ts src/routes/router.tsx src/components/layout/nav-items.ts src/flags.ts --max-warnings=0
 # passed
+
+/Users/licaris/dev/stockalert/.venv/bin/pytest app/providers/tests/test_schwab_provider.py::TestMarketDataGet app/providers/tests/test_schwab_provider.py::TestMarketDataMethods::test_get_option_chains
+# 5 passed
+
+AWS_PROFILE=stock-lake /Users/licaris/dev/stockalert/.venv/bin/python scripts/options_chain_snapshot.py --symbols AAPL --strike-count 20
+# status=ok contracts=1000 expirations=25 gex_rows=566 written=1592 sink=ok
 ```
 
 Full frontend lint is currently blocked by a pre-existing warning in

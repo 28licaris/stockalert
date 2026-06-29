@@ -1,0 +1,43 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "OptionsGlueCatalog",
+      "Effect": "Allow",
+      "Action": [
+        "glue:GetCatalog",
+        "glue:CreateDatabase",
+        "glue:GetDatabase",
+        "glue:GetDatabases",
+        "glue:UpdateDatabase"
+      ],
+      "Resource": [
+        "arn:aws:glue:us-east-1:562741918372:catalog",
+        "arn:aws:glue:us-east-1:562741918372:database/options"
+      ]
+    },
+    {
+      "Sid": "OptionsGlueTables",
+      "Effect": "Allow",
+      "Action": [
+        "glue:CreateTable",
+        "glue:GetTable",
+        "glue:GetTables",
+        "glue:UpdateTable",
+        "glue:DeleteTable",
+        "glue:GetPartition",
+        "glue:GetPartitions",
+        "glue:BatchCreatePartition",
+        "glue:CreatePartition",
+        "glue:UpdatePartition",
+        "glue:DeletePartition",
+        "glue:BatchDeletePartition"
+      ],
+      "Resource": [
+        "arn:aws:glue:us-east-1:562741918372:catalog",
+        "arn:aws:glue:us-east-1:562741918372:database/options",
+        "arn:aws:glue:us-east-1:562741918372:table/options/*"
+      ]
+    }
+  ]
+}

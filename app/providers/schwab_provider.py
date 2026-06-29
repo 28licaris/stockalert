@@ -72,6 +72,21 @@ MARKET_SINGLE_PATH = "/markets/{market_id}"
 INSTRUMENTS_PATH = "/instruments"
 INSTRUMENT_CUSIP_PATH = "/instruments/{cusip_id}"
 
+
+def _query_params(params: Optional[dict]) -> dict:
+    if not params:
+        return {}
+    normalized: dict[str, Any] = {}
+    for key, value in params.items():
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            normalized[key] = "true" if value else "false"
+        else:
+            normalized[key] = value
+    return normalized
+
+
 # Streamer services (per Schwab Streamer API doc; same request shape: service, command, SchwabClientCustomerId, SchwabClientCorrelId, parameters)
 SERVICE_ADMIN = "ADMIN"
 SERVICE_CHART_EQUITY = "CHART_EQUITY"
@@ -299,8 +314,9 @@ class SchwabProvider(DataProvider):
         token = await self._ensure_token()
         url = f"{self._base_url}{MARKET_DATA_BASE}{path}"
         headers = {"Authorization": f"Bearer {token}"}
+        query_params = _query_params(params)
         async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
-            async with session.get(url, params=params or {}, headers=headers) as resp:
+            async with session.get(url, params=query_params, headers=headers) as resp:
                 # #region agent log
                 _debug_ndjson(
                     "market_data_get",

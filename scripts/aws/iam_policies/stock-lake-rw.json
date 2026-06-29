@@ -48,7 +48,8 @@
         "arn:aws:glue:us-east-1:562741918372:catalog",
         "arn:aws:glue:us-east-1:562741918372:database/stock_lake",
         "arn:aws:glue:us-east-1:562741918372:database/equities",
-        "arn:aws:glue:us-east-1:562741918372:database/futures"
+        "arn:aws:glue:us-east-1:562741918372:database/futures",
+        "arn:aws:glue:us-east-1:562741918372:database/options"
       ]
     },
     {
@@ -75,7 +76,9 @@
         "arn:aws:glue:us-east-1:562741918372:table/stock_lake/*",
         "arn:aws:glue:us-east-1:562741918372:table/equities/*",
         "arn:aws:glue:us-east-1:562741918372:database/futures",
-        "arn:aws:glue:us-east-1:562741918372:table/futures/*"
+        "arn:aws:glue:us-east-1:562741918372:table/futures/*",
+        "arn:aws:glue:us-east-1:562741918372:database/options",
+        "arn:aws:glue:us-east-1:562741918372:table/options/*"
       ]
     },
     {
