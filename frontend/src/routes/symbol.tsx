@@ -12,7 +12,9 @@ import { Button } from "@/components/ui/button";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
 import { SymbolSearchInput } from "@/components/symbol/SymbolSearchInput";
 import {
+  CHART_RANGE_DAYS,
   useIndicators,
+  useBarsWindow,
   useLakeBars,
   useSymbolSignals,
   type Bar,
@@ -92,7 +94,24 @@ export function SymbolPage() {
     [indicatorIds],
   );
 
-  const bars = useLakeBars(ticker || undefined, interval, range);
+  const maxMovingAveragePeriod = useMemo(
+    () => Math.max(0, ...movingAverages.map((ma) => ma.period)),
+    [movingAverages],
+  );
+  const chartLookbackDays = chartDataLookback(
+    range,
+    interval,
+    maxMovingAveragePeriod,
+  );
+  const bars = useBarsWindow(
+    ticker || undefined,
+    interval,
+    chartLookbackDays,
+  );
+  const visibleRange = useMemo(
+    () => chartVisibleRange(bars.data ?? [], range),
+    [bars.data, range],
+  );
   const signals = useSymbolSignals(ticker || undefined, 100);
   const indicators = useIndicators(
     ticker || undefined,
@@ -102,7 +121,12 @@ export function SymbolPage() {
     indicatorSettings,
   );
   const movingAverageSeries = useMemo(
-    () => buildMovingAverageSeries(bars.data ?? [], movingAverages, interval),
+    () =>
+      buildMovingAverageSeries(
+        bars.data ?? [],
+        movingAverages,
+        interval,
+      ),
     [bars.data, movingAverages, interval],
   );
   const chartIndicators = useMemo(
@@ -264,6 +288,7 @@ export function SymbolPage() {
           timezone={zone}
           height="fill"
           fitKey={`${ticker}:${interval}:${range}`}
+          visibleRange={visibleRange}
         />
         {!bars.data || bars.data.length === 0 ? (
           <div className="absolute inset-0 flex items-center justify-center rounded-md bg-bg-base/60 text-sm text-fg-muted backdrop-blur-[1px]">
@@ -292,14 +317,15 @@ function buildMovingAverageSeries(
       ma.kind,
       ma.period,
     );
-    const unit = interval === "1d" ? "D" : " bars";
-    const label = `${ma.kind.toUpperCase()} ${ma.period}${unit}`;
+    const intervalSuffix = interval === "1d" ? "D" : `×${interval}`;
+    const label = `${ma.kind.toUpperCase()} ${ma.period}${intervalSuffix}`;
     return {
       name: `ma_${ma.id}`,
       label,
       params: {
         kind: ma.kind,
         period: ma.period,
+        interval,
         color: ma.color,
         lineWidth: 2,
       },
@@ -310,6 +336,84 @@ function buildMovingAverageSeries(
       count: bars.length,
     };
   });
+}
+
+function chartDataLookback(
+  range: ChartRange,
+  interval: Interval,
+  maxPeriod: number,
+): number {
+  const visibleDays = CHART_RANGE_DAYS[range] ?? CHART_RANGE_DAYS["30D"];
+  if (range === "MAX") return visibleDays;
+  const scrollbackDays = chartScrollbackDays(range, interval);
+  const warmupDays =
+    maxPeriod > 0 ? movingAverageWarmupCalendarDays(interval, maxPeriod) : 0;
+  return Math.min(
+    20_000,
+    Math.max(visibleDays, scrollbackDays, visibleDays + warmupDays),
+  );
+}
+
+function chartScrollbackDays(range: ChartRange, interval: Interval): number {
+  const visibleDays = CHART_RANGE_DAYS[range] ?? CHART_RANGE_DAYS["30D"];
+  if (interval === "1d") {
+    if (range === "1D") return 30;
+    return Math.min(20_000, Math.max(visibleDays * 2, visibleDays + 365));
+  }
+  if (interval === "1m") {
+    if (range === "1D") return 10;
+    if (range === "5D") return 20;
+    return Math.min(60, Math.max(visibleDays, visibleDays + 10));
+  }
+  if (range === "1D") return 15;
+  if (range === "5D") return 30;
+  return Math.min(365, Math.max(visibleDays * 2, visibleDays + 30));
+}
+
+function chartVisibleRange(
+  bars: ReadonlyArray<Bar>,
+  range: ChartRange,
+): { from: string; to: string } | null {
+  if (bars.length === 0 || range === "MAX") return null;
+  const latest = bars.at(-1);
+  if (!latest) return null;
+  const toMs = Date.parse(withUtc(latest.ts));
+  if (Number.isNaN(toMs)) return null;
+  const windowMs = (CHART_RANGE_DAYS[range] ?? CHART_RANGE_DAYS["30D"]) * 86_400_000;
+  return {
+    from: new Date(toMs - windowMs).toISOString(),
+    to: new Date(toMs).toISOString(),
+  };
+}
+
+function withUtc(ts: string): string {
+  return /[zZ]|[+-]\d\d:?\d\d$/.test(ts) ? ts : `${ts}Z`;
+}
+
+function movingAverageWarmupCalendarDays(interval: Interval, period: number): number {
+  if (interval === "1d") {
+    // Trading days to calendar days with holiday/weekend headroom.
+    return Math.ceil(period * 1.7) + 2;
+  }
+
+  const minutesPerBar = intervalMinutes(interval);
+  const tradingDays = Math.ceil((period * minutesPerBar) / 390);
+  return Math.ceil(tradingDays * 1.7) + 2;
+}
+
+function intervalMinutes(interval: Exclude<Interval, "1d">): number {
+  switch (interval) {
+    case "1m":
+      return 1;
+    case "5m":
+      return 5;
+    case "15m":
+      return 15;
+    case "30m":
+      return 30;
+    case "1h":
+      return 60;
+  }
 }
 
 function movingAverageValues(

@@ -89,6 +89,12 @@ interface OhlcvChartProps {
    */
   fitKey?: string;
   /**
+   * Optional viewport preset. The chart may receive more data than this
+   * range so users can pan backward, but ticker / interval / range changes
+   * should snap the initial view here.
+   */
+  visibleRange?: { from: string; to: string } | null;
+  /**
    * IANA timezone for the time axis + crosshair, or `undefined` for the
    * viewer's local zone. Must stay in sync with the Recent Bars table so
    * the two surfaces show the same clock. See lib/timezone.ts.
@@ -125,6 +131,7 @@ export function OhlcvChart({
   chartType = "candles",
   height = 480,
   fitKey,
+  visibleRange,
   timezone,
 }: OhlcvChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -133,6 +140,7 @@ export function OhlcvChart({
     ISeriesApi<"Candlestick"> | ISeriesApi<"Line"> | ISeriesApi<"Area"> | null
   >(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const sessionShadeLayerRef = useRef<HTMLDivElement | null>(null);
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   // Elliott Wave overlay series — created once in the chart-lifecycle
   // effect (chart-type-independent, like volume).
@@ -198,6 +206,16 @@ export function OhlcvChart({
       crosshair: { mode: CrosshairMode.Normal },
     });
 
+    const sessionShadeLayer = document.createElement("div");
+    Object.assign(sessionShadeLayer.style, {
+      position: "absolute",
+      inset: "0",
+      overflow: "hidden",
+      pointerEvents: "none",
+      zIndex: "2",
+    });
+    container.appendChild(sessionShadeLayer);
+
     const volume = chart.addSeries(HistogramSeries, {
       priceFormat: { type: "volume" },
       priceScaleId: "vol",
@@ -234,6 +252,7 @@ export function OhlcvChart({
     });
 
     chartRef.current = chart;
+    sessionShadeLayerRef.current = sessionShadeLayer;
     volumeSeriesRef.current = volume;
     waveSeriesRef.current = waveLine;
     extensionSeriesRef.current = extensionLine;
@@ -243,15 +262,23 @@ export function OhlcvChart({
       const rect = entries[0]?.contentRect;
       if (rect && rect.width > 0 && rect.height > 0) {
         chart.resize(rect.width, rect.height);
+        scheduleExtendedHoursOverlay(chart, barsRef.current, palette, sessionShadeLayer);
       }
     });
     ro.observe(container);
 
+    const repaintExtendedHours = () =>
+      scheduleExtendedHoursOverlay(chart, barsRef.current, palette, sessionShadeLayer);
+    chart.timeScale().subscribeVisibleTimeRangeChange(repaintExtendedHours);
+
     return () => {
+      chart.timeScale().unsubscribeVisibleTimeRangeChange(repaintExtendedHours);
       ro.disconnect();
+      sessionShadeLayer.remove();
       chart.remove();
       chartRef.current = null;
       priceSeriesRef.current = null;
+      sessionShadeLayerRef.current = null;
       volumeSeriesRef.current = null;
       markersRef.current = null;
       waveSeriesRef.current = null;
@@ -295,10 +322,13 @@ export function OhlcvChart({
   useEffect(() => {
     const price = priceSeriesRef.current;
     const volume = volumeSeriesRef.current;
+    const sessionShadeLayer = sessionShadeLayerRef.current;
     const palette = paletteRef.current;
-    if (!price || !volume || !palette) return;
+    const chart = chartRef.current;
+    if (!price || !volume || !sessionShadeLayer || !palette || !chart) return;
 
     setPriceData(price, bars, chartType);
+    scheduleExtendedHoursOverlay(chart, bars, palette, sessionShadeLayer);
     volume.setData(
       bars.map((b) => ({
         time: toUnix(b.ts),
@@ -319,10 +349,20 @@ export function OhlcvChart({
     const chart = chartRef.current;
     const pending = pendingFitKeyRef.current;
     if (!chart || !pending || bars.length === 0) return;
-    chart.timeScale().fitContent();
+    const range = visibleRange ? toVisibleRange(visibleRange) : null;
+    if (range) {
+      chart.timeScale().setVisibleRange(range);
+    } else {
+      chart.timeScale().fitContent();
+    }
+    const palette = paletteRef.current;
+    const sessionShadeLayer = sessionShadeLayerRef.current;
+    if (palette && sessionShadeLayer) {
+      scheduleExtendedHoursOverlay(chart, bars, palette, sessionShadeLayer);
+    }
     lastFitKeyRef.current = pending;
     pendingFitKeyRef.current = null;
-  }, [bars]);
+  }, [bars, visibleRange]);
 
   // ── Data updates — markers (wave pivots take priority over signals) ─
   useEffect(() => {
@@ -546,7 +586,7 @@ export function OhlcvChart({
     <div
       ref={containerRef}
       style={{ height: totalHeight }}
-      className="h-full min-h-[420px] w-full rounded-md border border-border bg-bg-base"
+      className="relative h-full min-h-[420px] w-full rounded-md border border-border bg-bg-base"
       aria-label="OHLCV chart"
     />
   );
@@ -608,6 +648,139 @@ function setPriceData(
   );
 }
 
+function scheduleExtendedHoursOverlay(
+  chart: IChartApi,
+  bars: ReadonlyArray<Bar>,
+  palette: Palette,
+  layer: HTMLDivElement,
+) {
+  window.requestAnimationFrame(() => {
+    updateExtendedHoursOverlay(chart, bars, palette, layer);
+  });
+}
+
+function updateExtendedHoursOverlay(
+  chart: IChartApi,
+  bars: ReadonlyArray<Bar>,
+  palette: Palette,
+  layer: HTMLDivElement,
+) {
+  layer.replaceChildren();
+  if (bars.length === 0) return;
+
+  const width = layer.clientWidth;
+  const height = layer.clientHeight;
+  if (width <= 0 || height <= 0) return;
+
+  const ranges = buildExtendedSessionRanges(bars);
+  const timeScale = chart.timeScale();
+  const visibleRange = timeScale.getVisibleRange();
+  if (!visibleRange) return;
+  const visibleFrom = visibleRange.from as UTCTimestamp;
+  const visibleTo = visibleRange.to as UTCTimestamp;
+
+  for (const range of ranges) {
+    const rangeFrom = toUnix(range.from);
+    const rangeTo = toUnix(range.to);
+    const clippedFrom = Math.max(rangeFrom, visibleFrom) as UTCTimestamp;
+    const clippedTo = Math.min(rangeTo, visibleTo) as UTCTimestamp;
+    if (clippedTo <= clippedFrom) continue;
+
+    const from = coordinateForTime(chart, bars, clippedFrom, "after", {
+      visibleFrom,
+      visibleTo,
+      width,
+    });
+    const to = coordinateForTime(chart, bars, clippedTo, "before", {
+      visibleFrom,
+      visibleTo,
+      width,
+    });
+    if (from == null || to == null) continue;
+
+    const left = Math.max(0, Math.min(from, to));
+    const right = Math.min(width, Math.max(from, to));
+    if (right <= 0 || left >= width || right - left < 1) continue;
+
+    const block = document.createElement("div");
+    Object.assign(block.style, {
+      position: "absolute",
+      top: "0",
+      bottom: "0",
+      left: `${left}px`,
+      width: `${right - left}px`,
+      background: palette.extendedSession,
+      borderLeft: `1px solid ${palette.extendedSessionEdge}`,
+      borderRight: `1px solid ${palette.extendedSessionEdge}`,
+    });
+    layer.appendChild(block);
+  }
+}
+
+function coordinateForTime(
+  chart: IChartApi,
+  bars: ReadonlyArray<Bar>,
+  target: UTCTimestamp,
+  direction: "before" | "after",
+  bounds: { visibleFrom: UTCTimestamp; visibleTo: UTCTimestamp; width: number },
+): number | null {
+  if (target <= bounds.visibleFrom) return 0;
+  if (target >= bounds.visibleTo) return bounds.width;
+
+  const exact = chart.timeScale().timeToCoordinate(target);
+  if (exact != null) return exact;
+
+  let candidate: UTCTimestamp | null = null;
+  if (direction === "after") {
+    for (const bar of bars) {
+      const t = toUnix(bar.ts);
+      if (t >= target) {
+        candidate = t;
+        break;
+      }
+    }
+  } else {
+    for (let i = bars.length - 1; i >= 0; i--) {
+      const t = toUnix(bars[i].ts);
+      if (t <= target) {
+        candidate = t;
+        break;
+      }
+    }
+  }
+
+  return candidate == null ? null : chart.timeScale().timeToCoordinate(candidate);
+}
+
+function buildExtendedSessionRanges(
+  bars: ReadonlyArray<Bar>,
+): Array<{ from: string; to: string }> {
+  if (bars.length === 0) return [];
+
+  const sessions = new Map<string, { year: number; month: number; day: number }>();
+  for (const bar of bars) {
+    const session = etDateParts(bar.ts);
+    if (!session || session.weekday === "Sat" || session.weekday === "Sun") continue;
+    const key = `${session.year}-${session.month}-${session.day}`;
+    sessions.set(key, session);
+  }
+
+  return Array.from(sessions.values())
+    .sort((a, b) =>
+      a.year - b.year || a.month - b.month || a.day - b.day,
+    )
+    .flatMap((session) => [
+      {
+        from: etLocalToUtcIso(session, 4, 0),
+        to: etLocalToUtcIso(session, 9, 30),
+      },
+      {
+        from: etLocalToUtcIso(session, 16, 0),
+        to: etLocalToUtcIso(session, 20, 0),
+      },
+    ]);
+}
+
 function buildMarkers(
   signals: ReadonlyArray<Signal> | undefined,
   wave: WaveOverlay | null | undefined,
@@ -667,6 +840,8 @@ interface Palette {
   down: string;
   upAlpha: string;
   downAlpha: string;
+  extendedSession: string;
+  extendedSessionEdge: string;
   accent: string;
   accentAlpha: string;
 }
@@ -691,6 +866,8 @@ function readPalette(): Palette {
     down: hslToken(down),
     upAlpha: hslToken(up, 0.5),
     downAlpha: hslToken(down, 0.5),
+    extendedSession: hslToken(fg, 0.09),
+    extendedSessionEdge: hslToken(fg, 0.12),
     accent: hslToken(accent),
     accentAlpha: hslToken(accent, 0.4),
   };
@@ -744,6 +921,83 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
 function toUnix(iso: string): UTCTimestamp {
   const s = /[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`;
   return Math.floor(new Date(s).getTime() / 1000) as UTCTimestamp;
+}
+
+function toVisibleRange(
+  range: { from: string; to: string },
+): { from: UTCTimestamp; to: UTCTimestamp } | null {
+  const from = toUnix(range.from);
+  const to = toUnix(range.to);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) return null;
+  return { from, to };
+}
+
+const ET_SESSION_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  weekday: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+function etDateParts(ts: string):
+  | {
+      year: number;
+      month: number;
+      day: number;
+      weekday: string;
+      hour: number;
+      minute: number;
+    }
+  | null {
+  const parts = ET_SESSION_FORMATTER.formatToParts(new Date(toUnix(ts) * 1000));
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value;
+  const year = Number(part("year"));
+  const month = Number(part("month"));
+  const day = Number(part("day"));
+  const hour = Number(part("hour"));
+  const minute = Number(part("minute"));
+  const weekday = part("weekday");
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day) ||
+    !Number.isFinite(hour) ||
+    !Number.isFinite(minute) ||
+    !weekday
+  ) {
+    return null;
+  }
+  return { year, month, day, weekday, hour, minute };
+}
+
+function etLocalToUtcIso(
+  session: { year: number; month: number; day: number },
+  hour: number,
+  minute: number,
+): string {
+  const utcGuess = Date.UTC(session.year, session.month - 1, session.day, hour, minute);
+  const firstPass = utcGuess - timeZoneOffsetMs(new Date(utcGuess));
+  const offset = timeZoneOffsetMs(new Date(firstPass));
+  return new Date(utcGuess - offset).toISOString();
+}
+
+function timeZoneOffsetMs(date: Date): number {
+  const parts = ET_SESSION_FORMATTER.formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value;
+  const asUtc = Date.UTC(
+    Number(part("year")),
+    Number(part("month")) - 1,
+    Number(part("day")),
+    Number(part("hour")),
+    Number(part("minute")),
+  );
+  return asUtc - date.getTime();
 }
 
 // ─────────────────────────────────────────────────────────────────────
