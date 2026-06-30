@@ -710,6 +710,35 @@ export function useLakeBars(
   });
 }
 
+export function useBarsWindow(
+  symbol: string | undefined,
+  interval: string,
+  lookbackDays: number,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: ["bars", "window", symbol ?? "", interval, lookbackDays] as const,
+    queryFn: async (): Promise<Bar[]> => {
+      if (!symbol) throw new Error("symbol required");
+      const { data } = await apiClient.GET("/api/v1/bars", {
+        params: {
+          query: {
+            symbol,
+            interval,
+            lookback_days: lookbackDays,
+            source: "auto",
+          },
+        },
+      });
+      return data ?? [];
+    },
+    enabled: Boolean(symbol) && enabled,
+    staleTime: 10_000,
+    refetchInterval: REFETCH_MS[interval] ?? 30_000,
+    refetchOnWindowFocus: true,
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // /api/v1/signals — divergence signals (FE-2; FE-CONTRACTS-2 typed)
 // ─────────────────────────────────────────────────────────────────────

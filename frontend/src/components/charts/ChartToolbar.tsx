@@ -148,6 +148,7 @@ export function ChartToolbar({
 
       {selected.length > 0 || movingAverages.length > 0 ? (
         <IndicatorChips
+          interval={interval}
           selected={selected}
           settings={indicatorSettings}
           movingAverages={movingAverages}
@@ -446,6 +447,7 @@ const MA_KINDS: MovingAverageKind[] = ["sma", "ema", "wma"];
 // ─────────────────────────────────────────────────────────────────────
 
 function IndicatorChips({
+  interval,
   selected,
   settings,
   movingAverages,
@@ -454,6 +456,7 @@ function IndicatorChips({
   onClear,
   onClearMovingAverages,
 }: {
+  interval: string;
   selected: ReadonlyArray<string>;
   settings: Record<string, Record<string, number>>;
   movingAverages: ReadonlyArray<MovingAverageOverlay>;
@@ -462,6 +465,7 @@ function IndicatorChips({
   onClear: () => void;
   onClearMovingAverages: () => void;
 }) {
+  const maSuffix = interval === "1d" ? "D" : `×${interval}`;
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       {movingAverages.map((ma) => (
@@ -475,7 +479,10 @@ function IndicatorChips({
             aria-hidden
           />
           {ma.kind.toUpperCase()}
-          <span className="text-[10px] text-fg-subtle">{ma.period}</span>
+          <span className="text-[10px] text-fg-subtle">
+            {ma.period}
+            {maSuffix}
+          </span>
           <button
             type="button"
             aria-label={`Remove ${ma.kind.toUpperCase()} ${ma.period}`}
