@@ -102,6 +102,15 @@ def build_status(state: PaperState) -> PaperStatus:
     wins = [t for t in fwd_closed if t.get("realized_pnl", 0.0) > 0]
     win_rate = (len(wins) / len(fwd_closed)) if fwd_closed else None
     days_live = max(0, ((state.computed_through or go) - go).days)
+    # "Today" = the latest computed bar date — the alertable activity for this run.
+    through = state.computed_through
+    today_entries, today_exits = [], []
+    if through is not None:
+        d = through.date()
+        today_entries = [PaperPositionView(**p) for p in state.open_positions
+                         if _ts(p["entry_time"]).date() == d]
+        today_exits = [PaperTradeView(**t) for t in state.trades
+                       if t.get("is_closing") and _ts(t["timestamp"]).date() == d]
     return PaperStatus(
         name=cfg.name, go_live=go, last_run_at=state.last_run_at,
         computed_through=state.computed_through, days_live=days_live,
@@ -113,7 +122,35 @@ def build_status(state: PaperState) -> PaperStatus:
         open_positions=[PaperPositionView(**p) for p in state.open_positions],
         forward_trades=[PaperTradeView(**t) for t in fwd_trades[-50:]],
         equity_curve=[PaperEquityPoint(t=t, equity=e) for t, e in curve],
+        today_entries=today_entries, today_exits=today_exits,
     )
+
+
+def append_alerts(status: PaperStatus) -> int:
+    """Append today's entries/exits to <name>_alerts.jsonl (idempotent per date).
+    Returns the count of alert rows written (0 if nothing new or already logged)."""
+    import json
+
+    if not status.today_entries and not status.today_exits:
+        return 0
+    path = _paper_dir() / f"{status.name}_alerts.jsonl"
+    date_str = (status.computed_through or status.go_live).date().isoformat()
+    if path.exists():
+        for line in path.read_text().splitlines():
+            try:
+                if json.loads(line).get("date") == date_str:
+                    return 0  # already logged this date — idempotent
+            except (ValueError, KeyError):
+                continue
+    row = {
+        "date": date_str,
+        "entries": [{"symbol": p.symbol, "side": "long" if p.quantity >= 0 else "short",
+                     "entry": p.avg_entry_price} for p in status.today_entries],
+        "exits": [{"symbol": t.symbol, "pnl": t.realized_pnl} for t in status.today_exits],
+    }
+    with path.open("a") as f:
+        f.write(json.dumps(row) + "\n")
+    return len(row["entries"]) + len(row["exits"])
 
 
 def _ts(v) -> datetime:

@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import yaml  # noqa: E402
 
 from app.services.sim.paper.schemas import PaperRunConfig  # noqa: E402
-from app.services.sim.paper.service import build_status, run_paper  # noqa: E402
+from app.services.sim.paper.service import append_alerts, build_status, run_paper  # noqa: E402
 
 
 def main(argv=None) -> int:
@@ -28,6 +28,17 @@ def main(argv=None) -> int:
     cfg = PaperRunConfig(**yaml.safe_load(Path(a.config).read_text()))
     state = run_paper(cfg)
     s = build_status(state)
+    append_alerts(s)
+    # ── ALERTS: today's entry/exit signals (what a subscriber would be pinged on) ──
+    if s.today_entries or s.today_exits:
+        print(f"\n🔔 SIGNAL ALERTS for {str(s.computed_through)[:10]}")
+        for p in s.today_entries:
+            side = "LONG" if p.quantity >= 0 else "SHORT"
+            print(f"   ENTRY  {side:5} {p.symbol:6} @ ${p.avg_entry_price:.2f}")
+        for t in s.today_exits:
+            print(f"   EXIT         {t.symbol:6} P&L ${t.realized_pnl:+,.0f}")
+    else:
+        print(f"\n🔕 No new entry/exit signals for {str(s.computed_through)[:10]}.")
     print(f"\nPAPER  {s.name}   live since {str(s.go_live)[:10]}  (computed through {str(s.computed_through)[:10]})")
     print("  " + "-" * 56)
     print(f"  days live          {s.days_live}")

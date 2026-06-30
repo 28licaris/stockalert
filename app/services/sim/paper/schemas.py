@@ -82,3 +82,6 @@ class PaperStatus(BaseModel):
     open_positions: list[PaperPositionView]
     forward_trades: list[PaperTradeView]
     equity_curve: list[PaperEquityPoint]   # full curve; go_live marks the live boundary
+    # "Today" = the latest computed bar date — the alertable activity for this run.
+    today_entries: list[PaperPositionView] = Field(default_factory=list)
+    today_exits: list[PaperTradeView] = Field(default_factory=list)

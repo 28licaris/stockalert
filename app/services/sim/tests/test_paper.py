@@ -64,3 +64,28 @@ def test_state_roundtrip(tmp_path, monkeypatch):
     assert loaded.config.name == "t_run"
     assert len(loaded.equity_curve) == 5
     assert build_status(loaded).forward_n_trades == 2
+
+
+def _state_with_today_entry():
+    st = _state()
+    st.open_positions.append({
+        "symbol": "AVGO", "quantity": 5, "avg_entry_price": 200.0,
+        "entry_time": dt.datetime(2026, 6, 30, tzinfo=UTC), "unrealized_pnl": 100.0,
+    })
+    return st
+
+
+def test_todays_activity_flags_entries_and_exits():
+    from app.services.sim.paper.service import build_status as bs
+    s = bs(_state_with_today_entry())
+    assert {p.symbol for p in s.today_entries} == {"AVGO"}   # opened on computed_through (6-30)
+    assert {t.symbol for t in s.today_exits} == {"Z"}        # closed on 6-30 (NVDA held since 6-20 → not today)
+
+
+def test_append_alerts_idempotent(tmp_path, monkeypatch):
+    from app.services.sim.paper.service import append_alerts, build_status as bs
+    monkeypatch.setenv("STOCKALERT_PAPER_DIR", str(tmp_path))
+    s = bs(_state_with_today_entry())
+    assert append_alerts(s) >= 1                              # writes AVGO entry + Z exit
+    assert append_alerts(s) == 0                              # same date → no duplicate
+    assert (tmp_path / "t_run_alerts.jsonl").exists()
