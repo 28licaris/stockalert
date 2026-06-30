@@ -667,6 +667,12 @@ function updateExtendedHoursOverlay(
 ) {
   layer.replaceChildren();
   if (bars.length === 0) return;
+  // Extended-hours shading is an intraday concept (pre-market 04:00–09:30,
+  // after-hours 16:00–20:00). On daily-or-coarser bars those windows are
+  // sub-pixel and meaningless — and building 2 ranges per trading day across
+  // years of history (each with an O(bars) coordinate fallback + a DOM node)
+  // is the dominant cost on long daily charts. Skip it entirely.
+  if (!barsAreIntraday(bars)) return;
 
   const width = layer.clientWidth;
   const height = layer.clientHeight;
@@ -750,6 +756,24 @@ function coordinateForTime(
   }
 
   return candidate == null ? null : chart.timeScale().timeToCoordinate(candidate);
+}
+
+/**
+ * True when bars are finer than daily — the only case where intraday
+ * session shading is visible. Detected from the smallest gap between
+ * consecutive bars (a sampled scan; intraday series have sub-day gaps,
+ * daily/weekly/monthly do not), so it needs no interval prop and is
+ * correct for every caller.
+ */
+function barsAreIntraday(bars: ReadonlyArray<Bar>): boolean {
+  let minGap = Infinity;
+  const n = Math.min(bars.length, 64);
+  for (let i = 1; i < n; i++) {
+    const gap = toUnix(bars[i].ts) - toUnix(bars[i - 1].ts);
+    if (gap > 0 && gap < minGap) minGap = gap;
+  }
+  // < 23h → intraday (daily bars sit ~24h+ apart, more across weekends).
+  return minGap < 23 * 3600;
 }
 
 function buildExtendedSessionRanges(
