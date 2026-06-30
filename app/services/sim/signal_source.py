@@ -323,9 +323,10 @@ class DivergenceSignalSource(BaseSignalSource):
             return None
 
         p2_ts = ts_index[p2]
-        if self._last_p2.get(direction) == p2_ts:
+        key = (ctx.bar.symbol, direction)   # symbol-keyed so one source serves a portfolio
+        if self._last_p2.get(key) == p2_ts:
             return None
-        self._last_p2[direction] = p2_ts
+        self._last_p2[key] = p2_ts
 
         entry = float(ctx.bar.close)
         if entry <= 0:

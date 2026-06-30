@@ -196,6 +196,13 @@ class BacktestConfig(BaseModel):
             "market-relative filters (regime, relative strength)."
         ),
     )
+    max_concurrent_positions: int = Field(
+        10, ge=1, description="Portfolio backtest: max simultaneously-open positions.",
+    )
+    max_portfolio_heat: float = Field(
+        0.10, gt=0.0, le=1.0,
+        description="Portfolio backtest: cap on total open risk (sum of entry→stop $) as a fraction of equity.",
+    )
     starting_cash: float = 40_000.0
     history_window: int = Field(
         200,

@@ -174,6 +174,97 @@ class Backtester:
             trades=list(portfolio.closed_trades),
         )
 
+    def run_portfolio(self, strategy: Strategy, config: BacktestConfig) -> RunResult:
+        """
+        Multi-symbol PORTFOLIO backtest: all symbols share one cash pool, one
+        equity curve, and a RiskManager that caps concurrent positions and total
+        open risk (portfolio heat). Bars are time-synchronized across symbols, so
+        positions are genuinely concurrent (unlike `run`, which walks each symbol's
+        full timeline in isolation). Single execution interval (no multi-TF yet).
+
+        The honest equity curve / drawdown this produces is what makes conviction
+        sizing safe to evaluate — and what a customer-facing track record needs.
+        """
+        from app.services.sim.risk import RiskManager
+
+        started_at = datetime.now(timezone.utc)
+        exec_interval = config.interval
+        if strategy.interval != exec_interval:
+            raise ValueError(
+                f"Strategy interval {strategy.interval!r} != config interval {exec_interval!r}."
+            )
+        fees = make_fees(config.fees_model, config.fees_params)
+        slippage = make_slippage(config.slippage_model, config.slippage_params)
+        snapshot_id = self._capture_snapshot(config, exec_interval)
+
+        bars_by_symbol = self._fetch_bars_multi(config, [exec_interval])[exec_interval]
+        portfolio = Portfolio(starting_cash=config.starting_cash)
+        risk = RiskManager(
+            max_concurrent=config.max_concurrent_positions,
+            max_portfolio_heat=config.max_portfolio_heat,
+        )
+
+        # One Context per symbol (isolated history/indicators); shared benchmark.
+        market = self._load_benchmark(config, exec_interval) if config.benchmark else None
+        ctx_by_symbol: dict[str, Context] = {}
+        for sym in config.symbols:
+            ctx = Context(config=config, intervals=[exec_interval])
+            ctx.market = market
+            ctx_by_symbol[sym] = ctx
+        # setup() runs once (strategy state is per-symbol-keyed internally).
+        if config.symbols:
+            strategy.setup(ctx_by_symbol[config.symbols[0]])
+
+        # Merge all symbols' bars into one ascending timeline.
+        timeline = sorted({b.timestamp for bars in bars_by_symbol.values() for b in bars})
+        cursors = {sym: 0 for sym in config.symbols}
+        last_close: dict[str, float] = {}
+
+        for t in timeline:
+            for sym in config.symbols:
+                bars = bars_by_symbol.get(sym, [])
+                cur = cursors[sym]
+                if cur >= len(bars) or bars[cur].timestamp != t:
+                    continue
+                bar = bars[cur]
+                next_bar = bars[cur + 1] if cur + 1 < len(bars) else None
+                cursors[sym] = cur + 1
+                last_close[sym] = bar.close
+
+                ctx = ctx_by_symbol[sym]
+                ctx.advance(bar, portfolio.snapshot())
+                action = strategy.on_bar(ctx)
+                if action.kind not in ("buy", "sell"):
+                    continue
+
+                pos = portfolio.positions.get(sym)
+                has_position = pos is not None and pos.quantity != 0
+                if has_position:
+                    # Exit / cover — always allowed; free its risk budget.
+                    portfolio.apply(action, bar, next_bar, fees, slippage)
+                    if sym not in portfolio.positions:
+                        risk.release(sym)
+                else:
+                    # Entry — gate on portfolio heat + concurrent caps.
+                    stop = action.stop_price if action.stop_price is not None else bar.close
+                    risk_amount = action.size * abs(bar.close - stop)
+                    if risk.can_open(sym, risk_amount, portfolio.snapshot().equity):
+                        trade = portfolio.apply(action, bar, next_bar, fees, slippage)
+                        if trade is not None and sym in portfolio.positions:
+                            risk.register(sym, risk_amount)
+
+            portfolio.mark_portfolio(t, dict(last_close))
+
+        strategy.teardown(ctx_by_symbol[config.symbols[0]]) if config.symbols else None
+        metrics = self._evaluator.compute(portfolio, config)
+        return RunResult(
+            started_at=started_at, finished_at=datetime.now(timezone.utc),
+            strategy_name=strategy.name, strategy_version=strategy.version,
+            strategy_params=self._extract_params(strategy), config=config,
+            snapshot_id=snapshot_id, git_sha=_git_sha(), metrics=metrics,
+            equity_curve=list(portfolio.equity_curve), trades=list(portfolio.closed_trades),
+        )
+
     def _load_benchmark(self, config, interval: str):
         """Load the benchmark once and wrap it in a (pure) MarketContext.
 

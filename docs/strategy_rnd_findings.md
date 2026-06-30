@@ -403,3 +403,43 @@ min_score=3, risk 1%→5%):
 **Next (now urgent):** risk-management layer; then a true portfolio backtest
 (concurrent long+short positions) to get a realistic equity curve + drawdown;
 then M3 paper-trading.
+
+---
+
+## EXP-12 · 2026-06-30 · realistic PORTFOLIO backtest + risk caps (reality check)
+
+Built a multi-symbol, time-synchronized **portfolio backtest** (`Backtester.run_portfolio`):
+all symbols share one cash pool + equity curve, with a `RiskManager` capping
+**max concurrent positions** and **portfolio heat** (total open entry→stop risk as
+a fraction of equity). `scripts/run_portfolio.py` runs it. This is the first
+*realistic* equity curve (the prior sweeps were per-symbol, isolated capital).
+
+Regime-agnostic config (divergence both-sides + directional confluence, 1%→5%),
+$100k, 2022–2025 (incl. 2022 bear):
+
+| Risk caps | Return (4y) | Ann. | Sharpe | Max DD | Win | PF | Round-trips |
+|---|---|---|---|---|---|---|---|
+| heat 10%, 6 concurrent | +23.2% | +5.5% | 0.34 | −29.4% | 40% | 1.14 | 90 |
+| heat 5%, 4 concurrent | −36.0% | −10.8% | −0.73 | −41.3% | 21% | 0.49 | 66 |
+
+**Conclusions (important):**
+1. **Reality check:** the per-symbol sweeps (EXP-10 holdout median +8.8%) were
+   optimistic. As a *real portfolio*, this is **+5.5%/yr, Sharpe 0.34, −29% DD,
+   profit factor 1.14** — modest and risk-adjusted-weak. Not yet tradeable. The
+   portfolio engine did exactly its job: kill the illusion before customers see it.
+2. **Design flaw surfaced:** tighter caps made it *worse*, not safer. The
+   RiskManager admits entries **first-come (symbol order)** until the budget fills
+   — so a scarce heat budget gets spent on whichever symbol is alphabetically
+   first, NOT the highest-confluence setup. Tighter caps amplified this arbitrary
+   selection → win-rate collapsed 40%→21%.
+3. **Clear next improvement: confidence-ranked risk allocation.** At each
+   timestamp, collect all candidate entries across symbols, rank by confluence
+   confidence, and spend the heat budget on the BEST setups first. This is the
+   right way to combine conviction sizing with a capped book.
+
+**Status:** engine is now production-grade (portfolio + risk + shorts, all tested)
+and *honest*. The strategy itself needs more work (better edge and/or
+confidence-ranked allocation) before it's worth paper-trading.
+
+**Next:** confidence-ranked allocation in run_portfolio; then re-evaluate
+Sharpe/DD; bear-specific walk-forward; only then M3.

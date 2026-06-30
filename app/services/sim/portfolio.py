@@ -136,6 +136,16 @@ class Portfolio:
             pos.unrealized_pnl = (bar.close - pos.avg_entry_price) * pos.quantity
         self.equity_curve.append((bar.timestamp, self._current_equity()))
 
+    def mark_portfolio(self, timestamp: datetime, prices: dict[str, float]) -> None:
+        """Multi-symbol mark: revalue every open position at its latest price and
+        append ONE shared equity point. Used by the portfolio backtest, where
+        many symbols share one equity curve (vs `mark_to_market`'s single symbol)."""
+        for sym, pos in self.positions.items():
+            px = prices.get(sym)
+            if px is not None:
+                pos.unrealized_pnl = (px - pos.avg_entry_price) * pos.quantity
+        self.equity_curve.append((timestamp, self._current_equity()))
+
     # ─────────────────────────────────────────────────────────────────
     # Internals
     # ─────────────────────────────────────────────────────────────────
