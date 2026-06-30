@@ -744,3 +744,45 @@ excluded), breakout, long top-15, lookback 60 — 2022–2025:
 disciplined alternative to RL — see findings note); long-leaders / short-laggards
 via a breakdown short source ("ride waves up OR down"); EW source on the dynamic
 pool; M3 forward paper-trade.
+
+---
+
+## EXP-20 · 2026-06-30 · Walk-forward combination search (the disciplined alt to RL)
+
+Built `scripts/walkforward_search.py`: loads the 119-name pool from CH once,
+slices in-memory, sweeps an interpretable grid (momentum top_n × lookback ×
+confluence stack) and scores each config per calendar year. Select on DEV Sharpe
+(2022-23), report HOLDOUT (2024-25) — winner chosen without peeking at its holdout.
+Strict per-year cold-start (no pre-year warmup) → each year loses its first
+~`lookback` days to momentum warmup, so this is a CONSERVATIVE read.
+
+12 configs (breakout base). Headline rows:
+
+| config | 2022 | 2023 | 2024 | 2025 | DEV Sh | HOLD Sh |
+|---|---|---|---|---|---|---|
+| **top15 / lb60 / none** | +5% | +42% | +24% | +25% | **+0.71** | +0.94 |
+| top20 / lb60 / none | +2% | +23% | +18% | +25% | +0.47 | +0.90 |
+| top10 / lb60 / none | +7% | +7% | +25% | +57% | +0.37 | +1.30 |
+| top15 / lb60 / **rs** | −25% | +44% | +2% | +21% | +0.16 | +0.50 |
+| top20 / lb90 / none | +7% | +13% | −2% | −22% | +0.44 | −0.28 |
+
+**Winner (DEV-selected): top_n=15, lookback=60, NO filters.** Per-year +5/+42/+24/
++25%, Sharpe +0.31/+1.11/+0.96/+0.92, PF 0.98/1.53/1.40/1.36. DEV Sharpe +0.71,
+**HOLDOUT Sharpe +0.94 (≥ DEV → not overfit to dev)**, worst year +5.1%.
+
+**Conclusions:**
+1. **The simplest dynamic-momentum config is the most robust** — plain breakout +
+   dynamic top-15 (lb60), no confluences. DEV-selected, holdout-confirmed, positive
+   every year even with a conservative cold-start.
+2. **Adding confluences/RS HURTS on the dynamic universe** — RS configs go negative
+   in 2022 (−23/−25%); the momentum top-N selection ALREADY does the "trade leaders"
+   job, so stacking RS double-filters and removes good trades. Over-engineering
+   lesson, again (cf. EXP-13/16): don't gate a selection that's already doing the work.
+3. **lookback 60 > 90; top-N 15 is the sweet spot** (10 is choppier, 20/lb90 breaks).
+4. **This is the RL answer in practice**: a disciplined walk-forward search over a
+   handful of interpretable knobs found a robust, holdout-validated config — no
+   black box, no reward-hacking risk. RL stays parked until a generalizing base +
+   live paper-trade pipeline exist.
+
+**Next:** long-leaders / short-laggards via a breakdown short source (ride up OR
+down) on the dynamic pool; then M3 forward paper-trade of top15/lb60 breakout.
