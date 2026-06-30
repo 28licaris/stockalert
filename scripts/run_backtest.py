@@ -37,70 +37,9 @@ from app.services.sim.schemas import BacktestConfig, RunResult  # noqa: E402
 # Future agent-loader will replace this with module discovery, but for
 # TA-1 the explicit map is clearer and easier to grep.
 def _load_strategy(name: str, params: dict[str, Any], interval: str) -> Any:
-    if name == "sma_crossover":
-        from app.services.sim.strategies.sma_crossover import (
-            SmaCrossoverParams,
-            SmaCrossoverStrategy,
-        )
-        return SmaCrossoverStrategy(
-            params=SmaCrossoverParams(**params),
-            interval=interval,
-        )
-    if name == "llm_agent":
-        from app.services.sim.strategies.llm_agent import (
-            LLMAgentParams,
-            LLMAgentStrategy,
-        )
-        return LLMAgentStrategy(
-            params=LLMAgentParams(**params),
-            interval=interval,
-        )
-    if name == "rsi_reversion":
-        from app.services.sim.strategies.rsi_reversion import (
-            RsiReversionParams,
-            RsiReversionStrategy,
-        )
-        return RsiReversionStrategy(
-            params=RsiReversionParams(**params),
-            interval=interval,
-        )
-    if name == "bollinger_mean_revert":
-        from app.services.sim.strategies.bollinger_mean_revert import (
-            BollingerMeanRevertParams,
-            BollingerMeanRevertStrategy,
-        )
-        return BollingerMeanRevertStrategy(
-            params=BollingerMeanRevertParams(**params),
-            interval=interval,
-        )
-    if name == "ema_crossover":
-        from app.services.sim.strategies.ema_crossover import (
-            EmaCrossoverParams,
-            EmaCrossoverStrategy,
-        )
-        return EmaCrossoverStrategy(
-            params=EmaCrossoverParams(**params),
-            interval=interval,
-        )
-    if name == "mtf_ema_trend_filtered":
-        from app.services.sim.strategies.mtf_ema_trend_filtered import (
-            MtfEmaTrendFilteredParams,
-            MtfEmaTrendFilteredStrategy,
-        )
-        # interval is bound by the strategy itself (1h); ignore CLI override
-        # since this strategy is explicitly multi-TF (1d + 1h).
-        return MtfEmaTrendFilteredStrategy(
-            params=MtfEmaTrendFilteredParams(**params),
-        )
-    if name == "alert_driven":
-        from app.services.sim.strategies.alert_strategy import (
-            AlertStrategy,
-            AlertStrategyParams,
-        )
-        return AlertStrategy(AlertStrategyParams(**params), interval=interval)
-    raise ValueError(
-        f"Unknown strategy {name!r}. Register it in scripts/run_backtest.py::_load_strategy."
-    )
+    # Single registration point — see app/services/sim/loader.py.
+    from app.services.sim.loader import build_strategy
+    return build_strategy(name, params, interval)
 
 
 def _print_metrics(run: RunResult) -> None:

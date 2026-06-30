@@ -37,6 +37,7 @@ from app.api import (
     routes_billing,
     routes_calendar,
     routes_clickhouse,
+    routes_backtest,
     routes_economic,
     routes_corp_actions,
     routes_health,
@@ -837,6 +838,7 @@ app.include_router(routes_economic.router, prefix=_V1, tags=["Economic"])
 app.include_router(routes_journal.router, prefix=_V1, tags=["Journal"])
 app.include_router(routes_lake.router, prefix=_V1, tags=["Lake"])
 app.include_router(routes_indicators.router, prefix=_V1, tags=["Indicators"])
+app.include_router(routes_backtest.router, prefix=_V1, tags=["Backtest"])
 app.include_router(routes_screener.router, prefix=_V1, tags=["Screener"])
 app.include_router(routes_sector_rotation.router, prefix=_V1, tags=["SectorRotation"])
 app.include_router(routes_corp_actions.router, prefix=_V1, tags=["CorpActions"])
