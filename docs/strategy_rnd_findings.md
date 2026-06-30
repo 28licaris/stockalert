@@ -487,3 +487,49 @@ A/B as a real portfolio ($100k, 12-name tech-heavy basket, 2022–2025):
 reversal-matched confluences for divergence; confidence-ranked allocation; then
 the score-mode min_score must scale with filter-count (3-of-5 < 3-of-4 selectivity
 surprised us — document/raise in the UI).
+
+---
+
+## EXP-14 · 2026-06-30 · cross-sector "just find movers" + walk-forward
+
+User intent: sector-agnostic — trade whatever is *moving*. Built a 34-name
+cross-sector basket from CH-available deep-history symbols: energy (XOM, XLE, USO,
+UNG), metals (SLV, IAU, PPLT, RIOT), financials (JPM, GS, V, MA), health (LLY,
+UNH, MRK), consumer (WMT, MCD, NKE, HD), industrials (RTX, LMT), semis (NVDA, MU,
+INTC, QCOM, MRVL), and high-beta movers (MSFT, GOOGL, META, PLTR, TSLA, SOFI,
+HOOD, NET). Signal: `breakout` (20-bar high + volume). Added `--start/--end`
+overrides to `scripts/run_portfolio.py` for walk-forward.
+
+**Full period 2022–2025 ($100k, 8 concurrent, 12% heat):**
+- breakout bare:        **+240%, Sharpe 1.34, −25% DD, PF 1.60, 416 trades**
+- breakout + 5 conflu.: +148%, Sharpe 1.04, −27% DD, **PF 1.82, 178 trades**
+
+→ Momentum/breakout is **NOT a tech artifact** — it's *stronger* across sectors.
+
+**Walk-forward by calendar year (regime robustness):**
+
+| Year | bare ret / Sharpe / PF | +confluences ret / Sharpe / PF |
+|---|---|---|
+| 2022 (bear) | +24.4% / 1.21 / 1.65 | −7.0% / −1.3 / 0.25 (only 8 trades) |
+| 2023 | +36.6% / 1.42 / 1.74 | +50.0% / 1.63 / **3.80** |
+| 2024 | +22.1% / 0.84 / 1.45 | +82.7% / 2.05 / **4.27** |
+| 2025 | −4.5% / −0.08 / 0.91 | **+12.9%** / 0.74 / 1.49 |
+
+**Conclusions:**
+1. **"Buy what's moving" generalizes across sectors and most regimes.** Bare
+   breakout was positive in 3 of 4 years — *including* the 2022 bear (+24%).
+2. **The confluences flip the profile, mostly for the better:** they lift trade
+   quality enormously in trending years (PF 3.8–4.3 in '23/'24) and **turned the
+   losing 2025 (−4.5% bare) into +12.9%** while cutting DD. But they (correctly)
+   go near-cash in the 2022 bear (8 trades) — they're a *trend-regime* overlay,
+   not a bear strategy.
+3. This is the **most tradeable result so far** — regime-robust, cross-sector,
+   coherent. A natural design: run confluence-gated breakout in up-regimes, lighten
+   (or flip to shorts/reversal) in down-regimes.
+
+**Honesty caveats:** these years are all in-sample (judged across all of them);
+calendar windows carry ~6wk warmup each Jan; basket is hand-picked liquid movers.
+Real track record still requires a clean train/test split + forward paper-trade (M3).
+
+**Next:** clean OOS (tune on 2022–23, validate untouched 2024–25); regime-switch
+overlay; forward paper-trading.

@@ -22,10 +22,12 @@ from scripts.run_backtest import _load_strategy  # noqa: E402
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
+    ap.add_argument("--start", default=None, help="Override config start (walk-forward).")
+    ap.add_argument("--end", default=None, help="Override config end (walk-forward).")
     a = ap.parse_args(argv)
     r = yaml.safe_load(Path(a.config).read_text())
     cfg = BacktestConfig(
-        symbols=r["symbols"], start=r["start"], end=r["end"],
+        symbols=r["symbols"], start=a.start or r["start"], end=a.end or r["end"],
         interval=r.get("interval", "1d"), starting_cash=float(r.get("starting_cash", 100_000)),
         history_window=int(r.get("history_window", 250)), benchmark=r.get("benchmark"),
         max_concurrent_positions=int(r.get("max_concurrent_positions", 10)),
