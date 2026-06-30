@@ -32,6 +32,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         history_window=int(r.get("history_window", 250)), benchmark=r.get("benchmark"),
         max_concurrent_positions=int(r.get("max_concurrent_positions", 10)),
         max_portfolio_heat=float(r.get("max_portfolio_heat", 0.10)),
+        momentum_top_n=r.get("momentum_top_n"),
+        momentum_bottom_n=r.get("momentum_bottom_n"),
+        momentum_lookback=int(r.get("momentum_lookback", 60)),
     )
     strat = _load_strategy(r["strategy"], r.get("strategy_params", {}), interval=cfg.interval)
     res = Backtester().run_portfolio(strat, cfg)

@@ -93,3 +93,38 @@ def test_portfolio_risk_cap_blocks_second_entry(monkeypatch) -> None:
     res = bt.run_portfolio(_RoundTrip(), _cfg(["A", "B"], max_concurrent_positions=1))
     # Only one symbol ever opened → exactly one closing leg.
     assert sum(1 for t in res.trades if t.is_closing) == 1
+
+
+def _falling(symbol, n=10, base=200.0):
+    return [_Bar(symbol, T0 + dt.timedelta(days=i), base - i, base - i + 0.5,
+                 base - i - 0.5, base - i) for i in range(n)]
+
+
+class _BuyAtN(BaseStrategy):
+    """Buy 10 when flat at the buy_n-th bar; sell two bars later."""
+    name = "bn"; version = "0"; interval = "1d"
+
+    def __init__(self, buy_n):
+        self.buy_n = buy_n
+
+    def on_bar(self, ctx):
+        sym = ctx.bar.symbol
+        pos = ctx.portfolio.positions.get(sym)
+        has = pos is not None and pos.quantity > 0
+        n = len(ctx.history)
+        if not has and n == self.buy_n:
+            return Action(kind="buy", symbol=sym, size=10, stop_price=ctx.bar.close * 0.9)
+        if has and n == self.buy_n + 2:
+            return Action(kind="sell", symbol=sym, size=10)
+        return hold()
+
+
+def test_dynamic_universe_gates_long_to_momentum_leaders(monkeypatch) -> None:
+    bt = Backtester()
+    _patch(bt, monkeypatch, {"A": _bars("A", n=10), "B": _falling("B", n=10)})
+    # top-1 leader: A rising (leader), B falling (laggard) → only A may go long.
+    # Buy at bar 5 so the lookback-2 momentum is available when the gate evaluates.
+    res = bt.run_portfolio(_BuyAtN(5), _cfg(["A", "B"], momentum_top_n=1, momentum_lookback=2))
+    syms = {t.symbol for t in res.trades}
+    assert "A" in syms and "B" not in syms
+    assert sum(1 for t in res.trades if t.is_closing) == 1   # only the leader round-tripped

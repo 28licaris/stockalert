@@ -219,8 +219,15 @@ class Backtester:
         timeline = sorted({b.timestamp for bars in bars_by_symbol.values() for b in bars})
         cursors = {sym: 0 for sym in config.symbols}
         last_close: dict[str, float] = {}
+        # Dynamic-universe state: per-symbol close history for as-of momentum ranking.
+        gate_long, gate_short = config.momentum_top_n, config.momentum_bottom_n
+        mom_lb = config.momentum_lookback
+        price_hist: dict[str, list[float]] = {}
 
         for t in timeline:
+            # Pass 1: advance cursors, update close history, compute as-of momentum.
+            present: list = []  # (sym, bar, next_bar)
+            momentum: dict[str, float] = {}
             for sym in config.symbols:
                 bars = bars_by_symbol.get(sym, [])
                 cur = cursors[sym]
@@ -230,7 +237,23 @@ class Backtester:
                 next_bar = bars[cur + 1] if cur + 1 < len(bars) else None
                 cursors[sym] = cur + 1
                 last_close[sym] = bar.close
+                ph = price_hist.setdefault(sym, [])
+                ph.append(bar.close)
+                if len(ph) > mom_lb and ph[-mom_lb - 1] > 0:
+                    momentum[sym] = bar.close / ph[-mom_lb - 1] - 1.0
+                present.append((sym, bar, next_bar))
 
+            # Eligibility sets from the cross-sectional momentum ranking (as-of t).
+            eligible_long = eligible_short = None
+            if (gate_long or gate_short) and momentum:
+                ranked = sorted(momentum, key=momentum.__getitem__, reverse=True)
+                if gate_long:
+                    eligible_long = set(ranked[:gate_long])
+                if gate_short:
+                    eligible_short = set(ranked[-gate_short:])
+
+            # Pass 2: signals + execution, gated by direction-eligibility.
+            for sym, bar, next_bar in present:
                 ctx = ctx_by_symbol[sym]
                 ctx.advance(bar, portfolio.snapshot())
                 action = strategy.on_bar(ctx)
@@ -244,14 +267,21 @@ class Backtester:
                     portfolio.apply(action, bar, next_bar, fees, slippage)
                     if sym not in portfolio.positions:
                         risk.release(sym)
-                else:
-                    # Entry — gate on portfolio heat + concurrent caps.
-                    stop = action.stop_price if action.stop_price is not None else bar.close
-                    risk_amount = action.size * abs(bar.close - stop)
-                    if risk.can_open(sym, risk_amount, portfolio.snapshot().equity):
-                        trade = portfolio.apply(action, bar, next_bar, fees, slippage)
-                        if trade is not None and sym in portfolio.positions:
-                            risk.register(sym, risk_amount)
+                    continue
+
+                # Entry: dynamic-universe gate — long only in leaders, short only
+                # in laggards (when the respective gate is configured).
+                if eligible_long is not None and action.kind == "buy" and sym not in eligible_long:
+                    continue
+                if eligible_short is not None and action.kind == "sell" and sym not in eligible_short:
+                    continue
+                # Risk gate: portfolio heat + concurrent caps.
+                stop = action.stop_price if action.stop_price is not None else bar.close
+                risk_amount = action.size * abs(bar.close - stop)
+                if risk.can_open(sym, risk_amount, portfolio.snapshot().equity):
+                    trade = portfolio.apply(action, bar, next_bar, fees, slippage)
+                    if trade is not None and sym in portfolio.positions:
+                        risk.register(sym, risk_amount)
 
             portfolio.mark_portfolio(t, dict(last_close))
 

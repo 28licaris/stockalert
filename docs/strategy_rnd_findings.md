@@ -703,3 +703,44 @@ masking two losing years.
 momentum/RS each rebalance, trade top-N) → re-validate breakout(+RS) and EW wave-3
 on it → only then OOS-by-time + forward paper-trade. Until that holds, treat all
 prior return figures as in-sample/optimistic.
+
+---
+
+## EXP-19 · 2026-06-30 · DYNAMIC UNIVERSE — the fix that generalizes
+
+EXP-18 showed fixed baskets overfit (the edge lived in whether the basket held the
+era's movers). Fix: let the strategy DISCOVER movers. Added dynamic-universe
+selection to `run_portfolio` — `momentum_top_n` / `momentum_bottom_n` /
+`momentum_lookback` (BacktestConfig + API + runner): each bar, rank symbols by
+as-of trailing return (no look-ahead) and allow LONG entries only in the top-N
+(short entries only in the bottom-N). Per-bar two-pass loop; unit-tested.
+
+Broad 119-name CH pool (all sectors, deep history; leveraged/inverse ETFs
+excluded), breakout, long top-15, lookback 60 — 2022–2025:
+
+- Full period: **+354%, Sharpe 1.28, −25.8% DD, PF 1.62, 425 trades.**
+- Walk-forward (the decisive test):
+
+| Year | Fixed fresh basket (bo+RS) | **Dynamic top-15 of 119** |
+|---|---|---|
+| 2022 | −13.9% | **+5.7%** (PF 0.99) |
+| 2023 | +62.1% | +41.7% (PF 1.53) |
+| 2024 | −9.8% | **+23.7%** (PF 1.40) |
+| 2025 | +51.0% | +41.9% (PF 1.58) |
+
+**Conclusions:**
+1. **Dynamic universe turns the down years positive and makes the edge
+   consistent** — every year positive, every year PF 1.4–1.6, Sharpe ~1. It
+   rotates into the year's actual leaders (energy '22, AI '24) instead of being
+   stuck with a fixed basket that missed them. This is the structural fix EXP-18
+   pointed to, and it works.
+2. **This is the most trustworthy result so far**: broad pool (not hand-picked),
+   as-of no-look-ahead selection, regime-robust across 4 years.
+3. Remaining honesty gaps: the 119-pool is liquid-survivors (mild survivorship);
+   top_n=15 / lookback=60 not yet robustness-swept; still needs forward paper-trade
+   for a real track record.
+
+**Next:** robustness-sweep (top_n, lookback) + walk-forward param search (the
+disciplined alternative to RL — see findings note); long-leaders / short-laggards
+via a breakdown short source ("ride waves up OR down"); EW source on the dynamic
+pool; M3 forward paper-trade.

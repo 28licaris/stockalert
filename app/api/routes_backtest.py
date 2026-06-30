@@ -48,6 +48,9 @@ class BacktestRunRequest(BaseModel):
     starting_cash: float = 100_000.0
     max_concurrent_positions: int = 6
     max_portfolio_heat: float = 0.10
+    momentum_top_n: Optional[int] = Field(None, description="Dynamic universe: long only the top-N as-of momentum names.")
+    momentum_bottom_n: Optional[int] = Field(None, description="Dynamic universe: short only the bottom-N as-of momentum names.")
+    momentum_lookback: int = 60
     store: bool = Field(True, description="Persist the run to the registry for the history list.")
 
 
@@ -130,6 +133,9 @@ def backtest_run(body: BacktestRunRequest = Body(...)) -> BacktestRunResponse:
         benchmark=body.benchmark, starting_cash=body.starting_cash,
         max_concurrent_positions=body.max_concurrent_positions,
         max_portfolio_heat=body.max_portfolio_heat,
+        momentum_top_n=body.momentum_top_n,
+        momentum_bottom_n=body.momentum_bottom_n,
+        momentum_lookback=body.momentum_lookback,
     )
     try:
         strategy = build_strategy(body.strategy, body.strategy_params, interval=body.interval)

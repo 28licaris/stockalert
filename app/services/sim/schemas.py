@@ -203,6 +203,22 @@ class BacktestConfig(BaseModel):
         0.10, gt=0.0, le=1.0,
         description="Portfolio backtest: cap on total open risk (sum of entry→stop $) as a fraction of equity.",
     )
+    momentum_top_n: Optional[int] = Field(
+        None, ge=1,
+        description=(
+            "Dynamic universe: allow LONG entries only for the top-N symbols ranked "
+            "by as-of momentum (trailing return over momentum_lookback bars) at each "
+            "bar. None = no gate (trade any symbol). Lets the strategy DISCOVER the "
+            "current leaders from a broad pool instead of a hand-picked basket."
+        ),
+    )
+    momentum_bottom_n: Optional[int] = Field(
+        None, ge=1,
+        description="Dynamic universe: allow SHORT entries only for the bottom-N (weakest) symbols by as-of momentum. None = no short gate. Enables long-leaders / short-laggards.",
+    )
+    momentum_lookback: int = Field(
+        60, ge=2, description="Bars used for the dynamic-universe momentum ranking.",
+    )
     starting_cash: float = 40_000.0
     history_window: int = Field(
         200,
