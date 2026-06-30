@@ -17,6 +17,15 @@ import {
 } from "./indicatorCatalog";
 import type { ChartType } from "./OhlcvChart";
 
+export type MovingAverageKind = "sma" | "ema" | "wma";
+
+export interface MovingAverageOverlay {
+  id: string;
+  kind: MovingAverageKind;
+  period: number;
+  color: string;
+}
+
 interface ChartToolbarProps {
   interval: string;
   intervals: readonly string[];
@@ -33,6 +42,14 @@ interface ChartToolbarProps {
   onClearIndicators: () => void;
   indicatorSettings: Record<string, Record<string, number>>;
   onIndicatorSettingChange: (id: string, key: string, value: number) => void;
+  movingAverages: ReadonlyArray<MovingAverageOverlay>;
+  onAddMovingAverage: (kind: MovingAverageKind) => void;
+  onUpdateMovingAverage: (
+    id: string,
+    patch: Partial<Omit<MovingAverageOverlay, "id">>,
+  ) => void;
+  onRemoveMovingAverage: (id: string) => void;
+  onClearMovingAverages: () => void;
 }
 
 /** Shared styling for the segmented control groups. */
@@ -61,6 +78,11 @@ export function ChartToolbar({
   onClearIndicators,
   indicatorSettings,
   onIndicatorSettingChange,
+  movingAverages,
+  onAddMovingAverage,
+  onUpdateMovingAverage,
+  onRemoveMovingAverage,
+  onClearMovingAverages,
 }: ChartToolbarProps) {
   return (
     <div className="flex flex-col gap-2">
@@ -115,17 +137,24 @@ export function ChartToolbar({
         <IndicatorMenu
           selected={selected}
           settings={indicatorSettings}
+          movingAverages={movingAverages}
           onToggle={onToggleIndicator}
           onSettingChange={onIndicatorSettingChange}
+          onAddMovingAverage={onAddMovingAverage}
+          onUpdateMovingAverage={onUpdateMovingAverage}
+          onRemoveMovingAverage={onRemoveMovingAverage}
         />
       </div>
 
-      {selected.length > 0 ? (
+      {selected.length > 0 || movingAverages.length > 0 ? (
         <IndicatorChips
           selected={selected}
           settings={indicatorSettings}
+          movingAverages={movingAverages}
           onRemove={onToggleIndicator}
+          onRemoveMovingAverage={onRemoveMovingAverage}
           onClear={onClearIndicators}
+          onClearMovingAverages={onClearMovingAverages}
         />
       ) : null}
     </div>
@@ -185,13 +214,24 @@ const KIND_LABEL: Record<IndicatorKind, string> = {
 function IndicatorMenu({
   selected,
   settings,
+  movingAverages,
   onToggle,
   onSettingChange,
+  onAddMovingAverage,
+  onUpdateMovingAverage,
+  onRemoveMovingAverage,
 }: {
   selected: ReadonlyArray<string>;
   settings: Record<string, Record<string, number>>;
+  movingAverages: ReadonlyArray<MovingAverageOverlay>;
   onToggle: (id: string) => void;
   onSettingChange: (id: string, key: string, value: number) => void;
+  onAddMovingAverage: (kind: MovingAverageKind) => void;
+  onUpdateMovingAverage: (
+    id: string,
+    patch: Partial<Omit<MovingAverageOverlay, "id">>,
+  ) => void;
+  onRemoveMovingAverage: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -230,9 +270,9 @@ function IndicatorMenu({
       >
         <Plus className="h-3.5 w-3.5" aria-hidden />
         <span>Indicators</span>
-        {selected.length > 0 ? (
+        {selected.length + movingAverages.length > 0 ? (
           <span className="ml-0.5 rounded-full bg-accent px-1.5 font-mono text-[10px] text-accent-fg">
-            {selected.length}
+            {selected.length + movingAverages.length}
           </span>
         ) : null}
         <ChevronDown className="h-3 w-3 opacity-60" aria-hidden />
@@ -241,8 +281,94 @@ function IndicatorMenu({
       {open ? (
         <div
           role="menu"
-          className="absolute right-0 z-20 mt-1 w-60 rounded-md border border-border bg-bg-elevated p-1 shadow-2xl shadow-black/40"
+          className="absolute right-0 z-20 mt-1 w-80 rounded-md border border-border bg-bg-elevated p-2 shadow-2xl shadow-black/40"
         >
+          <div className="border-b border-border/70 pb-2">
+            <div className="flex items-center justify-between gap-2 px-1 py-1">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">
+                  Moving averages
+                </div>
+                <div className="text-[10px] text-fg-muted">
+                  Periods follow the selected candle interval.
+                </div>
+              </div>
+              <div className="flex gap-1">
+                {MA_KINDS.map((kind) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => onAddMovingAverage(kind)}
+                    className="rounded border border-border bg-bg-base px-2 py-1 font-mono text-[10px] uppercase text-fg-muted hover:border-accent/50 hover:text-fg-base"
+                  >
+                    + {kind}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {movingAverages.length > 0 ? (
+              <div className="mt-1 space-y-1">
+                {movingAverages.map((ma) => (
+                  <div
+                    key={ma.id}
+                    className="grid grid-cols-[4.75rem_1fr_2.5rem_1.5rem] items-center gap-1 rounded border border-border/70 bg-bg-base/50 p-1"
+                  >
+                    <select
+                      value={ma.kind}
+                      onChange={(event) =>
+                        onUpdateMovingAverage(ma.id, {
+                          kind: event.target.value as MovingAverageKind,
+                        })
+                      }
+                      className="h-7 rounded border border-border bg-bg-base px-1 font-mono text-[11px] uppercase text-fg-base focus:border-accent focus:outline-none"
+                    >
+                      {MA_KINDS.map((kind) => (
+                        <option key={kind} value={kind}>
+                          {kind.toUpperCase()}
+                        </option>
+                      ))}
+                    </select>
+                    <label className="flex items-center gap-1 text-[10px] text-fg-muted">
+                      <span>Period</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={1000}
+                        step={1}
+                        value={ma.period}
+                        onChange={(event) => {
+                          const next = Number(event.target.value);
+                          if (Number.isFinite(next)) {
+                            onUpdateMovingAverage(ma.id, {
+                              period: Math.max(1, Math.round(next)),
+                            });
+                          }
+                        }}
+                        className="h-7 min-w-0 flex-1 rounded border border-border bg-bg-base px-2 text-right font-mono text-[11px] text-fg-base focus:border-accent focus:outline-none"
+                      />
+                    </label>
+                    <input
+                      type="color"
+                      value={ma.color}
+                      aria-label={`${ma.kind.toUpperCase()} ${ma.period} color`}
+                      onChange={(event) =>
+                        onUpdateMovingAverage(ma.id, { color: event.target.value })
+                      }
+                      className="h-7 w-9 rounded border border-border bg-bg-base p-0.5"
+                    />
+                    <button
+                      type="button"
+                      aria-label={`Remove ${ma.kind.toUpperCase()} ${ma.period}`}
+                      onClick={() => onRemoveMovingAverage(ma.id)}
+                      className="flex h-7 w-7 items-center justify-center rounded text-fg-subtle hover:bg-bg-muted hover:text-fg-base"
+                    >
+                      <X className="h-3 w-3" aria-hidden />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
           {kinds.map((kind) => (
             <div key={kind} className="py-1">
               <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">
@@ -315,21 +441,51 @@ function supportsPeriodSetting(id: string): boolean {
   return id === "sma" || id === "ema" || id === "wma";
 }
 
+const MA_KINDS: MovingAverageKind[] = ["sma", "ema", "wma"];
+
 // ─────────────────────────────────────────────────────────────────────
 
 function IndicatorChips({
   selected,
   settings,
+  movingAverages,
   onRemove,
+  onRemoveMovingAverage,
   onClear,
+  onClearMovingAverages,
 }: {
   selected: ReadonlyArray<string>;
   settings: Record<string, Record<string, number>>;
+  movingAverages: ReadonlyArray<MovingAverageOverlay>;
   onRemove: (id: string) => void;
+  onRemoveMovingAverage: (id: string) => void;
   onClear: () => void;
+  onClearMovingAverages: () => void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
+      {movingAverages.map((ma) => (
+        <span
+          key={ma.id}
+          className="inline-flex items-center gap-1 rounded-full border border-border bg-bg-subtle py-0.5 pl-2 pr-1 font-mono text-[11px] text-fg-base"
+        >
+          <span
+            className="h-2.5 w-2.5 rounded-full"
+            style={{ backgroundColor: ma.color }}
+            aria-hidden
+          />
+          {ma.kind.toUpperCase()}
+          <span className="text-[10px] text-fg-subtle">{ma.period}</span>
+          <button
+            type="button"
+            aria-label={`Remove ${ma.kind.toUpperCase()} ${ma.period}`}
+            onClick={() => onRemoveMovingAverage(ma.id)}
+            className="flex h-3.5 w-3.5 items-center justify-center rounded-full text-fg-subtle hover:bg-bg-muted hover:text-fg-base"
+          >
+            <X className="h-2.5 w-2.5" aria-hidden />
+          </button>
+        </span>
+      ))}
       {selected.map((id) => {
         const period = supportsPeriodSetting(id) ? settings[id]?.period : null;
         return (
@@ -352,10 +508,13 @@ function IndicatorChips({
           </span>
         );
       })}
-      {selected.length > 1 ? (
+      {selected.length + movingAverages.length > 1 ? (
         <button
           type="button"
-          onClick={onClear}
+          onClick={() => {
+            onClear();
+            onClearMovingAverages();
+          }}
           className="ml-1 text-[11px] text-fg-subtle hover:text-fg-base"
         >
           Clear all

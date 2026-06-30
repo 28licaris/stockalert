@@ -1,8 +1,12 @@
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Table2 } from "lucide-react";
 import { OhlcvChart, type ChartType } from "@/components/charts/OhlcvChart";
-import { ChartToolbar } from "@/components/charts/ChartToolbar";
+import {
+  ChartToolbar,
+  type MovingAverageKind,
+  type MovingAverageOverlay,
+} from "@/components/charts/ChartToolbar";
 import { BarsTable } from "@/components/tables/BarsTable";
 import { Button } from "@/components/ui/button";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
@@ -11,7 +15,9 @@ import {
   useIndicators,
   useLakeBars,
   useSymbolSignals,
+  type Bar,
   type ChartRange,
+  type IndicatorSeries,
 } from "@/api/queries";
 import { useUserSetting } from "@/lib/storage";
 import {
@@ -29,6 +35,8 @@ const DEFAULT_INTERVAL: Interval = "5m";
 const DEFAULT_RANGE: ChartRange = "30D";
 const DEFAULT_CHART_TYPE: ChartType = "candles";
 type IndicatorSettings = Record<string, Record<string, number>>;
+
+const DEFAULT_MA_COLORS = ["#f59e0b", "#38bdf8", "#c084fc", "#22c55e", "#f43f5e"];
 
 /**
  * Charts page — chart + indicators (FE-2.1).
@@ -72,18 +80,34 @@ export function SymbolPage() {
       ema: { period: 20 },
       wma: { period: 20 },
     });
+  const [movingAverages, setMovingAverages] = useUserSetting<MovingAverageOverlay[]>(
+    "chart.movingAverages",
+    [{ id: "ma-sma-200", kind: "sma", period: 200, color: "#f59e0b" }],
+  );
   // Global display timezone for the chart axis + Recent Bars table.
   const [tz, setTz] = useUserSetting<TzSetting>("chart.timezone", DEFAULT_TZ);
   const zone = resolveZone(tz);
+  const backendIndicatorIds = useMemo(
+    () => indicatorIds.filter((id) => !isMovingAverageKind(id)),
+    [indicatorIds],
+  );
 
   const bars = useLakeBars(ticker || undefined, interval, range);
   const signals = useSymbolSignals(ticker || undefined, 100);
   const indicators = useIndicators(
     ticker || undefined,
     interval,
-    indicatorIds,
+    backendIndicatorIds,
     range,
     indicatorSettings,
+  );
+  const movingAverageSeries = useMemo(
+    () => buildMovingAverageSeries(bars.data ?? [], movingAverages, interval),
+    [bars.data, movingAverages, interval],
+  );
+  const chartIndicators = useMemo(
+    () => [...movingAverageSeries, ...(indicators.data ?? [])],
+    [movingAverageSeries, indicators.data],
   );
 
   const toggleIndicator = useCallback(
@@ -107,6 +131,48 @@ export function SymbolPage() {
         },
       })),
     [setIndicatorSettings],
+  );
+  const addMovingAverage = useCallback(
+    (kind: MovingAverageKind) =>
+      setMovingAverages((prev) => {
+        const color = DEFAULT_MA_COLORS[prev.length % DEFAULT_MA_COLORS.length];
+        const period = kind === "ema" ? 50 : 20;
+        return [
+          ...prev,
+          {
+            id: `ma-${kind}-${Date.now().toString(36)}-${prev.length}`,
+            kind,
+            period,
+            color,
+          },
+        ];
+      }),
+    [setMovingAverages],
+  );
+  const updateMovingAverage = useCallback(
+    (id: string, patch: Partial<Omit<MovingAverageOverlay, "id">>) =>
+      setMovingAverages((prev) =>
+        prev.map((ma) => (ma.id === id ? { ...ma, ...patch } : ma)),
+      ),
+    [setMovingAverages],
+  );
+  const removeMovingAverage = useCallback(
+    (id: string) =>
+      setMovingAverages((prev) => prev.filter((ma) => ma.id !== id)),
+    [setMovingAverages],
+  );
+  const clearMovingAverages = useCallback(
+    () => setMovingAverages([]),
+    [setMovingAverages],
+  );
+  const setRangeWithSnap = useCallback(
+    (next: ChartRange) => {
+      setRange(next);
+      if (next === "1Y" || next === "5Y" || next === "MAX") {
+        setInterval("1d");
+      }
+    },
+    [setInterval, setRange],
   );
 
   if (!ticker) {
@@ -165,16 +231,21 @@ export function SymbolPage() {
         intervals={INTERVALS}
         onIntervalChange={(i) => setInterval(i as Interval)}
         range={range}
-        onRangeChange={setRange}
+        onRangeChange={setRangeWithSnap}
         chartType={chartType}
         onChartTypeChange={setChartType}
         tz={tz}
         onTzChange={setTz}
-        selected={indicatorIds}
+        selected={backendIndicatorIds}
         onToggleIndicator={toggleIndicator}
         onClearIndicators={clearIndicators}
         indicatorSettings={indicatorSettings}
         onIndicatorSettingChange={setIndicatorParam}
+        movingAverages={movingAverages}
+        onAddMovingAverage={addMovingAverage}
+        onUpdateMovingAverage={updateMovingAverage}
+        onRemoveMovingAverage={removeMovingAverage}
+        onClearMovingAverages={clearMovingAverages}
       />
 
       {bars.error ? <ApiErrorAlert error={bars.error} /> : null}
@@ -188,10 +259,11 @@ export function SymbolPage() {
         <OhlcvChart
           bars={bars.data ?? []}
           signals={signals.data ?? []}
-          indicators={indicators.data ?? []}
+          indicators={chartIndicators}
           chartType={chartType}
           timezone={zone}
           height="fill"
+          fitKey={`${ticker}:${interval}:${range}`}
         />
         {!bars.data || bars.data.length === 0 ? (
           <div className="absolute inset-0 flex items-center justify-center rounded-md bg-bg-base/60 text-sm text-fg-muted backdrop-blur-[1px]">
@@ -204,6 +276,94 @@ export function SymbolPage() {
 
     </div>
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+
+function buildMovingAverageSeries(
+  bars: ReadonlyArray<Bar>,
+  overlays: ReadonlyArray<MovingAverageOverlay>,
+  interval: Interval,
+): IndicatorSeries[] {
+  if (bars.length === 0 || overlays.length === 0) return [];
+  return overlays.map((ma) => {
+    const values = movingAverageValues(
+      bars.map((bar) => bar.close),
+      ma.kind,
+      ma.period,
+    );
+    const unit = interval === "1d" ? "D" : " bars";
+    const label = `${ma.kind.toUpperCase()} ${ma.period}${unit}`;
+    return {
+      name: `ma_${ma.id}`,
+      label,
+      params: {
+        kind: ma.kind,
+        period: ma.period,
+        color: ma.color,
+        lineWidth: 2,
+      },
+      values: bars.map((bar, index) => ({
+        timestamp: bar.ts,
+        value: values[index] ?? null,
+      })),
+      count: bars.length,
+    };
+  });
+}
+
+function movingAverageValues(
+  closes: number[],
+  kind: MovingAverageKind,
+  period: number,
+): Array<number | null> {
+  const n = Math.max(1, Math.round(period));
+  if (kind === "ema") return emaValues(closes, n);
+  if (kind === "wma") return wmaValues(closes, n);
+  return smaValues(closes, n);
+}
+
+function smaValues(closes: number[], period: number): Array<number | null> {
+  const out: Array<number | null> = Array(closes.length).fill(null);
+  let sum = 0;
+  for (let i = 0; i < closes.length; i++) {
+    sum += closes[i];
+    if (i >= period) sum -= closes[i - period];
+    if (i >= period - 1) out[i] = sum / period;
+  }
+  return out;
+}
+
+function emaValues(closes: number[], period: number): Array<number | null> {
+  const out: Array<number | null> = Array(closes.length).fill(null);
+  if (closes.length < period) return out;
+  const k = 2 / (period + 1);
+  let ema = 0;
+  for (let i = 0; i < period; i++) ema += closes[i];
+  ema /= period;
+  out[period - 1] = ema;
+  for (let i = period; i < closes.length; i++) {
+    ema = closes[i] * k + ema * (1 - k);
+    out[i] = ema;
+  }
+  return out;
+}
+
+function wmaValues(closes: number[], period: number): Array<number | null> {
+  const out: Array<number | null> = Array(closes.length).fill(null);
+  const denom = (period * (period + 1)) / 2;
+  for (let i = period - 1; i < closes.length; i++) {
+    let weighted = 0;
+    for (let j = 0; j < period; j++) {
+      weighted += closes[i - j] * (period - j);
+    }
+    out[i] = weighted / denom;
+  }
+  return out;
+}
+
+function isMovingAverageKind(id: string): id is MovingAverageKind {
+  return id === "sma" || id === "ema" || id === "wma";
 }
 
 // ─────────────────────────────────────────────────────────────────────

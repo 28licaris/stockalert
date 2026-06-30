@@ -34,9 +34,6 @@ export interface IndicatorDef {
 /** Catalog order = display order in the picker. */
 export const INDICATOR_CATALOG: readonly IndicatorDef[] = [
   // Overlays (price pane)
-  { id: "sma", label: "SMA", kind: "overlay", description: "Simple moving average" },
-  { id: "ema", label: "EMA", kind: "overlay", description: "Exponential moving average" },
-  { id: "wma", label: "WMA", kind: "overlay", description: "Weighted moving average" },
   { id: "bollinger", label: "Bollinger Bands", kind: "overlay", description: "Volatility bands" },
   // Oscillators (own pane)
   { id: "rsi", label: "RSI", kind: "oscillator", description: "Relative strength index" },
@@ -105,6 +102,9 @@ const COMPONENT_RENDER: Record<string, ComponentRender | null> = {
  * future backend component still renders rather than vanishing silently.
  */
 export function componentRender(seriesName: string): ComponentRender | null {
+  if (seriesName.startsWith("ma_")) {
+    return { type: "line", color: "#f59e0b", lineWidth: 2 };
+  }
   if (seriesName in COMPONENT_RENDER) return COMPONENT_RENDER[seriesName];
   return { type: "line", color: "#94a3b8", lineWidth: 1 };
 }
