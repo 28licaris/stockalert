@@ -225,6 +225,93 @@ class BreakoutSignalSource(BaseSignalSource):
         )
 
 
+class BreakdownSignalSource(BaseSignalSource):
+    """
+    Short mirror of breakout: short when price breaks BELOW the lowest low of the
+    prior `lookback` bars on a volume expansion (a downside breakout — "rolling
+    over"). Stop = the breakdown level (prior low, above entry); target = entry −
+    reward_risk_mult × risk. Paired with the dynamic universe's `momentum_bottom_n`
+    gate, this is how you "ride the wave down" — short the laggards as they break.
+    """
+
+    name = "breakdown"
+
+    def __init__(
+        self,
+        *,
+        lookback: int = 20,
+        vol_mult: float = 1.5,
+        vol_avg_period: int = 20,
+        reward_risk_mult: float = 2.0,
+        min_risk_pct: float = 0.005,
+    ) -> None:
+        if lookback < 2:
+            raise ValueError(f"lookback must be >= 2, got {lookback}")
+        self.lookback = lookback
+        self.vol_mult = vol_mult
+        self.vol_avg_period = vol_avg_period
+        self.reward_risk_mult = reward_risk_mult
+        self.min_risk_pct = min_risk_pct
+
+    def on_bar(self, ctx: Context) -> Optional[Signal]:
+        need = max(self.lookback, self.vol_avg_period) + 1
+        if len(ctx.history) < need:
+            return None
+        df = ctx.history.to_dataframe()
+        closes = df["close"]
+        lows = df["low"] if "low" in df else closes
+        # Prior window EXCLUDES the current bar — no look-ahead.
+        prior_low = float(lows.iloc[-(self.lookback + 1):-1].min())
+        entry = float(ctx.bar.close)
+        if entry >= prior_low or entry <= 0:
+            return None
+        if "volume" in df:
+            vol_now = float(df["volume"].iloc[-1])
+            vol_avg = float(df["volume"].iloc[-(self.vol_avg_period + 1):-1].mean())
+            if vol_avg > 0 and vol_now < self.vol_mult * vol_avg:
+                return None
+        stop = prior_low                      # above entry for a short
+        risk = stop - entry
+        if risk < entry * self.min_risk_pct:
+            stop = entry * (1.0 + self.min_risk_pct)
+            risk = stop - entry
+        target = entry - self.reward_risk_mult * risk
+        return Signal(
+            symbol=ctx.bar.symbol, direction="short",
+            entry=entry, stop=stop, target_1=target,
+            confidence=0.5, kind="breakdown",
+            rationale=f"close {entry:.2f} broke {self.lookback}-bar low {prior_low:.2f} on volume",
+        )
+
+
+class CompositeSignalSource(BaseSignalSource):
+    """
+    Combine several sources — return the first that fires (priority order). Lets a
+    single strategy emit long breakouts AND short breakdowns; the dynamic-universe
+    direction gate (top-N long / bottom-N short) then routes each to the right
+    names. Config: `source: composite, source_params: {sources: [{name, params}, …]}`.
+    """
+
+    name = "composite"
+
+    def __init__(self, *, sources: list[dict]) -> None:
+        if not sources:
+            raise ValueError("composite requires a non-empty `sources` list")
+        self._subs = [build_signal_source(s["name"], **(s.get("params") or {})) for s in sources]
+        self.name = "composite(" + ",".join(s.name for s in self._subs) + ")"
+
+    def setup(self, ctx: Context) -> None:
+        for s in self._subs:
+            s.setup(ctx)
+
+    def on_bar(self, ctx: Context) -> Optional[Signal]:
+        for s in self._subs:
+            sig = s.on_bar(ctx)
+            if sig is not None:
+                return sig
+        return None
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Registry — name → factory. New sources register here.
 # ─────────────────────────────────────────────────────────────────────
@@ -463,6 +550,8 @@ class ElliottWaveSource(BaseSignalSource):
 _SOURCES = {
     "ma_cross": MACrossSignalSource,
     "breakout": BreakoutSignalSource,
+    "breakdown": BreakdownSignalSource,
+    "composite": CompositeSignalSource,
     "divergence": DivergenceSignalSource,
     "elliott_wave": ElliottWaveSource,
 }

@@ -786,3 +786,37 @@ Strict per-year cold-start (no pre-year warmup) → each year loses its first
 
 **Next:** long-leaders / short-laggards via a breakdown short source (ride up OR
 down) on the dynamic pool; then M3 forward paper-trade of top15/lb60 breakout.
+
+---
+
+## EXP-21 · 2026-06-30 · Long-leaders / short-laggards — shorts don't pay this regime
+
+Built the "ride up OR down" tooling: `breakdown` source (short mirror of breakout —
+short a new N-bar low on volume), `composite` source (emit long breakouts AND short
+breakdowns, first-fires), all tested + purity-green. Ran long top-15 leaders +
+short bottom-15 laggards on the 119-name dynamic pool.
+
+| Year | long-only dynamic | long+short |
+|---|---|---|
+| 2022 | +5.7% | −11.2% (DD −50%) |
+| 2023 | +41.7% | +9.4% (DD −41%) |
+| 2024 | +23.7% | **+55.4%** (DD −32%) |
+| 2025 | +41.9% | −32.6% (DD −67%) |
+| **Full** | **+354% / Sh 1.28** | **−47.6% / Sh −0.07 / DD −70%** |
+
+**Conclusions:**
+1. **Shorting loses badly in 2022–25 — even shorting laggards "correctly."** It hurt
+   3 of 4 years (only the 2024 rotation helped) and blew drawdowns out to −70%.
+   Even in the 2022 down year shorts hurt (choppy decline + short squeezes on the
+   bounces). The market's upward drift punishes persistent short exposure.
+2. **This is now confirmed 4× independently** (EXP-15 regime-switch shorts −32%,
+   EXP-17 EW long+short −33%, EXP-21 long+short −48%). The honest answer to "ride
+   the wave down": in THIS regime, down doesn't pay.
+3. **The short tooling is built, tested, and correct** — it's the right instrument
+   for a genuine sustained bear; it just doesn't earn its keep in a bull-dominated
+   sample. Keep it parked behind a (future) regime trigger, don't run it now.
+4. **Headline strategy stays LONG-ONLY dynamic momentum** (breakout, top-15, lb60) —
+   +354% full, every year positive, walk-forward + holdout validated (EXP-19/20).
+
+**Next:** stop trying to short this regime. Lock the long-only dynamic-breakout
+config and move to M3 forward paper-trading — the real, sellable track record.
