@@ -16,15 +16,14 @@ import {
   type IndicatorKind,
 } from "./indicatorCatalog";
 import type { ChartType } from "./OhlcvChart";
+import {
+  isCrossTimeframeMA,
+  sourceOptions,
+  type MovingAverageKind,
+  type MovingAverageOverlay,
+} from "./movingAverage";
 
-export type MovingAverageKind = "sma" | "ema" | "wma";
-
-export interface MovingAverageOverlay {
-  id: string;
-  kind: MovingAverageKind;
-  period: number;
-  color: string;
-}
+export type { MovingAverageKind, MovingAverageOverlay } from "./movingAverage";
 
 interface ChartToolbarProps {
   interval: string;
@@ -135,6 +134,7 @@ export function ChartToolbar({
         </div>
 
         <IndicatorMenu
+          interval={interval}
           selected={selected}
           settings={indicatorSettings}
           movingAverages={movingAverages}
@@ -213,6 +213,7 @@ const KIND_LABEL: Record<IndicatorKind, string> = {
 };
 
 function IndicatorMenu({
+  interval,
   selected,
   settings,
   movingAverages,
@@ -222,6 +223,7 @@ function IndicatorMenu({
   onUpdateMovingAverage,
   onRemoveMovingAverage,
 }: {
+  interval: string;
   selected: ReadonlyArray<string>;
   settings: Record<string, Record<string, number>>;
   movingAverages: ReadonlyArray<MovingAverageOverlay>;
@@ -234,6 +236,7 @@ function IndicatorMenu({
   ) => void;
   onRemoveMovingAverage: (id: string) => void;
 }) {
+  const srcOptions = sourceOptions(interval);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
 
@@ -291,7 +294,8 @@ function IndicatorMenu({
                   Moving averages
                 </div>
                 <div className="text-[10px] text-fg-muted">
-                  Periods follow the selected candle interval.
+                  Length counts source bars. Pin a source to lock a level
+                  (e.g. 200 · 1d = a true 200-day SMA on any chart).
                 </div>
               </div>
               <div className="flex gap-1">
@@ -312,59 +316,86 @@ function IndicatorMenu({
                 {movingAverages.map((ma) => (
                   <div
                     key={ma.id}
-                    className="grid grid-cols-[4.75rem_1fr_2.5rem_1.5rem] items-center gap-1 rounded border border-border/70 bg-bg-base/50 p-1"
+                    className="space-y-1 rounded border border-border/70 bg-bg-base/50 p-1"
                   >
-                    <select
-                      value={ma.kind}
-                      onChange={(event) =>
-                        onUpdateMovingAverage(ma.id, {
-                          kind: event.target.value as MovingAverageKind,
-                        })
-                      }
-                      className="h-7 rounded border border-border bg-bg-base px-1 font-mono text-[11px] uppercase text-fg-base focus:border-accent focus:outline-none"
-                    >
-                      {MA_KINDS.map((kind) => (
-                        <option key={kind} value={kind}>
-                          {kind.toUpperCase()}
-                        </option>
-                      ))}
-                    </select>
-                    <label className="flex items-center gap-1 text-[10px] text-fg-muted">
-                      <span>Period</span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={1000}
-                        step={1}
-                        value={ma.period}
-                        onChange={(event) => {
-                          const next = Number(event.target.value);
-                          if (Number.isFinite(next)) {
+                    <div className="flex items-center gap-1">
+                      <select
+                        value={ma.kind}
+                        aria-label="Type"
+                        onChange={(event) =>
+                          onUpdateMovingAverage(ma.id, {
+                            kind: event.target.value as MovingAverageKind,
+                          })
+                        }
+                        className="h-7 flex-1 rounded border border-border bg-bg-base px-1 font-mono text-[11px] uppercase text-fg-base focus:border-accent focus:outline-none"
+                      >
+                        {MA_KINDS.map((kind) => (
+                          <option key={kind} value={kind}>
+                            {kind.toUpperCase()}
+                          </option>
+                        ))}
+                      </select>
+                      <label className="flex items-center gap-1 text-[10px] text-fg-muted">
+                        <span>Source</span>
+                        <select
+                          value={ma.sourceAgg ?? "chart"}
+                          aria-label="Source timeframe"
+                          onChange={(event) =>
                             onUpdateMovingAverage(ma.id, {
-                              period: Math.max(1, Math.round(next)),
-                            });
+                              sourceAgg:
+                                event.target.value === "chart"
+                                  ? undefined
+                                  : event.target.value,
+                            })
                           }
-                        }}
-                        className="h-7 min-w-0 flex-1 rounded border border-border bg-bg-base px-2 text-right font-mono text-[11px] text-fg-base focus:border-accent focus:outline-none"
+                          className="h-7 rounded border border-border bg-bg-base px-1 font-mono text-[11px] text-fg-base focus:border-accent focus:outline-none"
+                        >
+                          {srcOptions.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${ma.kind.toUpperCase()} ${ma.period}`}
+                        onClick={() => onRemoveMovingAverage(ma.id)}
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-fg-subtle hover:bg-bg-muted hover:text-fg-base"
+                      >
+                        <X className="h-3 w-3" aria-hidden />
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <label className="flex flex-1 items-center gap-1 text-[10px] text-fg-muted">
+                        <span>Length</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={1000}
+                          step={1}
+                          value={ma.period}
+                          onChange={(event) => {
+                            const next = Number(event.target.value);
+                            if (Number.isFinite(next)) {
+                              onUpdateMovingAverage(ma.id, {
+                                period: Math.max(1, Math.round(next)),
+                              });
+                            }
+                          }}
+                          className="h-7 min-w-0 flex-1 rounded border border-border bg-bg-base px-2 text-right font-mono text-[11px] text-fg-base focus:border-accent focus:outline-none"
+                        />
+                      </label>
+                      <input
+                        type="color"
+                        value={ma.color}
+                        aria-label={`${ma.kind.toUpperCase()} ${ma.period} color`}
+                        onChange={(event) =>
+                          onUpdateMovingAverage(ma.id, { color: event.target.value })
+                        }
+                        className="h-7 w-9 rounded border border-border bg-bg-base p-0.5"
                       />
-                    </label>
-                    <input
-                      type="color"
-                      value={ma.color}
-                      aria-label={`${ma.kind.toUpperCase()} ${ma.period} color`}
-                      onChange={(event) =>
-                        onUpdateMovingAverage(ma.id, { color: event.target.value })
-                      }
-                      className="h-7 w-9 rounded border border-border bg-bg-base p-0.5"
-                    />
-                    <button
-                      type="button"
-                      aria-label={`Remove ${ma.kind.toUpperCase()} ${ma.period}`}
-                      onClick={() => onRemoveMovingAverage(ma.id)}
-                      className="flex h-7 w-7 items-center justify-center rounded text-fg-subtle hover:bg-bg-muted hover:text-fg-base"
-                    >
-                      <X className="h-3 w-3" aria-hidden />
-                    </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -468,10 +499,17 @@ function IndicatorChips({
   const maSuffix = interval === "1d" ? "D" : `×${interval}`;
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      {movingAverages.map((ma) => (
+      {movingAverages.map((ma) => {
+        const crossTf = isCrossTimeframeMA(ma, interval);
+        return (
         <span
           key={ma.id}
           className="inline-flex items-center gap-1 rounded-full border border-border bg-bg-subtle py-0.5 pl-2 pr-1 font-mono text-[11px] text-fg-base"
+          title={
+            crossTf
+              ? `${ma.kind.toUpperCase()} ${ma.period} on ${ma.sourceAgg} bars, stepped onto the ${interval} chart`
+              : `${ma.kind.toUpperCase()} ${ma.period} on ${interval} bars`
+          }
         >
           <span
             className="h-2.5 w-2.5 rounded-full"
@@ -481,7 +519,7 @@ function IndicatorChips({
           {ma.kind.toUpperCase()}
           <span className="text-[10px] text-fg-subtle">
             {ma.period}
-            {maSuffix}
+            {crossTf ? ` · ${ma.sourceAgg}` : maSuffix}
           </span>
           <button
             type="button"
@@ -492,7 +530,8 @@ function IndicatorChips({
             <X className="h-2.5 w-2.5" aria-hidden />
           </button>
         </span>
-      ))}
+        );
+      })}
       {selected.map((id) => {
         const period = supportsPeriodSetting(id) ? settings[id]?.period : null;
         return (
