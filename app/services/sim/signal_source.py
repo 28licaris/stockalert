@@ -351,10 +351,120 @@ class DivergenceSignalSource(BaseSignalSource):
         )
 
 
+class ElliottWaveSource(BaseSignalSource):
+    """
+    "Trade the wave" — enter motive waves the way an Elliott Wave trader does.
+
+    On each bar, label the name's wave structure as-of now (the pure, no-look-ahead
+    `app.signals.elliott` engine over recent swing pivots). When the primary count
+    confirms a MOTIVE leg in `entry_waves` (default wave 3 — the strongest, highest-
+    conviction leg; optionally 5 / C), enter in the count's direction with:
+
+      - stop   = the count's `invalidation_price` — the cardinal-rule "trap door"
+                 (the wave-2 low for a wave-3 trade); the level that *voids* the
+                 count, exactly the EW trader's hard stop.
+      - target = the engine's first Fibonacci target (e.g. ~1.618×W1 for wave 3),
+                 or a reward:risk fallback when no fib target is published.
+      - confidence = the engine's calibrated confidence → drives conviction sizing.
+
+    This is the structural, per-name entry EXP-15/16 pointed to: position for the
+    wave-3 thrust near the wave-2 low with a tight count-based stop and a far fib
+    target — a reward:risk profile a 20-day-high breakout can't match — instead of
+    chasing strength. Debounced per (symbol, direction) so each new motive leg
+    triggers once. The engine enforces the three cardinal rules; we trade only its
+    surviving primary count, with its invalidation as the risk backbone.
+    """
+
+    name = "elliott_wave"
+
+    def __init__(
+        self,
+        *,
+        pivot_period: int = 5,
+        entry_waves=("3",),
+        min_confidence: float = 0.0,
+        lookback: int = 300,
+        reward_risk_mult: float = 2.0,
+        side: str = "both",
+    ) -> None:
+        self.pivot_period = pivot_period
+        self.entry_waves = tuple(str(w) for w in entry_waves)
+        self.min_confidence = min_confidence
+        self.lookback = lookback
+        self.reward_risk_mult = reward_risk_mult
+        if side not in ("long", "short", "both"):
+            raise ValueError(f"side must be long|short|both, got {side!r}")
+        self.side = side
+        self._last_wave: dict = {}
+        self._engine = None
+
+    def setup(self, ctx: Context) -> None:
+        self._last_wave = {}
+        self._engine = None
+
+    def on_bar(self, ctx: Context) -> Optional[Signal]:
+        from app.indicators.pivots import PivotDetector
+        from app.signals.elliott.engine import WaveEngine
+
+        df = ctx.history.to_dataframe()
+        if len(df) < max(40, self.pivot_period * 5):
+            return None
+        sub = df.iloc[-self.lookback:]
+        close, high, low = sub["close"], sub["high"], sub["low"]
+        pivots = PivotDetector(period=self.pivot_period, source="hl").detect(close, high, low)
+        if len(pivots) < 5:
+            return None
+        if self._engine is None:
+            self._engine = WaveEngine()
+        labeling = self._engine.label(
+            pivots, last_price=float(close.iloc[-1]), symbol=ctx.bar.symbol,
+            interval=getattr(ctx, "_exec_interval", "1d"),
+            as_of_index=len(close) - 1, as_of=ctx.bar.timestamp,
+        )
+        prim = labeling.primary
+        if prim is None or prim.current_wave is None:
+            return None
+        direction = "long" if prim.direction == "up" else "short"
+        if self.side != "both" and self.side != direction:
+            return None
+
+        cw = prim.current_wave
+        key = (ctx.bar.symbol, direction)
+        prev = self._last_wave.get(key)
+        self._last_wave[key] = cw
+        if cw not in self.entry_waves or prev == cw:
+            return None  # not a motive-leg onset (or already signaled this leg)
+        if labeling.confidence < self.min_confidence:
+            return None
+
+        entry = float(close.iloc[-1])
+        scen = labeling.scenarios[0] if labeling.scenarios else None
+        stop = float(scen.invalidation) if scen is not None else float(prim.invalidation_price)
+        target = float(scen.next_target) if (scen is not None and scen.next_target is not None) else None
+        risk = abs(entry - stop)
+        if risk <= 0:
+            return None
+        if target is None:
+            target = entry + self.reward_risk_mult * risk * (1.0 if direction == "long" else -1.0)
+        # Geometry sanity: long → stop < entry < target; short → target < entry < stop.
+        if direction == "long" and not (stop < entry < target):
+            return None
+        if direction == "short" and not (target < entry < stop):
+            return None
+        conf = min(1.0, max(0.0, labeling.confidence))
+        return Signal(
+            symbol=ctx.bar.symbol, direction=direction, entry=entry, stop=stop,
+            target_1=target, confidence=conf, kind=f"ew_wave{cw}",
+            rationale=(f"EW {prim.structure} {prim.direction} wave {cw} conf {conf:.2f} "
+                       f"inval {stop:.2f} tgt {target:.2f}"),
+        )
+
+
 _SOURCES = {
     "ma_cross": MACrossSignalSource,
     "breakout": BreakoutSignalSource,
     "divergence": DivergenceSignalSource,
+    "elliott_wave": ElliottWaveSource,
 }
 
 

@@ -1,0 +1,18 @@
+strategy: alert_driven
+strategy_params:
+  source: elliott_wave
+  source_params: { pivot_period: 8, entry_waves: ["3"], min_confidence: 0.5, lookback: 250, reward_risk_mult: 2.0, side: long }
+  filters: []
+  filter_mode: all
+  risk_pct: 0.01
+  max_risk_pct: 0.05
+  min_reward_risk: 1.0
+symbols: [XOM, XLE, USO, UNG, SLV, IAU, PPLT, RIOT, JPM, GS, V, MA, LLY, UNH, MRK, WMT, MCD, NKE, HD, RTX, LMT, NVDA, MU, INTC, QCOM, MRVL, MSFT, GOOGL, META, PLTR, TSLA, SOFI, HOOD, NET]
+benchmark: SPY
+interval: 1d
+starting_cash: 100000
+history_window: 280
+max_concurrent_positions: 8
+max_portfolio_heat: 0.12
+start: 2022-01-01T00:00:00Z
+end: 2025-12-31T23:59:59Z

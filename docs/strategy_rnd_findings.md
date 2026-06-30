@@ -611,3 +611,47 @@ A/B on breakout, diversified basket 2022–2025:
 **Status:** ewt_impulse shipped (pure, tested, in the catalog/UI) — a legit tool
 and the foundation for an EWT source. NOT a momentum improver. Next EWT step: a
 wave-entry SOURCE (trade-the-wave), which uses the engine's invalidation/targets.
+
+---
+
+## EXP-17 · 2026-06-30 · "Trade the wave" — Elliott Wave entry SOURCE (the headline)
+
+Per user + the elliott-wave skill + the Avi (AviMarkets GC/GDX) wave log, built
+`elliott_wave` as a SIGNAL SOURCE (not a gate): label the name as-of each bar with
+the pure no-look-ahead engine; on confirmation of a motive leg (default wave 3 —
+the money wave), enter in the count direction with stop = the count's
+`invalidation_price` (the cardinal-rule "trap door" = wave-2 low) and target = the
+engine's first fib target (~1.618×W1). Conviction-sized by engine confidence.
+Debounced per (symbol, direction). 9 tests; purity green.
+
+Diversified 34-name basket, 2022–2025 ($100k, 8 concurrent, 12% heat):
+
+| Variant | Return | Sharpe | DD | PF | Trades |
+|---|---|---|---|---|---|
+| wave-3 long+short | −32.8% | −0.42 | −54.6% | 0.63 | 91 |
+| **wave-3 LONG only** | **+147%** | **1.36** | **−22.7%** | **2.45** | 104 |
+
+Walk-forward (wave-3 long): 2022 +0.2% (PF 0.16, ~flat, 16 trades — didn't force
+trades in the bear); 2023 +10.9% (PF 4.51); 2024 +71.8% (Sharpe 3.28, PF 6.35);
+2025 +8.9% (PF 1.48). **Never a losing year.**
+
+**Conclusions:**
+1. **EWT as a SOURCE is our best risk-adjusted strategy** — same return as
+   confluence breakout (+147%) but highest Sharpe (1.36) and by far the best
+   profit factor (2.45) with the fewest trades + lowest DD. The structural edge:
+   enter near the wave-2 low with a tight trap-door stop and a far wave-3 target —
+   an R:R a 20-day-high breakout can't match.
+2. **The gate-vs-source distinction is the whole lesson** (EXP-16 vs EXP-17): EWT
+   gating momentum HURT (+10%); EWT generating native wave-3 entries is the best
+   strategy. Use the wave structure to TIME the entry, not to veto another signal.
+3. **LONG ONLY.** Long+short lost −33% — shorting the movers is fatal (echoes
+   EXP-15). Bearish wave-3 shorts need their own universe/treatment.
+
+**Caveats (honesty doctrine):** in-sample (all years observed); hand-picked
+basket; 2024 Sharpe 3.28 / PF 6.35 won't repeat (22 trades, sequencing luck); the
+engine runs every bar (~50s/backtest — fine for research, needs caching for live
+scanning). NOT a track record until clean OOS + forward paper-trade.
+
+**Next:** clean OOS (tune 2022–23 / validate untouched 2024–25); add EWT
+confluence (channeling/volume/alternation guidelines already in the skill);
+combine EW-source + breakout in a portfolio; M3 forward paper-trade.
