@@ -128,11 +128,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     print("\n" + "=" * 64)
     print(f"  BEST ON DEV: {best_combo['source_params']}  filters=[{fdesc}]")
     print("  " + "-" * 60)
-    print(f"  {'':10}{'DEV (optimized)':>22}{'HOLDOUT (honest)':>22}")
+    print(f"  {'':18}{'DEV (optimized)':>16}{'HOLDOUT (honest)':>18}")
     for k in ("mean_return", "median_return", "pct_profitable", "mean_win_rate"):
-        print(f"  {k:18}{_pct(best_dev[k]):>14}{_pct(hold[k]):>22}")
-    print(f"  {'total_trades':18}{best_dev['total_trades']:>14}{hold['total_trades']:>22}")
-    print(f"  {'worst_dd':18}{_pct(best_dev['worst_dd']):>14}{_pct(hold['worst_dd']):>22}")
+        print(f"  {k:18}{_pct(best_dev[k]):>16}{_pct(hold[k]):>18}")
+    print(f"  {'$/trade':18}{best_dev['mean_trade_pnl']:>16.0f}{hold['mean_trade_pnl']:>18.0f}")
+    print(f"  {'avg_holding_days':18}{best_dev['avg_holding_days']:>16.0f}{hold['avg_holding_days']:>18.0f}")
+    print(f"  {'trades (/sym)':18}{best_dev['total_trades']:>10} (~{best_dev['trades_per_symbol']:.0f}){hold['total_trades']:>12} (~{hold['trades_per_symbol']:.0f})")
+    print(f"  {'worst_dd':18}{_pct(best_dev['worst_dd']):>16}{_pct(hold['worst_dd']):>18}")
     print("=" * 64)
     print("  Trust the HOLDOUT column. A large dev→holdout drop = overfit.\n")
     return 0

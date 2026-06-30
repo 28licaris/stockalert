@@ -248,3 +248,44 @@ professional TA additions — rather than in-sample numbers.
 **Next:** more professional signals/filters to build genuine confluence; a
 walk-forward (rolling dev→holdout) for regime robustness; then M3 forward
 paper-trading of the validated divergence config.
+
+---
+
+## EXP-8 · 2026-06-30 · fewer/bigger trades + time-in-trade metric
+
+Guidance: prefer higher return on FEWER trades; also track time-in-trade.
+Added `avg_holding_days` (calendar days per round-trip) to RunMetrics
+(portfolio records it on each closing sell), surfaced `$/trade` + holding +
+trades/symbol in the sweep, and added a **return-per-trade** OOS objective
+(`mean_trade_pnl`).
+
+Re-ran the divergence OOS optimizing `mean_trade_pnl` with higher R:R
+{3,4,5} and candidate confluence stacks. Best on dev: lookback=60, pivot_k=3,
+**rr=5.0, +trend filter**.
+
+| Metric | DEV (optimized) | HOLDOUT (honest) |
+|---|---|---|
+| mean return | +3.8% | +3.3% |
+| median return | +2.4% | +3.0% |
+| % profitable | 75% | 67% |
+| win-rate | 36% | 34% |
+| **$/trade** | 369 | 275 |
+| **avg holding** | 48 days | 47 days |
+| trades (/sym) | ~6 | ~8 (~4/yr) |
+| worst DD | −5.1% | −5.3% |
+
+**Conclusions:**
+1. Optimizing for return-per-trade gives the **high-conviction, low-frequency**
+   profile we want: ~4 trades/symbol/year, ~$275/trade on holdout, ~47-day
+   holds (genuine multi-week swings), still generalizing OOS (no overfit drop).
+2. **The trend filter now wins** the dev objective (vs EXP-7 where filters
+   didn't, under a median-return objective) — confluence earns its keep once we
+   select for quality. Low win-rate (34%) is fine with rr=5: big winners pay for
+   many small stops.
+3. Time-in-trade is now a first-class metric — useful for capital turnover and
+   for matching the "hold days→weeks" product intent.
+
+**Next:** add *independent* professional signals (MACD, ADX trend-strength,
+Bollinger squeeze, VWAP) so score-mode confluence can build genuine
+high-conviction A+ setups; walk-forward across a bear regime; then M3
+paper-trading of this validated divergence+trend config.

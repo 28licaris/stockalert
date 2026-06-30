@@ -53,6 +53,8 @@ class StandardEvaluator:
         sortino = self._sortino(equity_curve, config.interval)
         max_dd, longest_dd_days = self._max_drawdown(equity_curve)
         win_rate, profit_factor, avg_t, avg_w, avg_l = self._trade_stats(trades)
+        holds = [t.holding_days for t in trades if t.side == "sell"]
+        avg_holding_days = float(np.mean(holds)) if holds else None
 
         return RunMetrics(
             total_return=float(total_return),
@@ -67,6 +69,7 @@ class StandardEvaluator:
             avg_trade_pnl=avg_t,
             avg_winner_pnl=avg_w,
             avg_loser_pnl=avg_l,
+            avg_holding_days=avg_holding_days,
             final_equity=float(final_equity),
         )
 

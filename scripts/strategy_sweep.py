@@ -60,6 +60,7 @@ def _run_one(
         "symbol": symbol, "return": m.total_return, "win_rate": m.win_rate,
         "profit_factor": m.profit_factor, "n_trades": m.n_trades,
         "max_dd": m.max_drawdown, "sharpe": m.sharpe_ratio,
+        "avg_trade_pnl": m.avg_trade_pnl, "avg_holding_days": m.avg_holding_days,
     }
 
 
@@ -67,15 +68,21 @@ def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
     traded = [r for r in rows if r["n_trades"] > 0]
     rets = [r["return"] for r in traded]
     wins = [r["win_rate"] for r in traded if r["win_rate"] is not None]
+    tpnls = [r["avg_trade_pnl"] for r in traded if r["avg_trade_pnl"] is not None]
+    holds = [r["avg_holding_days"] for r in traded if r["avg_holding_days"] is not None]
+    n = sum(r["n_trades"] for r in rows)
     return {
         "symbols_total": len(rows),
         "symbols_traded": len(traded),
         "symbols_no_trades": len(rows) - len(traded),
-        "total_trades": sum(r["n_trades"] for r in rows),
+        "total_trades": n,
+        "trades_per_symbol": (n / len(traded)) if traded else 0.0,
         "mean_return": statistics.mean(rets) if rets else 0.0,
         "median_return": statistics.median(rets) if rets else 0.0,
         "pct_profitable": (sum(1 for r in rets if r > 0) / len(rets)) if rets else 0.0,
         "mean_win_rate": statistics.mean(wins) if wins else 0.0,
+        "mean_trade_pnl": statistics.mean(tpnls) if tpnls else 0.0,
+        "avg_holding_days": statistics.mean(holds) if holds else 0.0,
         "worst_dd": min((r["max_dd"] for r in traded), default=0.0),
     }
 
@@ -119,8 +126,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"    {'─' * 50}")
         print(f"    AGG  mean {_pct(agg['mean_return'])}  median {_pct(agg['median_return'])}  "
               f"profitable {agg['pct_profitable'] * 100:.0f}%  "
-              f"win {_pct(agg['mean_win_rate'])}  trades {agg['total_trades']}  "
-              f"worstDD {_pct(agg['worst_dd'])}  "
+              f"win {_pct(agg['mean_win_rate'])}  trades {agg['total_trades']} "
+              f"(~{agg['trades_per_symbol']:.0f}/sym)  $/trade {agg['mean_trade_pnl']:.0f}  "
+              f"hold {agg['avg_holding_days']:.0f}d  worstDD {_pct(agg['worst_dd'])}  "
               f"({agg['symbols_traded']}/{agg['symbols_total']} traded)\n")
     return 0
 

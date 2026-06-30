@@ -223,6 +223,7 @@ class Portfolio:
         realized = (fill_price - pos.avg_entry_price) * qty - fee
 
         fill_ts = next_bar.timestamp if next_bar else current_bar.timestamp
+        holding_days = max(0.0, (fill_ts - pos.entry_time).total_seconds() / 86_400.0)
         trade = Trade(
             symbol=action.symbol,
             side="sell",
@@ -231,6 +232,7 @@ class Portfolio:
             timestamp=fill_ts,
             fees=fee,
             realized_pnl=realized,
+            holding_days=holding_days,
             note=action.note,
         )
         self.cash += proceeds

@@ -104,6 +104,7 @@ class Trade(BaseModel):
     timestamp: datetime   # the bar that produced the fill
     fees: float = 0.0
     realized_pnl: float = 0.0    # populated on a closing trade
+    holding_days: float = 0.0    # calendar days held (populated on a closing sell)
     note: str = ""
 
 
@@ -140,6 +141,9 @@ class RunMetrics(BaseModel):
     avg_trade_pnl: Optional[float] = None
     avg_winner_pnl: Optional[float] = None
     avg_loser_pnl: Optional[float] = None
+    avg_holding_days: Optional[float] = Field(
+        None, description="Mean calendar days held per round-trip (time-in-trade).",
+    )
     final_equity: float = 0.0
 
 
