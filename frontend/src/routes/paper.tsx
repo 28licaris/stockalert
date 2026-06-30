@@ -224,20 +224,26 @@ function Holdings({ positions }: { positions: PaperStatus["open_positions"] }) {
           <thead className="text-fg-subtle">
             <tr><th className="py-1 pr-2">Symbol</th><th className="pr-2">Entered</th>
               <th className="pr-2 text-right">Qty</th><th className="pr-2 text-right">Entry $</th>
-              <th className="text-right">Unreal. P&amp;L</th></tr>
+              <th className="pr-2 text-right">Current $</th><th className="text-right">Unreal. P&amp;L</th></tr>
           </thead>
           <tbody>
-            {positions.map((p) => (
+            {positions.map((p) => {
+              const chg = p.avg_entry_price ? p.current_price / p.avg_entry_price - 1 : 0;
+              return (
               <tr key={p.symbol} className="border-t border-border/50">
                 <td className="py-1 pr-2 text-fg-base">{p.symbol}{p.quantity < 0 ? " (short)" : ""}</td>
                 <td className="pr-2 text-fg-subtle">{p.entry_time.slice(0, 10)}</td>
-                <td className="pr-2 text-right text-fg-muted">{Math.round(p.quantity)}</td>
+                <td className="pr-2 text-right text-fg-muted">{qty(p.quantity)}</td>
                 <td className="pr-2 text-right text-fg-muted">${p.avg_entry_price.toFixed(2)}</td>
+                <td className={cn("pr-2 text-right", chg >= 0 ? "text-up" : "text-down")}>
+                  ${p.current_price.toFixed(2)}
+                  <span className="ml-1 text-[10px] text-fg-subtle">{chg >= 0 ? "+" : ""}{(chg * 100).toFixed(1)}%</span>
+                </td>
                 <td className={cn("text-right", p.unrealized_pnl >= 0 ? "text-up" : "text-down")}>
                   {p.unrealized_pnl >= 0 ? "+" : ""}{Math.round(p.unrealized_pnl).toLocaleString()}
                 </td>
               </tr>
-            ))}
+            ); })}
           </tbody>
         </table>
       )}
@@ -304,4 +310,9 @@ function money(x: number): string {
 
 function signedMoney(x: number): string {
   return `${x >= 0 ? "+" : "-"}$${Math.round(Math.abs(x)).toLocaleString()}`;
+}
+
+function qty(x: number): string {
+  const a = Math.abs(x);
+  return a >= 10 ? String(Math.round(x)) : x.toFixed(2); // avoid showing fractional sizes as 0
 }

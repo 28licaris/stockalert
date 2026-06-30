@@ -124,6 +124,7 @@ export interface PaperPositionView {
   symbol: string;
   quantity: number;
   avg_entry_price: number;
+  current_price: number;
   entry_time: string;
   unrealized_pnl: number;
 }

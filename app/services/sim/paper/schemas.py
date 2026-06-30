@@ -36,6 +36,7 @@ class PaperPositionView(BaseModel):
     symbol: str
     quantity: float
     avg_entry_price: float
+    current_price: float = 0.0      # latest mark (entry + unrealized P&L / qty)
     entry_time: datetime
     unrealized_pnl: float = 0.0
 

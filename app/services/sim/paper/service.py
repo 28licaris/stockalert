@@ -134,10 +134,16 @@ def build_status(
         )
 
     def _mk_pos(p: dict) -> PaperPositionView:
+        qty = p["quantity"]
+        avg = p["avg_entry_price"]
+        upnl = p.get("unrealized_pnl", 0.0)
+        # current mark from the position: unrealized = qty*(mark - avg) → mark = avg + upnl/qty.
+        # qty & upnl share the rebase factor, so the price is rebase-invariant.
+        current_price = (avg + upnl / qty) if qty else avg
         return PaperPositionView(
-            symbol=p["symbol"], quantity=p["quantity"] * rebase,
-            avg_entry_price=p["avg_entry_price"], entry_time=_ts(p["entry_time"]),
-            unrealized_pnl=p.get("unrealized_pnl", 0.0) * rebase,
+            symbol=p["symbol"], quantity=qty * rebase,
+            avg_entry_price=avg, current_price=current_price, entry_time=_ts(p["entry_time"]),
+            unrealized_pnl=upnl * rebase,
         )
 
     fwd_trades = [t for t in state.trades if _ts(t["timestamp"]) >= start_date]
