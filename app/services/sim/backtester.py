@@ -287,12 +287,14 @@ class Backtester:
 
         strategy.teardown(ctx_by_symbol[config.symbols[0]]) if config.symbols else None
         metrics = self._evaluator.compute(portfolio, config)
+        open_positions = [p for p in portfolio.positions.values() if p.quantity != 0]
         return RunResult(
             started_at=started_at, finished_at=datetime.now(timezone.utc),
             strategy_name=strategy.name, strategy_version=strategy.version,
             strategy_params=self._extract_params(strategy), config=config,
             snapshot_id=snapshot_id, git_sha=_git_sha(), metrics=metrics,
             equity_curve=list(portfolio.equity_curve), trades=list(portfolio.closed_trades),
+            open_positions=open_positions,
         )
 
     def _load_benchmark(self, config, interval: str):

@@ -184,6 +184,16 @@ def backtest_runs(
     return [_row_to_summary(r) for r in rows]
 
 
+@router.get("/paper/status")
+def paper_status(name: str = Query("momentum_top15", description="Paper run name.")):
+    """Forward paper-trading track record (post-go-live slice of the locked config)."""
+    from app.services.sim.paper.service import build_status, load_state
+    state = load_state(name)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"no paper run named {name!r} (run scripts/paper_trade_run.py)")
+    return build_status(state)
+
+
 @router.get("/backtest/runs/{run_id}", response_model=RunSummary)
 def backtest_run_detail(run_id: str) -> RunSummary:
     """One stored run's summary metrics."""

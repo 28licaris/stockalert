@@ -271,6 +271,10 @@ class RunResult(BaseModel):
     metrics: RunMetrics
     equity_curve: list[tuple[datetime, float]] = Field(default_factory=list)
     trades: list[Trade] = Field(default_factory=list)
+    open_positions: list[Position] = Field(
+        default_factory=list,
+        description="Positions still open at the final bar (for paper-trading 'currently holding').",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────
