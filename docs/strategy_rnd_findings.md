@@ -104,3 +104,33 @@ while `close > SMA(50)` (`trend_filter: true, trend_period: 50`).
 composable, individually-measurable layer (M2) rather than as per-source flags —
 so we can A/B each filter's contribution like this, at scale, and let an agent
 search filter combinations.
+
+---
+
+## EXP-4 · 2026-06-29 · composable A+ filter layer (M2)
+
+Re-ran the breakout sweep with the new composable filters
+(`trend`(SMA50) + `volume`(1.5×) + `reward_risk`(≥2), mode=all) instead of
+source-baked flags.
+
+| Window | Mean | % profitable | Avg win | Trades |
+|---|---|---|---|---|
+| 2022–2023 | +1.5% | 58% | 38.8% | 123 |
+| 2024–2025 | +4.9% | 82% | 52.2% | 124 |
+
+**Conclusions:**
+1. Results match EXP-3 (the single trend filter) almost exactly — *as expected*:
+   the breakout source already gates on volume internally and emits rr≈2, so the
+   `volume`/`reward_risk` filters were already satisfied. The trend filter is the
+   only net constraint. This **confirms the filter layer is correct** (consistent,
+   no surprises) and isolates where the lever actually is.
+2. The win is **architectural**, not a new number: "A+" is now declared in config
+   (`filters: [...]`), each filter is a separate unit with its own pass/score, and
+   the layer annotates `confidence` with the normalized A+ score for ranking. An
+   agent can now search filter/parameter combinations and the sweep tool measures
+   each combo's contribution.
+
+**Next experiments:** filters that AREN'T already implied by the source —
+relative strength vs SPY (needs cross-symbol data), a market-regime gate
+(SPY uptrend), and `mode="score"` partial-confluence ranking; plus the EW
+signal source for a head-to-head.

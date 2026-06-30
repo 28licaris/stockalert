@@ -29,6 +29,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from app.services.sim.context import Context
+from app.services.sim.filters import FilteredSignalSource, build_filter
 from app.services.sim.schemas import Action, hold
 from app.services.sim.signal_source import Signal, build_signal_source
 from app.services.sim.strategy import BaseStrategy
@@ -39,6 +40,20 @@ logger = logging.getLogger(__name__)
 class AlertStrategyParams(BaseModel):
     source: str = Field("breakout", description="Registered SignalSource name (ma_cross, breakout).")
     source_params: dict = Field(default_factory=dict, description="kwargs for the SignalSource.")
+    filters: list[dict] = Field(
+        default_factory=list,
+        description=(
+            "Composable A+ filters applied to each signal, e.g. "
+            "[{name: trend, params: {period: 50}}, {name: reward_risk, params: {min_rr: 2}}]. "
+            "Empty = raw source signals."
+        ),
+    )
+    filter_mode: str = Field(
+        "all", description="'all' (every filter must pass) or 'score' (weighted score ≥ min_score).",
+    )
+    min_score: Optional[float] = Field(
+        None, description="For filter_mode='score': minimum summed filter weight to pass.",
+    )
     risk_pct: float = Field(
         0.01, gt=0.0, le=0.25,
         description="Fraction of equity risked per trade (entry→stop). 0.01 = 1%.",
@@ -69,7 +84,15 @@ class AlertStrategy(BaseStrategy):
     ) -> None:
         self.params = params or AlertStrategyParams()
         self.interval = interval
-        self.source = build_signal_source(self.params.source, **self.params.source_params)
+        base = build_signal_source(self.params.source, **self.params.source_params)
+        # Wrap in the composable A+ filter layer when filters are declared.
+        if self.params.filters:
+            built = [build_filter(f["name"], **(f.get("params") or {})) for f in self.params.filters]
+            self.source = FilteredSignalSource(
+                base, built, mode=self.params.filter_mode, min_score=self.params.min_score,
+            )
+        else:
+            self.source = base
         # Active trade plan per symbol (stop/target tracking for open positions).
         self._plans: dict[str, Signal] = {}
 
