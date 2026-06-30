@@ -97,3 +97,13 @@ def test_append_alerts_idempotent(tmp_path, monkeypatch):
     assert append_alerts(s) >= 1                              # writes AVGO entry + Z exit
     assert append_alerts(s) == 0                              # same date → no duplicate
     assert (tmp_path / "t_run_alerts.jsonl").exists()
+
+
+def test_export_csv_has_summary_trades_and_positions():
+    from app.services.sim.paper.service import export_csv
+    csv_text = export_csv(_state_with_today_entry())
+    assert "# Paper trading log" in csv_text
+    assert "# Starting balance" in csv_text and "# Ending balance" in csv_text
+    assert "CLOSED TRADES" in csv_text and "OPEN POSITIONS" in csv_text
+    assert "symbol,side,entry_date,exit_date,held_days,quantity,exit_price,realized_pnl" in csv_text
+    assert "NVDA" in csv_text   # the open position

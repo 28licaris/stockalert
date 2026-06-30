@@ -88,6 +88,7 @@ def build_status(
     state: PaperState,
     start: Optional[datetime] = None,
     capital: Optional[float] = None,
+    trade_limit: Optional[int] = 100,
 ) -> PaperStatus:
     """Forward track record, REBASED to `capital` as of `start` (defaults to the
     locked go_live / configured cash). Pure slice + scale of the persisted run —
@@ -163,10 +164,57 @@ def build_status(
         forward_n_trades=len(fwd_closed), forward_win_rate=win_rate,
         n_open_positions=len(state.open_positions),
         open_positions=[_mk_pos(p) for p in state.open_positions],
-        forward_trades=[_mk_trade(t) for t in fwd_trades[-100:]],
+        forward_trades=[_mk_trade(t) for t in (fwd_trades if trade_limit is None else fwd_trades[-trade_limit:])],
         equity_curve=[PaperEquityPoint(t=t, equity=e) for t, e in fwd_curve],
         today_entries=today_entries, today_exits=today_exits,
     )
+
+
+def export_csv(
+    state: PaperState,
+    start: Optional[datetime] = None,
+    capital: Optional[float] = None,
+) -> str:
+    """A complete, human-readable CSV log: summary (start/end balance, return) +
+    every closed trade (entry/exit dates, P&L) + current open positions. Rebased
+    to the requested start/capital, like the dashboard."""
+    import csv
+    import io
+
+    s = build_status(state, start, capital, trade_limit=None)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["# Paper trading log", s.name])
+    w.writerow(["# Start date", s.start_date.date().isoformat()])
+    w.writerow(["# Computed through", s.computed_through.date().isoformat() if s.computed_through else ""])
+    w.writerow(["# Starting balance", round(s.starting_capital, 2)])
+    w.writerow(["# Ending balance", round(s.current_balance, 2)])
+    w.writerow(["# Return $", round(s.current_balance - s.starting_capital, 2)])
+    w.writerow(["# Return %", round(s.forward_return * 100, 2)])
+    w.writerow(["# Days", s.days_live])
+    w.writerow(["# Closed trades", s.forward_n_trades])
+    w.writerow(["# Win rate %", round(s.forward_win_rate * 100, 1) if s.forward_win_rate is not None else ""])
+    w.writerow([])
+    w.writerow(["CLOSED TRADES"])
+    w.writerow(["symbol", "side", "entry_date", "exit_date", "held_days", "quantity", "exit_price", "realized_pnl"])
+    for t in s.forward_trades:
+        if not t.is_closing:
+            continue
+        w.writerow([
+            t.symbol, t.side,
+            t.entry_date.date().isoformat() if t.entry_date else "",
+            t.exit_date.date().isoformat() if t.exit_date else "",
+            round(t.holding_days, 1), round(t.quantity, 2), round(t.price, 2), round(t.realized_pnl, 2),
+        ])
+    w.writerow([])
+    w.writerow(["OPEN POSITIONS"])
+    w.writerow(["symbol", "side", "entry_date", "quantity", "avg_entry_price", "unrealized_pnl"])
+    for p in s.open_positions:
+        w.writerow([
+            p.symbol, "long" if p.quantity >= 0 else "short", p.entry_time.date().isoformat(),
+            round(p.quantity, 2), round(p.avg_entry_price, 2), round(p.unrealized_pnl, 2),
+        ])
+    return buf.getvalue()
 
 
 def append_alerts(status: PaperStatus) -> int:

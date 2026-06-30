@@ -198,6 +198,26 @@ def paper_status(
     return build_status(state, start=start, capital=capital)
 
 
+@router.get("/paper/export")
+def paper_export(
+    name: str = Query("momentum_top15"),
+    start: Optional[datetime] = Query(None),
+    capital: Optional[float] = Query(None, gt=0),
+):
+    """Download a complete CSV log: start/end balance + closed trades + open positions."""
+    from fastapi import Response
+
+    from app.services.sim.paper.service import export_csv, load_state
+    state = load_state(name)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"no paper run named {name!r}")
+    csv_text = export_csv(state, start=start, capital=capital)
+    tag = (start.date().isoformat() if start else "golive")
+    fname = f"paper_{name}_{tag}.csv"
+    return Response(content=csv_text, media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
 @router.get("/backtest/runs/{run_id}", response_model=RunSummary)
 def backtest_run_detail(run_id: str) -> RunSummary:
     """One stored run's summary metrics."""

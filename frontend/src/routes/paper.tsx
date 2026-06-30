@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
-import { Bell, Loader2, Radio } from "lucide-react";
+import { Bell, Download, Loader2, Radio } from "lucide-react";
 import { usePaperStatus, type EquityPoint, type PaperStatus } from "@/api/backtest";
 import { cn } from "@/lib/utils";
+
+type Unit = "pct" | "usd";
 
 /**
  * Paper Trading — the live forward track record. Replay the locked momentum
@@ -11,7 +13,25 @@ import { cn } from "@/lib/utils";
 export function PaperPage() {
   const [capital, setCapital] = useState(100_000);
   const [startDate, setStartDate] = useState(""); // "" = default to locked go-live
+  const [unit, setUnit] = useState<Unit>("pct");
   const q = usePaperStatus("momentum_top15", startDate || undefined, capital);
+
+  async function downloadLog() {
+    const params = new URLSearchParams({ name: "momentum_top15" });
+    if (startDate) params.set("start", startDate);
+    if (capital) params.set("capital", String(capital));
+    const r = await fetch(`/api/v1/paper/export?${params.toString()}`, { credentials: "include" });
+    if (!r.ok) return;
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `paper_log_${startDate || "golive"}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-auto p-4 md:p-6">
@@ -42,6 +62,24 @@ export function PaperPage() {
               reset to go-live
             </button>
           )}
+          <div className="ml-auto flex items-end gap-3">
+            <label className="flex flex-col gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">Return as</span>
+              <div className="flex h-8 overflow-hidden rounded border border-border">
+                {(["pct", "usd"] as Unit[]).map((u) => (
+                  <button key={u} type="button" onClick={() => setUnit(u)}
+                    className={cn("px-3 text-[11px] font-semibold",
+                      unit === u ? "bg-accent text-accent-fg" : "text-fg-muted hover:text-fg-base")}>
+                    {u === "pct" ? "%" : "$"}
+                  </button>
+                ))}
+              </div>
+            </label>
+            <button type="button" onClick={downloadLog}
+              className="inline-flex h-8 items-center gap-1.5 rounded border border-border px-3 text-[11px] text-fg-muted hover:border-accent hover:text-fg-base">
+              <Download className="h-3.5 w-3.5" /> Download log
+            </button>
+          </div>
         </div>
       </header>
 
@@ -56,17 +94,19 @@ export function PaperPage() {
           <code className="mx-1 rounded bg-bg-base px-1.5 py-0.5 text-xs">scripts/paper_trade_run.py</code>.
         </div>
       )}
-      {q.data && <PaperBody s={q.data} />}
+      {q.data && <PaperBody s={q.data} unit={unit} />}
     </div>
   );
 }
 
-function PaperBody({ s }: { s: PaperStatus }) {
+function PaperBody({ s, unit }: { s: PaperStatus; unit: Unit }) {
+  const gain = s.current_balance - s.starting_capital;
+  const returnValue = unit === "pct" ? pct(s.forward_return) : signedMoney(gain);
   return (
     <>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Metric label="Current balance" value={money(s.current_balance)} good={s.current_balance >= s.starting_capital} big />
-        <Metric label="Return" value={pct(s.forward_return)} good={s.forward_return >= 0} big />
+        <Metric label={unit === "pct" ? "Return" : "Profit / loss"} value={returnValue} good={gain >= 0} big />
         <Metric label="Started with" value={money(s.starting_capital)} />
         <Metric label="Trades" value={s.forward_n_trades + (s.forward_win_rate != null ? ` · ${Math.round(s.forward_win_rate * 100)}% win` : "")} />
       </div>
@@ -260,4 +300,8 @@ function pct(x: number): string {
 
 function money(x: number): string {
   return `$${Math.round(x).toLocaleString()}`;
+}
+
+function signedMoney(x: number): string {
+  return `${x >= 0 ? "+" : "-"}$${Math.round(Math.abs(x)).toLocaleString()}`;
 }
