@@ -200,3 +200,51 @@ essentially unchanged (bull market — gate rarely blocks).
 
 **Next:** divergence × regime / RS stacks; a proper dev→holdout param search
 (pick on 2022–23, validate untouched on 2024–25); then EW source head-to-head.
+
+---
+
+## EXP-7 · 2026-06-30 · out-of-sample validation (the honesty harness)
+
+New `scripts/oos_search.py`: search a param/filter-stack grid on a DEV window
+(2022–23) across the basket, pick the best by objective (median return), then
+report that exact config on an UNTOUCHED HOLDOUT window (2024–25). Only holdout
+is trustworthy. This is what lets us trust any signal/filter — including future
+professional TA additions — rather than in-sample numbers.
+
+**Breakout** (best dev: lookback=10, rr=2.0, no filter):
+
+| Metric | DEV (optimized) | HOLDOUT (honest) |
+|---|---|---|
+| median return | +0.7% | +1.8% |
+| % profitable | 58% | 50% |
+| win-rate | 37% | 44% |
+| trades | 153 | 167 |
+
+**Divergence** (best dev: lookback=40, pivot_k=3, rr=3.0, no filter):
+
+| Metric | DEV (optimized) | HOLDOUT (honest) |
+|---|---|---|
+| median return | +2.1% | +3.5% |
+| % profitable | 75% | **83%** |
+| win-rate | 37% | 42% |
+| trades | 175 | 164 |
+
+**Conclusions:**
+1. Both signals **generalize** — holdout ≥ dev, no overfit collapse (helped by a
+   stronger-trending 2024–25 regime).
+2. **Divergence is the first out-of-sample-validated, high-consistency edge**
+   (83% of names green on holdout, positive median, rr=3 carrying a moderate
+   win-rate to positive expectancy). It's the candidate to carry to forward
+   paper-trading (M3).
+3. The candidate **filters (trend/regime) did NOT win the dev objective** on this
+   basket — confirming they're risk levers here, not alpha. Higher-confidence
+   confluence will likely need *additional independent* professional signals
+   (MACD, ADX trend-strength, Bollinger squeeze, VWAP, Ichimoku) combined via the
+   score-mode layer — the architecture is ready for them (registries + composable
+   filters).
+4. **Caveat:** neither holdout window was strongly bearish; a bear holdout (or a
+   walk-forward across multiple regimes) is needed before claiming robustness.
+
+**Next:** more professional signals/filters to build genuine confluence; a
+walk-forward (rolling dev→holdout) for regime robustness; then M3 forward
+paper-trading of the validated divergence config.
