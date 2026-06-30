@@ -237,3 +237,14 @@ def test_time_stop_exits_after_max_holding_days() -> None:
     ctx.advance(bar, PortfolioSnapshot(cash=0.0, equity=5050.0, positions={"TEST": pos}, n_trades=1))
     action = strat.on_bar(ctx)
     assert action.kind == "sell" and "time stop" in action.note
+
+
+def test_conviction_scaled_sizing() -> None:
+    # risk scales 1%→5% by confidence. conf=0.5 → 3% of $40k = $1200 / $5 risk = 240 sh.
+    sig = Signal("TEST", "long", entry=100.0, stop=95.0, target_1=120.0, confidence=0.5, kind="stub")
+    strat = AlertStrategy(AlertStrategyParams(risk_pct=0.01, max_risk_pct=0.05, min_reward_risk=0.0))
+    strat.source = _StubSource(sig)
+    ctx = Context(config=_cfg())
+    strat.setup(ctx)
+    ctx.advance(_bar(0, 100.0), _flat())
+    assert strat.on_bar(ctx).size == 240

@@ -197,3 +197,34 @@ def test_relative_strength_filter() -> None:
     ctx2 = _ctx_with_closes([100.0] * 20)                       # symbol flat
     ctx2.market = _market([100.0 + i * 2 for i in range(20)])   # benchmark +strong
     assert not RelativeStrengthFilter(lookback=10).evaluate(ctx2, _sig()).passed
+
+
+# ── directional confirmation filters + conviction sizing ─────────────
+
+# Net-trending series WITH pullbacks (so RSI has both gains and losses → defined).
+def _uptrend(n=40, start=100.0):
+    out, c = [], start
+    for i in range(n):
+        c += 3.0 if i % 3 else -1.0   # net +5 per 3 bars, with down bars
+        out.append(c)
+    return out
+
+
+def _downtrend(n=40, start=200.0):
+    out, c = [], start
+    for i in range(n):
+        c += -3.0 if i % 3 else 1.0
+        out.append(c)
+    return out
+
+
+def test_rsi_bull_filter() -> None:
+    from app.services.sim.filters import RsiBullFilter
+    assert RsiBullFilter(period=14, threshold=50).evaluate(_ctx_with_closes(_uptrend()), _sig()).passed
+    assert not RsiBullFilter(period=14, threshold=50).evaluate(_ctx_with_closes(_downtrend()), _sig()).passed
+
+
+def test_macd_bull_filter() -> None:
+    from app.services.sim.filters import MacdBullFilter
+    assert MacdBullFilter().evaluate(_ctx_with_closes(_uptrend()), _sig()).passed
+    assert not MacdBullFilter().evaluate(_ctx_with_closes(_downtrend()), _sig()).passed

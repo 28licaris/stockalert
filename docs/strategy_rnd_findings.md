@@ -328,3 +328,44 @@ at fixed rr=2.0 + trend filter:
 
 **Next:** independent pro signals (MACD/ADX/squeeze) for confluence; a bear-regime
 walk-forward; then M3 paper-trading of whichever profile we pick.
+
+---
+
+## EXP-10 · 2026-06-30 · directional confluence + conviction sizing (1%→5%)
+
+Tuning per guidance: use up to 5% risk on higher-probability trades; stack
+direction-confirming signals. Added conviction-scaled sizing (`max_risk_pct`:
+risk scales risk_pct→max_risk_pct by the signal's confluence confidence) and two
+directional filters (`rsi_bull` RSI>50, `macd_bull` MACD-line>0). Confluence stack
+= divergence + **5 directional confirmers** (trend, regime, relative_strength,
+rsi_bull, macd_bull), score-mode, size 1%→5% by # confirming. Best dev: min_score=3
+(≥3 of 5 must confirm).
+
+| Metric | DEV (optimized) | HOLDOUT (honest) |
+|---|---|---|
+| mean return | +8.2% | +10.1% |
+| median return | +4.9% | **+8.8%** |
+| % profitable | 75% | **83%** |
+| win-rate | 49% | **52%** |
+| $/trade | 678 | **973** |
+| avg hold | 19d | 29d |
+| worst DD | −12% | **−17.6%** |
+
+**Conclusions:**
+1. **Big step-change** vs prior bests (~3% holdout median): confluence + conviction
+   sizing → holdout median +8.8%, $973/trade, 52% win, 83% of names profitable —
+   and it generalizes OOS (holdout ≥ dev). This is the first config that looks
+   genuinely worth trading.
+2. **Confluence confirms direction:** requiring ≥3 of 5 independent directional
+   signals (trend / regime / relative-strength / RSI / MACD) raised both win-rate
+   AND per-trade size (we bet 5% only when many agree). min_score=3 beat 4
+   (4 was too selective — fewer trades, lower aggregate $/trade).
+3. **Honest cost — drawdown:** 5% sizing pushed worst DD to −17.6% (from ~−5%).
+   That's the risk you buy for the return. And these are SINGLE-symbol runs — a
+   live portfolio holding several 5%-risk positions at once could draw down more
+   on correlated moves. **A risk-management layer (portfolio heat / max concurrent
+   positions / per-name cap) is now a prerequisite before paper-trading this.**
+4. Caveat unchanged: no bear holdout yet.
+
+**Next:** risk-management layer (cap portfolio heat so concurrent 5% bets don't
+compound drawdown); bear-regime walk-forward; then M3 paper-trade this config.

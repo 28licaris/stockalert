@@ -158,12 +158,52 @@ class RelativeStrengthFilter(BaseFilter):
                             f"RS {sym_ret:+.1%} vs {mc.benchmark} {bench_ret:+.1%}")
 
 
+class RsiBullFilter(BaseFilter):
+    """Bullish momentum confirmation: RSI above a threshold (default 50)."""
+
+    name = "rsi_bull"
+
+    def __init__(self, *, period: int = 14, threshold: float = 50.0, weight: float = 1.0) -> None:
+        self.period = period
+        self.threshold = threshold
+        self.weight = weight
+
+    def evaluate(self, ctx: Context, signal: Signal) -> FilterResult:
+        s = ctx.indicator("rsi", period=self.period)
+        v = float(s.iloc[-1]) if len(s) else float("nan")
+        if v != v:
+            return FilterResult(False, 0.0, "rsi warmup")
+        ok = v > self.threshold
+        return FilterResult(ok, self.weight if ok else 0.0,
+                            f"rsi {v:.0f} {'>' if ok else '<='} {self.threshold:.0f}")
+
+
+class MacdBullFilter(BaseFilter):
+    """Bullish confirmation: MACD line above zero (uptrend momentum)."""
+
+    name = "macd_bull"
+
+    def __init__(self, *, weight: float = 1.0) -> None:
+        self.weight = weight
+
+    def evaluate(self, ctx: Context, signal: Signal) -> FilterResult:
+        s = ctx.indicator("macd")  # canonical MACD output is the MACD line
+        v = float(s.iloc[-1]) if len(s) else float("nan")
+        if v != v:
+            return FilterResult(False, 0.0, "macd warmup")
+        ok = v > 0.0
+        return FilterResult(ok, self.weight if ok else 0.0,
+                            f"macd {v:+.2f} {'>' if ok else '<='} 0")
+
+
 _FILTERS = {
     "trend": TrendFilter,
     "reward_risk": MinRewardRiskFilter,
     "volume": VolumeExpansionFilter,
     "regime": RegimeFilter,
     "relative_strength": RelativeStrengthFilter,
+    "rsi_bull": RsiBullFilter,
+    "macd_bull": MacdBullFilter,
 }
 
 

@@ -56,7 +56,16 @@ class AlertStrategyParams(BaseModel):
     )
     risk_pct: float = Field(
         0.01, gt=0.0, le=0.25,
-        description="Fraction of equity risked per trade (entry→stop). 0.01 = 1%.",
+        description="Base fraction of equity risked per trade (entry→stop). 0.01 = 1%.",
+    )
+    max_risk_pct: Optional[float] = Field(
+        None, gt=0.0, le=0.25,
+        description=(
+            "Ceiling risk for FULL-confluence (confidence=1.0) setups; risk scales "
+            "linearly from risk_pct (confidence 0) to max_risk_pct (confidence 1). "
+            "e.g. risk_pct=0.01, max_risk_pct=0.05 → 1% on weak setups, up to 5% when "
+            "every confirmation agrees. None = flat risk_pct (no scaling)."
+        ),
     )
     max_cash_pct: float = Field(
         0.95, gt=0.0, le=1.0,
@@ -171,9 +180,14 @@ class AlertStrategy(BaseStrategy):
                       note=f"{sig.kind} entry rr={sig.reward_risk:.2f}: {sig.rationale}")
 
     def _size(self, ctx: Context, sig: Signal) -> int:
-        """Risk-based size: lose ~risk_pct of equity if the stop is hit, capped by cash."""
+        """Conviction-scaled risk size: risk scales risk_pct→max_risk_pct by the
+        signal's confluence confidence, then converts to shares off the stop,
+        capped by cash. Higher-probability (more-confirmed) setups bet more."""
         p = self.params
-        risk_amount = ctx.portfolio.equity * p.risk_pct
+        ceil = p.max_risk_pct if p.max_risk_pct is not None else p.risk_pct
+        conf = min(1.0, max(0.0, sig.confidence))
+        risk_pct = p.risk_pct + (ceil - p.risk_pct) * conf
+        risk_amount = ctx.portfolio.equity * risk_pct
         qty_by_risk = math.floor(risk_amount / sig.risk_per_share)
         cash_cap = ctx.portfolio.cash * p.max_cash_pct
         qty_by_cash = math.floor(cash_cap / sig.entry) if sig.entry > 0 else 0
