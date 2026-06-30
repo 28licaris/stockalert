@@ -71,6 +71,7 @@ class Action(BaseModel):
     )
     limit_price: Optional[float] = None
     stop_price: Optional[float] = None
+    target_price: Optional[float] = None
     note: str = Field("", description="Optional reason from the strategy (for audit + log).")
 
 
@@ -92,6 +93,8 @@ class Position(BaseModel):
     avg_entry_price: float
     entry_time: datetime
     unrealized_pnl: float = 0.0
+    stop_price: Optional[float] = None      # the setup's invalidation/stop, for alerts
+    target_price: Optional[float] = None    # the setup's target, for alerts
 
 
 class Trade(BaseModel):

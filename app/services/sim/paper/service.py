@@ -158,7 +158,9 @@ def build_status(
         current_price = (avg + upnl / qty) if qty else avg
         return PaperPositionView(
             symbol=p["symbol"], quantity=qty * rebase,
-            avg_entry_price=avg, current_price=current_price, entry_time=_ts(p["entry_time"]),
+            avg_entry_price=avg, current_price=current_price,
+            stop_price=p.get("stop_price"), target_price=p.get("target_price"),
+            entry_time=_ts(p["entry_time"]),
             unrealized_pnl=upnl * rebase,
         )
 

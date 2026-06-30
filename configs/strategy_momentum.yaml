@@ -1,0 +1,13 @@
+# Public metadata for the library card + a pointer to the SECRET config.
+name: momentum_top15
+title: Cross-Sector Momentum
+tagline: Rides the strongest movers across every sector — long only.
+description: >
+  A long-only momentum system that each day ranks a broad, cross-sector universe
+  by trailing strength and trades the leaders' breakouts. Regime-robust: it rotates
+  into whatever is actually moving (energy, AI, metals, financials), validated
+  out-of-sample and walk-forward across multiple years. You receive the entry,
+  stop and target on every signal plus a live, no-look-ahead track record.
+category: momentum
+visibility: subscribers
+config_file: configs/paper_momentum.yaml   # SECRET recipe — embedded into the definition, never exposed

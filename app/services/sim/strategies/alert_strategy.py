@@ -197,7 +197,8 @@ class AlertStrategy(BaseStrategy):
         # Long → buy to open; short → sell to open (the engine opens a short).
         # Carry the stop so the portfolio risk manager can size portfolio heat.
         entry_kind = "buy" if sig.direction == "long" else "sell"
-        return Action(kind=entry_kind, symbol=symbol, size=float(qty), stop_price=sig.stop,
+        return Action(kind=entry_kind, symbol=symbol, size=float(qty),
+                      stop_price=sig.stop, target_price=sig.target_1,
                       note=f"{sig.kind} {sig.direction} rr={sig.reward_risk:.2f}: {sig.rationale}")
 
     def _size(self, ctx: Context, sig: Signal) -> int:

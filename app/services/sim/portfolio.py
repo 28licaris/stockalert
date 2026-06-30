@@ -223,7 +223,8 @@ class Portfolio:
         # is a real bug worth investigating.
         if -1e-6 < self.cash < 0.0:
             self.cash = 0.0
-        self._add_to_position(action.symbol, qty, fill_price, fill_ts)
+        self._add_to_position(action.symbol, qty, fill_price, fill_ts,
+                              stop_price=action.stop_price, target_price=action.target_price)
         self.closed_trades.append(trade)
         return trade
 
@@ -265,7 +266,8 @@ class Portfolio:
             return None
         fee = fees.fee_for(Action(kind="sell", symbol=action.symbol, size=qty), fill_price)
         self.cash += qty * fill_price - fee
-        self._add_to_short(action.symbol, qty, fill_price, fill_ts)
+        self._add_to_short(action.symbol, qty, fill_price, fill_ts,
+                           stop_price=action.stop_price, target_price=action.target_price)
         trade = Trade(
             symbol=action.symbol, side="sell", quantity=qty, price=fill_price,
             timestamp=fill_ts, fees=fee, realized_pnl=0.0, is_closing=False, note=action.note,
@@ -275,6 +277,7 @@ class Portfolio:
 
     def _add_to_position(
         self, symbol: str, qty: float, price: float, ts: datetime,
+        *, stop_price: Optional[float] = None, target_price: Optional[float] = None,
     ) -> None:
         """Weighted-average entry price."""
         existing = self.positions.get(symbol)
@@ -282,6 +285,7 @@ class Portfolio:
             self.positions[symbol] = Position(
                 symbol=symbol, quantity=qty,
                 avg_entry_price=price, entry_time=ts,
+                stop_price=stop_price, target_price=target_price,
             )
             return
         new_qty = existing.quantity + qty
@@ -291,12 +295,16 @@ class Portfolio:
         existing.quantity = new_qty
         existing.avg_entry_price = new_avg
 
-    def _add_to_short(self, symbol: str, qty: float, price: float, ts: datetime) -> None:
+    def _add_to_short(
+        self, symbol: str, qty: float, price: float, ts: datetime,
+        *, stop_price: Optional[float] = None, target_price: Optional[float] = None,
+    ) -> None:
         """Open or add to a SHORT (quantity < 0), weighted-average entry price."""
         existing = self.positions.get(symbol)
         if existing is None:
             self.positions[symbol] = Position(
                 symbol=symbol, quantity=-qty, avg_entry_price=price, entry_time=ts,
+                stop_price=stop_price, target_price=target_price,
             )
             return
         prior_short = -existing.quantity            # positive size
