@@ -83,6 +83,12 @@ interface OhlcvChartProps {
   /** Price-pane height in px, or "fill" to occupy the parent height. */
   height?: number | "fill";
   /**
+   * Changes when the caller wants the visible time scale reset to the loaded
+   * data window (for example ticker / interval / range changes). Ordinary
+   * polling should keep this stable so user pan/zoom is not snapped back.
+   */
+  fitKey?: string;
+  /**
    * IANA timezone for the time axis + crosshair, or `undefined` for the
    * viewer's local zone. Must stay in sync with the Recent Bars table so
    * the two surfaces show the same clock. See lib/timezone.ts.
@@ -118,6 +124,7 @@ export function OhlcvChart({
   indicators,
   chartType = "candles",
   height = 480,
+  fitKey,
   timezone,
 }: OhlcvChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -137,6 +144,8 @@ export function OhlcvChart({
   const priceLinesRef = useRef<IPriceLine[]>([]);
   // Indicator series added on the last render — removed before the next.
   const indicatorRefs = useRef<ISeriesApi<"Line" | "Histogram">[]>([]);
+  const pendingFitKeyRef = useRef<string | null>(fitKey ?? null);
+  const lastFitKeyRef = useRef<string | null>(null);
   // Resolved palette captured at create-time so data effects don't
   // need to re-read the DOM on every render.
   const paletteRef = useRef<Palette | null>(null);
@@ -299,6 +308,22 @@ export function OhlcvChart({
     );
   }, [bars, chartType]);
 
+  // ── Range changes — fit the viewport to the newly requested window ──
+  useEffect(() => {
+    if (fitKey && fitKey !== lastFitKeyRef.current) {
+      pendingFitKeyRef.current = fitKey;
+    }
+  }, [fitKey]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    const pending = pendingFitKeyRef.current;
+    if (!chart || !pending || bars.length === 0) return;
+    chart.timeScale().fitContent();
+    lastFitKeyRef.current = pending;
+    pendingFitKeyRef.current = null;
+  }, [bars]);
+
   // ── Data updates — markers (wave pivots take priority over signals) ─
   useEffect(() => {
     const palette = paletteRef.current;
@@ -444,20 +469,30 @@ export function OhlcvChart({
           .filter((v) => v.value != null)
           .map((v) => ({ time: toUnix(v.timestamp), value: v.value as number }));
         if (data.length === 0) continue;
+        const customColor =
+          typeof comp.params?.color === "string" ? comp.params.color : undefined;
+        const customLineWidth =
+          typeof comp.params?.lineWidth === "number"
+            ? (comp.params.lineWidth as 1 | 2 | 3 | 4)
+            : undefined;
 
         let series: ISeriesApi<"Line" | "Histogram">;
         if (rc.type === "histogram") {
           series = chart.addSeries(
             HistogramSeries,
-            { color: rc.color, priceLineVisible: false, lastValueVisible: false },
+            {
+              color: customColor ?? rc.color,
+              priceLineVisible: false,
+              lastValueVisible: false,
+            },
             paneIdx,
           );
         } else {
           series = chart.addSeries(
             LineSeries,
             {
-              color: rc.color,
-              lineWidth: rc.lineWidth ?? 2,
+              color: customColor ?? rc.color,
+              lineWidth: customLineWidth ?? rc.lineWidth ?? 2,
               lineStyle: rc.dashed ? LineStyle.Dashed : LineStyle.Solid,
               priceLineVisible: false,
               lastValueVisible: isOsc,
