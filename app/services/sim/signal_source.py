@@ -269,32 +269,39 @@ class DivergenceSignalSource(BaseSignalSource):
         need = self.lookback + self.pivot_k + self.ind_period + 5
         if len(ctx.history) < need:
             return None
-        # Lazy import: keeps this module free of the divergence/config deps until used.
-        from app.signals.divergence import detect_hidden_bullish, detect_regular_bullish
-
-        close = ctx.history.to_dataframe()["close"]
+        # Pure inline detection (no app.signals import) so the strategy graph
+        # stays past the purity gate and carries no global-config trend filter.
+        close = ctx.history.to_dataframe()["close"].tail(self.lookback)
         ind = ctx.indicator(self.indicator, period=self.ind_period)
         if not close.index.equals(ind.index):
             ind = ind.reindex(close.index)
+        ind = ind.tail(self.lookback)
 
-        div = label = None
-        if self.kind in ("regular", "both"):
-            div = detect_regular_bullish(close, ind, self.lookback, self.pivot_k)
-            label = "regular_bullish"
-        if div is None and self.kind in ("hidden", "both"):
-            div = detect_hidden_bullish(close, ind, self.lookback, self.pivot_k)
-            label = "hidden_bullish"
-        if div is None:
+        prices = close.to_numpy()
+        rsis = ind.to_numpy()
+        piv = _pivot_lows(prices, self.pivot_k)
+        if len(piv) < 2:
+            return None
+        p1, p2 = piv[-2], piv[-1]
+        price1, price2, r1, r2 = prices[p1], prices[p2], rsis[p1], rsis[p2]
+        if any(v != v for v in (r1, r2)):  # NaN RSI at a pivot — skip
             return None
 
-        p2 = div["p2_ts"]
-        if p2 == self._last_p2:        # already acted on this divergence
+        label = None
+        if self.kind in ("regular", "both") and price2 < price1 and r2 > r1:
+            label = "regular_bullish"   # lower low in price, higher low in RSI → reversal
+        elif self.kind in ("hidden", "both") and price2 > price1 and r2 < r1:
+            label = "hidden_bullish"    # higher low in price, lower low in RSI → continuation
+        if label is None:
             return None
-        self._last_p2 = p2
+
+        p2_ts = close.index[p2]
+        if p2_ts == self._last_p2:       # already acted on this divergence
+            return None
+        self._last_p2 = p2_ts
 
         entry = float(ctx.bar.close)
-        pivot_low = float(div["price"])
-        stop = min(pivot_low, entry) * (1.0 - self.stop_buffer_pct)
+        stop = float(min(price2, entry)) * (1.0 - self.stop_buffer_pct)
         if stop >= entry or entry <= 0:
             return None
         target = entry + self.reward_risk_mult * (entry - stop)
@@ -331,6 +338,23 @@ def list_signal_sources() -> list[str]:
 # ─────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────
+
+
+def _pivot_lows(values, k: int) -> list[int]:
+    """Positions of strict pivot lows: a bar lower than the `k` bars on each
+    side. The last `k` bars can't be pivots (need k confirming bars after) —
+    that lag is what keeps divergence detection no-look-ahead."""
+    n = len(values)
+    out: list[int] = []
+    for i in range(k, n - k):
+        v = values[i]
+        if v != v:  # NaN
+            continue
+        if all(v < values[j] for j in range(i - k, i)) and all(
+            v < values[j] for j in range(i + 1, i + k + 1)
+        ):
+            out.append(i)
+    return out
 
 
 def _last_two(series: pd.Series) -> tuple[float, float]:

@@ -116,6 +116,11 @@ class Context:
         intervals: Optional[list[str]] = None,
     ) -> None:
         self.config = config
+        # Optional benchmark/market state, set by the engine (Backtester) when a
+        # benchmark is configured. Filters read it via `ctx.market`; None when
+        # no benchmark is loaded. Duck-typed (a MarketContext) to avoid pulling
+        # data-layer imports into this purity-gated module.
+        self.market = None
         # Back-compat: if intervals not given, use [config.interval].
         # Otherwise honor what the strategy declared.
         self._intervals = list(intervals) if intervals else [config.interval]

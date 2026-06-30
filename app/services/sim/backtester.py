@@ -140,6 +140,8 @@ class Backtester:
 
         portfolio = Portfolio(starting_cash=config.starting_cash)
         ctx = Context(config=config, intervals=run_intervals)
+        if config.benchmark:
+            ctx.market = self._load_benchmark(config, exec_interval)
         strategy.setup(ctx)
 
         for symbol in config.symbols:
@@ -171,6 +173,34 @@ class Backtester:
             equity_curve=list(portfolio.equity_curve),
             trades=list(portfolio.closed_trades),
         )
+
+    def _load_benchmark(self, config, interval: str):
+        """Load the benchmark once and wrap it in a (pure) MarketContext.
+
+        Engine-side IO (allowed here; strategies/filters stay pure and just read
+        `ctx.market`). Empty/missing data degrades to an empty MarketContext so a
+        market filter fails closed rather than crashing the run.
+        """
+        import pandas as pd
+
+        from app.services.readers.bar_reader import BarReader
+        from app.services.sim.market_context import MarketContext
+
+        try:
+            bars = BarReader.from_settings().get_bars_in_range(
+                config.benchmark, config.start, config.end, interval=interval,
+            )
+        except Exception as exc:  # noqa: BLE001 — degrade, don't crash the backtest
+            logger.warning("Backtester: benchmark %s load failed: %s", config.benchmark, exc)
+            bars = []
+        if not bars:
+            logger.warning("Backtester: no benchmark bars for %s", config.benchmark)
+            return MarketContext(config.benchmark, pd.Series(dtype=float))
+        close = pd.Series(
+            [b.close for b in bars],
+            index=pd.DatetimeIndex([b.timestamp for b in bars]),
+        )
+        return MarketContext(config.benchmark, close)
 
     # ─────────────────────────────────────────────────────────────────
     # Iteration

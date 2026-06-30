@@ -142,26 +142,61 @@ signal source for a head-to-head.
 New `divergence` SignalSource (wraps the existing pure RSI-divergence detectors
 in `app/signals/divergence.py`: regular + hidden bullish → long). Same sweep.
 
+First run rode a global trend filter (`settings.use_trend_filter`) inside the
+reused detector, which over-suppressed signals AND tripped the purity gate (it
+pulled `app.providers` into the strategy graph). Re-implemented as a **pure**
+inline pivot/divergence detector (no global config). Numbers below are the pure
+version (what's in the code):
+
 | Window | Mean | Median | % profitable | Avg win | Trades | Worst DD |
 |---|---|---|---|---|---|---|
-| 2022–2023 | +0.2% | +1.1% | 58% | 46.5% | 87 | −7.7% |
-| 2024–2025 | +2.2% | +2.3% | 73% | 60.0% | 72 | −4.1% |
+| 2022–2023 | +1.3% | +0.8% | 58% | 46.7% | 182 | −8.9% |
+| 2024–2025 | +4.0% | +3.6% | **92%** | 54.3% | 161 | −6.5% |
 
-vs breakout (EXP-2): higher win-rate (46/60% vs 37/53%), **fewer trades**
-(87/72 vs 127/141), lower mean return.
+vs breakout (EXP-2): comparable mean, **higher consistency** — 92% of names
+green in 2024–25 (vs breakout's 73%), with a similar-or-better win-rate.
 
 **Conclusions:**
-1. Divergence is a **more selective, higher-win-rate, lower-frequency** signal
-   with a weak positive edge — directionally profitable in both windows
-   (median > 0, 58/73% of names green), but it leaves more on the table than
-   breakout in absolute terms.
-2. The high win-rate + low frequency profile suggests its best use is **as a
-   confluence filter** (only take entries that *also* have divergence support)
-   rather than standalone — a `DivergenceFilter` to test next.
-3. Caveat: the reused detector applies a global trend filter via
-   `settings.use_trend_filter`; for clean per-strategy control this should be
-   parameterized (it currently rides the app default).
+1. Divergence is the **most consistent** signal tested so far — 92% of names
+   profitable in the trending window. Removing the mismatched global trend
+   filter roughly doubled trade count and improved consistency (the filter was
+   suppressing valid setups; lesson: filters belong in the *composable* layer
+   where they're chosen deliberately, not baked into a shared detector).
+2. Still a weak absolute edge (risk-throttled), but a strong **quality** signal.
+   Natural next test: divergence as a confluence filter on breakout, and a
+   divergence+regime stack.
 
-**Does it help?** Yes as a quality signal (win-rate), modestly as a return
-driver alone. Highest expected value: combine it with breakout via the M2
-filter layer.
+**Does it help? Yes** — it's the best single signal on consistency so far.
+
+---
+
+## EXP-6 · 2026-06-30 · market context + regime filter (engine extension)
+
+Added a benchmark/market layer: the **engine** loads a benchmark (e.g. SPY)
+once and exposes a pure `MarketContext` on `ctx.market`; new market-aware filters
+read it (`regime` = benchmark above its SMA; `relative_strength` = symbol return
+> benchmark return). Keeps strategies/filters past the purity gate — the IO is
+engine-side, filters just read.
+
+Breakout + `regime`(SPY > SMA50), `benchmark: SPY`:
+
+| Window | Mean | % profitable | Avg win | Trades |
+|---|---|---|---|---|
+| 2022–2023 | +0.7% | 58% | 38.2% | 109 |
+| 2024–2025 | +5.2% | 73% | 54.9% | 115 |
+
+vs plain breakout (EXP-2): 2022–23 trades 127→109 (the regime gate correctly
+suppressed breakouts during the 2022 bear-market SPY downtrend), 2024–25
+essentially unchanged (bull market — gate rarely blocks).
+
+**Conclusions:**
+1. The market-context machinery **works end-to-end** (loads SPY, gates trades,
+   no-look-ahead as-of lookups).
+2. On this basket the SPY-regime gate is a **modest risk lever** — it trims
+   bear-market activity but doesn't materially lift returns here. Its value is
+   likely larger over a full cycle / on lower-quality names.
+3. Filters are now stackable across these axes (trend, volume, rr, regime,
+   relative_strength) and individually measurable — an agent can search combos.
+
+**Next:** divergence × regime / RS stacks; a proper dev→holdout param search
+(pick on 2022–23, validate untouched on 2024–25); then EW source head-to-head.

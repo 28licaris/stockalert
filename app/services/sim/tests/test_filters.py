@@ -157,3 +157,43 @@ def test_empty_filters_passthrough() -> None:
 def test_build_unknown_filter_raises() -> None:
     with pytest.raises(ValueError, match="Unknown filter"):
         build_filter("nope")
+
+
+# ── market-aware filters (regime / relative strength) ───────────────
+
+def _market(values: list[float], n: int = 60):
+    import pandas as pd
+    from app.services.sim.market_context import MarketContext
+    idx = pd.DatetimeIndex([T0 + dt.timedelta(days=i) for i in range(len(values))])
+    return MarketContext("SPY", pd.Series(values, index=idx))
+
+
+def test_regime_filter_passes_in_uptrend() -> None:
+    from app.services.sim.filters import RegimeFilter
+    ctx = _ctx_with_closes([100.0] * 10)  # ctx.bar at T0+9
+    ctx.market = _market([100.0 + i for i in range(60)])  # rising benchmark
+    assert RegimeFilter(ma_period=5).evaluate(ctx, _sig()).passed
+
+
+def test_regime_filter_fails_in_downtrend() -> None:
+    from app.services.sim.filters import RegimeFilter
+    ctx = _ctx_with_closes([100.0] * 10)
+    ctx.market = _market([160.0 - i for i in range(60)])  # falling benchmark
+    assert not RegimeFilter(ma_period=5).evaluate(ctx, _sig()).passed
+
+
+def test_regime_filter_fails_without_benchmark() -> None:
+    from app.services.sim.filters import RegimeFilter
+    ctx = _ctx_with_closes([100.0] * 10)  # ctx.market is None
+    res = RegimeFilter(ma_period=5).evaluate(ctx, _sig())
+    assert not res.passed and "no benchmark" in res.reason
+
+
+def test_relative_strength_filter() -> None:
+    from app.services.sim.filters import RelativeStrengthFilter
+    ctx = _ctx_with_closes([100.0 + i * 2 for i in range(20)])  # symbol +strong
+    ctx.market = _market([100.0] * 20)                          # benchmark flat
+    assert RelativeStrengthFilter(lookback=10).evaluate(ctx, _sig()).passed
+    ctx2 = _ctx_with_closes([100.0] * 20)                       # symbol flat
+    ctx2.market = _market([100.0 + i * 2 for i in range(20)])   # benchmark +strong
+    assert not RelativeStrengthFilter(lookback=10).evaluate(ctx2, _sig()).passed

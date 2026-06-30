@@ -183,6 +183,14 @@ class BacktestConfig(BaseModel):
         ),
     )
     provider: SupportedProvider = "polygon"
+    benchmark: Optional[str] = Field(
+        None,
+        description=(
+            "Optional benchmark symbol (e.g. 'SPY'). When set, the engine loads "
+            "it once and exposes a MarketContext on `ctx.market` for "
+            "market-relative filters (regime, relative strength)."
+        ),
+    )
     starting_cash: float = 40_000.0
     history_window: int = Field(
         200,

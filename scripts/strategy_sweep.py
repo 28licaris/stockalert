@@ -42,11 +42,12 @@ from scripts.run_backtest import _load_strategy  # noqa: E402
 def _run_one(
     strategy_name: str, params: dict[str, Any], symbol: str,
     start: str, end: str, interval: str, cash: float, hw: int,
+    benchmark: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """One single-symbol backtest. Returns a metrics row, or None on no-data/error."""
     cfg = BacktestConfig(
         symbols=[symbol], start=start, end=end, interval=interval,
-        starting_cash=cash, history_window=hw,
+        starting_cash=cash, history_window=hw, benchmark=benchmark,
     )
     strat = _load_strategy(strategy_name, params, interval=interval)
     try:
@@ -95,6 +96,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     interval = raw.get("interval", "1d")
     cash = float(raw.get("starting_cash", 40_000.0))
     hw = int(raw.get("history_window", 250))
+    benchmark = raw.get("benchmark")
     windows = raw.get("windows") or [{"label": "full", "start": raw["start"], "end": raw["end"]}]
 
     print(f"\nSWEEP  strategy={strategy}  params={params}")
@@ -106,7 +108,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"    {'symbol':6}  {'return':>7}  {'win':>6}  {'PF':>6}  {'trades':>6}  {'maxDD':>7}")
         rows: list[dict[str, Any]] = []
         for sym in symbols:
-            r = _run_one(strategy, params, sym, start, end, interval, cash, hw)
+            r = _run_one(strategy, params, sym, start, end, interval, cash, hw, benchmark)
             if r is None:
                 continue
             rows.append(r)

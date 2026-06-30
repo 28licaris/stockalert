@@ -109,10 +109,61 @@ class VolumeExpansionFilter(BaseFilter):
                             f"vol {vol_now:.0f} vs {self.mult}×avg {vol_avg:.0f}")
 
 
+class RegimeFilter(BaseFilter):
+    """Only trade when the market benchmark is in an uptrend (above its SMA).
+
+    Reads `ctx.market` (a MarketContext the engine loads when `benchmark` is set
+    in the config). Fails closed if no benchmark is loaded or it's still warming
+    up — a market filter with no market data should not pass.
+    """
+
+    name = "regime"
+
+    def __init__(self, *, ma_period: int = 50, weight: float = 1.0) -> None:
+        self.ma_period = ma_period
+        self.weight = weight
+
+    def evaluate(self, ctx: Context, signal: Signal) -> FilterResult:
+        mc = getattr(ctx, "market", None)
+        if mc is None:
+            return FilterResult(False, 0.0, "no benchmark loaded (set config.benchmark)")
+        above = mc.above_ma_asof(ctx.bar.timestamp, self.ma_period)
+        if above is None:
+            return FilterResult(False, 0.0, f"{mc.benchmark} regime warmup")
+        return FilterResult(above, self.weight if above else 0.0,
+                            f"{mc.benchmark} {'up' if above else 'down'}-regime")
+
+
+class RelativeStrengthFilter(BaseFilter):
+    """Only trade names outperforming the benchmark over `lookback` bars."""
+
+    name = "relative_strength"
+
+    def __init__(self, *, lookback: int = 60, weight: float = 1.0) -> None:
+        self.lookback = lookback
+        self.weight = weight
+
+    def evaluate(self, ctx: Context, signal: Signal) -> FilterResult:
+        mc = getattr(ctx, "market", None)
+        if mc is None:
+            return FilterResult(False, 0.0, "no benchmark loaded (set config.benchmark)")
+        bench_ret = mc.return_over_asof(ctx.bar.timestamp, self.lookback)
+        df = ctx.history.to_dataframe()
+        if bench_ret is None or len(df) < self.lookback + 1:
+            return FilterResult(False, 0.0, "RS warmup")
+        prev = float(df["close"].iloc[-1 - self.lookback])
+        sym_ret = (float(df["close"].iloc[-1]) / prev - 1.0) if prev else 0.0
+        ok = sym_ret > bench_ret
+        return FilterResult(ok, self.weight if ok else 0.0,
+                            f"RS {sym_ret:+.1%} vs {mc.benchmark} {bench_ret:+.1%}")
+
+
 _FILTERS = {
     "trend": TrendFilter,
     "reward_risk": MinRewardRiskFilter,
     "volume": VolumeExpansionFilter,
+    "regime": RegimeFilter,
+    "relative_strength": RelativeStrengthFilter,
 }
 
 
