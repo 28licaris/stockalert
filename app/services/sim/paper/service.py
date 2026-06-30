@@ -120,10 +120,24 @@ def build_status(
         fwd_curve = [(curve[-1][0], curve[-1][1] * rebase)]
     current = fwd_curve[-1][1] if fwd_curve else starting_capital
 
+    # Pair each closing leg with its opening leg's fill price. AlertStrategy holds
+    # one position per symbol at a time, so entry/exit legs alternate per symbol —
+    # a simple "last open price per symbol" pairing is exact.
+    entry_px: dict[int, float] = {}
+    _open_px: dict[str, float] = {}
+    for tr in state.trades:
+        if tr.get("is_closing"):
+            entry_px[id(tr)] = _open_px.get(tr["symbol"], float("nan"))
+        else:
+            _open_px[tr["symbol"]] = tr["price"]
+            entry_px[id(tr)] = tr["price"]
+
     def _mk_trade(t: dict) -> PaperTradeView:
         ts = _ts(t["timestamp"])
         hold = float(t.get("holding_days", 0.0) or 0.0)
         closing = bool(t.get("is_closing"))
+        ep = entry_px.get(id(t))
+        entry_price = ep if (ep is not None and ep == ep) else None  # drop NaN
         return PaperTradeView(
             symbol=t["symbol"], side=t["side"], quantity=t["quantity"] * rebase,
             price=t["price"], timestamp=ts,
@@ -131,6 +145,8 @@ def build_status(
             holding_days=hold, is_closing=closing,
             exit_date=ts if closing else None,
             entry_date=(ts - timedelta(days=hold)) if closing else ts,
+            entry_price=entry_price,
+            exit_price=t["price"] if closing else None,
         )
 
     def _mk_pos(p: dict) -> PaperPositionView:
@@ -202,7 +218,8 @@ def export_csv(
     w.writerow(["# Win rate %", round(s.forward_win_rate * 100, 1) if s.forward_win_rate is not None else ""])
     w.writerow([])
     w.writerow(["CLOSED TRADES"])
-    w.writerow(["symbol", "side", "entry_date", "exit_date", "held_days", "quantity", "exit_price", "realized_pnl"])
+    w.writerow(["symbol", "side", "entry_date", "exit_date", "held_days", "quantity",
+                "entry_price", "exit_price", "realized_pnl"])
     for t in s.forward_trades:
         if not t.is_closing:
             continue
@@ -210,7 +227,10 @@ def export_csv(
             t.symbol, t.side,
             t.entry_date.date().isoformat() if t.entry_date else "",
             t.exit_date.date().isoformat() if t.exit_date else "",
-            round(t.holding_days, 1), round(t.quantity, 2), round(t.price, 2), round(t.realized_pnl, 2),
+            round(t.holding_days, 1), round(t.quantity, 2),
+            round(t.entry_price, 2) if t.entry_price is not None else "",
+            round(t.exit_price, 2) if t.exit_price is not None else "",
+            round(t.realized_pnl, 2),
         ])
     w.writerow([])
     w.writerow(["OPEN POSITIONS"])

@@ -266,7 +266,8 @@ function ForwardTrades({ trades }: { trades: PaperStatus["forward_trades"] }) {
         <table className="w-full text-left font-mono text-[11px]">
           <thead className="text-fg-subtle">
             <tr><th className="py-1 pr-2">Symbol</th><th className="pr-2">Entered</th>
-              <th className="pr-2">Exited</th><th className="pr-2 text-right">Held</th>
+              <th className="pr-2">Exited</th><th className="pr-2 text-right">Entry $</th>
+              <th className="pr-2 text-right">Exit $</th><th className="pr-2 text-right">Held</th>
               <th className="text-right">P&amp;L</th></tr>
           </thead>
           <tbody>
@@ -275,6 +276,8 @@ function ForwardTrades({ trades }: { trades: PaperStatus["forward_trades"] }) {
                 <td className="py-1 pr-2 text-fg-base">{t.symbol}</td>
                 <td className="pr-2 text-fg-subtle">{(t.entry_date ?? "").slice(0, 10) || "—"}</td>
                 <td className="pr-2 text-fg-subtle">{(t.exit_date ?? t.timestamp).slice(0, 10)}</td>
+                <td className="pr-2 text-right text-fg-muted">{t.entry_price != null ? `$${t.entry_price.toFixed(2)}` : "—"}</td>
+                <td className="pr-2 text-right text-fg-muted">{t.exit_price != null ? `$${t.exit_price.toFixed(2)}` : "—"}</td>
                 <td className="pr-2 text-right text-fg-muted">{Math.round(t.holding_days)}d</td>
                 <td className={cn("text-right", t.realized_pnl >= 0 ? "text-up" : "text-down")}>
                   {t.realized_pnl >= 0 ? "+" : ""}{Math.round(t.realized_pnl).toLocaleString()}

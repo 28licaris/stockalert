@@ -140,6 +140,8 @@ export interface PaperTradeView {
   is_closing: boolean;
   entry_date: string | null;
   exit_date: string | null;
+  entry_price: number | null;
+  exit_price: number | null;
 }
 
 export interface PaperStatus {

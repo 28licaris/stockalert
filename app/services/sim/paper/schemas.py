@@ -52,6 +52,8 @@ class PaperTradeView(BaseModel):
     is_closing: bool = False
     entry_date: Optional[datetime] = None   # when the position was opened
     exit_date: Optional[datetime] = None    # when it was closed (None if still open)
+    entry_price: Optional[float] = None     # fill price of the opening leg
+    exit_price: Optional[float] = None      # fill price of the closing leg
 
 
 class PaperEquityPoint(BaseModel):
