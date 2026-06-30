@@ -459,6 +459,17 @@ class IndicatorSeries(BaseModel):
     )
     values: list[IndicatorValue]
     count: int = Field(..., description="len(values). Echoed for cheap client-side checks.")
+    source_agg: Optional[str] = Field(
+        None,
+        description=(
+            "Bar aggregation the indicator was COMPUTED over, when it "
+            "differs from the chart's display interval (e.g. a 200-day SMA "
+            "drawn on a 5m chart has source_agg='1d'). None means the "
+            "indicator was computed on the display interval — the common "
+            "case. Carries the cross-timeframe semantics so 'price crossed "
+            "the 200 SMA' is unambiguous; alerts echo this in their payload."
+        ),
+    )
 
 
 class IndicatorChartData(BaseModel):

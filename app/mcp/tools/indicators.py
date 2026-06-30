@@ -40,6 +40,8 @@ def compute_indicator(
     interval: str = "1d",
     params: Optional[dict[str, Any]] = None,
     provider: str = "polygon",
+    source_agg: Optional[str] = None,
+    window_days: Optional[int] = None,
 ) -> IndicatorSeries:
     """Compute one indicator series for a symbol over a window.
 
@@ -47,6 +49,13 @@ def compute_indicator(
     "what's AAPL's RSI(14) over the last quarter?" "Give me a
     20-day SMA of SPY for backtest scaffolding." Returns one
     `IndicatorSeries` with timestamped values.
+
+    CROSS-TIMEFRAME: to compute a moving average over a coarser bar than
+    the chart (e.g. a true 200-DAY SMA on a 5m chart), pass either
+    `source_agg='1d'` with `params={"period":200}` (bar-locked), or
+    `window_days=200` (window-locked — pins source_agg='1d'). The coarser
+    MA is forward-filled onto `interval`. The returned series carries
+    `source_agg` so "price crossed the 200 SMA" stays unambiguous.
 
     Args:
         symbol: Ticker.
@@ -78,6 +87,7 @@ def compute_indicator(
             params=params or {},
             start=start, end=end,
             interval=interval, provider=provider,
+            source_agg=source_agg, window_days=window_days,
         )
 
 
@@ -106,6 +116,9 @@ def compute_indicators(
         indicators: List of dicts, each shape:
             `{"name": "<registry name>", "params": {...}, "label": "..."}`.
             `label` is optional; defaults to a sensible 'SMA(20)' form.
+            Cross-timeframe MAs: add `"source_agg": "1d"` (bar-locked) or
+            `"window_days": 200` (window-locked) to a spec to compute it
+            over a coarser bar than `interval`, forward-filled onto it.
         start, end: Window. Naive datetimes treated as UTC.
         interval: Bar interval (see compute_indicator).
         provider: Bronze provider for 1m.
