@@ -154,6 +154,8 @@ export interface PaperStatus {
   open_positions: PaperPositionView[];
   forward_trades: PaperTradeView[];
   equity_curve: EquityPoint[];
+  today_entries: PaperPositionView[];
+  today_exits: PaperTradeView[];
 }
 
 export function usePaperStatus(name = "momentum_top15") {

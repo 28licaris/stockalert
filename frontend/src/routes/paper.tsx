@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Loader2, Radio } from "lucide-react";
+import { Bell, Loader2, Radio } from "lucide-react";
 import { usePaperStatus, type EquityPoint, type PaperStatus } from "@/api/backtest";
 import { cn } from "@/lib/utils";
 
@@ -51,6 +51,8 @@ function PaperBody({ s }: { s: PaperStatus }) {
         <Metric label="Open positions" value={String(s.n_open_positions)} />
       </div>
 
+      <TodaysSignals s={s} />
+
       <div className="surface-panel rounded-lg p-3">
         <div className="mb-2 flex items-center justify-between">
           <span className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
@@ -71,6 +73,40 @@ function PaperBody({ s }: { s: PaperStatus }) {
         <ForwardTrades trades={s.forward_trades} />
       </div>
     </>
+  );
+}
+
+function TodaysSignals({ s }: { s: PaperStatus }) {
+  const date = (s.computed_through ?? s.go_live).slice(0, 10);
+  const entries = s.today_entries ?? [];
+  const exits = s.today_exits ?? [];
+  const has = entries.length > 0 || exits.length > 0;
+  if (!has) {
+    return (
+      <div className="surface-panel rounded-lg p-3 text-xs text-fg-muted">
+        <Bell className="mr-1.5 inline h-3.5 w-3.5" /> No new entry/exit signals for {date}.
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-accent/40 bg-accent/10 p-3">
+      <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-accent">
+        <Bell className="h-3.5 w-3.5" /> Signals for {date}
+      </div>
+      <div className="flex flex-wrap gap-2 font-mono text-[11px]">
+        {entries.map((p) => (
+          <span key={`e-${p.symbol}`} className="rounded border border-up/50 px-2 py-1 text-up">
+            ENTRY {p.quantity >= 0 ? "LONG" : "SHORT"} {p.symbol} @ ${p.avg_entry_price.toFixed(2)}
+          </span>
+        ))}
+        {exits.map((t, i) => (
+          <span key={`x-${i}`} className={cn("rounded border px-2 py-1",
+            t.realized_pnl >= 0 ? "border-up/50 text-up" : "border-down/50 text-down")}>
+            EXIT {t.symbol} {t.realized_pnl >= 0 ? "+" : ""}{Math.round(t.realized_pnl).toLocaleString()}
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }
 
