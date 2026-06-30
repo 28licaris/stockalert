@@ -12,6 +12,7 @@ import { CalendarPage } from "./calendar";
 import { NewsPage } from "./news";
 import { EconomicPage } from "./economic";
 import { SectorsPage } from "./sectors";
+import { BacktestPage } from "./backtest";
 import { NotFoundPage } from "./not-found";
 import { LoginPage } from "./login";
 import { SettingsPage } from "./settings";
@@ -53,6 +54,8 @@ export const router = createBrowserRouter(
             { path: "news", element: <NewsPage /> },
             { path: "economic", element: <EconomicPage /> },
             { path: "sectors", element: <SectorsPage /> },
+            { path: "backtest", element: <BacktestPage /> },
+            { path: "runs", element: <BacktestPage /> },
             { path: "settings", element: <SettingsPage /> },
             { path: "*", element: <NotFoundPage /> },
           ],
