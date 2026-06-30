@@ -1,0 +1,20 @@
+strategy: alert_driven
+strategy_params:
+  source: breakout
+  source_params: { lookback: 20, vol_mult: 1.5, reward_risk_mult: 3.0 }
+  filters:
+    []
+  filter_mode: all
+  min_score: 0
+  risk_pct: 0.01
+  max_risk_pct: 0.05
+  min_reward_risk: 0.0
+symbols: [IBM, ORCL, NFLX, TSM, TXN, KLAC, LRCX, MS, WFC, KO, SBUX, JNJ, RBLX, RIVN, SNAP, PINS, LYFT, XLF, XLK, XLI, XLV, XLY, XLP, XLB]
+benchmark: SPY
+interval: 1d
+starting_cash: 100000
+history_window: 300
+max_concurrent_positions: 8
+max_portfolio_heat: 0.12
+start: 2022-01-01T00:00:00Z
+end: 2025-12-31T23:59:59Z

@@ -655,3 +655,51 @@ scanning). NOT a track record until clean OOS + forward paper-trade.
 **Next:** clean OOS (tune 2022–23 / validate untouched 2024–25); add EWT
 confluence (channeling/volume/alternation guidelines already in the skill);
 combine EW-source + breakout in a portfolio; M3 forward paper-trade.
+
+---
+
+## EXP-18 · 2026-06-30 · OUT-OF-SAMPLE REALITY CHECK (the honest checkpoint)
+
+The prior headline numbers were all measured on ONE hand-picked 34-name basket.
+Since I'd seen every calendar year, a time-holdout is contaminated, so I ran the
+cleaner test: same strategies + params on a **fresh 24-name cross-sector basket
+with ZERO overlap** (IBM, ORCL, NFLX, TSM, semis, MS/WFC, KO/SBUX/JNJ, RBLX/RIVN/
+SNAP/PINS/LYFT, sector ETFs).
+
+**Every strategy collapsed out-of-sample:**
+
+| Strategy | Original basket | Fresh basket |
+|---|---|---|
+| Bare breakout | +240% / PF 1.60 | +29.5% / PF 1.17 |
+| Confluence breakout | +148% / PF 1.82 | **−4.3% / PF 0.89** |
+| Elliott wave-3 long | +147% / PF 2.45 | +17.9% / PF 1.08 |
+
+Adding an as-of **relative-strength gate** ("trade only market leaders") helped the
+momentum signal but not the wave signal:
+- breakout + RS: fresh +29.5% → **+70.6%** (PF 1.44) — RS recovers a lot.
+- EW + RS: fresh +17.9% → **−15.6%** — RS fights the early wave-3 entry (thesis
+  mismatch, cf. EXP-16).
+
+But breakout + RS **walk-forward on fresh names is inconsistent**: 2022 −13.9%,
+2023 +62.1%, 2024 −9.8%, 2025 +51.0%. The +70% full-period is two strong years
+masking two losing years.
+
+**Conclusions (no spin):**
+1. **The big in-sample returns were basket-selection bias.** The original basket
+   happened to hold the era's biggest movers (NVDA, PLTR, 2022 energy/metals). On
+   names I didn't pick, the edge shrinks to modest (breakout) or vanishes
+   (confluence) or is inconsistent (breakout+RS loses 2 of 4 years).
+2. **EW wave-3 was the in-sample champion but did NOT generalize** (+147%/PF2.45 →
+   +17.9%/PF1.08) and RS gating made it worse. More overfit than plain breakout.
+3. **We do NOT have a validated, sellable edge yet.** This is the honesty doctrine
+   working as intended — better to learn it here than in production.
+4. **Root cause = universe.** These momentum/wave strategies live or die on whether
+   the traded set contains the period's movers. Hand-picking supplied that with
+   hindsight (look-ahead). The principled fix is a **dynamic, no-look-ahead
+   universe**: screen a BROAD pool each day, trade the top as-of momentum/RS names —
+   so the strategy *discovers* movers instead of being handed them.
+
+**Next:** build dynamic universe selection (rank a broad CH universe by as-of
+momentum/RS each rebalance, trade top-N) → re-validate breakout(+RS) and EW wave-3
+on it → only then OOS-by-time + forward paper-trade. Until that holds, treat all
+prior return figures as in-sample/optimistic.
