@@ -123,55 +123,65 @@ async def market_banner(
     if not want:
         return _empty_response(provider_name, errors=[])
 
-    if not _provider_supports_get_quotes(quote_service):
-        return _empty_response(
-            provider_name,
-            errors=[{"message": "provider has no get_quotes"}],
-        )
+    # ClickHouse is the PRIMARY source: the hot 1m tier already holds the
+    # exact last price and the prior regular-session close needed for the
+    # change %. This serves the default ETF tape in ~10–50ms versus the
+    # ~650ms live-quote REST round-trip the provider needs.
+    ch_rows = await _ch_banner(want)
+    missing = [s for s in want if s not in ch_rows]
 
-    try:
-        raw, invalid = await quote_service.get_raw_quotes(want)
-    except Exception as exc:  # noqa: BLE001 — boundary; preserve original behavior
-        logger.warning("market_banner get_quotes failed: %s", exc)
-        return _empty_response(provider_name, errors=[{"message": str(exc)}])
+    errors: list[dict[str, Any]] = []
+    provider_rows: dict[str, dict[str, Any]] = {}
+    used_provider = False
 
-    if not raw and want:
-        logger.warning("market_banner: empty quotes response, falling back to ClickHouse last bars")
-        ch_items = await _ch_banner_fallback(want)
-        return {
-            "as_of": datetime.now(timezone.utc).isoformat(),
-            "provider": "clickhouse-fallback",
-            "items": ch_items,
-            "errors": [{"message": "live quotes unavailable, showing last known prices"}],
-        }
+    # Provider fallback ONLY for symbols CH doesn't carry — indices ($SPX),
+    # futures roots, or anything outside the ingested universe.
+    if missing and _provider_supports_get_quotes(quote_service):
+        try:
+            raw, invalid = await quote_service.get_raw_quotes(missing)
+            used_provider = True
+            by_inner: dict[str, dict[str, Any]] = {}
+            for k, v in (raw or {}).items():
+                if not isinstance(v, dict):
+                    continue
+                by_inner[str(k).upper()] = v
+                inner_sym = v.get("symbol")
+                if inner_sym:
+                    by_inner[str(inner_sym).upper()] = v
+            for sym in missing:
+                block = (raw or {}).get(sym) or by_inner.get(sym.upper())
+                if not isinstance(block, dict):
+                    continue
+                row = _extract_row(sym, block)
+                if row and row.get("last") is not None:
+                    provider_rows[sym] = row
+            errors.extend(
+                {"symbol": sym, "message": "invalid or unsupported symbol"}
+                for sym in invalid
+            )
+        except Exception as exc:  # noqa: BLE001 — boundary
+            logger.warning("market_banner provider fallback failed: %s", exc)
+            errors.append({"message": f"provider fallback failed: {exc}"})
 
-    errors: list[dict[str, Any]] = [
-        {"symbol": sym, "message": "invalid or unsupported symbol"}
-        for sym in invalid
-    ]
-
-    # Index by top-level key and by nested `symbol` (defensive for API variants).
-    by_inner: dict[str, dict[str, Any]] = {}
-    for k, v in raw.items():
-        if not isinstance(v, dict):
-            continue
-        by_inner[str(k).upper()] = v
-        inner_sym = v.get("symbol")
-        if inner_sym:
-            by_inner[str(inner_sym).upper()] = v
-
-    items: list[dict[str, Any]] = []
+    # Anything still unresolved is surfaced explicitly — never silently dropped.
     for sym in want:
-        block = raw.get(sym) or by_inner.get(sym.upper())
-        if not isinstance(block, dict):
-            continue
-        row = _extract_row(sym, block)
-        if row and row.get("last") is not None:
-            items.append(row)
+        if sym not in ch_rows and sym not in provider_rows:
+            if not any(e.get("symbol") == sym for e in errors):
+                errors.append({"symbol": sym, "message": "no data available"})
+
+    items = [ch_rows.get(s) or provider_rows.get(s) for s in want]
+    items = [it for it in items if it]
+
+    if ch_rows and used_provider:
+        provider_label = f"clickhouse+{provider_name}" if provider_name else "clickhouse"
+    elif ch_rows:
+        provider_label = "clickhouse"
+    else:
+        provider_label = provider_name
 
     return {
         "as_of": datetime.now(timezone.utc).isoformat(),
-        "provider": provider_name,
+        "provider": provider_label,
         "items": items,
         "errors": errors,
     }
@@ -182,44 +192,104 @@ def _provider_supports_get_quotes(svc: QuoteService) -> bool:
     return callable(getattr(svc._provider, "get_quotes", None))  # noqa: SLF001
 
 
-async def _ch_banner_fallback(symbols: list[str]) -> list[dict[str, Any]]:
-    """Return last-bar prices from ClickHouse when live quotes are unavailable.
+# Friendly tape labels for the configured banner ETFs (CH has no company
+# names). Falls back to the raw ticker for anything not listed.
+_BANNER_LABELS: dict[str, str] = {
+    "SPY": "S&P 500",
+    "QQQ": "Nasdaq 100",
+    "IWM": "Russell 2000",
+    "DIA": "Dow Jones",
+    "GLD": "Gold",
+    "TLT": "20Y Treasuries",
+    "VIXY": "VIX Futures",
+    "SLV": "Silver",
+}
 
-    Produces BannerItem-compatible dicts with `last` set and
-    `net_change`/`change_pct` as None — shows prices without change direction.
+# The two most recent regular-session (≤16:00 ET) daily closes per symbol.
+# We anchor "previous close" to the DATA's own sessions, not the wall clock:
+# overnight/pre-open, `now()`'s ET date has no session yet, so comparing
+# against "yesterday" would pick the same day as the latest price. Taking the
+# last two RTH session closes (LIMIT 2 BY symbol) and using the OLDER one as
+# `prev` gives the correct day-over-day change in every session state.
+_LAST2_RTH_CLOSE_SQL = """
+SELECT symbol, d, close FROM (
+  SELECT
+    symbol,
+    toDate(toTimeZone(timestamp, 'America/New_York')) AS d,
+    argMax(close, timestamp) AS close
+  FROM stocks.ohlcv_1m
+  WHERE symbol IN ('{inlist}')
+    AND timestamp >= now() - INTERVAL 14 DAY
+    AND (toHour(toTimeZone(timestamp, 'America/New_York')) * 60
+         + toMinute(toTimeZone(timestamp, 'America/New_York'))) <= 960
+  GROUP BY symbol, d
+  ORDER BY symbol, d DESC
+  LIMIT 2 BY symbol
+)
+"""
+
+
+async def _ch_banner(symbols: list[str]) -> dict[str, dict[str, Any]]:
+    """Build banner rows from ClickHouse — the primary, fast path.
+
+    Per symbol: `last` = latest 1m close (current price, any session);
+    `close` = prior regular-session close; `net_change`/`change_pct`
+    derived from the two. Returns a dict keyed by symbol for only the
+    symbols CH actually has (callers fall back to the provider for the
+    rest). Any CH error degrades to an empty dict — never raises into the
+    request path.
     """
     from app.db.client import get_client
-    if not symbols:
-        return []
-    safe = [s.replace("'", "") for s in symbols if s.replace("'", "")]
+
+    safe = [s for s in symbols if s and "'" not in s]
     if not safe:
-        return []
-    in_clause = "','".join(safe)
+        return {}
+    inlist = "','".join(safe)
     try:
         client = get_client()
-        result = await asyncio.to_thread(
+        # Sequential, not concurrent: the shared CH client is single-session
+        # and rejects concurrent queries on one connection. Each query is a
+        # ~10ms indexed scan, so two in series is still well under the
+        # provider round-trip we're replacing.
+        last_res = await asyncio.to_thread(
             client.query,
-            f"SELECT symbol, argMax(close, timestamp) AS last, argMax(timestamp, timestamp) AS ts"
-            f" FROM stocks.ohlcv_1m WHERE symbol IN ('{in_clause}')"
-            f" GROUP BY symbol ORDER BY symbol",
+            f"SELECT symbol, argMax(close, timestamp) AS last"
+            f" FROM stocks.ohlcv_1m WHERE symbol IN ('{inlist}')"
+            f" AND timestamp >= now() - INTERVAL 14 DAY GROUP BY symbol",
         )
-        items = []
-        for row in result.result_rows:
-            sym, last, _ = row[0], row[1], row[2]
-            items.append({
-                "symbol": sym,
-                "label": sym,
-                "description": "",
-                "asset_type": "EQUITY",
-                "last": float(last) if last is not None else None,
-                "net_change": None,
-                "change_pct": None,
-                "close": None,
-            })
-        return [it for it in items if it["last"] is not None]
-    except Exception as exc:
-        logger.warning("ch banner fallback failed: %s", exc)
-        return []
+        rth_res = await asyncio.to_thread(
+            client.query, _LAST2_RTH_CLOSE_SQL.format(inlist=inlist)
+        )
+    except Exception as exc:  # noqa: BLE001 — CH unavailable degrades to provider
+        logger.warning("ch banner query failed: %s", exc)
+        return {}
+
+    last = {r[0]: float(r[1]) for r in last_res.result_rows if r[1] is not None}
+    # rth rows are (symbol, day, close) ordered day-DESC per symbol; the second
+    # row per symbol is the prior session's close.
+    rth_by_sym: dict[str, list[float]] = {}
+    for sym, _day, close in rth_res.result_rows:
+        if close is not None:
+            rth_by_sym.setdefault(sym, []).append(float(close))
+    prev = {sym: rows[1] for sym, rows in rth_by_sym.items() if len(rows) >= 2}
+
+    out: dict[str, dict[str, Any]] = {}
+    for sym, last_px in last.items():
+        prev_px = prev.get(sym)
+        net = (last_px - prev_px) if prev_px is not None else None
+        pct = (net / prev_px * 100.0) if (net is not None and prev_px) else None
+        label = _BANNER_LABELS.get(sym, sym)
+        out[sym] = {
+            "symbol": sym,
+            "label": label,
+            "description": label,
+            "asset_type": "ETF",
+            "last": last_px,
+            "net_change": net,
+            "change_pct": pct,
+            "close": prev_px,
+        }
+    return out
 
 
 def _empty_response(provider_name: Optional[str], *, errors: list[dict[str, Any]]) -> dict:
