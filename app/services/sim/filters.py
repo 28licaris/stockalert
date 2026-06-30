@@ -66,10 +66,11 @@ class TrendFilter(BaseFilter):
         val = float(series.iloc[-1]) if len(series) else float("nan")
         if val != val:  # NaN (warmup) — fail closed
             return FilterResult(False, 0.0, f"{self.ma}{self.period} warmup")
-        ok = signal.entry > val
+        # Long wants price above trend, short wants price below — confirm direction.
+        ok = signal.entry > val if signal.direction == "long" else signal.entry < val
         return FilterResult(
             ok, self.weight if ok else 0.0,
-            f"close {'>' if ok else '<='} {self.ma}{self.period}={val:.2f}",
+            f"close vs {self.ma}{self.period}={val:.2f} ({signal.direction})",
         )
 
 
@@ -130,8 +131,10 @@ class RegimeFilter(BaseFilter):
         above = mc.above_ma_asof(ctx.bar.timestamp, self.ma_period)
         if above is None:
             return FilterResult(False, 0.0, f"{mc.benchmark} regime warmup")
-        return FilterResult(above, self.weight if above else 0.0,
-                            f"{mc.benchmark} {'up' if above else 'down'}-regime")
+        # Long confirms in an up-regime, short in a down-regime — trade WITH the regime.
+        ok = above if signal.direction == "long" else (not above)
+        return FilterResult(ok, self.weight if ok else 0.0,
+                            f"{mc.benchmark} {'up' if above else 'down'}-regime ({signal.direction})")
 
 
 class RelativeStrengthFilter(BaseFilter):
@@ -153,9 +156,10 @@ class RelativeStrengthFilter(BaseFilter):
             return FilterResult(False, 0.0, "RS warmup")
         prev = float(df["close"].iloc[-1 - self.lookback])
         sym_ret = (float(df["close"].iloc[-1]) / prev - 1.0) if prev else 0.0
-        ok = sym_ret > bench_ret
+        # Long wants out-performance, short wants under-performance.
+        ok = sym_ret > bench_ret if signal.direction == "long" else sym_ret < bench_ret
         return FilterResult(ok, self.weight if ok else 0.0,
-                            f"RS {sym_ret:+.1%} vs {mc.benchmark} {bench_ret:+.1%}")
+                            f"RS {sym_ret:+.1%} vs {mc.benchmark} {bench_ret:+.1%} ({signal.direction})")
 
 
 class RsiBullFilter(BaseFilter):
@@ -173,9 +177,10 @@ class RsiBullFilter(BaseFilter):
         v = float(s.iloc[-1]) if len(s) else float("nan")
         if v != v:
             return FilterResult(False, 0.0, "rsi warmup")
-        ok = v > self.threshold
-        return FilterResult(ok, self.weight if ok else 0.0,
-                            f"rsi {v:.0f} {'>' if ok else '<='} {self.threshold:.0f}")
+        # Momentum confirms direction: long wants RSI above the threshold, short
+        # wants it below the mirror (100 - threshold).
+        ok = v > self.threshold if signal.direction == "long" else v < (100.0 - self.threshold)
+        return FilterResult(ok, self.weight if ok else 0.0, f"rsi {v:.0f} ({signal.direction})")
 
 
 class MacdBullFilter(BaseFilter):
@@ -191,9 +196,9 @@ class MacdBullFilter(BaseFilter):
         v = float(s.iloc[-1]) if len(s) else float("nan")
         if v != v:
             return FilterResult(False, 0.0, "macd warmup")
-        ok = v > 0.0
-        return FilterResult(ok, self.weight if ok else 0.0,
-                            f"macd {v:+.2f} {'>' if ok else '<='} 0")
+        # Long confirms with MACD above zero, short with MACD below zero.
+        ok = v > 0.0 if signal.direction == "long" else v < 0.0
+        return FilterResult(ok, self.weight if ok else 0.0, f"macd {v:+.2f} ({signal.direction})")
 
 
 _FILTERS = {

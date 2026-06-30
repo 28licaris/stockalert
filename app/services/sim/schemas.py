@@ -104,7 +104,8 @@ class Trade(BaseModel):
     timestamp: datetime   # the bar that produced the fill
     fees: float = 0.0
     realized_pnl: float = 0.0    # populated on a closing trade
-    holding_days: float = 0.0    # calendar days held (populated on a closing sell)
+    holding_days: float = 0.0    # calendar days held (populated on a closing leg)
+    is_closing: bool = False     # True on the leg that realizes P&L (sell-to-close long OR buy-to-cover short)
     note: str = ""
 
 

@@ -150,7 +150,29 @@ class Portfolio:
     ) -> Optional[Trade]:
         if fill_price <= 0:
             return None
-        # Clamp to what cash allows (long-only; no margin).
+        # Buy-to-cover: if we're short, a buy closes (realizes P&L on) the short.
+        pos = self.positions.get(action.symbol)
+        if pos is not None and pos.quantity < 0:
+            qty = min(action.size, -pos.quantity)
+            if qty <= 0:
+                return None
+            fee = fees.fee_for(Action(kind="buy", symbol=action.symbol, size=qty), fill_price)
+            realized = (pos.avg_entry_price - fill_price) * qty - fee  # short: profit when fill < entry
+            fill_ts = next_bar.timestamp if next_bar else current_bar.timestamp
+            holding_days = max(0.0, (fill_ts - pos.entry_time).total_seconds() / 86_400.0)
+            self.cash -= qty * fill_price + fee  # covering costs cash
+            trade = Trade(
+                symbol=action.symbol, side="buy", quantity=qty, price=fill_price,
+                timestamp=fill_ts, fees=fee, realized_pnl=realized,
+                holding_days=holding_days, is_closing=True, note=action.note,
+            )
+            pos.quantity += qty
+            if pos.quantity >= -1e-9:
+                del self.positions[action.symbol]
+            self.closed_trades.append(trade)
+            return trade
+
+        # Otherwise: open/add a LONG. Clamp to what cash allows (no margin).
         requested_qty = action.size
         max_qty_by_cash = self.cash / fill_price  # ignores fees; refine below
         qty = min(requested_qty, max_qty_by_cash)
@@ -206,37 +228,38 @@ class Portfolio:
         if fill_price <= 0:
             return None
         pos = self.positions.get(action.symbol)
-        if pos is None or pos.quantity <= 0:
-            # Long-only: no short sells in TA-1. Drop silently — the
-            # strategy may have sized incorrectly.
-            return None
+        fill_ts = next_bar.timestamp if next_bar else current_bar.timestamp
 
-        qty = min(action.size, pos.quantity)
+        if pos is not None and pos.quantity > 0:
+            # Sell-to-close a LONG (realizes P&L).
+            qty = min(action.size, pos.quantity)
+            if qty <= 0:
+                return None
+            fee = fees.fee_for(Action(kind="sell", symbol=action.symbol, size=qty), fill_price)
+            realized = (fill_price - pos.avg_entry_price) * qty - fee
+            holding_days = max(0.0, (fill_ts - pos.entry_time).total_seconds() / 86_400.0)
+            trade = Trade(
+                symbol=action.symbol, side="sell", quantity=qty, price=fill_price,
+                timestamp=fill_ts, fees=fee, realized_pnl=realized,
+                holding_days=holding_days, is_closing=True, note=action.note,
+            )
+            self.cash += qty * fill_price - fee
+            self._reduce_position(action.symbol, qty)
+            self.closed_trades.append(trade)
+            return trade
+
+        # Sell-to-open a SHORT (flat or already short). Proceeds credited to cash;
+        # equity reflects the liability via the negative position (see mark_to_market).
+        qty = action.size
         if qty <= 0:
             return None
-
-        fee = fees.fee_for(
-            Action(kind="sell", symbol=action.symbol, size=qty),
-            fill_price,
-        )
-        proceeds = qty * fill_price - fee
-        realized = (fill_price - pos.avg_entry_price) * qty - fee
-
-        fill_ts = next_bar.timestamp if next_bar else current_bar.timestamp
-        holding_days = max(0.0, (fill_ts - pos.entry_time).total_seconds() / 86_400.0)
+        fee = fees.fee_for(Action(kind="sell", symbol=action.symbol, size=qty), fill_price)
+        self.cash += qty * fill_price - fee
+        self._add_to_short(action.symbol, qty, fill_price, fill_ts)
         trade = Trade(
-            symbol=action.symbol,
-            side="sell",
-            quantity=qty,
-            price=fill_price,
-            timestamp=fill_ts,
-            fees=fee,
-            realized_pnl=realized,
-            holding_days=holding_days,
-            note=action.note,
+            symbol=action.symbol, side="sell", quantity=qty, price=fill_price,
+            timestamp=fill_ts, fees=fee, realized_pnl=0.0, is_closing=False, note=action.note,
         )
-        self.cash += proceeds
-        self._reduce_position(action.symbol, qty)
         self.closed_trades.append(trade)
         return trade
 
@@ -257,6 +280,21 @@ class Portfolio:
         ) / new_qty
         existing.quantity = new_qty
         existing.avg_entry_price = new_avg
+
+    def _add_to_short(self, symbol: str, qty: float, price: float, ts: datetime) -> None:
+        """Open or add to a SHORT (quantity < 0), weighted-average entry price."""
+        existing = self.positions.get(symbol)
+        if existing is None:
+            self.positions[symbol] = Position(
+                symbol=symbol, quantity=-qty, avg_entry_price=price, entry_time=ts,
+            )
+            return
+        prior_short = -existing.quantity            # positive size
+        new_short = prior_short + qty
+        existing.avg_entry_price = (
+            existing.avg_entry_price * prior_short + price * qty
+        ) / new_short
+        existing.quantity = -new_short
 
     def _reduce_position(self, symbol: str, qty: float) -> None:
         existing = self.positions.get(symbol)

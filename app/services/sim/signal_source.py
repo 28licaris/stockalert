@@ -55,14 +55,18 @@ class Signal:
 
     @property
     def risk_per_share(self) -> float:
-        """Entry-to-stop distance (long). Always positive for a valid long."""
-        return self.entry - self.stop
+        """Entry-to-stop distance, direction-agnostic (always positive when valid).
+        Long: stop < entry. Short: stop > entry."""
+        return abs(self.entry - self.stop)
 
     @property
     def reward_risk(self) -> float:
-        """(target_1 - entry) / (entry - stop). 0 if risk is non-positive."""
+        """Reward:risk, direction-aware. 0 if risk is non-positive."""
         r = self.risk_per_share
-        return (self.target_1 - self.entry) / r if r > 0 else 0.0
+        if r <= 0:
+            return 0.0
+        reward = (self.target_1 - self.entry) if self.direction == "long" else (self.entry - self.target_1)
+        return reward / r
 
 
 @runtime_checkable
@@ -248,22 +252,26 @@ class DivergenceSignalSource(BaseSignalSource):
         lookback: int = 60,
         pivot_k: int = 3,
         kind: str = "both",           # "regular" | "hidden" | "both"
+        side: str = "long",           # "long" (bullish) | "short" (bearish) | "both"
         reward_risk_mult: float = 2.0,
         stop_buffer_pct: float = 0.01,
     ) -> None:
         if kind not in ("regular", "hidden", "both"):
             raise ValueError(f"kind must be regular|hidden|both, got {kind!r}")
+        if side not in ("long", "short", "both"):
+            raise ValueError(f"side must be long|short|both, got {side!r}")
         self.indicator = indicator
         self.ind_period = ind_period
         self.lookback = lookback
         self.pivot_k = pivot_k
         self.kind = kind
+        self.side = side
         self.reward_risk_mult = reward_risk_mult
         self.stop_buffer_pct = stop_buffer_pct
-        self._last_p2 = None
+        self._last_p2: dict[str, object] = {}
 
     def setup(self, ctx: Context) -> None:
-        self._last_p2 = None
+        self._last_p2 = {}
 
     def on_bar(self, ctx: Context) -> Optional[Signal]:
         need = self.lookback + self.pivot_k + self.ind_period + 5
@@ -276,37 +284,66 @@ class DivergenceSignalSource(BaseSignalSource):
         if not close.index.equals(ind.index):
             ind = ind.reindex(close.index)
         ind = ind.tail(self.lookback)
-
         prices = close.to_numpy()
         rsis = ind.to_numpy()
-        piv = _pivot_lows(prices, self.pivot_k)
+        ts_index = close.index
+
+        if self.side in ("long", "both"):
+            sig = self._detect(ctx, prices, rsis, ts_index, "long")
+            if sig is not None:
+                return sig
+        if self.side in ("short", "both"):
+            sig = self._detect(ctx, prices, rsis, ts_index, "short")
+            if sig is not None:
+                return sig
+        return None
+
+    def _detect(self, ctx, prices, rsis, ts_index, direction) -> Optional[Signal]:
+        # Long divergence is built on pivot LOWS; short on pivot HIGHS.
+        piv = _pivot_lows(prices, self.pivot_k) if direction == "long" else _pivot_highs(prices, self.pivot_k)
         if len(piv) < 2:
             return None
         p1, p2 = piv[-2], piv[-1]
         price1, price2, r1, r2 = prices[p1], prices[p2], rsis[p1], rsis[p2]
-        if any(v != v for v in (r1, r2)):  # NaN RSI at a pivot — skip
+        if any(v != v for v in (r1, r2)):
             return None
 
         label = None
-        if self.kind in ("regular", "both") and price2 < price1 and r2 > r1:
-            label = "regular_bullish"   # lower low in price, higher low in RSI → reversal
-        elif self.kind in ("hidden", "both") and price2 > price1 and r2 < r1:
-            label = "hidden_bullish"    # higher low in price, lower low in RSI → continuation
+        if direction == "long":
+            if self.kind in ("regular", "both") and price2 < price1 and r2 > r1:
+                label = "regular_bullish"   # lower low price, higher low RSI → reversal up
+            elif self.kind in ("hidden", "both") and price2 > price1 and r2 < r1:
+                label = "hidden_bullish"    # higher low price, lower low RSI → continuation up
+        else:  # short
+            if self.kind in ("regular", "both") and price2 > price1 and r2 < r1:
+                label = "regular_bearish"   # higher high price, lower high RSI → reversal down
+            elif self.kind in ("hidden", "both") and price2 < price1 and r2 > r1:
+                label = "hidden_bearish"    # lower high price, higher high RSI → continuation down
         if label is None:
             return None
 
-        p2_ts = close.index[p2]
-        if p2_ts == self._last_p2:       # already acted on this divergence
+        p2_ts = ts_index[p2]
+        if self._last_p2.get(direction) == p2_ts:
             return None
-        self._last_p2 = p2_ts
+        self._last_p2[direction] = p2_ts
 
         entry = float(ctx.bar.close)
-        stop = float(min(price2, entry)) * (1.0 - self.stop_buffer_pct)
-        if stop >= entry or entry <= 0:
+        if entry <= 0:
             return None
-        target = entry + self.reward_risk_mult * (entry - stop)
+        if direction == "long":
+            stop = float(min(price2, entry)) * (1.0 - self.stop_buffer_pct)
+            if stop >= entry:
+                return None
+            target = entry + self.reward_risk_mult * (entry - stop)
+        else:
+            stop = float(max(price2, entry)) * (1.0 + self.stop_buffer_pct)
+            if stop <= entry:
+                return None
+            target = entry - self.reward_risk_mult * (stop - entry)
+            if target <= 0:
+                return None
         return Signal(
-            symbol=ctx.bar.symbol, direction="long",
+            symbol=ctx.bar.symbol, direction=direction,
             entry=entry, stop=stop, target_1=target,
             confidence=0.5, kind=f"divergence_{label}",
             rationale=f"{label} divergence on {self.indicator}{self.ind_period}",
@@ -352,6 +389,22 @@ def _pivot_lows(values, k: int) -> list[int]:
             continue
         if all(v < values[j] for j in range(i - k, i)) and all(
             v < values[j] for j in range(i + 1, i + k + 1)
+        ):
+            out.append(i)
+    return out
+
+
+def _pivot_highs(values, k: int) -> list[int]:
+    """Positions of strict pivot highs (mirror of _pivot_lows): a bar higher
+    than the `k` bars on each side. Last `k` bars can't be pivots (no-look-ahead)."""
+    n = len(values)
+    out: list[int] = []
+    for i in range(k, n - k):
+        v = values[i]
+        if v != v:
+            continue
+        if all(v > values[j] for j in range(i - k, i)) and all(
+            v > values[j] for j in range(i + 1, i + k + 1)
         ):
             out.append(i)
     return out

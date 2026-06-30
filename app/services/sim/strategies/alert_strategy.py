@@ -120,46 +120,50 @@ class AlertStrategy(BaseStrategy):
     def on_bar(self, ctx: Context) -> Action:
         symbol = ctx.bar.symbol
         pos = ctx.portfolio.positions.get(symbol)
-        has_position = pos is not None and pos.quantity > 0
-
-        if has_position:
-            return self._manage_exit(ctx, symbol, pos.quantity)
+        if pos is not None and pos.quantity != 0:
+            return self._manage_exit(ctx, symbol, pos)
 
         return self._maybe_enter(ctx, symbol)
 
     # ── exits ──────────────────────────────────────────────────────────
-    def _manage_exit(self, ctx: Context, symbol: str, qty: float) -> Action:
+    def _manage_exit(self, ctx: Context, symbol: str, pos) -> Action:
         plan = self._plans.get(symbol)
         if plan is None:
             return hold()  # position without a tracked plan — leave it be
         bar = ctx.bar
-        # Stop takes priority over target when a single bar spans both (worst case).
-        if bar.low <= plan.stop:
+        is_long = pos.quantity > 0
+        qty = abs(pos.quantity)
+        # Exit leg: sell to close a long, buy to cover a short.
+        exit_kind = "sell" if is_long else "buy"
+
+        # Stop: long stops below (low ≤ stop); short stops above (high ≥ stop).
+        # Stop checked before target (worst case when a bar spans both).
+        stop_hit = bar.low <= plan.stop if is_long else bar.high >= plan.stop
+        if stop_hit:
             self._plans.pop(symbol, None)
-            ctx.log(event="exit_stop", stop=plan.stop, low=bar.low)
-            return Action(kind="sell", symbol=symbol, size=qty,
-                          note=f"stop hit @ {plan.stop:.4f} ({plan.kind})")
-        if bar.high >= plan.target_1:
+            ctx.log(event="exit_stop", stop=plan.stop, dir=plan.direction)
+            return Action(kind=exit_kind, symbol=symbol, size=qty,
+                          note=f"stop @ {plan.stop:.4f} ({plan.kind})")
+        target_hit = bar.high >= plan.target_1 if is_long else bar.low <= plan.target_1
+        if target_hit:
             self._plans.pop(symbol, None)
-            ctx.log(event="exit_target", target=plan.target_1, high=bar.high)
-            return Action(kind="sell", symbol=symbol, size=qty,
-                          note=f"target hit @ {plan.target_1:.4f} ({plan.kind})")
+            ctx.log(event="exit_target", target=plan.target_1, dir=plan.direction)
+            return Action(kind=exit_kind, symbol=symbol, size=qty,
+                          note=f"target @ {plan.target_1:.4f} ({plan.kind})")
         # Time stop — cap how long capital stays tied up.
         if self.params.max_holding_days is not None:
-            pos = ctx.portfolio.positions.get(symbol)
-            if pos is not None:
-                held = (bar.timestamp - pos.entry_time).total_seconds() / 86_400.0
-                if held >= self.params.max_holding_days:
-                    self._plans.pop(symbol, None)
-                    ctx.log(event="exit_time", held_days=round(held, 1))
-                    return Action(kind="sell", symbol=symbol, size=qty,
-                                  note=f"time stop @ {held:.0f}d ({plan.kind})")
+            held = (bar.timestamp - pos.entry_time).total_seconds() / 86_400.0
+            if held >= self.params.max_holding_days:
+                self._plans.pop(symbol, None)
+                ctx.log(event="exit_time", held_days=round(held, 1))
+                return Action(kind=exit_kind, symbol=symbol, size=qty,
+                              note=f"time stop @ {held:.0f}d ({plan.kind})")
         return hold()
 
     # ── entries ────────────────────────────────────────────────────────
     def _maybe_enter(self, ctx: Context, symbol: str) -> Action:
         sig = self.source.on_bar(ctx)
-        if sig is None or sig.direction != "long":
+        if sig is None or sig.direction not in ("long", "short"):
             return hold()
         if sig.risk_per_share <= 0:
             return hold()
@@ -173,11 +177,13 @@ class AlertStrategy(BaseStrategy):
             return hold()
         self._plans[symbol] = sig
         ctx.log(
-            event="entry", kind=sig.kind, entry=sig.entry,
+            event="entry", kind=sig.kind, direction=sig.direction, entry=sig.entry,
             stop=sig.stop, target=sig.target_1, qty=qty, rr=round(sig.reward_risk, 2),
         )
-        return Action(kind="buy", symbol=symbol, size=float(qty),
-                      note=f"{sig.kind} entry rr={sig.reward_risk:.2f}: {sig.rationale}")
+        # Long → buy to open; short → sell to open (the engine opens a short).
+        entry_kind = "buy" if sig.direction == "long" else "sell"
+        return Action(kind=entry_kind, symbol=symbol, size=float(qty),
+                      note=f"{sig.kind} {sig.direction} rr={sig.reward_risk:.2f}: {sig.rationale}")
 
     def _size(self, ctx: Context, sig: Signal) -> int:
         """Conviction-scaled risk size: risk scales risk_pct→max_risk_pct by the

@@ -369,3 +369,37 @@ rsi_bull, macd_bull), score-mode, size 1%→5% by # confirming. Best dev: min_sc
 
 **Next:** risk-management layer (cap portfolio heat so concurrent 5% bets don't
 compound drawdown); bear-regime walk-forward; then M3 paper-trade this config.
+
+---
+
+## EXP-11 · 2026-06-30 · regime-agnostic (long + short) trading
+
+Guidance: trade any regime / reversals into a new regime — not bull-only. Added
+**short support** to the engine (portfolio opens shorts on a flat sell, covers on
+a buy; P&L/equity verified by `test_shorts.py`), made the `Signal` risk/reward and
+all confluence filters **direction-aware** (long confirms in up-trend/up-regime/
+out-performance; short the mirror), and added **bearish divergence** (regular/hidden
+bearish → short) via a `side` param.
+
+Regime-agnostic config (divergence side=both + 4 directional confirmers, score-mode
+min_score=3, risk 1%→5%):
+
+| Window | Mean | Median | % profitable | win | $/trade | hold | worst DD |
+|---|---|---|---|---|---|---|---|
+| 2022–23 (bear-ish) | +3.4% | +1.4% | 58% | 31% | $135 | 45d | −28.1% |
+| 2024–25 (bull) | +6.7% | +7.3% | 75% | 40% | $548 | 36d | −21.8% |
+
+**Conclusions:**
+1. **It trades both regimes:** 2022–23 — where long-only was weak — is now solidly
+   positive (the short side earns in downturns). Delivers "don't care bull or bear."
+2. **Cost = drawdown:** −28% / −22% worst DD (5% sizing + both-direction + lower
+   short win-rate ~31–40%). Shorts are harder (lower hit-rate) — expected.
+3. **Risk management is now a hard prerequisite**, not a nice-to-have: 5% conviction
+   bets across long+short need portfolio-heat / max-concurrent / per-name caps
+   before this is usable. These are also single-symbol DDs; a real portfolio could
+   diversify (long+short can hedge) or compound (correlated) — must be modeled.
+4. Short P&L correctness is pinned by tests (round-trip profit AND loss).
+
+**Next (now urgent):** risk-management layer; then a true portfolio backtest
+(concurrent long+short positions) to get a realistic equity curve + drawdown;
+then M3 paper-trading.

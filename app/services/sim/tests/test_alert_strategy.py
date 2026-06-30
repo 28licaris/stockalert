@@ -120,14 +120,17 @@ def test_skips_below_reward_risk_gate() -> None:
     assert strat.on_bar(ctx).kind == "hold"
 
 
-def test_skips_short_signal() -> None:
-    sig = Signal("TEST", "short", entry=100.0, stop=105.0, target_1=90.0, kind="stub")
-    strat = AlertStrategy()
+def test_short_signal_opens_short() -> None:
+    # short: entry 100, stop 105 (above), target 90 (below) → rr=10/5=2.0. Opens via SELL.
+    sig = Signal("TEST", "short", entry=100.0, stop=105.0, target_1=90.0, confidence=0.5, kind="stub")
+    strat = AlertStrategy(AlertStrategyParams(risk_pct=0.01, min_reward_risk=1.5))
     strat.source = _StubSource(sig)
     ctx = Context(config=_cfg())
     strat.setup(ctx)
     ctx.advance(_bar(0, 100.0), _flat())
-    assert strat.on_bar(ctx).kind == "hold"
+    action = strat.on_bar(ctx)
+    assert action.kind == "sell" and action.size > 0  # sell-to-open a short
+    assert strat._plans["TEST"].direction == "short"
 
 
 def test_exit_on_stop() -> None:
