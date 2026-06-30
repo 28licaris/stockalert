@@ -332,6 +332,64 @@ class RelativeVolumeFilter(BaseFilter):
         return FilterResult(ok, self.weight if ok else 0.0, f"rvol {rvol:.2f} (>= {self.mult})")
 
 
+class EwtImpulseFilter(BaseFilter):
+    """Elliott Wave gate — "trade the wave."
+
+    Only pass a setup when the name's wave structure (labeled as-of the current
+    bar — no look-ahead) is in a MOTIVE/impulse wave in the trade direction
+    (default waves 3 & 5, the trend legs) with engine confidence ≥ threshold.
+    Rejects entries during corrections (waves 2/4) and counter-trend counts.
+
+    Per-name and structural — the right kind of gate (EXP-15: top-down market
+    gates hurt; bottom-up structure gates fit momentum). Uses the pure, no-look-
+    ahead `app.signals.elliott` engine over recent pivots; runs only on bars where
+    the base source already fired, so cost is bounded.
+    """
+
+    name = "ewt_impulse"
+
+    def __init__(self, *, pivot_period: int = 5, allowed_waves: tuple = ("3", "5"),
+                 min_confidence: float = 0.30, lookback: int = 250, weight: float = 1.0) -> None:
+        self.pivot_period = pivot_period
+        self.allowed_waves = tuple(str(w) for w in allowed_waves)
+        self.min_confidence = min_confidence
+        self.lookback = lookback
+        self.weight = weight
+        self._engine = None
+
+    def evaluate(self, ctx: Context, signal: Signal) -> FilterResult:
+        from app.indicators.pivots import PivotDetector
+        from app.signals.elliott.engine import WaveEngine
+
+        df = ctx.history.to_dataframe()
+        if len(df) < max(30, self.pivot_period * 4):
+            return FilterResult(False, 0.0, "ewt warmup")
+        sub = df.iloc[-self.lookback:]
+        close, high, low = sub["close"], sub["high"], sub["low"]
+        pivots = PivotDetector(period=self.pivot_period, source="hl").detect(close, high, low)
+        if len(pivots) < 4:
+            return FilterResult(False, 0.0, "ewt: too few swings")
+        if self._engine is None:
+            self._engine = WaveEngine()
+        labeling = self._engine.label(
+            pivots, last_price=float(close.iloc[-1]), symbol=ctx.bar.symbol,
+            interval=getattr(ctx, "_exec_interval", "1d"),
+            as_of_index=len(close) - 1, as_of=ctx.bar.timestamp,
+        )
+        cw = labeling.current_wave
+        prim = labeling.primary
+        if cw is None or prim is None:
+            return FilterResult(False, 0.0, "ewt: no count")
+        ewt_dir = "long" if prim.direction == "up" else "short"
+        ok = (
+            cw in self.allowed_waves
+            and ewt_dir == signal.direction
+            and labeling.confidence >= self.min_confidence
+        )
+        return FilterResult(ok, self.weight if ok else 0.0,
+                            f"wave {cw} {prim.direction} conf {labeling.confidence:.2f} ({signal.direction})")
+
+
 _FILTERS = {
     "trend": TrendFilter,
     "reward_risk": MinRewardRiskFilter,
@@ -345,6 +403,7 @@ _FILTERS = {
     "htf_trend": HtfTrendFilter,
     "not_extended": NotExtendedFilter,
     "rel_volume": RelativeVolumeFilter,
+    "ewt_impulse": EwtImpulseFilter,
 }
 
 

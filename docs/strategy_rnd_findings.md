@@ -572,3 +572,42 @@ to use the existing `app/signals/elliott` forward (no-look-ahead) labeler.
 
 **Status:** regime_switch shipped + tested (a legit tool; useful when a customer
 wants lower DD), but NOT our headline strategy. Next: EWT per-name entry gate.
+
+---
+
+## EXP-16 · 2026-06-30 · Elliott Wave gate ("trade the wave") — built, pure, but doesn't help momentum
+
+Built `ewt_impulse` filter: gates entries on the pure, no-look-ahead
+`app.signals.elliott` engine — pass only when the name is in a motive wave
+(default 3 & 5) in the trade direction with confidence ≥ threshold. Per-name +
+structural (the EXP-15-endorsed kind of gate). Runs only on base-signal bars
+(bounded cost ~30s for the basket). 7 tests (mocked decision logic + real-engine
+smoke); purity gate stays green (engine is pure).
+
+A/B on breakout, diversified basket 2022–2025:
+
+| Config | Return | Sharpe | DD | PF | Trades |
+|---|---|---|---|---|---|
+| breakout bare (EXP-14) | +240% | 1.34 | −25% | 1.60 | 416 |
+| breakout + ewt_impulse | +9.8% | 0.22 | **−17.5%** | 1.08 | 117 |
+| + loose (conf 0, waves 1/3/5) | +9.8% | 0.22 | −17.5% | 1.08 | 117 |
+
+**Conclusions:**
+1. **As a GATE on momentum, EWT hurts here.** It keeps ~117/416 breakout signals,
+   and that subset is *worse* per-trade (PF 1.08 vs 1.60) — the wave labeling at a
+   breakout moment isn't adding predictive value; it removes net-winning trades.
+   (Loosening confidence/waves changed nothing → the wave/direction label is the
+   binding constraint, not the threshold.) Only benefit: lower DD (−17.5%).
+2. **This may be the wrong USE of EWT.** Breakout already enters on strength;
+   asking "is this a clean wave 3/5" just sub-samples it. The EWT-native idea is a
+   **signal SOURCE**, not a gate: enter at the START of wave 3 (after wave 2
+   completes), stop = wave-2 invalidation, target = wave-3 fib extension — i.e.
+   enter EARLIER than breakout, on the structure itself. That remains untested.
+3. **Meta-finding across EXP-13/15/16:** on this 2022–25 cross-sector momentum
+   universe, *every* gate (trend confluences, market regime, EWT) trades return
+   for selectivity + lower DD. Bare breakout wins on return; gated variants win on
+   risk-adjusted DD. "Best" depends on the objective.
+
+**Status:** ewt_impulse shipped (pure, tested, in the catalog/UI) — a legit tool
+and the foundation for an EWT source. NOT a momentum improver. Next EWT step: a
+wave-entry SOURCE (trade-the-wave), which uses the engine's invalidation/targets.
