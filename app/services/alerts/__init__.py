@@ -7,9 +7,11 @@ scan tab.
 """
 from __future__ import annotations
 
-from app.services.alerts.schemas import WaveAlert
+from app.services.alerts.schemas import MACrossoverAlert, WaveAlert
 from app.services.alerts.service import build_alert, scan_alerts
 from app.services.alerts.intraday import IntradayWaveScanner, scan_intraday_alerts
+from app.services.alerts.crossover import detect_crossings, scan_ma_crossovers
 
 __all__ = ["WaveAlert", "build_alert", "scan_alerts",
-           "IntradayWaveScanner", "scan_intraday_alerts"]
+           "IntradayWaveScanner", "scan_intraday_alerts",
+           "MACrossoverAlert", "detect_crossings", "scan_ma_crossovers"]
