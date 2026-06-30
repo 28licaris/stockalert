@@ -37,6 +37,25 @@ from app.services.sim.strategy import BaseStrategy
 logger = logging.getLogger(__name__)
 
 
+def build_filtered_source(
+    source: str,
+    source_params: Optional[dict] = None,
+    filters: Optional[list[dict]] = None,
+    *,
+    filter_mode: str = "all",
+    min_score: Optional[float] = None,
+):
+    """Build a SignalSource, wrapping it in the composable A+ filter layer when
+    filters are declared. Shared by AlertStrategy and RegimeSwitchStrategy so the
+    {source, source_params, filters, filter_mode, min_score} contract is built one
+    way everywhere."""
+    base = build_signal_source(source, **(source_params or {}))
+    if filters:
+        built = [build_filter(f["name"], **(f.get("params") or {})) for f in filters]
+        return FilteredSignalSource(base, built, mode=filter_mode, min_score=min_score)
+    return base
+
+
 class AlertStrategyParams(BaseModel):
     source: str = Field("breakout", description="Registered SignalSource name (ma_cross, breakout).")
     source_params: dict = Field(default_factory=dict, description="kwargs for the SignalSource.")
@@ -101,15 +120,10 @@ class AlertStrategy(BaseStrategy):
     ) -> None:
         self.params = params or AlertStrategyParams()
         self.interval = interval
-        base = build_signal_source(self.params.source, **self.params.source_params)
-        # Wrap in the composable A+ filter layer when filters are declared.
-        if self.params.filters:
-            built = [build_filter(f["name"], **(f.get("params") or {})) for f in self.params.filters]
-            self.source = FilteredSignalSource(
-                base, built, mode=self.params.filter_mode, min_score=self.params.min_score,
-            )
-        else:
-            self.source = base
+        self.source = build_filtered_source(
+            self.params.source, self.params.source_params, self.params.filters,
+            filter_mode=self.params.filter_mode, min_score=self.params.min_score,
+        )
         # Active trade plan per symbol (stop/target tracking for open positions).
         self._plans: dict[str, Signal] = {}
 

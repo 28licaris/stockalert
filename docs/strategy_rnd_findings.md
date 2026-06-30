@@ -533,3 +533,42 @@ Real track record still requires a clean train/test split + forward paper-trade 
 
 **Next:** clean OOS (tune on 2022–23, validate untouched 2024–25); regime-switch
 overlay; forward paper-trading.
+
+---
+
+## EXP-15 · 2026-06-30 · regime-switch strategy — and why top-down regime gating HURTS
+
+Built `RegimeSwitchStrategy` (regime_switch): reads benchmark regime (SPY vs its
+regime SMA) per bar and routes entries to an `up` branch (confluence breakout) vs a
+`down` branch (reversal shorts) or CASH. Reuses AlertStrategy sizing/exits; routing
+unit-tested; registered in loader + catalog (live in UI). Walk-forward on the
+34-name cross-sector basket (regime_ma=100):
+
+| Year | rs_cash (down=cash) | rs_short (down=div shorts) | dv_pro (no gate, EXP-14) |
+|---|---|---|---|
+| 2022 | −5.2% (6 trades, in cash) | **−54.3%** (shorts blew up) | −7.0% |
+| 2023 | +38.4%, PF 2.39 | +8.6% | +50.0% |
+| 2024 | +73.2%, Sharpe 1.87 | +56.3% | +82.7% |
+| 2025 | +5.4% | +5.4% | +12.9% |
+| **Full** | **+113%, −20.7% DD** | −32%, −77.6% DD | **+148%, −27% DD** |
+
+**Conclusions (important, and they validate the user's thesis):**
+1. **A top-down SPY regime gate SUBTRACTS value from cross-sector momentum.**
+   rs_cash underperforms dv_pro in every year (+113% vs +148% full) — the gate
+   sits out names that are *individually* moving when SPY is weak (e.g. the 2022
+   energy/commodity breakouts). "We don't care about regime, we want what's
+   moving" is empirically correct: per-name breakout already IS the regime filter,
+   at the name level. The gate's only payoff is a modestly lower DD (−20.7%).
+2. **Shorting the movers is catastrophic** (rs_short −32%/−77% DD; −54% in 2022).
+   Reversal-divergence shorts on a momentum universe lose badly. Don't fight movers.
+3. **The winner remains dv_pro**: confluence-gated breakout, regime-agnostic at the
+   name level. Bottom-up > top-down for this style.
+
+**Implication for the next idea (EWT):** the lesson is that gating should be
+**per-name and structural**, not top-down/market-wide. Elliott Wave is exactly a
+per-name structure gate — "enter on an impulse (wave 3/5), avoid corrections
+(wave 4/B)" — which fits the bottom-up momentum philosophy. That's the right way
+to use the existing `app/signals/elliott` forward (no-look-ahead) labeler.
+
+**Status:** regime_switch shipped + tested (a legit tool; useful when a customer
+wants lower DD), but NOT our headline strategy. Next: EWT per-name entry gate.

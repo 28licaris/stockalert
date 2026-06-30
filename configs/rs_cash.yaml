@@ -1,0 +1,25 @@
+strategy: regime_switch
+strategy_params:
+  regime_ma_period: 100
+  up:
+    source: breakout
+    source_params: { lookback: 20, vol_mult: 1.5, reward_risk_mult: 3.0 }
+    filters:
+      - { name: adx, params: { threshold: 20 } }
+      - { name: htf_trend, params: { weeks: 20 } }
+      - { name: not_extended, params: { period: 20, max_atr: 4 } }
+      - { name: rel_volume, params: { period: 50, mult: 1.2 } }
+    filter_mode: all
+  down: null
+  risk_pct: 0.01
+  max_risk_pct: 0.05
+  min_reward_risk: 0.0
+symbols: [XOM, XLE, USO, UNG, SLV, IAU, PPLT, RIOT, JPM, GS, V, MA, LLY, UNH, MRK, WMT, MCD, NKE, HD, RTX, LMT, NVDA, MU, INTC, QCOM, MRVL, MSFT, GOOGL, META, PLTR, TSLA, SOFI, HOOD, NET]
+benchmark: SPY
+interval: 1d
+starting_cash: 100000
+history_window: 300
+max_concurrent_positions: 8
+max_portfolio_heat: 0.12
+start: 2022-01-01T00:00:00Z
+end: 2025-12-31T23:59:59Z

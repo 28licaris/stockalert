@@ -12,7 +12,7 @@ from typing import Any
 # Names exposed to the catalog/UI. `alert_driven` is the configurable one
 # (pluggable signal source + composable A+ filters); the rest are canaries.
 STRATEGY_NAMES: list[str] = [
-    "alert_driven", "sma_crossover", "ema_crossover",
+    "alert_driven", "regime_switch", "sma_crossover", "ema_crossover",
     "rsi_reversion", "bollinger_mean_revert", "mtf_ema_trend_filtered", "llm_agent",
 ]
 
@@ -21,6 +21,9 @@ def build_strategy(name: str, params: dict[str, Any], interval: str) -> Any:
     if name == "alert_driven":
         from app.services.sim.strategies.alert_strategy import AlertStrategy, AlertStrategyParams
         return AlertStrategy(AlertStrategyParams(**params), interval=interval)
+    if name == "regime_switch":
+        from app.services.sim.strategies.regime_switch import RegimeSwitchParams, RegimeSwitchStrategy
+        return RegimeSwitchStrategy(RegimeSwitchParams(**params), interval=interval)
     if name == "sma_crossover":
         from app.services.sim.strategies.sma_crossover import SmaCrossoverParams, SmaCrossoverStrategy
         return SmaCrossoverStrategy(params=SmaCrossoverParams(**params), interval=interval)
