@@ -1,15 +1,17 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Bell, Loader2, Radio } from "lucide-react";
 import { usePaperStatus, type EquityPoint, type PaperStatus } from "@/api/backtest";
 import { cn } from "@/lib/utils";
 
 /**
- * Paper Trading — the live forward track record. Shows the validated backtest
- * equity (seed) with a LIVE marker at go-live; the forward slice after it is the
- * only sellable record. Backed by /api/v1/paper/status.
+ * Paper Trading — the live forward track record. Replay the locked momentum
+ * strategy forward from any start date with any starting capital (rebased on the
+ * fly); the slice after the locked go-live is the real forward record.
  */
 export function PaperPage() {
-  const q = usePaperStatus();
+  const [capital, setCapital] = useState(100_000);
+  const [startDate, setStartDate] = useState(""); // "" = default to locked go-live
+  const q = usePaperStatus("momentum_top15", startDate || undefined, capital);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-auto p-4 md:p-6">
@@ -19,10 +21,28 @@ export function PaperPage() {
         </p>
         <h1 className="mt-1 font-display text-2xl font-semibold text-fg-base">Paper Trading</h1>
         <p className="mt-1 text-sm text-fg-muted">
-          The locked momentum strategy, run forward against live data. Equity below
-          includes the validated backtest seed; the <strong>forward record</strong> —
-          the only sellable track record — begins at the <span className="text-accent">LIVE</span> marker.
+          The locked momentum strategy, run forward against live data. Set a starting
+          balance and a start date — including a past year — to replay it forward.
         </p>
+        <div className="mt-3 flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">Starting capital $</span>
+            <input type="number" value={capital} step={10000} min={1000}
+              onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n) && n > 0) setCapital(n); }}
+              className="h-8 w-36 rounded border border-border bg-bg-base px-2 text-right font-mono text-[11px] text-fg-base focus:border-accent focus:outline-none" />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">Start date (replay from)</span>
+            <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)}
+              className="h-8 rounded border border-border bg-bg-base px-2 font-mono text-[11px] text-fg-base focus:border-accent focus:outline-none" />
+          </label>
+          {startDate && (
+            <button type="button" onClick={() => setStartDate("")}
+              className="h-8 rounded border border-border px-2 text-[11px] text-fg-muted hover:text-fg-base">
+              reset to go-live
+            </button>
+          )}
+        </div>
       </header>
 
       {q.isLoading && (
@@ -45,26 +65,33 @@ function PaperBody({ s }: { s: PaperStatus }) {
   return (
     <>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Metric label="Forward return" value={pct(s.forward_return)} good={s.forward_return >= 0} big />
-        <Metric label="Days live" value={String(s.days_live)} />
-        <Metric label="Forward trades" value={s.forward_n_trades + (s.forward_win_rate != null ? ` · ${Math.round(s.forward_win_rate * 100)}% win` : "")} />
-        <Metric label="Open positions" value={String(s.n_open_positions)} />
+        <Metric label="Current balance" value={money(s.current_balance)} good={s.current_balance >= s.starting_capital} big />
+        <Metric label="Return" value={pct(s.forward_return)} good={s.forward_return >= 0} big />
+        <Metric label="Started with" value={money(s.starting_capital)} />
+        <Metric label="Trades" value={s.forward_n_trades + (s.forward_win_rate != null ? ` · ${Math.round(s.forward_win_rate * 100)}% win` : "")} />
       </div>
+      <p className="text-xs text-fg-muted">
+        Replaying from <span className="text-fg-base">{s.start_date.slice(0, 10)}</span>
+        {Date.parse(s.start_date) < Date.parse(s.go_live)
+          ? " (before go-live — includes backtest replay)"
+          : " · live forward record"} · {s.days_live} days · {s.n_open_positions} positions open.
+      </p>
 
       <TodaysSignals s={s} />
 
       <div className="surface-panel rounded-lg p-3">
         <div className="mb-2 flex items-center justify-between">
           <span className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
-            Equity — validated seed + live forward
+            Equity curve
           </span>
           <span className="font-mono text-xs text-fg-muted">
-            live since {s.go_live.slice(0, 10)} · ${Math.round(s.current_equity).toLocaleString()}
+            {money(s.starting_capital)} → {money(s.current_balance)}
           </span>
         </div>
         <EquityWithMarker points={s.equity_curve} goLive={s.go_live} />
         <p className="mt-1 text-[10px] text-fg-subtle">
-          Left of the marker = backtest (R&D, not a track record). Right of it = the {s.days_live}-day live forward record.
+          Balance from {money(s.starting_capital)} at {s.start_date.slice(0, 10)}.
+          The <span className="text-accent">dashed marker</span> is the locked go-live — only the segment to its right is the real (no-look-ahead) forward record; anything left of it is backtest replay.
         </p>
       </div>
 
@@ -128,7 +155,11 @@ function EquityWithMarker({ points, goLive }: { points: EquityPoint[]; goLive: s
     const up = points[points.length - 1].equity >= points[0].equity;
     return { line, area, markerX, W, H, up };
   }, [points, goLive]);
-  if (!g) return <div className="py-8 text-center text-xs text-fg-muted">No equity data yet.</div>;
+  if (!g) return (
+    <div className="py-8 text-center text-xs text-fg-muted">
+      No forward history yet — the live record just started. Set an earlier <strong>start date</strong> above to replay the strategy forward from a past date.
+    </div>
+  );
   const color = g.up ? "#22c55e" : "#f43f5e";
   return (
     <svg viewBox={`0 0 ${g.W} ${g.H}`} className="h-56 w-full" preserveAspectRatio="none">
@@ -151,13 +182,15 @@ function Holdings({ positions }: { positions: PaperStatus["open_positions"] }) {
       ) : (
         <table className="w-full text-left font-mono text-[11px]">
           <thead className="text-fg-subtle">
-            <tr><th className="py-1 pr-2">Symbol</th><th className="pr-2 text-right">Qty</th>
-              <th className="pr-2 text-right">Entry</th><th className="text-right">Unreal. P&amp;L</th></tr>
+            <tr><th className="py-1 pr-2">Symbol</th><th className="pr-2">Entered</th>
+              <th className="pr-2 text-right">Qty</th><th className="pr-2 text-right">Entry $</th>
+              <th className="text-right">Unreal. P&amp;L</th></tr>
           </thead>
           <tbody>
             {positions.map((p) => (
               <tr key={p.symbol} className="border-t border-border/50">
                 <td className="py-1 pr-2 text-fg-base">{p.symbol}{p.quantity < 0 ? " (short)" : ""}</td>
+                <td className="pr-2 text-fg-subtle">{p.entry_time.slice(0, 10)}</td>
                 <td className="pr-2 text-right text-fg-muted">{Math.round(p.quantity)}</td>
                 <td className="pr-2 text-right text-fg-muted">${p.avg_entry_price.toFixed(2)}</td>
                 <td className={cn("text-right", p.unrealized_pnl >= 0 ? "text-up" : "text-down")}>
@@ -186,18 +219,20 @@ function ForwardTrades({ trades }: { trades: PaperStatus["forward_trades"] }) {
       ) : (
         <table className="w-full text-left font-mono text-[11px]">
           <thead className="text-fg-subtle">
-            <tr><th className="py-1 pr-2">Symbol</th><th className="pr-2 text-right">P&amp;L</th>
-              <th className="pr-2 text-right">Held</th><th>When</th></tr>
+            <tr><th className="py-1 pr-2">Symbol</th><th className="pr-2">Entered</th>
+              <th className="pr-2">Exited</th><th className="pr-2 text-right">Held</th>
+              <th className="text-right">P&amp;L</th></tr>
           </thead>
           <tbody>
             {closed.map((t, i) => (
               <tr key={i} className="border-t border-border/50">
                 <td className="py-1 pr-2 text-fg-base">{t.symbol}</td>
-                <td className={cn("pr-2 text-right", t.realized_pnl >= 0 ? "text-up" : "text-down")}>
+                <td className="pr-2 text-fg-subtle">{(t.entry_date ?? "").slice(0, 10) || "—"}</td>
+                <td className="pr-2 text-fg-subtle">{(t.exit_date ?? t.timestamp).slice(0, 10)}</td>
+                <td className="pr-2 text-right text-fg-muted">{Math.round(t.holding_days)}d</td>
+                <td className={cn("text-right", t.realized_pnl >= 0 ? "text-up" : "text-down")}>
                   {t.realized_pnl >= 0 ? "+" : ""}{Math.round(t.realized_pnl).toLocaleString()}
                 </td>
-                <td className="pr-2 text-right text-fg-muted">{Math.round(t.holding_days)}d</td>
-                <td className="text-fg-subtle">{t.timestamp.slice(0, 10)}</td>
               </tr>
             ))}
           </tbody>
@@ -221,4 +256,8 @@ function Metric({ label, value, good, big }: { label: string; value: string; goo
 
 function pct(x: number): string {
   return `${x >= 0 ? "+" : ""}${(x * 100).toFixed(2)}%`;
+}
+
+function money(x: number): string {
+  return `$${Math.round(x).toLocaleString()}`;
 }

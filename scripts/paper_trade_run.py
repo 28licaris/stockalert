@@ -42,8 +42,8 @@ def main(argv=None) -> int:
     print(f"\nPAPER  {s.name}   live since {str(s.go_live)[:10]}  (computed through {str(s.computed_through)[:10]})")
     print("  " + "-" * 56)
     print(f"  days live          {s.days_live}")
-    print(f"  equity @ go-live   ${s.equity_at_go_live:,.0f}")
-    print(f"  current equity     ${s.current_equity:,.0f}")
+    print(f"  starting capital   ${s.starting_capital:,.0f}")
+    print(f"  current balance    ${s.current_balance:,.0f}")
     print(f"  FORWARD return     {s.forward_return * 100:+.2f}%")
     print(f"  forward trades     {s.forward_n_trades}"
           + (f"  (win {s.forward_win_rate * 100:.0f}%)" if s.forward_win_rate is not None else ""))

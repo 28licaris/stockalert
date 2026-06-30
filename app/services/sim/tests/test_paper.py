@@ -40,11 +40,19 @@ def _state():
                                        "entry_time": dt.datetime(2026, 6, 20, tzinfo=UTC), "unrealized_pnl": 250.0}])
 
 
-def test_forward_slice_baseline_and_return():
-    s = build_status(_state())
-    assert s.equity_at_go_live == 110_000.0          # last point at/before go-live
-    assert s.current_equity == 121_000.0
-    assert abs(s.forward_return - (121_000 / 110_000 - 1)) < 1e-9
+def test_forward_slice_rebased_to_starting_capital():
+    s = build_status(_state())                       # default capital = cfg 100k, start = go_live
+    assert s.starting_capital == 100_000.0           # forward record starts at configured capital
+    assert abs(s.current_balance - 110_000.0) < 1e-6  # 121k * (100k/110k baseline at go-live)
+    assert abs(s.forward_return - (121_000 / 110_000 - 1)) < 1e-9   # return invariant to rebasing
+
+
+def test_rebase_and_start_override():
+    # Replay from an earlier date with a custom capital; return spans the wider window.
+    s = build_status(_state(), start=dt.datetime(2026, 5, 1, tzinfo=UTC), capital=50_000.0)
+    assert s.starting_capital == 50_000.0
+    assert s.start_date.date() == dt.date(2026, 5, 1)
+    assert abs(s.forward_return - (121_000 / 100_000 - 1)) < 1e-9   # 5/1 baseline=100k → +21%
 
 
 def test_forward_counts_only_post_golive_closed_trades():

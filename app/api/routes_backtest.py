@@ -185,13 +185,17 @@ def backtest_runs(
 
 
 @router.get("/paper/status")
-def paper_status(name: str = Query("momentum_top15", description="Paper run name.")):
-    """Forward paper-trading track record (post-go-live slice of the locked config)."""
+def paper_status(
+    name: str = Query("momentum_top15", description="Paper run name."),
+    start: Optional[datetime] = Query(None, description="Replay start date (default = locked go_live). Set earlier to replay forward from a past date."),
+    capital: Optional[float] = Query(None, gt=0, description="Starting capital to rebase to (default = config). The curve/P&L scale to this."),
+):
+    """Forward paper-trading track record, rebased to `capital` as of `start`."""
     from app.services.sim.paper.service import build_status, load_state
     state = load_state(name)
     if state is None:
         raise HTTPException(status_code=404, detail=f"no paper run named {name!r} (run scripts/paper_trade_run.py)")
-    return build_status(state)
+    return build_status(state, start=start, capital=capital)
 
 
 @router.get("/backtest/runs/{run_id}", response_model=RunSummary)

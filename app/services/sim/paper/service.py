@@ -84,44 +84,87 @@ def run_paper(cfg: PaperRunConfig, now: Optional[datetime] = None) -> PaperState
     return state
 
 
-def build_status(state: PaperState) -> PaperStatus:
-    """Compute the forward (post-go-live) track record from persisted state."""
+def build_status(
+    state: PaperState,
+    start: Optional[datetime] = None,
+    capital: Optional[float] = None,
+) -> PaperStatus:
+    """Forward track record, REBASED to `capital` as of `start` (defaults to the
+    locked go_live / configured cash). Pure slice + scale of the persisted run —
+    lets the UI replay the strategy forward from any past date at any starting
+    capital instantly (no re-run). $ amounts (equity, P&L, position size) scale by
+    the rebase factor; prices and dates are untouched."""
+    from datetime import timedelta
+
     cfg = state.config
-    go = cfg.go_live
+    start_date = start or cfg.go_live
+    if start_date.tzinfo is None:  # date-only query params arrive naive; curve ts are tz-aware
+        start_date = start_date.replace(tzinfo=timezone.utc)
+    starting_capital = capital if capital is not None else cfg.starting_cash
     curve = state.equity_curve
-    # Baseline equity = last point at/before go_live (or first point if go_live precedes data).
-    baseline = cfg.starting_cash
+
+    # Baseline equity at start_date (last point at/before it; else first point).
+    baseline = None
     for t, e in curve:
-        if t <= go:
+        if t <= start_date:
             baseline = e
         else:
             break
-    current = curve[-1][1] if curve else cfg.starting_cash
-    fwd_trades = [t for t in state.trades if _ts(t["timestamp"]) >= go]
+    if baseline is None:
+        baseline = curve[0][1] if curve else cfg.starting_cash
+    rebase = (starting_capital / baseline) if baseline else 1.0
+
+    fwd_curve = [(t, e * rebase) for t, e in curve if t >= start_date]
+    if not fwd_curve and curve:
+        fwd_curve = [(curve[-1][0], curve[-1][1] * rebase)]
+    current = fwd_curve[-1][1] if fwd_curve else starting_capital
+
+    def _mk_trade(t: dict) -> PaperTradeView:
+        ts = _ts(t["timestamp"])
+        hold = float(t.get("holding_days", 0.0) or 0.0)
+        closing = bool(t.get("is_closing"))
+        return PaperTradeView(
+            symbol=t["symbol"], side=t["side"], quantity=t["quantity"] * rebase,
+            price=t["price"], timestamp=ts,
+            realized_pnl=float(t.get("realized_pnl", 0.0)) * rebase,
+            holding_days=hold, is_closing=closing,
+            exit_date=ts if closing else None,
+            entry_date=(ts - timedelta(days=hold)) if closing else ts,
+        )
+
+    def _mk_pos(p: dict) -> PaperPositionView:
+        return PaperPositionView(
+            symbol=p["symbol"], quantity=p["quantity"] * rebase,
+            avg_entry_price=p["avg_entry_price"], entry_time=_ts(p["entry_time"]),
+            unrealized_pnl=p.get("unrealized_pnl", 0.0) * rebase,
+        )
+
+    fwd_trades = [t for t in state.trades if _ts(t["timestamp"]) >= start_date]
     fwd_closed = [t for t in fwd_trades if t.get("is_closing")]
     wins = [t for t in fwd_closed if t.get("realized_pnl", 0.0) > 0]
     win_rate = (len(wins) / len(fwd_closed)) if fwd_closed else None
-    days_live = max(0, ((state.computed_through or go) - go).days)
+    days_live = max(0, ((state.computed_through or start_date) - start_date).days)
+
     # "Today" = the latest computed bar date — the alertable activity for this run.
     through = state.computed_through
     today_entries, today_exits = [], []
     if through is not None:
         d = through.date()
-        today_entries = [PaperPositionView(**p) for p in state.open_positions
+        today_entries = [_mk_pos(p) for p in state.open_positions
                          if _ts(p["entry_time"]).date() == d]
-        today_exits = [PaperTradeView(**t) for t in state.trades
+        today_exits = [_mk_trade(t) for t in state.trades
                        if t.get("is_closing") and _ts(t["timestamp"]).date() == d]
+
     return PaperStatus(
-        name=cfg.name, go_live=go, last_run_at=state.last_run_at,
-        computed_through=state.computed_through, days_live=days_live,
-        equity_at_go_live=baseline, current_equity=current,
-        forward_return=(current / baseline - 1.0) if baseline else 0.0,
-        forward_n_trades=len(fwd_closed),
-        forward_win_rate=win_rate,
+        name=cfg.name, go_live=cfg.go_live, start_date=start_date,
+        last_run_at=state.last_run_at, computed_through=state.computed_through,
+        days_live=days_live, starting_capital=starting_capital, current_balance=current,
+        forward_return=(current / starting_capital - 1.0) if starting_capital else 0.0,
+        forward_n_trades=len(fwd_closed), forward_win_rate=win_rate,
         n_open_positions=len(state.open_positions),
-        open_positions=[PaperPositionView(**p) for p in state.open_positions],
-        forward_trades=[PaperTradeView(**t) for t in fwd_trades[-50:]],
-        equity_curve=[PaperEquityPoint(t=t, equity=e) for t, e in curve],
+        open_positions=[_mk_pos(p) for p in state.open_positions],
+        forward_trades=[_mk_trade(t) for t in fwd_trades[-100:]],
+        equity_curve=[PaperEquityPoint(t=t, equity=e) for t, e in fwd_curve],
         today_entries=today_entries, today_exits=today_exits,
     )
 

@@ -49,6 +49,8 @@ class PaperTradeView(BaseModel):
     realized_pnl: float = 0.0
     holding_days: float = 0.0
     is_closing: bool = False
+    entry_date: Optional[datetime] = None   # when the position was opened
+    exit_date: Optional[datetime] = None    # when it was closed (None if still open)
 
 
 class PaperEquityPoint(BaseModel):
@@ -67,14 +69,22 @@ class PaperState(BaseModel):
 
 
 class PaperStatus(BaseModel):
-    """The forward track record served to the dashboard."""
+    """The forward track record served to the dashboard.
+
+    The equity curve / trades / balances are REBASED to `starting_capital` as of
+    `start_date` (a pure scale of the persisted run — risk-% sizing is ~scale-
+    invariant, so this projects the same strategy at a chosen capital instantly,
+    without re-running). `start_date` defaults to go_live but can be set earlier to
+    replay the strategy forward from a past date.
+    """
     name: str
     go_live: datetime
+    start_date: datetime              # effective replay start (override or go_live)
     last_run_at: Optional[datetime]
     computed_through: Optional[datetime]
     days_live: int
-    equity_at_go_live: float
-    current_equity: float
+    starting_capital: float           # capital at start_date (rebased)
+    current_balance: float            # latest equity (rebased)
     forward_return: float
     forward_n_trades: int
     forward_win_rate: Optional[float]

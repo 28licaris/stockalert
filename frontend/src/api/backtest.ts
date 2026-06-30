@@ -137,16 +137,19 @@ export interface PaperTradeView {
   realized_pnl: number;
   holding_days: number;
   is_closing: boolean;
+  entry_date: string | null;
+  exit_date: string | null;
 }
 
 export interface PaperStatus {
   name: string;
   go_live: string;
+  start_date: string;
   last_run_at: string | null;
   computed_through: string | null;
   days_live: number;
-  equity_at_go_live: number;
-  current_equity: number;
+  starting_capital: number;
+  current_balance: number;
   forward_return: number;
   forward_n_trades: number;
   forward_win_rate: number | null;
@@ -158,11 +161,14 @@ export interface PaperStatus {
   today_exits: PaperTradeView[];
 }
 
-export function usePaperStatus(name = "momentum_top15") {
+export function usePaperStatus(name = "momentum_top15", start?: string, capital?: number) {
+  const params = new URLSearchParams({ name });
+  if (start) params.set("start", start);
+  if (capital) params.set("capital", String(capital));
   return useQuery({
-    queryKey: ["paper", "status", name],
-    queryFn: () => getJSON<PaperStatus>(`/api/v1/paper/status?name=${encodeURIComponent(name)}`),
-    staleTime: 60_000,
+    queryKey: ["paper", "status", name, start ?? "", capital ?? ""],
+    queryFn: () => getJSON<PaperStatus>(`/api/v1/paper/status?${params.toString()}`),
+    staleTime: 30_000,
     retry: false,
   });
 }
