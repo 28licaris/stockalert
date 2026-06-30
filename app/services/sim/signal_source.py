@@ -163,6 +163,9 @@ class BreakoutSignalSource(BaseSignalSource):
         vol_avg_period: int = 20,
         reward_risk_mult: float = 2.0,
         min_risk_pct: float = 0.005,
+        trend_filter: bool = False,
+        trend_ma: str = "sma",
+        trend_period: int = 50,
     ) -> None:
         if lookback < 2:
             raise ValueError(f"lookback must be >= 2, got {lookback}")
@@ -171,11 +174,24 @@ class BreakoutSignalSource(BaseSignalSource):
         self.vol_avg_period = vol_avg_period
         self.reward_risk_mult = reward_risk_mult
         self.min_risk_pct = min_risk_pct
+        # Confluence: only take breakouts while price is above a trend MA. The
+        # first composable A+ filter (M2 generalizes filters into their own layer).
+        self.trend_filter = trend_filter
+        self.trend_ma = trend_ma
+        self.trend_period = trend_period
 
     def on_bar(self, ctx: Context) -> Optional[Signal]:
         need = max(self.lookback, self.vol_avg_period) + 1
+        if self.trend_filter:
+            need = max(need, self.trend_period + 1)
         if len(ctx.history) < need:
             return None
+        if self.trend_filter:
+            trend = ctx.indicator(self.trend_ma, period=self.trend_period)
+            trend_now = float(trend.iloc[-1]) if len(trend) else float("nan")
+            # Skip breakouts that aren't confirmed by an uptrend (NaN warmup skips too).
+            if trend_now != trend_now or float(ctx.bar.close) <= trend_now:
+                return None
         df = ctx.history.to_dataframe()
         closes = df["close"]
         highs = df["high"] if "high" in df else closes
