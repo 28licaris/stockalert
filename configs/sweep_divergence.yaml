@@ -1,0 +1,13 @@
+strategy: alert_driven
+strategy_params:
+  source: divergence
+  source_params: { indicator: rsi, ind_period: 14, lookback: 60, pivot_k: 3, kind: both, reward_risk_mult: 2.0 }
+  risk_pct: 0.01
+  min_reward_risk: 1.0
+symbols: [AAPL, MSFT, NVDA, AMD, TSLA, META, AMZN, GOOGL, AVGO, NFLX, SPY, QQQ]
+interval: 1d
+starting_cash: 40000
+history_window: 250
+windows:
+  - { label: "2022-2023", start: 2022-01-01T00:00:00Z, end: 2023-12-31T23:59:59Z }
+  - { label: "2024-2025", start: 2024-01-01T00:00:00Z, end: 2025-12-31T23:59:59Z }

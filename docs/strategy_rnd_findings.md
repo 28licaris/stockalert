@@ -134,3 +134,34 @@ source-baked flags.
 relative strength vs SPY (needs cross-symbol data), a market-regime gate
 (SPY uptrend), and `mode="score"` partial-confluence ranking; plus the EW
 signal source for a head-to-head.
+
+---
+
+## EXP-5 · 2026-06-30 · divergence as a standalone signal
+
+New `divergence` SignalSource (wraps the existing pure RSI-divergence detectors
+in `app/signals/divergence.py`: regular + hidden bullish → long). Same sweep.
+
+| Window | Mean | Median | % profitable | Avg win | Trades | Worst DD |
+|---|---|---|---|---|---|---|
+| 2022–2023 | +0.2% | +1.1% | 58% | 46.5% | 87 | −7.7% |
+| 2024–2025 | +2.2% | +2.3% | 73% | 60.0% | 72 | −4.1% |
+
+vs breakout (EXP-2): higher win-rate (46/60% vs 37/53%), **fewer trades**
+(87/72 vs 127/141), lower mean return.
+
+**Conclusions:**
+1. Divergence is a **more selective, higher-win-rate, lower-frequency** signal
+   with a weak positive edge — directionally profitable in both windows
+   (median > 0, 58/73% of names green), but it leaves more on the table than
+   breakout in absolute terms.
+2. The high win-rate + low frequency profile suggests its best use is **as a
+   confluence filter** (only take entries that *also* have divergence support)
+   rather than standalone — a `DivergenceFilter` to test next.
+3. Caveat: the reused detector applies a global trend filter via
+   `settings.use_trend_filter`; for clean per-strategy control this should be
+   parameterized (it currently rides the app default).
+
+**Does it help?** Yes as a quality signal (win-rate), modestly as a return
+driver alone. Highest expected value: combine it with breakout via the M2
+filter layer.

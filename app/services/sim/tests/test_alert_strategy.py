@@ -213,3 +213,14 @@ def test_build_unknown_source_raises() -> None:
     from app.services.sim.signal_source import build_signal_source
     with pytest.raises(ValueError, match="Unknown signal source"):
         build_signal_source("does_not_exist")
+
+
+def test_divergence_source_registered_and_warmup_safe() -> None:
+    from app.services.sim.signal_source import build_signal_source, list_signal_sources
+    assert "divergence" in list_signal_sources()
+    src = build_signal_source("divergence", lookback=60, pivot_k=3)
+    ctx = Context(config=_cfg())
+    # Far fewer bars than the source needs → must return None, never raise.
+    for i in range(10):
+        ctx.advance(_bar(i, 100.0 + i), _flat())
+        assert src.on_bar(ctx) is None

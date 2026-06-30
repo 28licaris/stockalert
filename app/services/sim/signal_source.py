@@ -225,9 +225,91 @@ class BreakoutSignalSource(BaseSignalSource):
 # Registry — name → factory. New sources register here.
 # ─────────────────────────────────────────────────────────────────────
 
+class DivergenceSignalSource(BaseSignalSource):
+    """
+    Long setup on bullish RSI divergence — reuses the existing pure detectors
+    in `app/signals/divergence.py`:
+      - regular bullish (price lower-low, RSI higher-low) → reversal up
+      - hidden bullish  (price higher-low, RSI lower-low)  → trend continuation
+
+    No-look-ahead: pivots require `pivot_k` bars on each side, so the latest
+    usable pivot lags by k bars — at the current bar we only act on a divergence
+    whose second pivot is already confirmed. Debounced on the pivot timestamp so
+    one divergence fires once. Stop = below the divergence's pivot low.
+    """
+
+    name = "divergence"
+
+    def __init__(
+        self,
+        *,
+        indicator: str = "rsi",
+        ind_period: int = 14,
+        lookback: int = 60,
+        pivot_k: int = 3,
+        kind: str = "both",           # "regular" | "hidden" | "both"
+        reward_risk_mult: float = 2.0,
+        stop_buffer_pct: float = 0.01,
+    ) -> None:
+        if kind not in ("regular", "hidden", "both"):
+            raise ValueError(f"kind must be regular|hidden|both, got {kind!r}")
+        self.indicator = indicator
+        self.ind_period = ind_period
+        self.lookback = lookback
+        self.pivot_k = pivot_k
+        self.kind = kind
+        self.reward_risk_mult = reward_risk_mult
+        self.stop_buffer_pct = stop_buffer_pct
+        self._last_p2 = None
+
+    def setup(self, ctx: Context) -> None:
+        self._last_p2 = None
+
+    def on_bar(self, ctx: Context) -> Optional[Signal]:
+        need = self.lookback + self.pivot_k + self.ind_period + 5
+        if len(ctx.history) < need:
+            return None
+        # Lazy import: keeps this module free of the divergence/config deps until used.
+        from app.signals.divergence import detect_hidden_bullish, detect_regular_bullish
+
+        close = ctx.history.to_dataframe()["close"]
+        ind = ctx.indicator(self.indicator, period=self.ind_period)
+        if not close.index.equals(ind.index):
+            ind = ind.reindex(close.index)
+
+        div = label = None
+        if self.kind in ("regular", "both"):
+            div = detect_regular_bullish(close, ind, self.lookback, self.pivot_k)
+            label = "regular_bullish"
+        if div is None and self.kind in ("hidden", "both"):
+            div = detect_hidden_bullish(close, ind, self.lookback, self.pivot_k)
+            label = "hidden_bullish"
+        if div is None:
+            return None
+
+        p2 = div["p2_ts"]
+        if p2 == self._last_p2:        # already acted on this divergence
+            return None
+        self._last_p2 = p2
+
+        entry = float(ctx.bar.close)
+        pivot_low = float(div["price"])
+        stop = min(pivot_low, entry) * (1.0 - self.stop_buffer_pct)
+        if stop >= entry or entry <= 0:
+            return None
+        target = entry + self.reward_risk_mult * (entry - stop)
+        return Signal(
+            symbol=ctx.bar.symbol, direction="long",
+            entry=entry, stop=stop, target_1=target,
+            confidence=0.5, kind=f"divergence_{label}",
+            rationale=f"{label} divergence on {self.indicator}{self.ind_period}",
+        )
+
+
 _SOURCES = {
     "ma_cross": MACrossSignalSource,
     "breakout": BreakoutSignalSource,
+    "divergence": DivergenceSignalSource,
 }
 
 
