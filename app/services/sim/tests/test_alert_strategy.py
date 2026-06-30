@@ -224,3 +224,16 @@ def test_divergence_source_registered_and_warmup_safe() -> None:
     for i in range(10):
         ctx.advance(_bar(i, 100.0 + i), _flat())
         assert src.on_bar(ctx) is None
+
+
+def test_time_stop_exits_after_max_holding_days() -> None:
+    strat = AlertStrategy(AlertStrategyParams(max_holding_days=5))
+    ctx = Context(config=_cfg())
+    strat.setup(ctx)
+    strat._plans["TEST"] = Signal("TEST", "long", entry=100.0, stop=90.0, target_1=130.0, kind="stub")
+    # 7 days held, neither stop (90) nor target (130) touched → time stop fires.
+    bar = _Bar("TEST", T0 + dt.timedelta(days=7), open=101.0, high=102.0, low=99.0, close=101.0)
+    pos = Position(symbol="TEST", quantity=50, avg_entry_price=100.0, entry_time=T0)
+    ctx.advance(bar, PortfolioSnapshot(cash=0.0, equity=5050.0, positions={"TEST": pos}, n_trades=1))
+    action = strat.on_bar(ctx)
+    assert action.kind == "sell" and "time stop" in action.note

@@ -289,3 +289,42 @@ Re-ran the divergence OOS optimizing `mean_trade_pnl` with higher R:R
 Bollinger squeeze, VWAP) so score-mode confluence can build genuine
 high-conviction A+ setups; walk-forward across a bear regime; then M3
 paper-trading of this validated divergence+trend config.
+
+---
+
+## EXP-9 · 2026-06-30 · hold-period tradeoff (time-stop) + capital note
+
+Capital: backtests use **$40,000** starting cash, **1% risk/trade** (~$400),
+per-symbol single-position. The per-symbol *total* returns (~1–3% over 2y) are
+throttled by that sizing + low frequency — judge by **$/trade**, win-rate, and
+% profitable, not the 2-year total.
+
+Added a **time stop** (`max_holding_days`: exit at market after N days). Swept it
+at fixed rr=2.0 + trend filter:
+
+| max_holding | $/trade (dev) | trades |
+|---|---|---|
+| 10d | 89 | 137 |
+| 20d | 107 | 130 |
+| 40d | 130 | 118 |
+| 60d | 159 | 111 |
+
+**Conclusions:**
+1. **No free lunch:** tighter time stops cut $/trade (you exit winners early) and
+   raise trade count. Longer caps = bigger per-trade P&L, fewer trades.
+2. The **R:R lever shortens holds more naturally than the time stop.** At rr=2 the
+   *average* hold is already ~21 days (vs ~47 at rr=5), because most trades hit
+   stop/target well before any cap — so the 60d cap rarely binds.
+3. This yields **two OOS-validated profiles** to choose between (divergence +
+   trend, holdout 2024–25):
+
+   | Profile | rr | avg hold | $/trade | win | % profitable | worstDD |
+   |---|---|---|---|---|---|---|
+   | **Conviction** | 5 | ~47d | $275 | 34% | 67% | −5.3% |
+   | **Swing** | 2 | ~21d | $119 | 48% | 83% | −4.3% |
+
+   Conviction = bigger wins, longer holds, lower win-rate. Swing = shorter holds,
+   higher win-rate + consistency, smaller per-trade P&L. Both generalize OOS.
+
+**Next:** independent pro signals (MACD/ADX/squeeze) for confluence; a bear-regime
+walk-forward; then M3 paper-trading of whichever profile we pick.

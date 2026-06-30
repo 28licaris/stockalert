@@ -1,0 +1,21 @@
+strategy: alert_driven
+base: { source: divergence, risk_pct: 0.01, min_reward_risk: 0.0 }
+grid:
+  source_params:
+    lookback: [60]
+    pivot_k: [3]
+    reward_risk_mult: [2.0]
+    kind: [both]
+  base_params:
+    max_holding_days: [10, 20, 40, 60]
+  filter_sets:
+    - [{ name: trend, params: { period: 50 } }]
+symbols: [AAPL, MSFT, NVDA, AMD, TSLA, META, AMZN, GOOGL, AVGO, NFLX, SPY, QQQ]
+benchmark: SPY
+interval: 1d
+starting_cash: 40000
+history_window: 250
+dev:     { start: 2022-01-01T00:00:00Z, end: 2023-12-31T23:59:59Z }
+holdout: { start: 2024-01-01T00:00:00Z, end: 2025-12-31T23:59:59Z }
+objective: mean_trade_pnl
+min_trades: 15

@@ -64,16 +64,19 @@ def _basket_agg(
 
 
 def _grid_combos(grid: dict[str, Any]) -> list[dict[str, Any]]:
-    """Cartesian product of source_params lists × filter_sets options."""
+    """Cartesian product of source_params × base_params × filter_sets."""
     sp = grid.get("source_params", {})
-    keys = list(sp.keys())
-    value_lists = [sp[k] for k in keys]
+    sp_keys = list(sp.keys())
+    bp = grid.get("base_params", {})           # top-level params (e.g. max_holding_days)
+    bp_keys = list(bp.keys())
     filter_sets = grid.get("filter_sets", [[]])
     combos = []
-    for values in itertools.product(*value_lists) if keys else [()]:
-        source_params = dict(zip(keys, values))
-        for fset in filter_sets:
-            combos.append({"source_params": source_params, "filters": fset})
+    for sp_vals in (itertools.product(*[sp[k] for k in sp_keys]) if sp_keys else [()]):
+        source_params = dict(zip(sp_keys, sp_vals))
+        for bp_vals in (itertools.product(*[bp[k] for k in bp_keys]) if bp_keys else [()]):
+            base_over = dict(zip(bp_keys, bp_vals))
+            for fset in filter_sets:
+                combos.append({"source_params": source_params, "base": base_over, "filters": fset})
     return combos
 
 
@@ -103,12 +106,14 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     results = []
     for i, combo in enumerate(combos):
-        params = {**base, "source_params": combo["source_params"], "filters": combo["filters"]}
+        params = {**base, **combo.get("base", {}),
+                  "source_params": combo["source_params"], "filters": combo["filters"]}
         agg = _basket_agg(strategy, params, symbols, dev, interval, cash, hw, benchmark)
         score = agg.get(objective, 0.0)
         ok = agg["total_trades"] >= min_trades
         fdesc = ",".join(f["name"] for f in combo["filters"]) or "none"
-        print(f"  [{i+1:>2}/{len(combos)}] {combo['source_params']} filters=[{fdesc}]  "
+        bdesc = f" {combo['base']}" if combo.get("base") else ""
+        print(f"  [{i+1:>2}/{len(combos)}] {combo['source_params']}{bdesc} filters=[{fdesc}]  "
               f"dev {objective}={_pct(score) if 'return' in objective or 'rate' in objective or 'profitable' in objective else f'{score:.2f}'}  "
               f"trades={agg['total_trades']}{'' if ok else '  (skip<min)'}")
         if ok:
@@ -126,7 +131,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     hold = _basket_agg(strategy, best_params, symbols, holdout, interval, cash, hw, benchmark)
 
     print("\n" + "=" * 64)
-    print(f"  BEST ON DEV: {best_combo['source_params']}  filters=[{fdesc}]")
+    bdesc = f"  {best_combo['base']}" if best_combo.get("base") else ""
+    print(f"  BEST ON DEV: {best_combo['source_params']}{bdesc}  filters=[{fdesc}]")
     print("  " + "-" * 60)
     print(f"  {'':18}{'DEV (optimized)':>16}{'HOLDOUT (honest)':>18}")
     for k in ("mean_return", "median_return", "pct_profitable", "mean_win_rate"):

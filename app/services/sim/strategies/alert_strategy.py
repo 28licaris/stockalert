@@ -68,6 +68,14 @@ class AlertStrategyParams(BaseModel):
     min_confidence: float = Field(
         0.0, ge=0.0, le=1.0, description="Skip signals below this source confidence.",
     )
+    max_holding_days: Optional[float] = Field(
+        None,
+        description=(
+            "Time stop: exit at market once a position has been held this many "
+            "calendar days, even if neither stop nor target hit. None = no time "
+            "stop (hold until stop/target). Caps capital tied up per trade."
+        ),
+    )
 
 
 class AlertStrategy(BaseStrategy):
@@ -127,6 +135,16 @@ class AlertStrategy(BaseStrategy):
             ctx.log(event="exit_target", target=plan.target_1, high=bar.high)
             return Action(kind="sell", symbol=symbol, size=qty,
                           note=f"target hit @ {plan.target_1:.4f} ({plan.kind})")
+        # Time stop — cap how long capital stays tied up.
+        if self.params.max_holding_days is not None:
+            pos = ctx.portfolio.positions.get(symbol)
+            if pos is not None:
+                held = (bar.timestamp - pos.entry_time).total_seconds() / 86_400.0
+                if held >= self.params.max_holding_days:
+                    self._plans.pop(symbol, None)
+                    ctx.log(event="exit_time", held_days=round(held, 1))
+                    return Action(kind="sell", symbol=symbol, size=qty,
+                                  note=f"time stop @ {held:.0f}d ({plan.kind})")
         return hold()
 
     # ── entries ────────────────────────────────────────────────────────
