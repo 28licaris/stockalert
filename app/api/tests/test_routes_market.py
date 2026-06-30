@@ -79,38 +79,35 @@ def test_market_banner_returns_rows(app_client) -> None:
 
 
 def test_market_banner_no_get_quotes(app_client) -> None:
-    """Provider lacking `get_quotes` -> 200 with an error message."""
+    """A non-CH symbol + a provider lacking `get_quotes` -> 200 with an error.
+
+    Uses a bogus symbol so the CH-primary path can't resolve it (regardless
+    of what the local CH holds) and it must fall to the provider, which here
+    has no `get_quotes` — so the symbol surfaces as an explicit error.
+    """
     _override(app_client, object())  # bare object has no get_quotes
     try:
-        r = app_client.get("/api/market/banner?symbols=SPY")
+        r = app_client.get("/api/market/banner?symbols=ZZZZ")
         assert r.status_code == 200
         assert r.json()["errors"]
     finally:
         _clear_override()
 
 
-def test_market_banner_empty_provider_payload(app_client) -> None:
-    """Provider returns {} -> 200 with the ClickHouse last-bar fallback.
-
-    When live quotes come back empty the banner falls back to CH last
-    bars (provider='clickhouse-fallback') so the tape still shows
-    last-known prices. `items` content depends on what CH holds; assert
-    the fallback contract instead of an empty list.
-    """
+def test_market_banner_unresolved_symbol_surfaces_error(app_client) -> None:
+    """A symbol neither CH nor the provider can resolve must surface as an
+    error, never be silently dropped (CH-primary, empty provider payload)."""
     class P:
         async def get_quotes(self, symbols: list[str]) -> dict:
             return {}
 
     _override(app_client, P())
     try:
-        r = app_client.get("/api/market/banner?symbols=SPY")
+        r = app_client.get("/api/market/banner?symbols=ZZZZ")
         assert r.status_code == 200
         body = r.json()
-        assert body["provider"] == "clickhouse-fallback"
-        assert any(
-            "unavailable" in (e.get("message") or "").lower()
-            for e in body["errors"]
-        )
+        assert all(it["symbol"] != "ZZZZ" for it in body["items"])
+        assert any(e.get("symbol") == "ZZZZ" for e in body["errors"])
     finally:
         _clear_override()
 

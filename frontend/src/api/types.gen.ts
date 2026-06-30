@@ -925,6 +925,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/options/contracts/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Latest Option Contracts */
+        get: operations["get_latest_option_contracts_api_v1_options_contracts_latest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/options/gex/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Latest Option Gamma Exposure */
+        get: operations["get_latest_option_gamma_exposure_api_v1_options_gex_latest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/options/contracts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Option Contracts */
+        get: operations["get_option_contracts_api_v1_options_contracts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/options/gex": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Option Gamma Exposure */
+        get: operations["get_option_gamma_exposure_api_v1_options_gex_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/monitors": {
         parameters: {
             query?: never;
@@ -2833,6 +2901,93 @@ export interface components {
             /** Reason */
             reason: string;
         };
+        /**
+         * GammaExposureResponse
+         * @description Response wrapper for derived gamma exposure snapshots.
+         */
+        GammaExposureResponse: {
+            /** Underlying Symbol */
+            underlying_symbol: string;
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+            /**
+             * End
+             * Format: date-time
+             */
+            end: string;
+            /** Aggregation Level */
+            aggregation_level?: ("total" | "strike" | "expiry" | "strike_expiry") | null;
+            /** Snapshot Id */
+            snapshot_id?: string | null;
+            /** Rows */
+            rows?: components["schemas"]["GammaExposureSnapshot"][];
+            /**
+             * Count
+             * @description Number of gamma exposure rows returned.
+             */
+            count: number;
+        };
+        /**
+         * GammaExposureSnapshot
+         * @description Derived gamma exposure row computed from canonical option snapshots.
+         */
+        GammaExposureSnapshot: {
+            /** Underlying Symbol */
+            underlying_symbol: string;
+            /**
+             * Snapshot Ts
+             * Format: date-time
+             */
+            snapshot_ts: string;
+            /** Expiration Date */
+            expiration_date?: string | null;
+            /** Strike */
+            strike?: number | null;
+            /** Put Call */
+            put_call?: ("CALL" | "PUT") | null;
+            /** Underlying Price */
+            underlying_price: number;
+            /** Gamma Exposure */
+            gamma_exposure: number;
+            /** Call Gamma Exposure */
+            call_gamma_exposure?: number | null;
+            /** Put Gamma Exposure */
+            put_gamma_exposure?: number | null;
+            /** Net Gamma Exposure */
+            net_gamma_exposure?: number | null;
+            /** Open Interest */
+            open_interest?: number | null;
+            /** Volume */
+            volume?: number | null;
+            /** Contract Count */
+            contract_count?: number | null;
+            /**
+             * Aggregation Level
+             * @enum {string}
+             */
+            aggregation_level: "total" | "strike" | "expiry" | "strike_expiry";
+            /** Level Key */
+            level_key: string;
+            /**
+             * Methodology
+             * @default stockalert-schwab-gex-v1
+             */
+            methodology: string;
+            /**
+             * Source
+             * @default stockalert-schwab-gex
+             */
+            source: string;
+            /** Source Snapshot Id */
+            source_snapshot_id?: string | null;
+            /** Ingestion Ts */
+            ingestion_ts?: string | null;
+            /** Ingestion Run Id */
+            ingestion_run_id?: string | null;
+        };
         /** GapFillRequest */
         GapFillRequest: {
             /** Symbols */
@@ -2972,6 +3127,11 @@ export interface components {
              * @description len(values). Echoed for cheap client-side checks.
              */
             count: number;
+            /**
+             * Source Agg
+             * @description Bar aggregation the indicator was COMPUTED over, when it differs from the chart's display interval (e.g. a 200-day SMA drawn on a 5m chart has source_agg='1d'). None means the indicator was computed on the display interval — the common case. Carries the cross-timeframe semantics so 'price crossed the 200 SMA' is unambiguous; alerts echo this in their payload.
+             */
+            source_agg?: string | null;
         };
         /**
          * IndicatorSpecRequest
@@ -2995,6 +3155,16 @@ export interface components {
              * @description Display label. Defaults to a sensible 'SMA(20)' form when omitted.
              */
             label?: string | null;
+            /**
+             * Source Agg
+             * @description Bar-locked cross-timeframe: aggregation the indicator is computed over, independent of the chart interval. E.g. source_agg='1d' with params={period:200} draws a true 200-day SMA on any chart. Must be coarser-or-equal to the display interval. Omit for an ordinary same-interval indicator.
+             */
+            source_agg?: string | null;
+            /**
+             * Window Days
+             * @description Window-locked cross-timeframe: a calendar window in trading days. Pins source_agg='1d' and period=window_days so the value stays constant across display zoom. Mutually exclusive with source_agg/params.period (window_days wins).
+             */
+            window_days?: number | null;
         };
         /**
          * IndicatorValue
@@ -3313,6 +3483,48 @@ export interface components {
              * @description Number of distinct symbols.
              */
             count: number;
+        };
+        /**
+         * LatestGammaExposureResponse
+         * @description Latest hot-tier gamma exposure rows for one underlying.
+         */
+        LatestGammaExposureResponse: {
+            /** Underlying Symbol */
+            underlying_symbol: string;
+            /** Aggregation Level */
+            aggregation_level?: ("total" | "strike" | "expiry" | "strike_expiry") | null;
+            /** Rows */
+            rows?: components["schemas"]["GammaExposureSnapshot"][];
+            /**
+             * Count
+             * @description Number of gamma exposure rows returned.
+             */
+            count: number;
+            /**
+             * Source
+             * @default clickhouse
+             */
+            source: string;
+        };
+        /**
+         * LatestOptionContractsResponse
+         * @description Latest hot-tier option contracts for one underlying.
+         */
+        LatestOptionContractsResponse: {
+            /** Underlying Symbol */
+            underlying_symbol: string;
+            /** Contracts */
+            contracts?: components["schemas"]["OptionContractSnapshot"][];
+            /**
+             * Count
+             * @description Number of contracts returned.
+             */
+            count: number;
+            /**
+             * Source
+             * @default clickhouse
+             */
+            source: string;
         };
         /**
          * LegacyWatchlistMutationResponse
@@ -3680,6 +3892,127 @@ export interface components {
              * @default
              */
             note: string;
+        };
+        /**
+         * OptionContractSnapshot
+         * @description One canonical option contract at one chain snapshot timestamp.
+         */
+        OptionContractSnapshot: {
+            /** Underlying Symbol */
+            underlying_symbol: string;
+            /** Option Symbol */
+            option_symbol: string;
+            /**
+             * Snapshot Ts
+             * Format: date-time
+             */
+            snapshot_ts: string;
+            /**
+             * Put Call
+             * @enum {string}
+             */
+            put_call: "CALL" | "PUT";
+            /**
+             * Expiration Date
+             * Format: date
+             */
+            expiration_date: string;
+            /** Strike */
+            strike: number;
+            /** Underlying Price */
+            underlying_price?: number | null;
+            /** Days To Expiration */
+            days_to_expiration?: number | null;
+            /** Bid */
+            bid?: number | null;
+            /** Ask */
+            ask?: number | null;
+            /** Last */
+            last?: number | null;
+            /** Mark */
+            mark?: number | null;
+            /** Bid Size */
+            bid_size?: number | null;
+            /** Ask Size */
+            ask_size?: number | null;
+            /** Last Size */
+            last_size?: number | null;
+            /** Volume */
+            volume?: number | null;
+            /** Open Interest */
+            open_interest?: number | null;
+            /** Quote Time */
+            quote_time?: string | null;
+            /** Trade Time */
+            trade_time?: string | null;
+            /** Delta */
+            delta?: number | null;
+            /** Gamma */
+            gamma?: number | null;
+            /** Theta */
+            theta?: number | null;
+            /** Vega */
+            vega?: number | null;
+            /** Rho */
+            rho?: number | null;
+            /** Volatility */
+            volatility?: number | null;
+            /** Theoretical Value */
+            theoretical_value?: number | null;
+            /** Intrinsic Value */
+            intrinsic_value?: number | null;
+            /** Time Value */
+            time_value?: number | null;
+            /** In The Money */
+            in_the_money?: boolean | null;
+            /** Mini */
+            mini?: boolean | null;
+            /** Non Standard */
+            non_standard?: boolean | null;
+            /** Penny Pilot */
+            penny_pilot?: boolean | null;
+            /** Multiplier */
+            multiplier?: number | null;
+            /** Settlement Type */
+            settlement_type?: string | null;
+            /** Expiration Type */
+            expiration_type?: string | null;
+            /**
+             * Source
+             * @default schwab-chain
+             */
+            source: string;
+            /** Ingestion Ts */
+            ingestion_ts?: string | null;
+            /** Ingestion Run Id */
+            ingestion_run_id?: string | null;
+        };
+        /**
+         * OptionContractsResponse
+         * @description Response wrapper for canonical option contract snapshots.
+         */
+        OptionContractsResponse: {
+            /** Underlying Symbol */
+            underlying_symbol: string;
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+            /**
+             * End
+             * Format: date-time
+             */
+            end: string;
+            /** Snapshot Id */
+            snapshot_id?: string | null;
+            /** Contracts */
+            contracts?: components["schemas"]["OptionContractSnapshot"][];
+            /**
+             * Count
+             * @description Number of contracts returned.
+             */
+            count: number;
         };
         /** PortalSessionResponse */
         PortalSessionResponse: {
@@ -5704,6 +6037,10 @@ export interface operations {
                 provider?: string;
                 /** @description JSON-encoded indicator constructor kwargs, e.g. `{"period":20}` for SMA. Empty / omitted means use the indicator's default constructor. */
                 params?: string | null;
+                /** @description Cross-timeframe (bar-locked): aggregation the indicator is computed over, e.g. '1d' for a 200-day SMA on a 5m chart. Coarser-or-equal to `interval`. Omit for same-interval. */
+                source_agg?: string | null;
+                /** @description Cross-timeframe (window-locked): calendar window in trading days. Pins source_agg='1d', period=window_days. */
+                window_days?: number | null;
             };
             header?: never;
             path?: never;
@@ -6090,6 +6427,166 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdjustedSymbolsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_latest_option_contracts_api_v1_options_contracts_latest_get: {
+        parameters: {
+            query: {
+                /** @description Underlying symbol, e.g. AAPL. */
+                symbol: string;
+                /** @description Optional contract expiration filter, YYYY-MM-DD. */
+                expiration_date?: string | null;
+                /** @description Optional side filter: CALL or PUT. */
+                put_call?: ("CALL" | "PUT") | null;
+                /** @description Return at most N latest hot-tier contracts. */
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LatestOptionContractsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_latest_option_gamma_exposure_api_v1_options_gex_latest_get: {
+        parameters: {
+            query: {
+                /** @description Underlying symbol, e.g. AAPL. */
+                symbol: string;
+                /** @description Optional GEX level: total, strike, expiry, or strike_expiry. */
+                aggregation_level?: ("total" | "strike" | "expiry" | "strike_expiry") | null;
+                /** @description Return at most N latest hot-tier GEX rows. */
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LatestGammaExposureResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_option_contracts_api_v1_options_contracts_get: {
+        parameters: {
+            query: {
+                /** @description Underlying symbol, e.g. AAPL. */
+                symbol: string;
+                /** @description Snapshot window start, inclusive. */
+                start: string;
+                /** @description Snapshot window end, exclusive. */
+                end: string;
+                /** @description Optional contract expiration filter, YYYY-MM-DD. */
+                expiration_date?: string | null;
+                /** @description Optional side filter: CALL or PUT. */
+                put_call?: ("CALL" | "PUT") | null;
+                /** @description Optional Iceberg snapshot id for deterministic replay. */
+                snapshot_id?: string | null;
+                /** @description Return at most the most recent N contracts in the window. */
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionContractsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_option_gamma_exposure_api_v1_options_gex_get: {
+        parameters: {
+            query: {
+                /** @description Underlying symbol, e.g. AAPL. */
+                symbol: string;
+                /** @description Snapshot window start, inclusive. */
+                start: string;
+                /** @description Snapshot window end, exclusive. */
+                end: string;
+                /** @description Optional GEX level: total, strike, expiry, or strike_expiry. */
+                aggregation_level?: ("total" | "strike" | "expiry" | "strike_expiry") | null;
+                /** @description Optional Iceberg snapshot id for deterministic replay. */
+                snapshot_id?: string | null;
+                /** @description Return at most the most recent N GEX rows in the window. */
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GammaExposureResponse"];
                 };
             };
             /** @description Validation Error */

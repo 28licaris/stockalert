@@ -2,23 +2,26 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useCallback, useMemo, useState } from "react";
 import { Table2 } from "lucide-react";
 import { OhlcvChart, type ChartType } from "@/components/charts/OhlcvChart";
+import { ChartToolbar } from "@/components/charts/ChartToolbar";
 import {
-  ChartToolbar,
+  isCrossTimeframeMA,
   type MovingAverageKind,
   type MovingAverageOverlay,
-} from "@/components/charts/ChartToolbar";
+} from "@/components/charts/movingAverage";
 import { BarsTable } from "@/components/tables/BarsTable";
 import { Button } from "@/components/ui/button";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
 import { SymbolSearchInput } from "@/components/symbol/SymbolSearchInput";
 import {
   CHART_RANGE_DAYS,
+  useCrossTimeframeMovingAverages,
   useIndicators,
   useBarsWindow,
   useLakeBars,
   useSymbolSignals,
   type Bar,
   type ChartRange,
+  type CrossTfMaSpec,
   type IndicatorSeries,
 } from "@/api/queries";
 import { useUserSetting } from "@/lib/storage";
@@ -94,9 +97,32 @@ export function SymbolPage() {
     [indicatorIds],
   );
 
+  // Same-interval MAs compute client-side from the displayed bars; MAs
+  // pinned to a coarser source (e.g. 200·1d on a 5m chart) can't be derived
+  // from those bars and route through the backend instead.
+  const sameTfMovingAverages = useMemo(
+    () => movingAverages.filter((ma) => !isCrossTimeframeMA(ma, interval)),
+    [movingAverages, interval],
+  );
+  const crossTfMaSpecs = useMemo<CrossTfMaSpec[]>(
+    () =>
+      movingAverages
+        .filter((ma) => isCrossTimeframeMA(ma, interval))
+        .map((ma) => ({
+          id: ma.id,
+          kind: ma.kind,
+          period: ma.period,
+          color: ma.color,
+          sourceAgg: ma.sourceAgg as string,
+        })),
+    [movingAverages, interval],
+  );
+  // Only same-TF MAs drive the client warmup window; cross-TF MAs warm up
+  // inside the backend, so their (daily-bar) length must not inflate the
+  // intraday lookback.
   const maxMovingAveragePeriod = useMemo(
-    () => Math.max(0, ...movingAverages.map((ma) => ma.period)),
-    [movingAverages],
+    () => Math.max(0, ...sameTfMovingAverages.map((ma) => ma.period)),
+    [sameTfMovingAverages],
   );
   const chartLookbackDays = chartDataLookback(
     range,
@@ -124,14 +150,24 @@ export function SymbolPage() {
     () =>
       buildMovingAverageSeries(
         bars.data ?? [],
-        movingAverages,
+        sameTfMovingAverages,
         interval,
       ),
-    [bars.data, movingAverages, interval],
+    [bars.data, sameTfMovingAverages, interval],
+  );
+  const crossTfMovingAverages = useCrossTimeframeMovingAverages(
+    ticker || undefined,
+    interval,
+    crossTfMaSpecs,
+    range,
   );
   const chartIndicators = useMemo(
-    () => [...movingAverageSeries, ...(indicators.data ?? [])],
-    [movingAverageSeries, indicators.data],
+    () => [
+      ...movingAverageSeries,
+      ...(crossTfMovingAverages.data ?? []),
+      ...(indicators.data ?? []),
+    ],
+    [movingAverageSeries, crossTfMovingAverages.data, indicators.data],
   );
 
   const toggleIndicator = useCallback(

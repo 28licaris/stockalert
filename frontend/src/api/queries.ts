@@ -811,6 +811,82 @@ export function useIndicators(
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Cross-timeframe moving averages — overlays pinned to a coarser source
+// aggregation than the chart (e.g. a 200-day SMA on a 5m chart). These
+// CANNOT be computed from the displayed bars, so they route through the
+// backend, which resamples to `source_agg`, warms up, computes the MA,
+// and forward-fills ("steps") it onto the display interval. Same-interval
+// MAs stay client-side (instant, no network) — see `buildMovingAverageSeries`.
+// The returned series are remapped into the `ma_<id>` overlay shape the
+// chart renderer already understands (custom color via `params.color`).
+// ─────────────────────────────────────────────────────────────────────
+
+export interface CrossTfMaSpec {
+  id: string;
+  kind: "sma" | "ema" | "wma";
+  period: number;
+  color: string;
+  sourceAgg: string;
+}
+
+export function useCrossTimeframeMovingAverages(
+  symbol: string | undefined,
+  interval: string,
+  specs: ReadonlyArray<CrossTfMaSpec>,
+  range: ChartRange = "30D",
+) {
+  const windowDays = CHART_RANGE_DAYS[range] ?? 30;
+  const key = specs
+    .map((s) => `${s.id}:${s.kind}:${s.period}:${s.sourceAgg}`)
+    .join("|");
+
+  return useQuery({
+    queryKey: ["cross-tf-ma", symbol ?? "", interval, windowDays, key] as const,
+    queryFn: async (): Promise<IndicatorSeries[]> => {
+      if (!symbol) throw new Error("symbol required");
+      const end = new Date();
+      const start = new Date(end.getTime() - windowDays * 24 * 60 * 60 * 1000);
+      const { data } = await apiClient.POST("/api/v1/indicators/chart-data", {
+        body: {
+          symbol,
+          start: start.toISOString(),
+          end: end.toISOString(),
+          interval,
+          provider: "polygon",
+          indicators: specs.map((s) => ({
+            name: s.kind,
+            params: { period: s.period },
+            source_agg: s.sourceAgg,
+          })),
+        },
+      });
+      const series = data?.series ?? [];
+      // Backend returns series in spec order; remap each to the overlay shape.
+      return series.map((s, i) => {
+        const spec = specs[i];
+        if (!spec) return s;
+        return {
+          ...s,
+          name: `ma_${spec.id}`,
+          label: `${spec.kind.toUpperCase()} ${spec.period} · ${spec.sourceAgg}`,
+          params: {
+            kind: spec.kind,
+            period: spec.period,
+            sourceAgg: spec.sourceAgg,
+            color: spec.color,
+            lineWidth: 2,
+          },
+        };
+      });
+    },
+    enabled: Boolean(symbol) && specs.length > 0,
+    staleTime: 10_000,
+    refetchInterval: REFETCH_MS[interval] ?? 30_000,
+    refetchOnWindowFocus: true,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Derivation helpers for the Signal shape.
 //
 // The backend Signal carries `type` (e.g. "regular_bullish_divergence")

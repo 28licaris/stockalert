@@ -60,6 +60,25 @@ class IndicatorSpecRequest(BaseModel):
         None,
         description="Display label. Defaults to a sensible 'SMA(20)' form when omitted.",
     )
+    source_agg: Optional[str] = Field(
+        None,
+        description=(
+            "Bar-locked cross-timeframe: aggregation the indicator is "
+            "computed over, independent of the chart interval. E.g. "
+            "source_agg='1d' with params={period:200} draws a true 200-day "
+            "SMA on any chart. Must be coarser-or-equal to the display "
+            "interval. Omit for an ordinary same-interval indicator."
+        ),
+    )
+    window_days: Optional[int] = Field(
+        None,
+        description=(
+            "Window-locked cross-timeframe: a calendar window in trading "
+            "days. Pins source_agg='1d' and period=window_days so the value "
+            "stays constant across display zoom. Mutually exclusive with "
+            "source_agg/params.period (window_days wins)."
+        ),
+    )
 
 
 class ChartDataRequest(BaseModel):
@@ -94,6 +113,21 @@ def get_indicator_series(
             "the indicator's default constructor."
         ),
     ),
+    source_agg: Optional[str] = Query(
+        None,
+        description=(
+            "Cross-timeframe (bar-locked): aggregation the indicator is "
+            "computed over, e.g. '1d' for a 200-day SMA on a 5m chart. "
+            "Coarser-or-equal to `interval`. Omit for same-interval."
+        ),
+    ),
+    window_days: Optional[int] = Query(
+        None,
+        description=(
+            "Cross-timeframe (window-locked): calendar window in trading "
+            "days. Pins source_agg='1d', period=window_days."
+        ),
+    ),
     reader: IndicatorReader = Depends(get_indicator_reader),
 ) -> IndicatorSeries:
     """Single indicator series for `symbol` over `[start, end)`.
@@ -113,6 +147,7 @@ def get_indicator_series(
             symbol=symbol, indicator=indicator, params=parsed_params,
             start=start, end=end,
             interval=interval, provider=provider,
+            source_agg=source_agg, window_days=window_days,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
