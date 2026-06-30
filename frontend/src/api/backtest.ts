@@ -118,6 +118,53 @@ export function useBacktestRuns(limit = 25) {
   });
 }
 
+// ── Paper trading (M3) ───────────────────────────────────────────────
+
+export interface PaperPositionView {
+  symbol: string;
+  quantity: number;
+  avg_entry_price: number;
+  entry_time: string;
+  unrealized_pnl: number;
+}
+
+export interface PaperTradeView {
+  symbol: string;
+  side: string;
+  quantity: number;
+  price: number;
+  timestamp: string;
+  realized_pnl: number;
+  holding_days: number;
+  is_closing: boolean;
+}
+
+export interface PaperStatus {
+  name: string;
+  go_live: string;
+  last_run_at: string | null;
+  computed_through: string | null;
+  days_live: number;
+  equity_at_go_live: number;
+  current_equity: number;
+  forward_return: number;
+  forward_n_trades: number;
+  forward_win_rate: number | null;
+  n_open_positions: number;
+  open_positions: PaperPositionView[];
+  forward_trades: PaperTradeView[];
+  equity_curve: EquityPoint[];
+}
+
+export function usePaperStatus(name = "momentum_top15") {
+  return useQuery({
+    queryKey: ["paper", "status", name],
+    queryFn: () => getJSON<PaperStatus>(`/api/v1/paper/status?name=${encodeURIComponent(name)}`),
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
 export function useRunBacktest() {
   const qc = useQueryClient();
   return useMutation({
