@@ -1,0 +1,16 @@
+strategy: alert_driven
+strategy_params:
+  source: breakout
+  source_params:
+    lookback: 20
+    vol_mult: 1.5
+    reward_risk_mult: 2.0
+  risk_pct: 0.01
+  min_reward_risk: 1.5
+config:
+  symbols: [NVDA]
+  start: 2022-01-01T00:00:00Z
+  end: 2024-12-31T23:59:59Z
+  interval: 1d
+  starting_cash: 40000
+  history_window: 250

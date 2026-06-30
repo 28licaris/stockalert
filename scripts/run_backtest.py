@@ -92,6 +92,12 @@ def _load_strategy(name: str, params: dict[str, Any], interval: str) -> Any:
         return MtfEmaTrendFilteredStrategy(
             params=MtfEmaTrendFilteredParams(**params),
         )
+    if name == "alert_driven":
+        from app.services.sim.strategies.alert_strategy import (
+            AlertStrategy,
+            AlertStrategyParams,
+        )
+        return AlertStrategy(AlertStrategyParams(**params), interval=interval)
     raise ValueError(
         f"Unknown strategy {name!r}. Register it in scripts/run_backtest.py::_load_strategy."
     )
