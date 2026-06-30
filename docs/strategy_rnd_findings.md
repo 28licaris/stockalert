@@ -443,3 +443,47 @@ confidence-ranked allocation) before it's worth paper-trading.
 
 **Next:** confidence-ranked allocation in run_portfolio; then re-evaluate
 Sharpe/DD; bear-specific walk-forward; only then M3.
+
+---
+
+## EXP-13 · 2026-06-30 · pro confluences + the confluence/signal-fit lesson
+
+Added 5 professional swing confluences (composable filters, direction-aware,
+pure, tested) + a proper **ADX** indicator in the registry:
+`adx` (trend strength), `atr_volatility` (volatility-regime band), `htf_trend`
+(weekly higher-timeframe alignment via resample), `not_extended` (don't chase —
+≤N ATRs from the MA), `rel_volume` (sustained participation). All in the catalog
+→ live in the Backtest Lab UI, CLI, and sweep.
+
+A/B as a real portfolio ($100k, 12-name tech-heavy basket, 2022–2025):
+
+**On DIVERGENCE (a reversal signal): the trend confluences HURT.**
+- baseline (trend+regime, all-mode): −4.3%, PF 0.95
+- + adx + htf_trend: −21.6%, PF 0.57
+- The trend confluences *fight* a reversal thesis: a bullish divergence fires
+  when price is falling/below the weekly MA, so `htf_trend`(long → price>weeklyMA)
+  and `adx`(strong existing trend) reject exactly the early-reversal entries that
+  make divergence work. **Confluence must match the signal's thesis.**
+
+**On BREAKOUT (a trend-following signal): coherent, and far stronger.**
+- breakout bare: **+171.6%, Sharpe 1.25, −24% DD, PF 2.14, 128 trades**
+- + adx+htf+regime: +53%, PF 1.50, 82 trades
+- + 5 confluences: +72%, Sharpe 0.83, **−21.6% DD**, PF 1.84, **69 trades**
+- The confluences trade raw return for **selectivity + lower DD** (128→69 trades,
+  DD −24%→−21.6%, PF stays strong) — exactly the "fewer, higher-conviction
+  trades" the user wants.
+
+**Conclusions:**
+1. **Confluence/signal fit is the master variable** — not "more confluence = better."
+   Trend filters belong on trend signals; reversal signals need reversal
+   confluences (oversold extreme, at support, candle confirmation — TODO).
+2. **Breakout/momentum >> divergence on this regime/basket** (+171% vs +23%). But
+   this is a mega-cap-tech basket over a 2023–25 momentum bull → optimistic /
+   basket-selected. **Needs a neutral basket + OOS/walk-forward before trusting.**
+3. The pro confluences work as designed (tighten selection, cut DD) when matched
+   to the right signal.
+
+**Next:** neutral-basket + walk-forward validation of breakout+confluences;
+reversal-matched confluences for divergence; confidence-ranked allocation; then
+the score-mode min_score must scale with filter-count (3-of-5 < 3-of-4 selectivity
+surprised us — document/raise in the UI).

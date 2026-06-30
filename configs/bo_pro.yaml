@@ -1,0 +1,22 @@
+strategy: alert_driven
+strategy_params:
+  source: breakout
+  source_params: { lookback: 20, vol_mult: 1.5, reward_risk_mult: 3.0 }
+  filters:
+    - { name: regime, params: { ma_period: 50 } }
+    - { name: adx, params: { threshold: 20 } }
+    - { name: htf_trend, params: { weeks: 20 } }
+  filter_mode: all
+  min_score: 3
+  risk_pct: 0.01
+  max_risk_pct: 0.05
+  min_reward_risk: 0.0
+symbols: [AAPL, MSFT, NVDA, AMD, TSLA, META, AMZN, GOOGL, AVGO, NFLX, SPY, QQQ]
+benchmark: SPY
+interval: 1d
+starting_cash: 100000
+history_window: 300
+max_concurrent_positions: 6
+max_portfolio_heat: 0.10
+start: 2022-01-01T00:00:00Z
+end: 2025-12-31T23:59:59Z

@@ -19,6 +19,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Optional, Protocol, runtime_checkable
 
+import pandas as pd
+
 from app.services.sim.context import Context
 from app.services.sim.signal_source import BaseSignalSource, Signal, SignalSource
 
@@ -201,6 +203,135 @@ class MacdBullFilter(BaseFilter):
         return FilterResult(ok, self.weight if ok else 0.0, f"macd {v:+.2f} ({signal.direction})")
 
 
+class AdxStrengthFilter(BaseFilter):
+    """Trend-strength gate: ADX ≥ threshold (default 20). Direction-agnostic —
+    ADX measures how strongly a name is trending, not which way. Pros skip
+    trend-following entries when ADX is low (chop)."""
+
+    name = "adx"
+
+    def __init__(self, *, period: int = 14, threshold: float = 20.0, weight: float = 1.0) -> None:
+        self.period = period
+        self.threshold = threshold
+        self.weight = weight
+
+    def evaluate(self, ctx: Context, signal: Signal) -> FilterResult:
+        s = ctx.indicator("adx", period=self.period)
+        v = float(s.iloc[-1]) if len(s) else float("nan")
+        if v != v:
+            return FilterResult(False, 0.0, "adx warmup")
+        ok = v >= self.threshold
+        return FilterResult(ok, self.weight if ok else 0.0, f"adx {v:.0f} {'>=' if ok else '<'} {self.threshold:.0f}")
+
+
+class AtrVolatilityFilter(BaseFilter):
+    """Volatility-regime band: ATR as a fraction of price must sit in
+    [min_pct, max_pct]. Skips dead names (no range to work with) and too-wild
+    names (stops get blown out). Direction-agnostic."""
+
+    name = "atr_volatility"
+
+    def __init__(self, *, period: int = 14, min_pct: float = 0.01, max_pct: float = 0.08,
+                 weight: float = 1.0) -> None:
+        self.period = period
+        self.min_pct = min_pct
+        self.max_pct = max_pct
+        self.weight = weight
+
+    def evaluate(self, ctx: Context, signal: Signal) -> FilterResult:
+        s = ctx.indicator("atr", period=self.period)
+        atr = float(s.iloc[-1]) if len(s) else float("nan")
+        price = float(ctx.bar.close)
+        if atr != atr or price <= 0:
+            return FilterResult(False, 0.0, "atr warmup")
+        pct = atr / price
+        ok = self.min_pct <= pct <= self.max_pct
+        return FilterResult(ok, self.weight if ok else 0.0,
+                            f"atr% {pct:.1%} in [{self.min_pct:.1%},{self.max_pct:.1%}]")
+
+
+class HtfTrendFilter(BaseFilter):
+    """Higher-timeframe alignment: resample the entry-interval history to weekly
+    and require the current price on the trend side of the weekly SMA. Daily
+    entries only fire when the WEEKLY trend agrees — the classic pro filter that
+    keeps you from fighting the bigger tide. Direction-aware."""
+
+    name = "htf_trend"
+
+    def __init__(self, *, weeks: int = 20, rule: str = "W-FRI", weight: float = 1.0) -> None:
+        self.weeks = weeks
+        self.rule = rule
+        self.weight = weight
+
+    def evaluate(self, ctx: Context, signal: Signal) -> FilterResult:
+        df = ctx.history.to_dataframe()
+        if df.empty or not isinstance(df.index, pd.DatetimeIndex):
+            return FilterResult(False, 0.0, "htf warmup")
+        weekly = df["close"].resample(self.rule).last().dropna()
+        if len(weekly) < self.weeks:
+            return FilterResult(False, 0.0, f"htf warmup ({len(weekly)}/{self.weeks}w)")
+        ma = float(weekly.iloc[-self.weeks:].mean())
+        price = float(ctx.bar.close)
+        ok = price > ma if signal.direction == "long" else price < ma
+        return FilterResult(ok, self.weight if ok else 0.0,
+                            f"weekly SMA{self.weeks}={ma:.2f} ({signal.direction})")
+
+
+class NotExtendedFilter(BaseFilter):
+    """Don't chase: price must be within `max_atr` ATRs of its MA on the trade
+    side. Filters out entries late in a move where reward:risk is poor.
+    Direction-aware."""
+
+    name = "not_extended"
+
+    def __init__(self, *, ma: str = "sma", period: int = 20, atr_period: int = 14,
+                 max_atr: float = 4.0, weight: float = 1.0) -> None:
+        self.ma = ma
+        self.period = period
+        self.atr_period = atr_period
+        self.max_atr = max_atr
+        self.weight = weight
+
+    def evaluate(self, ctx: Context, signal: Signal) -> FilterResult:
+        ma_s = ctx.indicator(self.ma, period=self.period)
+        atr_s = ctx.indicator("atr", period=self.atr_period)
+        ma = float(ma_s.iloc[-1]) if len(ma_s) else float("nan")
+        atr = float(atr_s.iloc[-1]) if len(atr_s) else float("nan")
+        if ma != ma or atr != atr or atr <= 0:
+            return FilterResult(False, 0.0, "not_extended warmup")
+        price = float(ctx.bar.close)
+        # Distance above MA (long) / below MA (short), in ATR units.
+        dist = (price - ma) / atr if signal.direction == "long" else (ma - price) / atr
+        ok = dist <= self.max_atr
+        return FilterResult(ok, self.weight if ok else 0.0,
+                            f"{dist:.1f} ATR from {self.ma}{self.period} (<= {self.max_atr})")
+
+
+class RelativeVolumeFilter(BaseFilter):
+    """Participation gate: current volume ≥ `mult` × its trailing average over a
+    longer window (default 50). Distinct from `volume` (a short 20-bar spike) —
+    this confirms sustained institutional interest. Direction-agnostic."""
+
+    name = "rel_volume"
+
+    def __init__(self, *, period: int = 50, mult: float = 1.2, weight: float = 1.0) -> None:
+        self.period = period
+        self.mult = mult
+        self.weight = weight
+
+    def evaluate(self, ctx: Context, signal: Signal) -> FilterResult:
+        df = ctx.history.to_dataframe()
+        if "volume" not in df or len(df) < self.period + 1:
+            return FilterResult(False, 0.0, "rel_volume warmup")
+        vol_now = float(df["volume"].iloc[-1])
+        vol_avg = float(df["volume"].iloc[-(self.period + 1):-1].mean())
+        if vol_avg <= 0:
+            return FilterResult(False, 0.0, "rel_volume no-avg")
+        rvol = vol_now / vol_avg
+        ok = rvol >= self.mult
+        return FilterResult(ok, self.weight if ok else 0.0, f"rvol {rvol:.2f} (>= {self.mult})")
+
+
 _FILTERS = {
     "trend": TrendFilter,
     "reward_risk": MinRewardRiskFilter,
@@ -209,6 +340,11 @@ _FILTERS = {
     "relative_strength": RelativeStrengthFilter,
     "rsi_bull": RsiBullFilter,
     "macd_bull": MacdBullFilter,
+    "adx": AdxStrengthFilter,
+    "atr_volatility": AtrVolatilityFilter,
+    "htf_trend": HtfTrendFilter,
+    "not_extended": NotExtendedFilter,
+    "rel_volume": RelativeVolumeFilter,
 }
 
 
