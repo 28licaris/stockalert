@@ -3,12 +3,27 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pytest
+
 from app.services.sim.library import service as lib
 from app.services.sim.library.schemas import StrategyDefinition, StrategyPublic
 from app.services.sim.paper.schemas import PaperRunConfig, PaperState
 from app.services.sim.paper.service import save_state
 
 UTC = dt.timezone.utc
+
+
+@pytest.fixture(autouse=True)
+def _no_clickhouse(monkeypatch):
+    """Keep these unit tests off the live CH tier — exercise only the local
+    file cache for both the library and the linked paper state."""
+    import app.services.sim.paper.service as paper_svc
+
+    monkeypatch.setattr(lib, "_ch_save_definition", lambda d, now: None)
+    monkeypatch.setattr(lib, "_ch_load_definition", lambda name: None)
+    monkeypatch.setattr(lib, "_ch_list_definitions", lambda: [])
+    monkeypatch.setattr(paper_svc, "_ch_save_state", lambda state: None)
+    monkeypatch.setattr(paper_svc, "_ch_load_state", lambda name: None)
 
 
 def _defn():

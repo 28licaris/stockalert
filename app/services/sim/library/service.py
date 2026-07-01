@@ -60,20 +60,87 @@ def _backup_to_s3(definition: StrategyDefinition, stamp: str) -> tuple[Optional[
         return None, str(exc)
 
 
+def _ch_save_definition(definition: StrategyDefinition, now: datetime) -> None:
+    """Upsert the definition into ClickHouse (durable source of truth).
+    Best-effort: a CH hiccup logs but never fails registration (local + S3
+    copies still exist)."""
+    try:
+        from app.db.client import get_client
+
+        get_client().insert(
+            "strategy_definitions",
+            [[
+                definition.name,
+                int(definition.version or 1),
+                definition.title or "",
+                definition.visibility or "subscribers",
+                definition.model_dump_json(),
+                now,
+                int(now.timestamp() * 1000),   # row_version — latest wins
+            ]],
+            column_names=[
+                "name", "version", "title", "visibility",
+                "definition_json", "updated_at", "row_version",
+            ],
+        )
+    except Exception as exc:  # noqa: BLE001 — CH unavailable; local/S3 remain
+        logger.warning("strategy CH write failed for %s: %s", definition.name, exc)
+
+
 def register(definition: StrategyDefinition) -> BackupResult:
-    """Persist a definition locally AND back it up to S3 (safety copy)."""
+    """Persist a definition to ClickHouse (durable) + locally (cache) + S3 (backup)."""
     now = datetime.now(timezone.utc)
     if definition.created_at is None:
         definition.created_at = now
     p = _path(definition.name)
     tmp = p.with_suffix(".json.tmp")
     tmp.write_text(definition.model_dump_json(indent=2))
-    tmp.replace(p)  # atomic local write
+    tmp.replace(p)  # atomic local cache
+    _ch_save_definition(definition, now)  # durable copy
     s3_uri, s3_err = _backup_to_s3(definition, now.strftime("%Y%m%dT%H%M%SZ"))
     return BackupResult(local_path=str(p), s3_uri=s3_uri, s3_error=s3_err)
 
 
+def _ch_load_definition(name: str) -> Optional[StrategyDefinition]:
+    try:
+        from app.db.client import get_client
+
+        rows = get_client().query(
+            "SELECT definition_json FROM strategy_definitions FINAL "
+            "WHERE name = {n:String} LIMIT 1",
+            parameters={"n": name},
+        ).result_rows
+        if rows and rows[0][0]:
+            return StrategyDefinition.model_validate_json(rows[0][0])
+    except Exception as exc:  # noqa: BLE001 — caller falls back to local file
+        logger.warning("strategy CH read failed for %s: %s", name, exc)
+    return None
+
+
+def _ch_list_definitions() -> list[StrategyDefinition]:
+    try:
+        from app.db.client import get_client
+
+        rows = get_client().query(
+            "SELECT definition_json FROM strategy_definitions FINAL ORDER BY name"
+        ).result_rows
+        out: list[StrategyDefinition] = []
+        for (blob,) in rows:
+            try:
+                out.append(StrategyDefinition.model_validate_json(blob))
+            except (ValueError, json.JSONDecodeError) as exc:
+                logger.warning("skip bad strategy row: %s", exc)
+        return out
+    except Exception as exc:  # noqa: BLE001 — caller falls back to local files
+        logger.warning("strategy CH list failed: %s", exc)
+        return []
+
+
 def load_definition(name: str) -> Optional[StrategyDefinition]:
+    # CH is the durable source of truth; fall back to the local cache.
+    d = _ch_load_definition(name)
+    if d is not None:
+        return d
     p = _path(name)
     if not p.exists():
         return None
@@ -81,6 +148,11 @@ def load_definition(name: str) -> Optional[StrategyDefinition]:
 
 
 def list_definitions() -> list[StrategyDefinition]:
+    # Prefer ClickHouse (durable); fall back to local files if CH is
+    # unavailable or empty (e.g. first run before any CH write).
+    ch_out = _ch_list_definitions()
+    if ch_out:
+        return ch_out
     out = []
     for f in sorted(_lib_dir().glob("*.json")):
         try:

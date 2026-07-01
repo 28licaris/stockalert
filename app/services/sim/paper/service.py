@@ -39,7 +39,53 @@ def _state_path(name: str) -> Path:
     return _paper_dir() / f"{safe}.json"
 
 
+def _ch_save_state(state: PaperState) -> None:
+    """Upsert the full paper state into ClickHouse (durable source of truth).
+    Best-effort: a CH hiccup logs but never fails the run — the local file
+    still holds the state."""
+    try:
+        from app.db.client import get_client
+
+        now = state.last_run_at or datetime.now(timezone.utc)
+        get_client().insert(
+            "paper_state",
+            [[
+                state.config.name,
+                state.config.go_live,
+                state.computed_through,
+                now,
+                state.model_dump_json(),
+                int(now.timestamp() * 1000),   # row_version — latest wins
+            ]],
+            column_names=[
+                "name", "go_live", "computed_through", "last_run_at",
+                "state_json", "row_version",
+            ],
+        )
+    except Exception as exc:  # noqa: BLE001 — CH unavailable; file is the fallback
+        logger.warning("paper.save_state CH write failed for %s: %s", state.config.name, exc)
+
+
+def _ch_load_state(name: str) -> Optional[PaperState]:
+    try:
+        from app.db.client import get_client
+
+        rows = get_client().query(
+            "SELECT state_json FROM paper_state FINAL WHERE name = {n:String} LIMIT 1",
+            parameters={"n": name},
+        ).result_rows
+        if rows and rows[0][0]:
+            return PaperState.model_validate_json(rows[0][0])
+    except Exception as exc:  # noqa: BLE001 — fall back to the local file
+        logger.warning("paper.load_state CH read failed for %s: %s", name, exc)
+    return None
+
+
 def load_state(name: str) -> Optional[PaperState]:
+    # CH is the durable source of truth; fall back to the local file cache.
+    state = _ch_load_state(name)
+    if state is not None:
+        return state
     p = _state_path(name)
     if not p.exists():
         return None
@@ -50,7 +96,8 @@ def save_state(state: PaperState) -> Path:
     p = _state_path(state.config.name)
     tmp = p.with_suffix(".json.tmp")
     tmp.write_text(state.model_dump_json(indent=2))
-    tmp.replace(p)  # atomic
+    tmp.replace(p)  # atomic local cache
+    _ch_save_state(state)  # durable copy
     return p
 
 

@@ -446,6 +446,43 @@ def init_schema() -> None:
         except Exception as exc:  # noqa: BLE001 — migration is best-effort
             logger.warning("ingestion_runs migration skipped (%s): %s", _mig[:48], exc)
 
+    # Strategy library + paper-trading state — DURABLE store for the strategy
+    # platform. Definitions and the forward track record were previously only
+    # local JSON under data/ (gitignored, so lost on a worktree/checkout wipe).
+    # CH is the durable source of truth; the local files remain a fast cache.
+    # ReplacingMergeTree(row_version) keeps the latest write per name.
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS strategy_definitions (
+            name             LowCardinality(String),
+            version          UInt32 DEFAULT 1,
+            title            String DEFAULT '',
+            visibility       LowCardinality(String) DEFAULT 'subscribers',
+            definition_json  String,
+            updated_at       DateTime64(3, 'UTC'),
+            row_version      UInt64
+        )
+        ENGINE = ReplacingMergeTree(row_version)
+        ORDER BY name
+        SETTINGS index_granularity = 8192
+        """
+    )
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS paper_state (
+            name             LowCardinality(String),
+            go_live          DateTime64(3, 'UTC'),
+            computed_through Nullable(DateTime64(3, 'UTC')),
+            last_run_at      DateTime64(3, 'UTC'),
+            state_json       String,
+            row_version      UInt64
+        )
+        ENGINE = ReplacingMergeTree(row_version)
+        ORDER BY name
+        SETTINGS index_granularity = 8192
+        """
+    )
+
     # Backtest / agent run registry — one row per completed run.
     # Reproducibility-enabling fields: snapshot_id pins the Iceberg
     # data version; git_sha pins the code; strategy_params + config
