@@ -7,11 +7,20 @@ Pipeline (correctness-critical, so validated before trusting):
      bars, bucketed by ET trading day (avoids the UTC-date misclassification bug).
   2. Reuse the tested `adjust.apply_adjustment` with market_corp_actions splits
      (prices ÷ cum-future-split-factor, volume ×) — same adjustment as the live path.
-  3. Load into CH ohlcv_daily.
+  3. Segment-trim ticker-reuse contamination: Polygon keys rows by TICKER, so a
+     reused ticker holds several companies' histories separated by multi-month
+     gaps (V = Vivendi'06 → Visa'08+, COIN = Converted-Organics-era'07-10 →
+     Coinbase'21+, FB = Facebook'12-22 + junk tail'25+). Keep only the dominant
+     (max total dollar-volume) contiguous segment per symbol — otherwise the
+     gap audit either rejects the whole name or a backtest trades the fake
+     gap-jump splice between two unrelated companies.
+  4. Load into CH ohlcv_daily (optionally via staging table + atomic EXCHANGE).
 
   --create                 create the table
   --symbols AAPL,NVDA      load + VALIDATE those vs BarReader's existing 1d rollup
   --universe               load all of configs/liquid_universe.txt
+  --staging                load into ohlcv_daily_staging, then atomically EXCHANGE
+  --no-segment-trim        keep full raw histories (debug/audit only)
 """
 from __future__ import annotations
 
@@ -61,10 +70,10 @@ def _athena(sql: str, timeout_s: float = 600.0) -> pa.Table:
     return pacsv.read_csv(io.BytesIO(body))
 
 
-def create_table() -> None:
+def create_table(name: str = "ohlcv_daily") -> None:
     from app.db.client import get_client  # targets the `stocks` DB (same as ohlcv_1m)
-    get_client().command("""
-        CREATE TABLE IF NOT EXISTS ohlcv_daily (
+    get_client().command(f"""
+        CREATE TABLE IF NOT EXISTS {name} (
             symbol    LowCardinality(String),
             timestamp DateTime64(3, 'UTC'),
             open Float64, high Float64, low Float64, close Float64, volume Float64,
@@ -72,7 +81,64 @@ def create_table() -> None:
         ) ENGINE = ReplacingMergeTree(version)
         PARTITION BY toYear(timestamp) ORDER BY (symbol, timestamp)
     """)
-    print("ohlcv_daily table ready")
+    print(f"{name} table ready")
+
+
+def dominant_segment_bounds(cal_idx: "np.ndarray", dollars: "np.ndarray",
+                            max_gap: int = 5) -> tuple[int, int]:
+    """Pure segment picker. cal_idx: sorted positions of a symbol's bars on the
+    trading calendar; dollars: per-bar dollar volume. A segment breaks where more
+    than max_gap consecutive trading days are missing (halts are shorter;
+    ticker-reuse gaps are months). Returns (start, end) INDICES into cal_idx
+    (inclusive) of the segment with the highest total dollar volume."""
+    import numpy as np
+    if len(cal_idx) == 0:
+        raise ValueError("empty symbol history")
+    breaks = np.where(np.diff(cal_idx) - 1 > max_gap)[0]
+    starts = np.concatenate(([0], breaks + 1))
+    ends = np.concatenate((breaks, [len(cal_idx) - 1]))
+    seg_dollars = [dollars[s:e + 1].sum() for s, e in zip(starts, ends)]
+    best = int(np.argmax(seg_dollars))
+    return int(starts[best]), int(ends[best])
+
+
+def segment_trim(df: "pd.DataFrame", max_gap: int = 5) -> "pd.DataFrame":
+    """Keep each symbol's dominant contiguous segment. df needs columns
+    symbol/timestamp/close/volume. Calendar = business days over the batch span,
+    unioned with observed bar dates (so gap size is measured against real market
+    days, independent of batch density; holidays inflate a gap by at most ~2 days,
+    negligible vs months-long ticker-reuse gaps). Logs every trimmed symbol."""
+    import numpy as np
+    import pandas as pd
+    ts = pd.to_datetime(df["timestamp"])
+    if ts.dt.tz is not None:
+        ts = ts.dt.tz_localize(None)
+    dates = ts.dt.normalize()
+    observed = dates.unique()
+    calendar = np.sort(pd.bdate_range(observed.min(), observed.max()).union(
+        pd.DatetimeIndex(observed)).values)
+    df = df.assign(_cal=np.searchsorted(calendar, dates.values),
+                   _dollar=(df["close"] * df["volume"]).values)
+    keep_masks, trimmed = [], []
+    for sym, g in df.groupby("symbol", sort=False):
+        g = g.sort_values("_cal")
+        s, e = dominant_segment_bounds(g["_cal"].values, g["_dollar"].values, max_gap)
+        idx = g.index[s:e + 1]
+        keep_masks.append(idx)
+        if len(idx) != len(g):
+            lo, hi = dates.loc[idx].min().date(), dates.loc[idx].max().date()
+            trimmed.append((sym, len(g) - len(idx), lo, hi))
+    kept = df.loc[np.concatenate([m.values for m in keep_masks])].drop(columns=["_cal", "_dollar"])
+    if trimmed:
+        print(f"  segment-trim: {len(trimmed)} symbols trimmed "
+              f"({len(df) - len(kept):,} contaminated rows dropped):")
+        for sym, dropped, lo, hi in sorted(trimmed, key=lambda t: -t[1])[:25]:
+            print(f"    {sym:8} kept {lo}→{hi}  (dropped {dropped} rows)")
+        if len(trimmed) > 25:
+            print(f"    … and {len(trimmed) - 25} more")
+    else:
+        print("  segment-trim: no symbols required trimming")
+    return kept
 
 
 def _splits_lookup(symbols: list[str]):
@@ -114,22 +180,37 @@ def _daily_raw(symbols: list[str]) -> pa.Table:
     })
 
 
-def load(symbols: list[str]) -> int:
+def load(symbols: list[str], table: str = "ohlcv_daily", trim: bool = True) -> int:
     from app.db.client import get_client
     lookup = _splits_lookup(symbols)
     raw = _daily_raw(symbols)
     adj = apply_adjustment(raw, lookup)
     cols = ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
-    py = adj.select(cols).to_pylist()
-    # normalize timestamp to naive UTC datetime for clickhouse-connect
-    rows = [[r["symbol"], r["timestamp"].replace(tzinfo=None), r["open"], r["high"],
-             r["low"], r["close"], r["volume"]] for r in py]
+    df = adj.select(cols).to_pandas()
+    if trim:
+        df = segment_trim(df)
+    df["timestamp"] = df["timestamp"].dt.tz_localize(None)  # naive UTC for clickhouse-connect
+    rows = df[cols].values.tolist()
     cli = get_client()
     CHUNK = 400_000
     for i in range(0, len(rows), CHUNK):
-        cli.insert("ohlcv_daily", rows[i:i + CHUNK], column_names=cols)
-    print(f"  inserted {len(rows):,} adjusted daily rows")
+        cli.insert(table, rows[i:i + CHUNK], column_names=cols)
+    print(f"  inserted {len(rows):,} adjusted daily rows → {table}")
     return len(rows)
+
+
+def exchange_staging() -> None:
+    """Atomically swap ohlcv_daily_staging into place; old data lands in staging
+    and is dropped. Zero-downtime for concurrent readers."""
+    from app.db.client import get_client
+    cli = get_client()
+    n_new = cli.query("SELECT count() FROM ohlcv_daily_staging").result_rows[0][0]
+    if not n_new:
+        raise RuntimeError("staging table is empty — refusing to exchange")
+    cli.command("EXCHANGE TABLES ohlcv_daily AND ohlcv_daily_staging")
+    n_old = cli.query("SELECT count() FROM ohlcv_daily_staging").result_rows[0][0]
+    cli.command("DROP TABLE ohlcv_daily_staging")
+    print(f"  exchanged: ohlcv_daily now {n_new:,} rows (replaced {n_old:,}); staging dropped")
 
 
 def validate(symbol: str) -> None:
@@ -163,6 +244,9 @@ def main(argv=None) -> int:
     ap.add_argument("--symbols", default="")
     ap.add_argument("--universe", action="store_true")
     ap.add_argument("--validate", default="")
+    ap.add_argument("--staging", action="store_true",
+                    help="load into ohlcv_daily_staging then atomically EXCHANGE")
+    ap.add_argument("--no-segment-trim", action="store_true")
     a = ap.parse_args(argv)
     if a.create:
         create_table()
@@ -172,10 +256,17 @@ def main(argv=None) -> int:
     elif a.universe:
         syms = [s for s in Path("configs/liquid_universe.txt").read_text().split(",") if s]
     if syms:
-        print(f"loading {len(syms)} symbols → ohlcv_daily (one Athena scan)…", flush=True)
+        table = "ohlcv_daily_staging" if a.staging else "ohlcv_daily"
+        if a.staging:
+            from app.db.client import get_client
+            get_client().command("DROP TABLE IF EXISTS ohlcv_daily_staging")
+            create_table("ohlcv_daily_staging")
+        print(f"loading {len(syms)} symbols → {table} (one Athena scan)…", flush=True)
         # One scan for the whole set: bucket(32,symbol) partitioning means batching
         # by symbol wouldn't prune much, so a single query is far cheaper than N.
-        load(syms)
+        load(syms, table=table, trim=not a.no_segment_trim)
+        if a.staging:
+            exchange_staging()
     for v in [x for x in [a.validate] + syms if x] if a.validate or a.symbols else []:
         validate(v)
     return 0
