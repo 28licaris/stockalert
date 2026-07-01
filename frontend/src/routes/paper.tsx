@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Bell, Download, Loader2, Radio } from "lucide-react";
 import { usePaperStatus, type EquityPoint, type PaperStatus } from "@/api/backtest";
+import { useLibrary } from "@/api/library";
 import { cn } from "@/lib/utils";
 
 type Unit = "pct" | "usd";
@@ -11,13 +12,15 @@ type Unit = "pct" | "usd";
  * fly); the slice after the locked go-live is the real forward record.
  */
 export function PaperPage() {
+  const [strategy, setStrategy] = useState("momentum_top15");
   const [capital, setCapital] = useState(100_000);
   const [startDate, setStartDate] = useState(""); // "" = default to locked go-live
   const [unit, setUnit] = useState<Unit>("pct");
-  const q = usePaperStatus("momentum_top15", startDate || undefined, capital);
+  const lib = useLibrary();
+  const q = usePaperStatus(strategy, startDate || undefined, capital);
 
   async function downloadLog() {
-    const params = new URLSearchParams({ name: "momentum_top15" });
+    const params = new URLSearchParams({ name: strategy });
     if (startDate) params.set("start", startDate);
     if (capital) params.set("capital", String(capital));
     const r = await fetch(`/api/v1/paper/export?${params.toString()}`, { credentials: "include" });
@@ -26,7 +29,7 @@ export function PaperPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `paper_log_${startDate || "golive"}.csv`;
+    a.download = `paper_log_${strategy}_${startDate || "golive"}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -41,10 +44,19 @@ export function PaperPage() {
         </p>
         <h1 className="mt-1 font-display text-2xl font-semibold text-fg-base">Paper Trading</h1>
         <p className="mt-1 text-sm text-fg-muted">
-          The locked momentum strategy, run forward against live data. Set a starting
-          balance and a start date — including a past year — to replay it forward.
+          Pick a strategy, set a starting balance and a start date — including a past
+          year — to replay it forward against live data.
         </p>
         <div className="mt-3 flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">Strategy</span>
+            <select value={strategy} onChange={(e) => setStrategy(e.target.value)}
+              className="h-8 rounded border border-border bg-bg-base px-2 font-mono text-[11px] text-fg-base focus:border-accent focus:outline-none">
+              {(lib.data ?? [{ name: "momentum_top15", title: "Cross-Sector Momentum" }]).map((s) => (
+                <option key={s.name} value={s.name}>{s.title}</option>
+              ))}
+            </select>
+          </label>
           <label className="flex flex-col gap-1">
             <span className="text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">Starting capital $</span>
             <input type="number" value={capital} step={10000} min={1000}
