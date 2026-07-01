@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "cockpit",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "STOCKALERT_BACKEND_URL=http://localhost:8001 npm run dev"],
+      "cwd": "frontend",
+      "port": 5173
+    }
+  ]
+}
