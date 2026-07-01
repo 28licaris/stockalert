@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { useUserSetting } from "@/lib/storage";
+import { useCurrentUser } from "@/auth/useCurrentUser";
 import { cn } from "@/lib/utils";
 import { MarketBanner } from "@/components/market/MarketBanner";
 import { ChatPanel } from "@/components/chat/ChatPanel";
@@ -23,6 +24,8 @@ export function AppShell() {
   );
   const [mobileOpen, setMobileOpen] = useState(false);
   const [chatOpen, setChatOpen] = useUserSetting<boolean>("ui.chat.open", false);
+  const user = useCurrentUser();
+  const isOperator = user.permissions.includes("operator.access");
 
   // ⌘/Ctrl+I toggles the assistant panel.
   useEffect(() => {
@@ -79,7 +82,18 @@ export function AppShell() {
           </div>
         </aside>
       </div>
-      <StatusBar />
+      {/* Subsystem-health strip is operator-only, and offset by the sidebar
+          width so the fixed sidebar doesn't cover the provider pills. */}
+      {isOperator ? (
+        <div
+          className={cn(
+            "transition-[margin] duration-200",
+            collapsed ? "md:ml-14" : "md:ml-56",
+          )}
+        >
+          <StatusBar />
+        </div>
+      ) : null}
     </div>
   );
 }

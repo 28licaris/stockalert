@@ -147,12 +147,13 @@ async def run_now_recompute(symbols_provider: Callable[[], list[str]],
                             intervals: tuple[str, ...] = ("1d",)) -> None:
     """One audited recompute cycle (the registry `run_now` callable)."""
     from app.services.jobs import audit_run  # lazy: avoid import cycle at module load
-    async with audit_run("nightly_elliott_recompute"):
+    async with audit_run("nightly_elliott_recompute") as rec:
         symbols = symbols_provider()
         if not symbols:
             logger.warning("ewt_recompute: empty universe — nothing to do")
+            rec.result = {"skipped": True, "reason": "empty universe"}
             return
-        await asyncio.to_thread(recompute_universe, symbols, intervals)
+        rec.result = await asyncio.to_thread(recompute_universe, symbols, intervals)
 
 
 async def run_elliott_recompute_loop(symbols_provider: Callable[[], list[str]], *,

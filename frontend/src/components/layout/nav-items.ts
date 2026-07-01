@@ -41,15 +41,16 @@ export interface NavItem {
   icon: LucideIcon;
   flag: string;
   category: NavCategory;
+  /** Operator-only surface — hidden unless the principal has
+   *  `operator.access`. The backend enforces the same gate on the APIs;
+   *  hiding the nav entry is convenience, not the security boundary. */
+  adminOnly?: boolean;
 }
 
 export const NAV_ITEMS: readonly NavItem[] = [
-  { label: "Status",      href: "/",            icon: Gauge,            flag: "page.status",      category: "Overview" },
-
   { label: "Charts",      href: "/charts",      icon: CandlestickChart, flag: "page.symbol",      category: "Markets" },
   { label: "Elliott Wave", href: "/ewt",        icon: Waves,            flag: "page.ewt",         category: "Markets" },
   { label: "Watchlists",  href: "/watchlists",  icon: ListChecks,       flag: "page.watchlists",  category: "Markets" },
-  { label: "Stream",      href: "/stream",      icon: Radio,            flag: "page.seed",        category: "Markets" },
   { label: "Options",     href: "/options",     icon: GaugeCircle,      flag: "page.options",     category: "Markets" },
   { label: "Monitors",    href: "/monitors",    icon: Activity,         flag: "page.monitors",    category: "Markets" },
   { label: "Calendar",    href: "/calendar",    icon: CalendarDays,     flag: "page.calendar",    category: "Markets" },
@@ -67,9 +68,11 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: "Indicators",  href: "/indicators",  icon: LineChart,        flag: "page.indicators",  category: "Data" },
   { label: "Lake",        href: "/lake",        icon: Database,         flag: "page.lake",        category: "Data" },
   { label: "Coverage",    href: "/coverage",    icon: BarChart3,        flag: "page.coverage",    category: "Data" },
-  { label: "ClickHouse",  href: "/clickhouse",  icon: Database,         flag: "page.clickhouse",  category: "Data" },
 
   { label: "MCP",         href: "/mcp",         icon: Wrench,           flag: "page.mcp",         category: "Agent" },
 
-  { label: "Settings",    href: "/settings",    icon: Settings,         flag: "page.settings",    category: "Admin" },
+  { label: "Settings",       href: "/settings",   icon: Settings, flag: "page.settings",   category: "Admin" },
+  { label: "System Health",  href: "/",           icon: Gauge,    flag: "page.status",     category: "Admin", adminOnly: true },
+  { label: "Stream",         href: "/stream",     icon: Radio,    flag: "page.seed",       category: "Admin", adminOnly: true },
+  { label: "ClickHouse",     href: "/clickhouse", icon: Database, flag: "page.clickhouse", category: "Admin", adminOnly: true },
 ] as const;

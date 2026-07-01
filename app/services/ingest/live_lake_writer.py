@@ -398,6 +398,7 @@ class LiveLakeWriter:
                         result.total_rows,
                         str(result.per_provider_rows_written),
                         str(result.per_provider_errors) if result.per_provider_errors else "",
+                        f"flushed {result.total_rows} row(s)",
                         "ok" if result.succeeded else "partial_fail",
                     ]
                 ],
@@ -406,6 +407,7 @@ class LiveLakeWriter:
                     "window_start", "window_end", "rows_written",
                     "per_provider_rows_written_json",
                     "per_provider_errors_json",
+                    "summary",
                     "status",
                 ],
             )

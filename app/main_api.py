@@ -8,7 +8,9 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+
+from app.api.auth_dependencies import require_operator
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -134,8 +136,8 @@ def _register_background_jobs(
                 refresh_polygon_lake_yesterday,
             )
 
-            async with audit_run("nightly_equities_polygon_refresh"):
-                await refresh_polygon_lake_yesterday()
+            async with audit_run("nightly_equities_polygon_refresh") as rec:
+                rec.result = await refresh_polygon_lake_yesterday()
 
         job_registry.register(
             name="nightly_equities_polygon_refresh",
@@ -152,8 +154,8 @@ def _register_background_jobs(
                 refresh_schwab_bronze_yesterday,
             )
 
-            async with audit_run("nightly_schwab_refresh"):
-                await refresh_schwab_bronze_yesterday()
+            async with audit_run("nightly_schwab_refresh") as rec:
+                rec.result = await refresh_schwab_bronze_yesterday()
 
         job_registry.register(
             name="nightly_schwab_refresh",
@@ -170,8 +172,8 @@ def _register_background_jobs(
                 refresh_futures_yesterday,
             )
 
-            async with audit_run("nightly_futures_refresh"):
-                await refresh_futures_yesterday()
+            async with audit_run("nightly_futures_refresh") as rec:
+                rec.result = await refresh_futures_yesterday()
 
         job_registry.register(
             name="nightly_futures_refresh",
@@ -181,12 +183,14 @@ def _register_background_jobs(
             run_now=_run_futures_once,
         )
 
-    # News ingest — run_news_ingest_once is self-auditing (audit_run inside).
+    # News ingest — run_news_ingest_once returns counts; a manual click always
+    # audits (frequent suppression is only for the scheduled poll loop).
     if _s.news_ingest_enabled:
         async def _run_news_ingest_once() -> None:
             from app.services.news.job import run_news_ingest_once
 
-            await run_news_ingest_once()
+            async with audit_run("news_ingest") as rec:
+                rec.result = await run_news_ingest_once()
 
         job_registry.register(
             name="news_ingest",
@@ -203,8 +207,8 @@ def _register_background_jobs(
                 refresh_options_snapshots,
             )
 
-            async with audit_run("options_snapshot_refresh"):
-                await refresh_options_snapshots()
+            async with audit_run("options_snapshot_refresh") as rec:
+                rec.result = await refresh_options_snapshots()
 
         job_registry.register(
             name="options_snapshot_refresh",
@@ -224,8 +228,8 @@ def _register_background_jobs(
         from app.services.journal.journal_sync import journal_sync_service as _js
 
         async def _run_journal_sync_once() -> None:
-            async with audit_run("journal_sync"):
-                await _js.sync_all(force=True)
+            async with audit_run("journal_sync") as rec:
+                rec.result = await _js.sync_all(force=True)
 
         job_registry.register(
             name="journal_sync",
@@ -451,6 +455,23 @@ async def lifespan(app: FastAPI):
                 name="nightly_futures_polygon_refresh",
             )
             app.state.nightly_futures_polygon_task = nightly_futures_polygon_task
+
+            async def _run_futures_polygon_once() -> None:
+                from app.services.ingest.nightly_futures_polygon_refresh import (
+                    refresh_futures_polygon_yesterday,
+                )
+                from app.services.jobs.service import audit_run
+
+                async with audit_run("nightly_futures_polygon_refresh") as rec:
+                    rec.result = await refresh_futures_polygon_yesterday()
+
+            job_registry.register(
+                name="nightly_futures_polygon_refresh",
+                display_name="Nightly Futures refresh (Polygon)",
+                schedule=f"daily at {int(_settings.futures_polygon_nightly_run_hour_utc):02d}:00 UTC",
+                setting_key="FUTURES_POLYGON_NIGHTLY_RUN_HOUR_UTC",
+                run_now=_run_futures_polygon_once,
+            )
             logger.info(
                 "nightly_futures_polygon_refresh: background loop started "
                 "(FUTURES_POLYGON_NIGHTLY_RUN_HOUR_UTC=%s)",
@@ -581,6 +602,30 @@ async def lifespan(app: FastAPI):
                 name="ch_reconcile",
             )
             app.state.ch_reconcile_task = ch_reconcile_task
+
+            async def _run_ch_reconcile_once() -> None:
+                from app.services.ingest.ch_reconcile import (
+                    reconcile_ch_from_futures,
+                    reconcile_ch_from_schwab,
+                )
+                from app.services.jobs.service import audit_run
+
+                _lb = int(getattr(_settings, "ch_reconcile_lookback_days", 7))
+                async with audit_run("ch_reconcile") as rec:
+                    eq = await asyncio.to_thread(reconcile_ch_from_schwab, _lb)
+                    fu = await asyncio.to_thread(reconcile_ch_from_futures, _lb)
+                    rec.result = {
+                        "equities_rows": int((eq or {}).get("rows", 0)) if isinstance(eq, dict) else 0,
+                        "futures_rows": int((fu or {}).get("rows", 0)) if isinstance(fu, dict) else 0,
+                    }
+
+            job_registry.register(
+                name="ch_reconcile",
+                display_name="CH reconcile (lake→CH)",
+                schedule=f"daily at {int(_settings.ch_reconcile_run_hour_utc):02d}:00 UTC",
+                setting_key="CH_RECONCILE_RUN_HOUR_UTC",
+                run_now=_run_ch_reconcile_once,
+            )
             logger.info(
                 "ch_reconcile: background loop started "
                 "(CH_RECONCILE_RUN_HOUR_UTC=%s, lookback=%dd)",
@@ -828,7 +873,12 @@ async def validation_exception_handler(
 
 _V1 = "/api/v1"
 
-app.include_router(routes_health.router, prefix=_V1, tags=["Health"])
+app.include_router(
+    routes_health.router,
+    prefix=_V1,
+    tags=["Health"],
+    dependencies=[Depends(require_operator)],
+)
 app.include_router(routes_movers.router, prefix=_V1, tags=["Movers"])
 app.include_router(routes_backfill.router, prefix=_V1, tags=["Backfill"])
 app.include_router(routes_instruments.router, prefix=_V1, tags=["Instruments"])
@@ -849,8 +899,18 @@ app.include_router(routes_options.router, prefix=_V1, tags=["Options"])
 app.include_router(routes_monitors.router, prefix=_V1, tags=["Monitors"])
 app.include_router(routes_watchlist.router, prefix=_V1, tags=["Watchlist"])
 app.include_router(routes_stream.router, prefix=_V1, tags=["Stream"])
-app.include_router(routes_jobs.router, prefix=_V1, tags=["Jobs"])
-app.include_router(routes_clickhouse.router, prefix=_V1, tags=["ClickHouse"])
+app.include_router(
+    routes_jobs.router,
+    prefix=_V1,
+    tags=["Jobs"],
+    dependencies=[Depends(require_operator)],
+)
+app.include_router(
+    routes_clickhouse.router,
+    prefix=_V1,
+    tags=["ClickHouse"],
+    dependencies=[Depends(require_operator)],
+)
 app.include_router(routes_customer_auth.router, prefix=_V1, tags=["CustomerAuth"])
 app.include_router(routes_billing.router, prefix=_V1, tags=["Billing"])
 app.include_router(routes_admin_auth.router, prefix=_V1, tags=["AdminAuth"])

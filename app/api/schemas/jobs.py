@@ -9,8 +9,17 @@ from __future__ import annotations
 from app.services.jobs.schemas import (
     JobListing,
     JobMetadata,
+    JobRun,
+    JobRunHistory,
     JobRunResult,
     JobStatus,
 )
 
-__all__ = ["JobListing", "JobMetadata", "JobRunResult", "JobStatus"]
+__all__ = [
+    "JobListing",
+    "JobMetadata",
+    "JobRun",
+    "JobRunHistory",
+    "JobRunResult",
+    "JobStatus",
+]

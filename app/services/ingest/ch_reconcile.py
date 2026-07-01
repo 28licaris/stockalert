@@ -206,8 +206,14 @@ async def run_ch_reconcile_loop() -> None:
             wait_s = _seconds_until_next_run(hour)
             logger.info("ch_reconcile: sleeping %.0fs until next run", wait_s)
             await asyncio.sleep(wait_s)
-            await asyncio.to_thread(reconcile_ch_from_schwab, lookback)
-            await asyncio.to_thread(reconcile_ch_from_futures, lookback)
+            from app.services.jobs.service import audit_run
+            async with audit_run("ch_reconcile") as rec:
+                eq = await asyncio.to_thread(reconcile_ch_from_schwab, lookback)
+                fu = await asyncio.to_thread(reconcile_ch_from_futures, lookback)
+                rec.result = {
+                    "equities_rows": int((eq or {}).get("rows", 0)) if isinstance(eq, dict) else 0,
+                    "futures_rows": int((fu or {}).get("rows", 0)) if isinstance(fu, dict) else 0,
+                }
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — keep the loop alive

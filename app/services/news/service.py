@@ -27,6 +27,27 @@ _NEWS_COLUMNS = [
 
 _DEFAULT_FORM_TYPES = ("8-K", "4")
 
+# Substrings that mark a persistent, batch-wide LLM outage (out of credits,
+# quota, rate limit, billing) — as opposed to a one-off per-item failure. When
+# one of these is seen we stop enriching for the cycle and leave filings stored
+# unenriched, rather than burning a failing API call on every pending item.
+_PROVIDER_UNAVAILABLE_MARKERS = (
+    "credit balance",
+    "insufficient",
+    "quota",
+    "rate limit",
+    "rate_limit",
+    "429",
+    "billing",
+    "too low",
+    "overloaded",
+)
+
+
+def _is_provider_unavailable(ex: Exception) -> bool:
+    msg = str(ex).lower()
+    return any(m in msg for m in _PROVIDER_UNAVAILABLE_MARKERS)
+
 
 class NewsIngestService:
     def __init__(
@@ -143,6 +164,19 @@ class NewsIngestService:
                     body_text=body,
                 )
             except Exception as ex:  # noqa: BLE001 — degrade safely, don't drop the run
+                # AI enrichment is best-effort: the filing is already stored and
+                # visible unenriched. If the LLM provider is out of credits /
+                # rate-limited (a persistent, batch-wide condition), stop the
+                # batch instead of burning one failed call per item. The rows
+                # stay enriched=0 and auto-resume enriching once it recovers.
+                if _is_provider_unavailable(ex):
+                    logger.warning(
+                        "news enrich: LLM provider unavailable (%s) — leaving "
+                        "%d item(s) unenriched this cycle; filings remain stored "
+                        "and searchable, enrichment resumes when it recovers.",
+                        ex, len(rows) - len(out),
+                    )
+                    break
                 failed += 1
                 logger.warning("news enrich: skipped id=%s (%s)", r.get("id"), ex)
                 continue

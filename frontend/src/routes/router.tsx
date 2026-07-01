@@ -19,6 +19,7 @@ import { NotFoundPage } from "./not-found";
 import { LoginPage } from "./login";
 import { SettingsPage } from "./settings";
 import { AuthGuard } from "@/auth/AuthGuard";
+import { AdminOnly } from "@/auth/AdminOnly";
 
 /**
  * Single source of truth for routing. As new pages land they get
@@ -38,7 +39,14 @@ export const router = createBrowserRouter(
           path: "/",
           element: <AppShell />,
           children: [
-            { index: true, element: <StatusPage /> },
+            {
+              index: true,
+              element: (
+                <AdminOnly>
+                  <StatusPage />
+                </AdminOnly>
+              ),
+            },
             { path: "charts", element: <SymbolPage /> },
             { path: "charts/:ticker", element: <SymbolPage /> },
             { path: "charts/:ticker/bars", element: <RecentBarsPage /> },
@@ -48,10 +56,24 @@ export const router = createBrowserRouter(
             { path: "ewt/guide", element: <EwtGuidePage /> },
             { path: "ewt/:ticker", element: <EwtPage /> },
             { path: "watchlists", element: <WatchlistsPage /> },
-            { path: "stream", element: <StreamPage /> },
+            {
+              path: "stream",
+              element: (
+                <AdminOnly>
+                  <StreamPage />
+                </AdminOnly>
+              ),
+            },
             { path: "options", element: <OptionsPage /> },
             { path: "seed", element: <Navigate to="/stream" replace /> },
-            { path: "clickhouse", element: <ClickHousePage /> },
+            {
+              path: "clickhouse",
+              element: (
+                <AdminOnly>
+                  <ClickHousePage />
+                </AdminOnly>
+              ),
+            },
             { path: "calendar", element: <CalendarPage /> },
             { path: "news", element: <NewsPage /> },
             { path: "economic", element: <EconomicPage /> },

@@ -108,7 +108,9 @@ class JournalSyncService:
             return
         while self._started:
             try:
-                await self.sync_all()
+                from app.services.jobs.service import audit_run
+                async with audit_run("journal_sync", frequent=True) as rec:
+                    rec.result = await self.sync_all()
             except Exception as e:
                 logger.error("journal sync loop iteration failed: %s", e, exc_info=True)
             try:

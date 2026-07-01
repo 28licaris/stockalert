@@ -153,7 +153,9 @@ async def run_options_snapshot_loop() -> None:
     while True:
         try:
             await asyncio.sleep(interval)
-            await refresh_options_snapshots()
+            from app.services.jobs.service import audit_run
+            async with audit_run("options_snapshot_refresh", frequent=True) as rec:
+                rec.result = await refresh_options_snapshots()
         except asyncio.CancelledError:
             logger.info("options_snapshot_refresh: loop cancelled")
             raise

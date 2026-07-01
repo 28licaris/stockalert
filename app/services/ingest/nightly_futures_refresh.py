@@ -164,7 +164,9 @@ async def run_futures_refresh_loop() -> None:
                 wait_s,
             )
             await asyncio.sleep(wait_s)
-            await refresh_futures_yesterday()
+            from app.services.jobs.service import audit_run
+            async with audit_run("nightly_futures_refresh") as rec:
+                rec.result = await refresh_futures_yesterday()
         except asyncio.CancelledError:
             logger.info("nightly_futures_refresh: loop cancelled")
             raise

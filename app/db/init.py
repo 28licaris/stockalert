@@ -422,15 +422,29 @@ def init_schema() -> None:
             rows_written                    UInt64 DEFAULT 0,
             per_provider_rows_written_json  String DEFAULT '{}',
             per_provider_errors_json        String DEFAULT '',
+            summary                         String DEFAULT '',
             status                          LowCardinality(String) DEFAULT 'ok',
             version                         UInt64 DEFAULT 0
         )
         ENGINE = ReplacingMergeTree(version)
         PARTITION BY toYYYYMM(started_at)
         ORDER BY (job_name, started_at, run_id)
+        TTL toDateTime(started_at) + INTERVAL 90 DAY
         SETTINGS index_granularity = 8192
         """
     )
+    # Idempotent migrations for tables created before the summary column / TTL
+    # existed (the CH volume persists across container teardown, so the
+    # CREATE ... IF NOT EXISTS above is a no-op on an existing table).
+    for _mig in (
+        "ALTER TABLE ingestion_runs ADD COLUMN IF NOT EXISTS "
+        "summary String DEFAULT '' AFTER per_provider_errors_json",
+        "ALTER TABLE ingestion_runs MODIFY TTL toDateTime(started_at) + INTERVAL 90 DAY",
+    ):
+        try:
+            client.command(_mig)
+        except Exception as exc:  # noqa: BLE001 — migration is best-effort
+            logger.warning("ingestion_runs migration skipped (%s): %s", _mig[:48], exc)
 
     # Backtest / agent run registry — one row per completed run.
     # Reproducibility-enabling fields: snapshot_id pins the Iceberg

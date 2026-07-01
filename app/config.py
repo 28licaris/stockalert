@@ -328,6 +328,11 @@ class Settings(BaseModel):
     # accidentally connect to a relational database before auth is enabled.
     identity_database_url: str = os.getenv("IDENTITY_DATABASE_URL", "")
     auth_enabled: bool = os.getenv("AUTH_ENABLED", "false").lower() == "true"
+    # Operator/admin allowlist: comma-separated emails that are granted the
+    # `operator.access` permission (system health, ClickHouse console, job
+    # registry). Bootstraps the founder-admin without a DB write and survives
+    # identity-DB rebuilds; DB Role.ADMIN also grants operator.access.
+    admin_emails: str = os.getenv("ADMIN_EMAILS", "")
     cognito_domain: str = os.getenv("COGNITO_DOMAIN", "").rstrip("/")
     cognito_issuer_url: str = os.getenv("COGNITO_ISSUER_URL", "").rstrip("/")
     cognito_client_id: str = os.getenv("COGNITO_CLIENT_ID", "")

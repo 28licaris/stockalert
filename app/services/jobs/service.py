@@ -148,6 +148,7 @@ class JobRegistry:
                     last_run_at=data.get("last_run_at"),
                     last_status=status,
                     last_error=data.get("last_error"),
+                    last_summary=data.get("last_summary"),
                     running=running,
                 )
             )
@@ -262,30 +263,104 @@ class JobRegistry:
 # ─────────────────────────────────────────────────────────────────────
 
 
+class RunRecorder:
+    """Handle yielded by ``audit_run`` so the wrapped cycle can report what
+    it did. Set ``rec.result`` to the cycle's return dict; ``audit_run``
+    derives a concise ``summary`` + ``rows_written`` from it.
+    """
+
+    __slots__ = ("result",)
+
+    def __init__(self) -> None:
+        self.result: object = None
+
+
+# Per-job date (UTC) of the last "heartbeat" row we wrote for a no-op cycle.
+# Lets frequent jobs (news, options, journal) skip writing a row every poll
+# while still proving-of-life once per day. In-memory is fine: on restart the
+# first no-op cycle simply writes one fresh heartbeat.
+_last_heartbeat_day: dict[str, str] = {}
+
+
+def _summarize(result: object) -> tuple[int, str, bool]:
+    """Return ``(rows_written, one_line_summary, is_noop)`` from a cycle's
+    return value. Defensive across the heterogeneous dict shapes the various
+    cycle functions return. ``is_noop`` marks "nothing happened" cycles so
+    frequent jobs can suppress the log row.
+    """
+    if not isinstance(result, dict):
+        return 0, "", False
+
+    if result.get("skipped"):
+        reason = str(result.get("reason") or "skipped")
+        return 0, f"skipped: {reason}"[:200], True
+
+    rows = int(result.get("rows_written") or result.get("rows") or 0)
+
+    # Nightly auto-catchup shape: {days_processed, dates, ...}
+    if "days_processed" in result:
+        days = int(result.get("days_processed") or 0)
+        dates = result.get("dates") or []
+        summ = f"filled {days} session(s)"
+        if dates:
+            summ += ": " + ", ".join(str(d) for d in dates[:10])
+        return rows, summ[:200], days == 0
+
+    # Single-day nightly shape: {date, symbols, exit_code}
+    if "date" in result and "symbols" in result:
+        summ = f"{result['date']}: {result['symbols']} symbol(s) (rc={result.get('exit_code')})"
+        return rows, summ[:200], False
+
+    # News shape: {stored, enriched, fomc_stored, econ_releases, ...}
+    if "stored" in result or "enriched" in result:
+        stored = int(result.get("stored") or 0)
+        enriched = int(result.get("enriched") or 0)
+        fomc = int(result.get("fomc_stored") or 0)
+        econ = int(result.get("econ_releases") or 0)
+        parts = [f"stored={stored}", f"enriched={enriched}"]
+        if fomc:
+            parts.append(f"fomc={fomc}")
+        if econ:
+            parts.append(f"econ={econ}")
+        noop = (stored == 0 and enriched == 0 and fomc == 0 and econ == 0)
+        return (rows or stored + enriched), " ".join(parts), noop
+
+    # Generic: compact "k=v" of the scalar keys. No-op when every numeric
+    # counter is zero (nothing was written/changed this cycle).
+    scalars = {k: v for k, v in result.items() if isinstance(v, (int, float, str, bool))}
+    summ = " ".join(f"{k}={v}" for k, v in list(scalars.items())[:6])
+    numeric = [v for v in scalars.values() if isinstance(v, (int, float)) and not isinstance(v, bool)]
+    noop = rows == 0 and (not numeric or all(n == 0 for n in numeric))
+    return rows, summ[:200], noop
+
+
 @contextlib.asynccontextmanager
 async def audit_run(
     job_name: str,
     *,
+    frequent: bool = False,
     window_start: Optional[datetime] = None,
     window_end: Optional[datetime] = None,
 ):
-    """Context manager wrapping a one-cycle function with
-    `ingestion_runs` writes.
+    """Context manager wrapping a one-cycle function with `ingestion_runs`
+    writes. This is the SINGLE auditing mechanism — both the scheduled loop
+    and the manual "Run now" button route every job through it so runs are
+    recorded identically.
 
-    Use this when registering a job whose one-cycle function does NOT
-    self-audit (e.g. nightly_equities_polygon_refresh, journal_sync.sync_all).
-    For loops that already write their own row (live_lake_writer,
-    silver_ohlcv_build), wrap nothing — let their existing audit code
-    do its thing.
+    Usage (capture the cycle's result for a concise summary)::
 
-    Usage:
-        async def _run_polygon_once():
-            async with audit_run("nightly_equities_polygon_refresh"):
-                await refresh_polygon_lake_yesterday(...)
+        async with audit_run("nightly_futures_refresh") as rec:
+            rec.result = await refresh_futures_yesterday()
+
+    ``frequent=True`` (news, options, journal) suppresses the log row for
+    no-op cycles — writing at most one "heartbeat" row per UTC day — so a
+    poll every few minutes doesn't flood the runs log. Real work and errors
+    are always written.
 
     The wrapper:
       - generates a `run_id` (uuid4)
-      - captures started_at = now() and finished_at = now()
+      - captures started_at / finished_at
+      - derives `summary` + `rows_written` from `rec.result` via `_summarize`
       - writes status='ok' on clean exit, status='error' on exception
         (and re-raises so callers see the failure)
       - tolerates CH write failures (logs but doesn't block the caller)
@@ -293,49 +368,66 @@ async def audit_run(
     started_at = datetime.now(timezone.utc)
     run_id = str(uuid.uuid4())
     error_msg = ""
+    rec = RunRecorder()
     try:
-        yield
+        yield rec
     except Exception as exc:  # noqa: BLE001 — boundary
         error_msg = str(exc)[:500]
         raise
     finally:
         finished_at = datetime.now(timezone.utc)
+        rows_written, summary, is_noop = _summarize(rec.result)
         status = "error" if error_msg else "ok"
-        try:
-            from app.db.client import get_client
 
-            client = get_client()
-            client.insert(
-                "ingestion_runs",
-                [[
-                    run_id,
-                    job_name,
-                    started_at,
-                    finished_at,
-                    window_start or started_at,
-                    window_end or finished_at,
-                    0,                       # rows_written — unknown at this layer
-                    "{}",                    # per_provider_rows_written_json
-                    error_msg,               # per_provider_errors_json (reused for the error)
-                    status,
-                ]],
-                column_names=[
-                    "run_id",
-                    "job_name",
-                    "started_at",
-                    "finished_at",
-                    "window_start",
-                    "window_end",
-                    "rows_written",
-                    "per_provider_rows_written_json",
-                    "per_provider_errors_json",
-                    "status",
-                ],
-            )
-        except Exception as exc:  # noqa: BLE001 — CH unavailable
-            logger.warning(
-                "audit_run %s: ingestion_runs write failed: %s", job_name, exc,
-            )
+        # Frequent jobs: skip no-op, non-error cycles unless we haven't
+        # written a heartbeat yet today.
+        skip_write = False
+        if frequent and is_noop and not error_msg:
+            day = finished_at.date().isoformat()
+            if _last_heartbeat_day.get(job_name) == day:
+                skip_write = True
+            else:
+                _last_heartbeat_day[job_name] = day
+                summary = summary or "heartbeat: no new work"
+
+        if not skip_write:
+            try:
+                from app.db.client import get_client
+
+                client = get_client()
+                client.insert(
+                    "ingestion_runs",
+                    [[
+                        run_id,
+                        job_name,
+                        started_at,
+                        finished_at,
+                        window_start or started_at,
+                        window_end or finished_at,
+                        rows_written,
+                        "{}",                    # per_provider_rows_written_json
+                        error_msg,               # per_provider_errors_json (the error)
+                        summary,
+                        status,
+                    ]],
+                    column_names=[
+                        "run_id",
+                        "job_name",
+                        "started_at",
+                        "finished_at",
+                        "window_start",
+                        "window_end",
+                        "rows_written",
+                        "per_provider_rows_written_json",
+                        "per_provider_errors_json",
+                        "summary",
+                        "status",
+                    ],
+                )
+            except Exception as exc:  # noqa: BLE001 — CH unavailable
+                logger.warning(
+                    "audit_run %s: ingestion_runs write failed: %s", job_name, exc,
+                )
 
 
 # Module-level singleton — matches the StreamService / WatchlistService pattern.

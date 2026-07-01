@@ -303,11 +303,25 @@ export interface JobMetadata {
   last_run_at: string | null;
   last_status: JobStatus;
   last_error: string | null;
+  last_summary: string | null;
   running: boolean;
 }
 
 export interface JobListing {
   jobs: JobMetadata[];
+}
+
+export interface JobRun {
+  finished_at: string | null;
+  status: string;
+  summary: string | null;
+  error: string | null;
+  rows_written: number;
+}
+
+export interface JobRunHistory {
+  job: string;
+  runs: JobRun[];
 }
 
 export interface JobRunResult {
@@ -342,6 +356,21 @@ export function useRunJob() {
       return (await res.json()) as JobRunResult;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.jobs }),
+  });
+}
+
+/** Recent run history for one job. `enabled` gates the fetch so we only
+ *  load history when a row is expanded. */
+export function useJobRuns(name: string, enabled: boolean) {
+  return useQuery({
+    queryKey: [...queryKeys.jobs, "runs", name],
+    queryFn: () =>
+      fetchJson<JobRunHistory>(
+        `/api/v1/jobs/${encodeURIComponent(name)}/runs?limit=10`,
+      ),
+    enabled,
+    refetchInterval: enabled ? 15_000 : false,
+    staleTime: 5_000,
   });
 }
 

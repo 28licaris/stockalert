@@ -236,7 +236,9 @@ async def run_lake_refresh_loop(stop_event: asyncio.Event | None = None) -> None
             return
 
         try:
-            await refresh_polygon_lake_yesterday()
+            from app.services.jobs.service import audit_run
+            async with audit_run("nightly_equities_polygon_refresh") as rec:
+                rec.result = await refresh_polygon_lake_yesterday()
         except asyncio.CancelledError:
             raise
         except Exception:

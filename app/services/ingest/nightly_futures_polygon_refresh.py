@@ -305,7 +305,9 @@ async def run_futures_polygon_refresh_loop() -> None:
             wait_s = _seconds_until_next_run(hour)
             logger.info("nightly_futures_polygon: sleeping %.0fs until next run", wait_s)
             await asyncio.sleep(wait_s)
-            await refresh_futures_polygon_yesterday()
+            from app.services.jobs.service import audit_run
+            async with audit_run("nightly_futures_polygon_refresh") as rec:
+                rec.result = await refresh_futures_polygon_yesterday()
         except asyncio.CancelledError:
             logger.info("nightly_futures_polygon: loop cancelled")
             raise
