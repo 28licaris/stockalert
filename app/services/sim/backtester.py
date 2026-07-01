@@ -140,6 +140,8 @@ class Backtester:
 
         portfolio = Portfolio(starting_cash=config.starting_cash)
         ctx = Context(config=config, intervals=run_intervals)
+        if config.benchmark:
+            ctx.market = self._load_benchmark(config, exec_interval)
         strategy.setup(ctx)
 
         for symbol in config.symbols:
@@ -171,6 +173,165 @@ class Backtester:
             equity_curve=list(portfolio.equity_curve),
             trades=list(portfolio.closed_trades),
         )
+
+    def run_portfolio(self, strategy: Strategy, config: BacktestConfig) -> RunResult:
+        """
+        Multi-symbol PORTFOLIO backtest: all symbols share one cash pool, one
+        equity curve, and a RiskManager that caps concurrent positions and total
+        open risk (portfolio heat). Bars are time-synchronized across symbols, so
+        positions are genuinely concurrent (unlike `run`, which walks each symbol's
+        full timeline in isolation). Single execution interval (no multi-TF yet).
+
+        The honest equity curve / drawdown this produces is what makes conviction
+        sizing safe to evaluate — and what a customer-facing track record needs.
+        """
+        from app.services.sim.risk import RiskManager
+
+        started_at = datetime.now(timezone.utc)
+        exec_interval = config.interval
+        if strategy.interval != exec_interval:
+            raise ValueError(
+                f"Strategy interval {strategy.interval!r} != config interval {exec_interval!r}."
+            )
+        fees = make_fees(config.fees_model, config.fees_params)
+        slippage = make_slippage(config.slippage_model, config.slippage_params)
+        snapshot_id = self._capture_snapshot(config, exec_interval)
+
+        bars_by_symbol = self._fetch_bars_multi(config, [exec_interval])[exec_interval]
+        portfolio = Portfolio(starting_cash=config.starting_cash)
+        risk = RiskManager(
+            max_concurrent=config.max_concurrent_positions,
+            max_portfolio_heat=config.max_portfolio_heat,
+        )
+
+        # One Context per symbol (isolated history/indicators); shared benchmark.
+        market = self._load_benchmark(config, exec_interval) if config.benchmark else None
+        ctx_by_symbol: dict[str, Context] = {}
+        for sym in config.symbols:
+            ctx = Context(config=config, intervals=[exec_interval])
+            ctx.market = market
+            ctx_by_symbol[sym] = ctx
+        # setup() runs once (strategy state is per-symbol-keyed internally).
+        if config.symbols:
+            strategy.setup(ctx_by_symbol[config.symbols[0]])
+
+        # Merge all symbols' bars into one ascending timeline.
+        timeline = sorted({b.timestamp for bars in bars_by_symbol.values() for b in bars})
+        cursors = {sym: 0 for sym in config.symbols}
+        last_close: dict[str, float] = {}
+        # Dynamic-universe state: per-symbol close history for as-of momentum ranking.
+        gate_long, gate_short = config.momentum_top_n, config.momentum_bottom_n
+        mom_lb = config.momentum_lookback
+        price_hist: dict[str, list[float]] = {}
+
+        for t in timeline:
+            # Pass 1: advance cursors, update close history, compute as-of momentum.
+            present: list = []  # (sym, bar, next_bar)
+            momentum: dict[str, float] = {}
+            for sym in config.symbols:
+                bars = bars_by_symbol.get(sym, [])
+                cur = cursors[sym]
+                if cur >= len(bars) or bars[cur].timestamp != t:
+                    continue
+                bar = bars[cur]
+                next_bar = bars[cur + 1] if cur + 1 < len(bars) else None
+                cursors[sym] = cur + 1
+                last_close[sym] = bar.close
+                ph = price_hist.setdefault(sym, [])
+                ph.append(bar.close)
+                if len(ph) > mom_lb and ph[-mom_lb - 1] > 0:
+                    momentum[sym] = bar.close / ph[-mom_lb - 1] - 1.0
+                present.append((sym, bar, next_bar))
+
+            # Eligibility sets from the cross-sectional momentum ranking (as-of t).
+            eligible_long = eligible_short = None
+            if (gate_long or gate_short) and momentum:
+                ranked = sorted(momentum, key=momentum.__getitem__, reverse=True)
+                if gate_long:
+                    eligible_long = set(ranked[:gate_long])
+                if gate_short:
+                    eligible_short = set(ranked[-gate_short:])
+
+            # Pass 2: signals + execution, gated by direction-eligibility.
+            for sym, bar, next_bar in present:
+                ctx = ctx_by_symbol[sym]
+                ctx.advance(bar, portfolio.snapshot())
+                action = strategy.on_bar(ctx)
+                if action.kind not in ("buy", "sell"):
+                    continue
+
+                pos = portfolio.positions.get(sym)
+                has_position = pos is not None and pos.quantity != 0
+                if has_position:
+                    # Exit / cover — always allowed; free its risk budget.
+                    portfolio.apply(action, bar, next_bar, fees, slippage)
+                    if sym not in portfolio.positions:
+                        risk.release(sym)
+                    continue
+
+                # Entry: dynamic-universe gate — long only in leaders, short only
+                # in laggards (when the respective gate is configured).
+                if eligible_long is not None and action.kind == "buy" and sym not in eligible_long:
+                    continue
+                if eligible_short is not None and action.kind == "sell" and sym not in eligible_short:
+                    continue
+                # Risk gate: portfolio heat + concurrent caps.
+                stop = action.stop_price if action.stop_price is not None else bar.close
+                risk_amount = action.size * abs(bar.close - stop)
+                if risk.can_open(sym, risk_amount, portfolio.snapshot().equity):
+                    trade = portfolio.apply(action, bar, next_bar, fees, slippage)
+                    if trade is not None and sym in portfolio.positions:
+                        risk.register(sym, risk_amount)
+
+            portfolio.mark_portfolio(t, dict(last_close))
+
+        strategy.teardown(ctx_by_symbol[config.symbols[0]]) if config.symbols else None
+        metrics = self._evaluator.compute(portfolio, config)
+        open_positions = [p for p in portfolio.positions.values() if p.quantity != 0]
+        return RunResult(
+            started_at=started_at, finished_at=datetime.now(timezone.utc),
+            strategy_name=strategy.name, strategy_version=strategy.version,
+            strategy_params=self._extract_params(strategy), config=config,
+            snapshot_id=snapshot_id, git_sha=_git_sha(), metrics=metrics,
+            equity_curve=list(portfolio.equity_curve), trades=list(portfolio.closed_trades),
+            open_positions=open_positions,
+        )
+
+    def _load_benchmark(self, config, interval: str):
+        """Load the benchmark once and wrap it in a (pure) MarketContext.
+
+        Engine-side IO (allowed here; strategies/filters stay pure and just read
+        `ctx.market`). Empty/missing data degrades to an empty MarketContext so a
+        market filter fails closed rather than crashing the run.
+        """
+        import pandas as pd
+
+        from app.services.readers.bar_reader import BarReader
+        from app.services.sim.market_context import MarketContext
+
+        try:
+            if config.daily_table and interval == "1d":
+                # Read the benchmark from the SAME table as the strategy bars so
+                # timestamps (tz) + adjustment convention match — otherwise the
+                # MarketContext as-of lookup compares mismatched tz and crashes.
+                bench_cfg = config.model_copy(update={"symbols": [config.benchmark]})
+                bars = self._fetch_bars_daily_table(bench_cfg, config.daily_table).get(
+                    config.benchmark, [])
+            else:
+                bars = BarReader.from_settings().get_bars_in_range(
+                    config.benchmark, config.start, config.end, interval=interval,
+                )
+        except Exception as exc:  # noqa: BLE001 — degrade, don't crash the backtest
+            logger.warning("Backtester: benchmark %s load failed: %s", config.benchmark, exc)
+            bars = []
+        if not bars:
+            logger.warning("Backtester: no benchmark bars for %s", config.benchmark)
+            return MarketContext(config.benchmark, pd.Series(dtype=float))
+        close = pd.Series(
+            [b.close for b in bars],
+            index=pd.DatetimeIndex([b.timestamp for b in bars]),
+        )
+        return MarketContext(config.benchmark, close)
 
     # ─────────────────────────────────────────────────────────────────
     # Iteration
@@ -267,10 +428,53 @@ class Backtester:
             )
         return out
 
+    def _fetch_bars_daily_table(self, config: BacktestConfig, table: str) -> dict[str, list[Bar]]:
+        """Read pre-adjusted daily bars directly from a CH table (the research
+        universe, e.g. ohlcv_daily). Bar is a structural Protocol, so a tiny
+        record with the OHLCV fields satisfies the rest of the engine."""
+        import re
+        from dataclasses import dataclass
+        from app.db.client import get_client
+
+        if not re.fullmatch(r"[A-Za-z0-9_]+", table):
+            raise ValueError(f"unsafe daily_table name {table!r}")
+
+        @dataclass
+        class _DailyBar:
+            symbol: str
+            timestamp: datetime
+            open: float
+            high: float
+            low: float
+            close: float
+            volume: float
+
+        cli = get_client()
+        a = config.start.strftime("%Y-%m-%d %H:%M:%S")
+        b = config.end.strftime("%Y-%m-%d %H:%M:%S")
+        out: dict[str, list[Bar]] = {sym: [] for sym in config.symbols}
+        # ONE query for the whole universe (500 per-symbol FINAL queries were slow).
+        rows = cli.query(
+            f"SELECT symbol, timestamp, open, high, low, close, volume FROM {table} FINAL "
+            "WHERE symbol IN {syms:Array(String)} "
+            "AND timestamp >= {a:String} AND timestamp <= {b:String} "
+            "ORDER BY symbol, timestamp",
+            parameters={"syms": list(config.symbols), "a": a, "b": b},
+        ).result_rows
+        for r in rows:
+            sym = r[0]
+            if sym in out:
+                out[sym].append(_DailyBar(sym, r[1], float(r[2]), float(r[3]),
+                                          float(r[4]), float(r[5]), float(r[6])))
+        return out
+
     def _fetch_bars_ch(
         self, config: BacktestConfig, interval: str,
     ) -> dict[str, list[Bar]]:
-        """All non-1m intervals route through CH via BarReader."""
+        """All non-1m intervals route through CH via BarReader (rollup of ohlcv_1m),
+        unless a `daily_table` is configured for 1d (direct pre-adjusted read)."""
+        if interval == "1d" and config.daily_table:
+            return self._fetch_bars_daily_table(config, config.daily_table)
         from app.services.readers.bar_reader import BarReader
 
         reader = BarReader.from_settings()

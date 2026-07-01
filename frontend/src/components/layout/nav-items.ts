@@ -59,6 +59,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
 
   { label: "Screener",    href: "/screener",    icon: Sparkles,         flag: "page.screener",    category: "Strategies" },
   { label: "Backtest",    href: "/backtest",    icon: Beaker,           flag: "page.backtest",    category: "Strategies" },
+  { label: "Strategy Library", href: "/library", icon: Sparkles,        flag: "page.library",     category: "Strategies" },
+  { label: "Paper Trading", href: "/paper",     icon: Radio,            flag: "page.paper",       category: "Strategies" },
   { label: "Runs",        href: "/runs",        icon: FileBarChart,     flag: "page.runs",        category: "Strategies" },
   { label: "Journal",     href: "/journal",     icon: NotebookPen,      flag: "page.journal",     category: "Strategies" },
 

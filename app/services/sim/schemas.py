@@ -71,6 +71,7 @@ class Action(BaseModel):
     )
     limit_price: Optional[float] = None
     stop_price: Optional[float] = None
+    target_price: Optional[float] = None
     note: str = Field("", description="Optional reason from the strategy (for audit + log).")
 
 
@@ -92,6 +93,8 @@ class Position(BaseModel):
     avg_entry_price: float
     entry_time: datetime
     unrealized_pnl: float = 0.0
+    stop_price: Optional[float] = None      # the setup's invalidation/stop, for alerts
+    target_price: Optional[float] = None    # the setup's target, for alerts
 
 
 class Trade(BaseModel):
@@ -104,6 +107,8 @@ class Trade(BaseModel):
     timestamp: datetime   # the bar that produced the fill
     fees: float = 0.0
     realized_pnl: float = 0.0    # populated on a closing trade
+    holding_days: float = 0.0    # calendar days held (populated on a closing leg)
+    is_closing: bool = False     # True on the leg that realizes P&L (sell-to-close long OR buy-to-cover short)
     note: str = ""
 
 
@@ -140,6 +145,9 @@ class RunMetrics(BaseModel):
     avg_trade_pnl: Optional[float] = None
     avg_winner_pnl: Optional[float] = None
     avg_loser_pnl: Optional[float] = None
+    avg_holding_days: Optional[float] = Field(
+        None, description="Mean calendar days held per round-trip (time-in-trade).",
+    )
     final_equity: float = 0.0
 
 
@@ -183,6 +191,45 @@ class BacktestConfig(BaseModel):
         ),
     )
     provider: SupportedProvider = "polygon"
+    benchmark: Optional[str] = Field(
+        None,
+        description=(
+            "Optional benchmark symbol (e.g. 'SPY'). When set, the engine loads "
+            "it once and exposes a MarketContext on `ctx.market` for "
+            "market-relative filters (regime, relative strength)."
+        ),
+    )
+    max_concurrent_positions: int = Field(
+        10, ge=1, description="Portfolio backtest: max simultaneously-open positions.",
+    )
+    max_portfolio_heat: float = Field(
+        0.10, gt=0.0, le=1.0,
+        description="Portfolio backtest: cap on total open risk (sum of entry→stop $) as a fraction of equity.",
+    )
+    momentum_top_n: Optional[int] = Field(
+        None, ge=1,
+        description=(
+            "Dynamic universe: allow LONG entries only for the top-N symbols ranked "
+            "by as-of momentum (trailing return over momentum_lookback bars) at each "
+            "bar. None = no gate (trade any symbol). Lets the strategy DISCOVER the "
+            "current leaders from a broad pool instead of a hand-picked basket."
+        ),
+    )
+    momentum_bottom_n: Optional[int] = Field(
+        None, ge=1,
+        description="Dynamic universe: allow SHORT entries only for the bottom-N (weakest) symbols by as-of momentum. None = no short gate. Enables long-leaders / short-laggards.",
+    )
+    momentum_lookback: int = Field(
+        60, ge=2, description="Bars used for the dynamic-universe momentum ranking.",
+    )
+    daily_table: Optional[str] = Field(
+        None,
+        description=(
+            "For interval='1d': read pre-adjusted daily bars directly from this CH "
+            "table (e.g. 'ohlcv_daily', the deep+liquid+delisted research universe) "
+            "instead of rolling up ohlcv_1m. None = default rollup."
+        ),
+    )
     starting_cash: float = 40_000.0
     history_window: int = Field(
         200,
@@ -235,6 +282,10 @@ class RunResult(BaseModel):
     metrics: RunMetrics
     equity_curve: list[tuple[datetime, float]] = Field(default_factory=list)
     trades: list[Trade] = Field(default_factory=list)
+    open_positions: list[Position] = Field(
+        default_factory=list,
+        description="Positions still open at the final bar (for paper-trading 'currently holding').",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────

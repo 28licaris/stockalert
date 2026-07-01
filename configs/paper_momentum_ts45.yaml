@@ -1,0 +1,24 @@
+# Variant of momentum_top15 with a 45-day time-stop — forward-test candidate (EXP-22).
+name: momentum_ts45
+strategy: alert_driven
+strategy_params:
+  source: breakout
+  source_params: { lookback: 20, vol_mult: 1.5, reward_risk_mult: 3.0 }
+  filters: []
+  filter_mode: all
+  risk_pct: 0.01
+  max_risk_pct: 0.05
+  min_reward_risk: 0.0
+  max_holding_days: 45
+symbols: [AAPL, ABBV, ABNB, ABT, ACWI, ADBE, AFRM, AMAT, AMC, AMD, AMZN, ARM, ASML, AVDV, AVGO, BA, BABA, BAC, BILL, BLK, BMY, BNTX, C, CAT, CLSK, COIN, COP, COPX, COST, CRM, CRWD, CSCO, CVX, DASH, DBA, DBC, DDOG, DIA, EEM, EFA, F, GE, GLD, GME, GOOGL, GS, HD, HOOD, HYG, IAU, IBM, INTC, IWM, JNJ, JPM, KLAC, KO, LCID, LLY, LMT, LQD, LRCX, LYFT, MA, MCD, META, MRK, MRVL, MS, MSFT, MU, NET, NFLX, NKE, NVDA, NVTS, ORCL, PALL, PINS, PLTR, PPLT, QCOM, QQQ, RBLX, RIOT, RIVN, RTX, SBUX, SHY, SLV, SNAP, SOFI, SOXX, SPY, T, TLT, TSLA, TSM, TXN, UNG, UNH, USO, V, VOO, VTI, VXUS, WFC, WMT, XLB, XLE, XLF, XLI, XLK, XLP, XLRE, XLU, XLV, XLY, XOM]
+interval: 1d
+benchmark: SPY
+starting_cash: 100000
+max_concurrent_positions: 10
+max_portfolio_heat: 0.12
+momentum_top_n: 15
+momentum_bottom_n: null
+momentum_lookback: 60
+history_window: 300
+history_start: 2022-01-01T00:00:00Z
+go_live: 2026-06-30T00:00:00Z

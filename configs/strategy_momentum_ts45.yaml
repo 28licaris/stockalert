@@ -1,0 +1,11 @@
+name: momentum_ts45
+title: Cross-Sector Momentum (Time-Stopped)
+tagline: Same momentum engine, exits stale trades after 45 days — forward-test variant.
+description: >
+  A variant of Cross-Sector Momentum that adds a 45-day time stop to cut trades
+  that stall. Flagged as a holdout lead (EXP-22) and now being forward-tested
+  head-to-head against the baseline — no parameter was chosen by peeking at the
+  evaluation data.
+category: momentum
+visibility: subscribers
+config_file: configs/paper_momentum_ts45.yaml

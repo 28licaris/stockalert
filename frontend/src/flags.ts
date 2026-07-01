@@ -20,7 +20,9 @@ const FLAGS: Record<string, FlagValue> = {
   "page.symbol": true, // enabled in FE-2
   "page.ewt": true, // enabled in EW-5
   "page.screener": false,
-  "page.backtest": false,
+  "page.backtest": true, // strategy backtest lab (customer playground)
+  "page.library": true, // subscription strategy library (subscriber + owner view)
+  "page.paper": true, // live forward paper-trading track record
   "page.indicators": false,
   "page.lake": false,
   "page.coverage": false,

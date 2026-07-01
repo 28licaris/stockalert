@@ -53,6 +53,8 @@ class StandardEvaluator:
         sortino = self._sortino(equity_curve, config.interval)
         max_dd, longest_dd_days = self._max_drawdown(equity_curve)
         win_rate, profit_factor, avg_t, avg_w, avg_l = self._trade_stats(trades)
+        holds = [t.holding_days for t in trades if t.is_closing]
+        avg_holding_days = float(np.mean(holds)) if holds else None
 
         return RunMetrics(
             total_return=float(total_return),
@@ -67,6 +69,7 @@ class StandardEvaluator:
             avg_trade_pnl=avg_t,
             avg_winner_pnl=avg_w,
             avg_loser_pnl=avg_l,
+            avg_holding_days=avg_holding_days,
             final_equity=float(final_equity),
         )
 
@@ -180,8 +183,9 @@ class StandardEvaluator:
     @staticmethod
     def _trade_stats(trades: list[Trade]) -> tuple[float | None, float | None, float | None, float | None, float | None]:
         """Returns (win_rate, profit_factor, avg_trade, avg_winner, avg_loser)."""
-        # Only count closing sells in win/loss aggregates (entries have realized_pnl=0).
-        closing_pnls = [t.realized_pnl for t in trades if t.side == "sell"]
+        # Count CLOSING legs (realize P&L) — a long closes on a sell, a short
+        # closes on a buy-to-cover, so key on is_closing, not side.
+        closing_pnls = [t.realized_pnl for t in trades if t.is_closing]
         if not closing_pnls:
             return (None, None, None, None, None)
         wins = [p for p in closing_pnls if p > 0]

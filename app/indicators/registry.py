@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+from app.indicators.adx import ADX
 from app.indicators.atr import ATR
 from app.indicators.base import Indicator
 from app.indicators.bollinger import BollingerBands
@@ -41,6 +42,8 @@ _INDICATOR_REGISTRY: dict[str, Callable[..., Indicator]] = {
     "macd": MACD,
     "tsi": TSI,
     "stochastic": StochasticOscillator,
+    # Trend strength
+    "adx": ADX,
     # Volatility
     "atr": ATR,
     "bollinger": BollingerBands,
