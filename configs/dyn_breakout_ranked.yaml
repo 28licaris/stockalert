@@ -1,0 +1,22 @@
+strategy: alert_driven
+strategy_params:
+  source: breakout
+  source_params: { lookback: 20, vol_mult: 1.5, reward_risk_mult: 3.0 }
+  filters:
+    - { name: meta_rank, params: { min_proba: 0.232 } }
+  filter_mode: all
+  risk_pct: 0.01
+  max_risk_pct: 0.05
+  min_reward_risk: 0.0
+symbols: ["SPY","TSLA","QQQ","NVDA","AAPL","META","QQQQ","AMZN","IWM","MSFT","GOOGL","FB","GOOG","EEM","AMD","BABA","PLTR","HYG","CBRS","CRWV","NFLX","TQQQ","XLF","XOM","XLE","BAC","EFA","GEV","JPM","VOO","CRCL","IVV","GLD","BRK.A","BKNG","AVGO","LQD","TLT","DIA","WBPT","MU","IBIT","SPCX","INTC","COIN","C","BA","GS","RIMM","WFC","V","ORCL","CSCO","GE","JNJ","UNH","CVX","UBER","QCOM","LEHPP","WMT","SPYM","SNDK","MSTR","PYPL","SHOP","KLMN","CRWD","PFE","EWZ","MER","XLI","MRNA","FXI","PG","T","SQQQ","NBIS","XLV","SNOW","SQ","DIS","KVUEW","BMNR","ZM","SMH","HD","IBM","XLK","MA","ROKU","BRK.B","SOXL","HOOD","LLY","ABNB","CRM","RDDT","LEH","VZ","MRK","GDX","IYR","XLU","SKF","ABBV","SMCI","TSM","BIDU","DHRPA","CMCSA","ADBE","IEMG","CAT","PDD","KO","VXX","COST","XLP","IEFA","MCD","RBLX","VWO","TWTR","PCLN","NOW","SLB","SGOV","APP","AVGOP","XLY","DWDP","GILD","COP","MDY","USCA","MYLPA","SYFW","ARKK","MS","SPOT","AMGN","ELV","TXN","DASH","RTX","FCX","PEP","OIH","YHOO","AMAT","OKLO","PANW","NVDL","XBI","SDS","VTI","FDXF","F","NIO","AABA","SOXX","LIN","JNK","XOP","TSLL","NKE","COTYW","TGT","SBUX","BMY","MRSH","CVS","MYLNP","EMC","GM","POT","XYZ","WMPR","OXY","LOW","AXP","UNP","BSC","DDOG","PM","SPGI","DELL","RIVN","RSP","INIO","QNT","IEF","ABT","VXXB","CCIV","FNGA","TMUS","SLV","FLUT","AGG","HAL","XLB","WYE","SNAP","LRCX","AIG","ZTSW","KVUE","CMG","MO","MDT","VRT","CVNA","AAL","JD","HPQ","QQQM","EBAY","TMO","XIV","CJT","KRE","UTX","DKNG","VEA","EWJ","DE","MON","ALAB","MDB","VIAC","BIL","SSO","MMM","UPS","TNA","MRVL","CELG","FAS","TWX","ISRG","XLC","AFRM","ETHA","EMB","LMT","NEE","VLO","HON","PYPLV","LNKD","CHTR","ASML","AGN","MELI","ARM","ACN","CNOPB","ANTM","MDLZ","UAL","PBR","RGTI","SNXX","VALE","FDX","SOFI","PINS","USO","DHR","PTON","INTU","WORK","IREN","TTD","SCHW","TWLO","XTO","USB","ZS","NET","SPXL","VCIT","XRT","BLS","KWEB","UPST","NEM","LVS","APC","NXPI","BIIB","ANET","NRGPA","BRCM","DAL","GDT","DOCU","FBTC","WDAY","HOTW","KFT","X","EOG","MOT","QID","ELANW","BLK","VNQ","FOXAV","IGV","MWD","COF","FNM","RTH","AZO","MPC","REGN","IWF","QBTS","UVXY","BNI","TEM","LULU","MUU","MARA","HIMS","CJB","CFC","BND","SGP","LITE","BXLT","CSX","EXE","RKLB","DVN","BYND","DOW","U","SOXS","TXU","IBB","GBTC","SHV","AMC","FSLR","WAG","CMX","WBA","TJX","TT","MOW","CME","SBIL","MDLN","IWD","TFC","BP","QLD","ABX","SHEL","BHI","TEAM","ATVI","ADI","HUM","EA","USHY","MET","WDC","AMT","ESRX","KLAC","CI","CCL","LHX","CEG","PNC","VSXY","WYNN","IJR","VST","BSX","WP","TZA","SE","ZTS","EWY","DG","HCA","IJH","PSX","RIG","DD","BNTX","ETN","ACT","KMI","MCK","ENPH","PXD","GDXJ","KHC","ON","CRDO","CL","APA","SHW","FOXA","DTV","CHK","SPLG","WFCPL","GLW","EQIX","FUTU","AA","NOC","LCID","ASTS","UPRO","IONQ","DRAM","OKTA","MRO","WLP","FD","STX","HLT","JAVAD","VRTX","FERG","SPG","NSC","MUB","FAZ","BK","AET","W","HES","ACWI","BBY","EXC","HUBS","AALCP","FCAM","CMI","ICE","CARR","KR","LYFT","DUK","LYB","BGU","SO","VRX","WMB","ETSY","EMR","VCSH","VTV","SHPG","FRE","IQV","MAR","JPST","SHY","RIO","ULTA","CAVA","EXPE","GEHC","ADP","XPEV","GG","XLRE","LK","CBS","BITO","GME","RCL","BX","TEVA","ADSK","BDX","WBD","DJT","ORLY","GENZ","PMW","TWC","CB","MOS","EOP","SYK","GD","M","DWAC"]
+benchmark: SPY
+interval: 1d
+daily_table: ohlcv_daily
+starting_cash: 100000
+history_window: 300
+max_concurrent_positions: 10
+max_portfolio_heat: 0.12
+momentum_top_n: 15
+momentum_lookback: 60
+start: 2022-01-01T00:00:00Z
+end: 2025-12-31T23:59:59Z

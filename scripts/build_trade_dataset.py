@@ -17,6 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
+from app.services.sim.ranker import compute_symbol_features  # noqa: E402
+
 
 def _load() -> pd.DataFrame:
     from app.db.client import get_client
@@ -85,18 +87,12 @@ def main(argv=None) -> int:
         c, h, l, v = g["close"], g["high"], g["low"], g["volume"]
         prior_hi = h.rolling(20).max().shift(1)
         vol_avg = v.rolling(20).mean().shift(1)
-        atr = _atr(h, l, c)
-        sma50, sma200 = c.rolling(50).mean(), c.rolling(200).mean()
-        g_feat = pd.DataFrame({
-            "symbol": sym, "d": g["d"],
-            "ret20": c.pct_change(20), "ret60": c.pct_change(60), "ret120": c.pct_change(120),
-            "rsi": _wilder_rsi(c), "atr_pct": atr / c, "adx": _adx(h, l, c),
-            "dist_sma50": (c - sma50) / atr, "dist_sma200": (c - sma200) / atr,
-            "vol_ratio": v / vol_avg, "dollar_vol": np.log((c * v).rolling(20).mean().shift(1) + 1),
-            "bo_height": (c - prior_hi) / atr,
-            "close": c, "open": g["open"], "high": h, "low": l,
-            "prior_hi": prior_hi, "atr_abs": atr,
-        })
+        # SHARED feature code (app.services.sim.ranker) — same fn the live filter
+        # calls → guarantees train/inference feature parity by construction.
+        g_feat = compute_symbol_features(g)
+        g_feat["symbol"] = sym
+        g_feat["d"] = g["d"].values
+        g_feat["prior_hi"] = prior_hi.values
         # base entry rule = breakout (new 20d high on volume)
         g_feat["is_breakout"] = (c > prior_hi) & (v >= 1.5 * vol_avg)
         # relative strength + regime (align on date)

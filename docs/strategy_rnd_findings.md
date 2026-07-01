@@ -915,3 +915,40 @@ not a black box); a gradient-boosted upgrade is a later, dep-tradeoff decision.
 **Next:** integrate as a MetaRankFilter (load ranker.json, recompute the SAME as-of
 features from ctx at entry — feature parity is the one correctness risk — gate by
 P-threshold) and re-backtest the gated strategy; then forward-paper it.
+
+---
+
+## EXP-25 · 2026-07-01 · MetaRankFilter — Layer-2 in the live engine (honest result)
+
+Integrated the ranker as `meta_rank` filter: features via the SHARED
+`app.services.sim.ranker.compute_symbol_features` (train/inference parity guaranteed
+by construction; proven by a truncation-invariance test), rel_str/regime from
+ctx.market, P = trained logistic; pass if P>=min_proba; confidence=P (conviction
+sizing). Fixed: daily_table benchmark now loads from the same table (tz parity);
+_fetch_bars_daily_table single-query (was 500). 5 parity/gate tests; purity green.
+
+Gated live backtest, HOLDOUT 2020-2026 (model trained <2020), threshold = a-priori
+median predicted-P (0.232 — NOT tuned on the holdout):
+
+| | Ungated | Ranker-gated |
+|---|---|---|
+| Return | +752% | +263% |
+| Sharpe | 1.04 | 0.95 |
+| PF | 1.51 | 1.51 |
+| Win | 40.5% | 35.6% |
+| Max DD | −34.9% | **−29.1%** |
+| Trades | 723 | **295** |
+
+**Honest conclusion:** the ranker's trade-level OOS edge is real but MODEST (EXP-24),
+and as a hard median-P gate in the full portfolio it mainly cuts trades (~60%) and
+drawdown (−35%→−29%) at ~flat Sharpe/PF, trading raw return (less compounding) for
+lower risk. It did NOT cleanly boost risk-adjusted return — the dynamic top-15
+momentum gate already does heavy selection, leaving the ranker marginal room. Not a
+failure: it's a real DD-reducer + a proven trade-quality signal; the median cutoff
+just isn't the highest-value way to use it.
+
+**Better uses (to FORWARD-test, not holdout-tune — threshold picked on train only):**
+(1) conviction SIZING by P (continuous: size up high-P, down low-P) rather than a
+hard gate; (2) a higher a-priori threshold to concentrate on the top-tercile (38%
+win / +0.385R); (3) a richer model (GBM — dep tradeoff) + more features. Ship the
+current momentum baseline; forward-test the ranked variant alongside it.

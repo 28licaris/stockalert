@@ -390,6 +390,52 @@ class EwtImpulseFilter(BaseFilter):
                             f"wave {cw} {prim.direction} conf {labeling.confidence:.2f} ({signal.direction})")
 
 
+class MetaRankFilter(BaseFilter):
+    """Layer-2 learned gate: score the setup with the trained probability ranker
+    (P of target-before-stop) and pass only high-P trades. Features are computed by
+    the SHARED `app.services.sim.ranker` code — the same function used to build the
+    training set — so train/inference parity is guaranteed by construction. The
+    signal's confidence becomes P, so conviction sizing scales with probability."""
+
+    name = "meta_rank"
+
+    def __init__(self, *, model_path: str = "data/ranker.json", min_proba: float = 0.5,
+                 rel_lookback: int = 60, regime_ma: int = 50, weight: float = 1.0) -> None:
+        self.model_path = model_path
+        self.min_proba = min_proba
+        self.rel_lookback = rel_lookback
+        self.regime_ma = regime_ma
+        self.weight = weight
+        self._model = None
+        self._tried = False
+
+    def evaluate(self, ctx: Context, signal: Signal) -> FilterResult:
+        from app.services.sim.ranker import (
+            SYMBOL_FEATURES, compute_symbol_features, load_ranker, predict_proba,
+        )
+        if not self._tried:
+            self._model = load_ranker(self.model_path)
+            self._tried = True
+        if self._model is None:
+            return FilterResult(False, 0.0, "ranker model missing")
+        df = ctx.history.to_dataframe()
+        if len(df) < 210:
+            return FilterResult(False, 0.0, "ranker warmup")
+        row = compute_symbol_features(df).iloc[-1]
+        if row[SYMBOL_FEATURES].isna().any():
+            return FilterResult(False, 0.0, "ranker features NaN")
+        mc = getattr(ctx, "market", None)
+        spy_ret = mc.return_over_asof(ctx.bar.timestamp, self.rel_lookback) if mc else None
+        regime = mc.above_ma_asof(ctx.bar.timestamp, self.regime_ma) if mc else None
+        feats = {f: float(row[f]) for f in SYMBOL_FEATURES}
+        feats["rel_str"] = float(row["ret60"] - spy_ret) if spy_ret is not None else 0.0
+        feats["regime_up"] = 1.0 if regime else 0.0
+        p = predict_proba(self._model, feats)
+        ok = p >= self.min_proba
+        # score = P → FilteredSignalSource sets confidence = P (conviction by prob).
+        return FilterResult(ok, p if ok else 0.0, f"P(win)={p:.2f}")
+
+
 _FILTERS = {
     "trend": TrendFilter,
     "reward_risk": MinRewardRiskFilter,
@@ -404,6 +450,7 @@ _FILTERS = {
     "not_extended": NotExtendedFilter,
     "rel_volume": RelativeVolumeFilter,
     "ewt_impulse": EwtImpulseFilter,
+    "meta_rank": MetaRankFilter,
 }
 
 

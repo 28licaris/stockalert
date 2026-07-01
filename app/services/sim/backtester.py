@@ -310,9 +310,17 @@ class Backtester:
         from app.services.sim.market_context import MarketContext
 
         try:
-            bars = BarReader.from_settings().get_bars_in_range(
-                config.benchmark, config.start, config.end, interval=interval,
-            )
+            if config.daily_table and interval == "1d":
+                # Read the benchmark from the SAME table as the strategy bars so
+                # timestamps (tz) + adjustment convention match — otherwise the
+                # MarketContext as-of lookup compares mismatched tz and crashes.
+                bench_cfg = config.model_copy(update={"symbols": [config.benchmark]})
+                bars = self._fetch_bars_daily_table(bench_cfg, config.daily_table).get(
+                    config.benchmark, [])
+            else:
+                bars = BarReader.from_settings().get_bars_in_range(
+                    config.benchmark, config.start, config.end, interval=interval,
+                )
         except Exception as exc:  # noqa: BLE001 — degrade, don't crash the backtest
             logger.warning("Backtester: benchmark %s load failed: %s", config.benchmark, exc)
             bars = []
@@ -444,18 +452,20 @@ class Backtester:
         cli = get_client()
         a = config.start.strftime("%Y-%m-%d %H:%M:%S")
         b = config.end.strftime("%Y-%m-%d %H:%M:%S")
-        out: dict[str, list[Bar]] = {}
-        for symbol in config.symbols:
-            rows = cli.query(
-                f"SELECT timestamp, open, high, low, close, volume FROM {table} FINAL "
-                "WHERE symbol = {s:String} AND timestamp >= {a:String} AND timestamp <= {b:String} "
-                "ORDER BY timestamp",
-                parameters={"s": symbol, "a": a, "b": b},
-            ).result_rows
-            out[symbol] = [
-                _DailyBar(symbol, r[0], float(r[1]), float(r[2]), float(r[3]),
-                          float(r[4]), float(r[5])) for r in rows
-            ]
+        out: dict[str, list[Bar]] = {sym: [] for sym in config.symbols}
+        # ONE query for the whole universe (500 per-symbol FINAL queries were slow).
+        rows = cli.query(
+            f"SELECT symbol, timestamp, open, high, low, close, volume FROM {table} FINAL "
+            "WHERE symbol IN {syms:Array(String)} "
+            "AND timestamp >= {a:String} AND timestamp <= {b:String} "
+            "ORDER BY symbol, timestamp",
+            parameters={"syms": list(config.symbols), "a": a, "b": b},
+        ).result_rows
+        for r in rows:
+            sym = r[0]
+            if sym in out:
+                out[sym].append(_DailyBar(sym, r[1], float(r[2]), float(r[3]),
+                                          float(r[4]), float(r[5]), float(r[6])))
         return out
 
     def _fetch_bars_ch(
