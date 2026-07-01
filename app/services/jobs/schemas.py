@@ -75,6 +75,14 @@ class JobMetadata(BaseModel):
             "(truncated to 500 chars). None when last run succeeded."
         ),
     )
+    last_summary: Optional[str] = Field(
+        default=None,
+        description=(
+            "Concise one-line summary of what the most recent run did "
+            "(e.g. 'filled 2 session(s): …', 'stored=3 enriched=2'). "
+            "None when no run has been recorded."
+        ),
+    )
     running: bool = Field(
         default=False,
         description="True iff a run is currently in flight for this job.",
@@ -85,6 +93,23 @@ class JobListing(BaseModel):
     """Result of `JobRegistry.list()` — what GET /api/v1/jobs returns."""
 
     jobs: list[JobMetadata]
+
+
+class JobRun(BaseModel):
+    """One historical run of a job (from `ingestion_runs`)."""
+
+    finished_at: Optional[str] = Field(default=None, description="ISO 8601 finish time.")
+    status: str = Field(default="unknown", description="ok | error | partial_fail.")
+    summary: Optional[str] = Field(default=None, description="Concise one-line summary.")
+    error: Optional[str] = Field(default=None, description="Error message, if any.")
+    rows_written: int = Field(default=0, description="Rows written this run.")
+
+
+class JobRunHistory(BaseModel):
+    """Result of GET /api/v1/jobs/{name}/runs — recent runs, newest first."""
+
+    job: str
+    runs: list[JobRun]
 
 
 class RunResult(BaseModel):

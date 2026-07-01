@@ -1,5 +1,8 @@
+import { useState } from "react";
 import {
   Activity,
+  ChevronDown,
+  ChevronRight,
   Database,
   Play,
   Radio,
@@ -12,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
 import {
   useHealthServices,
+  useJobRuns,
   useJobs,
   useRunJob,
   type HealthState,
@@ -203,9 +207,10 @@ function ScheduledJobsSection() {
         <table className="w-full text-sm">
           <thead className="bg-bg-muted/65 text-xs uppercase tracking-wider text-fg-subtle">
             <tr>
+              <th className="w-8 px-2 py-2" aria-label="Expand" />
               <th className="px-4 py-2 text-left font-medium">Job</th>
               <th className="px-4 py-2 text-left font-medium">Schedule</th>
-              <th className="px-4 py-2 text-left font-medium">Last success</th>
+              <th className="px-4 py-2 text-left font-medium">Last run</th>
               <th className="px-4 py-2 text-left font-medium">Status</th>
               <th className="px-4 py-2 text-right font-medium" aria-label="Actions" />
             </tr>
@@ -213,13 +218,13 @@ function ScheduledJobsSection() {
           <tbody className="divide-y divide-border-subtle">
             {jobs.isLoading ? (
               <tr>
-                <td colSpan={5} className="px-4 py-4 text-center text-xs text-fg-subtle">
+                <td colSpan={6} className="px-4 py-4 text-center text-xs text-fg-subtle">
                   Loading…
                 </td>
               </tr>
             ) : (jobs.data?.jobs ?? []).length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-4 py-4 text-center text-xs text-fg-subtle">
+                <td colSpan={6} className="px-4 py-4 text-center text-xs text-fg-subtle">
                   No jobs registered. (Background loops may not be enabled — check your .env.)
                 </td>
               </tr>
@@ -265,56 +270,148 @@ function JobRow({
   onRun: () => void;
   triggering: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const disabled = !job.runnable || job.running || triggering;
   return (
-    <tr className="hover:bg-bg-muted/40">
-      <td className="px-4 py-2">
-        <div className="font-medium text-fg-base">{job.display_name}</div>
-        <div className="font-mono text-[11px] text-fg-subtle">{job.name}</div>
-      </td>
-      <td
-        className="px-4 py-2 text-xs text-fg-muted"
-        title={job.setting_key ? `env: ${job.setting_key}` : undefined}
-      >
-        {job.schedule}
-      </td>
-      <td className="px-4 py-2 text-xs text-fg-muted">
-        {job.last_success ? fmtAgo(job.last_success) : "—"}
-      </td>
-      <td className="px-4 py-2">
-        <span className="inline-flex items-center gap-2 text-xs text-fg-base">
-          <span
-            aria-hidden
-            className={cn("h-2 w-2 rounded-full", JOB_STATUS_BG[job.last_status])}
-          />
-          {JOB_STATUS_LABEL[job.last_status]}
-        </span>
-        {job.last_status === "error" && job.last_error ? (
-          <div className="mt-1 line-clamp-2 font-mono text-[11px] text-fg-subtle" title={job.last_error}>
-            {job.last_error}
-          </div>
-        ) : null}
-      </td>
-      <td className="px-4 py-2 text-right">
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          onClick={onRun}
-          disabled={disabled}
-          aria-label={`Run ${job.display_name} now`}
-          title={
-            !job.runnable
-              ? "No manual trigger registered for this job"
-              : job.running
-                ? "Job is already running"
-                : `Run ${job.display_name} now`
-          }
+    <>
+      <tr className="hover:bg-bg-muted/40">
+        <td className="px-2 py-2 align-top">
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            aria-label={expanded ? "Hide run history" : "Show run history"}
+            aria-expanded={expanded}
+            className="rounded p-1 text-fg-subtle hover:bg-bg-muted/60 hover:text-fg-base"
+          >
+            {expanded ? (
+              <ChevronDown className="h-4 w-4" />
+            ) : (
+              <ChevronRight className="h-4 w-4" />
+            )}
+          </button>
+        </td>
+        <td className="px-4 py-2 align-top">
+          <div className="font-medium text-fg-base">{job.display_name}</div>
+          <div className="font-mono text-[11px] text-fg-subtle">{job.name}</div>
+        </td>
+        <td
+          className="px-4 py-2 align-top text-xs text-fg-muted"
+          title={job.setting_key ? `env: ${job.setting_key}` : undefined}
         >
-          <Play className={cn("h-4 w-4", triggering && "animate-pulse")} />
-        </Button>
-      </td>
-    </tr>
+          {job.schedule}
+        </td>
+        <td className="px-4 py-2 align-top text-xs text-fg-muted">
+          {job.last_run_at ? fmtAgo(job.last_run_at) : "—"}
+        </td>
+        <td className="px-4 py-2 align-top">
+          <span className="inline-flex items-center gap-2 text-xs text-fg-base">
+            <span
+              aria-hidden
+              className={cn("h-2 w-2 rounded-full", JOB_STATUS_BG[job.last_status])}
+            />
+            {JOB_STATUS_LABEL[job.last_status]}
+          </span>
+          {job.last_status === "error" && job.last_error ? (
+            <div className="mt-1 line-clamp-2 font-mono text-[11px] text-fg-subtle" title={job.last_error}>
+              {job.last_error}
+            </div>
+          ) : job.last_summary ? (
+            <div className="mt-1 line-clamp-2 text-[11px] text-fg-subtle" title={job.last_summary}>
+              {job.last_summary}
+            </div>
+          ) : null}
+        </td>
+        <td className="px-4 py-2 text-right align-top">
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            onClick={onRun}
+            disabled={disabled}
+            aria-label={`Run ${job.display_name} now`}
+            title={
+              !job.runnable
+                ? "No manual trigger registered for this job"
+                : job.running
+                  ? "Job is already running"
+                  : `Run ${job.display_name} now`
+            }
+          >
+            <Play className={cn("h-4 w-4", triggering && "animate-pulse")} />
+          </Button>
+        </td>
+      </tr>
+      {expanded ? (
+        <tr className="bg-bg-muted/25">
+          <td />
+          <td colSpan={5} className="px-4 pb-3 pt-1">
+            <JobRunHistoryTable job={job.name} />
+          </td>
+        </tr>
+      ) : null}
+    </>
+  );
+}
+
+// Per-job run log (last 10), lazily fetched when a row is expanded.
+function JobRunHistoryTable({ job }: { job: string }) {
+  const runs = useJobRuns(job, true);
+  if (runs.isLoading) {
+    return <div className="py-2 text-[11px] text-fg-subtle">Loading run history…</div>;
+  }
+  if (runs.error) {
+    return <ApiErrorAlert error={runs.error} />;
+  }
+  const rows = runs.data?.runs ?? [];
+  if (rows.length === 0) {
+    return (
+      <div className="py-2 text-[11px] text-fg-subtle">
+        No runs recorded yet for this job.
+      </div>
+    );
+  }
+  return (
+    <div className="overflow-hidden rounded border border-border-subtle">
+      <table className="w-full text-[11px]">
+        <thead className="bg-bg-muted/50 uppercase tracking-wider text-fg-subtle">
+          <tr>
+            <th className="px-3 py-1 text-left font-medium">When</th>
+            <th className="px-3 py-1 text-left font-medium">Status</th>
+            <th className="px-3 py-1 text-left font-medium">Summary</th>
+            <th className="px-3 py-1 text-right font-medium">Rows</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border-subtle">
+          {rows.map((r, i) => (
+            <tr key={`${r.finished_at ?? "run"}-${i}`}>
+              <td className="whitespace-nowrap px-3 py-1 text-fg-muted">
+                {r.finished_at ? fmtAgo(r.finished_at) : "—"}
+              </td>
+              <td className="px-3 py-1">
+                <span
+                  className={cn(
+                    "inline-block rounded px-1.5 py-0.5 text-[10px] font-medium",
+                    r.status === "ok"
+                      ? "bg-success/15 text-success"
+                      : r.status === "error"
+                        ? "bg-danger/15 text-danger"
+                        : "bg-warning/15 text-warning",
+                  )}
+                >
+                  {r.status}
+                </span>
+              </td>
+              <td className="px-3 py-1 font-mono text-fg-subtle" title={r.error ?? r.summary ?? ""}>
+                {r.error ?? r.summary ?? "—"}
+              </td>
+              <td className="px-3 py-1 text-right tabular-nums text-fg-muted">
+                {r.rows_written ? fmtInt(r.rows_written) : "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

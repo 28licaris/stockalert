@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.services.identity.entitlements import entitlements_for
+from app.services.identity.permissions import permissions_for
 from app.services.identity.models import (
     AuthTransactionModel,
     ExternalIdentityModel,
@@ -175,7 +176,7 @@ class PostgresIdentityRepository:
     ) -> Principal | None:
         with self._session_factory() as db:
             row = db.execute(
-                select(SessionModel, MembershipModel, SubscriptionModel)
+                select(SessionModel, MembershipModel, SubscriptionModel, UserModel)
                 .join(
                     MembershipModel,
                     (MembershipModel.user_id == SessionModel.user_id)
@@ -198,14 +199,16 @@ class PostgresIdentityRepository:
             ).one_or_none()
             if row is None:
                 return None
-            session, membership, subscription = row
+            session, membership, subscription, user = row
             status = subscription.status if subscription is not None else "none"
             price_id = subscription.price_id if subscription is not None else None
+            role = Role(membership.role)
             return Principal(
                 user_id=session.user_id,
                 tenant_id=session.tenant_id,
                 session_id=session.id,
-                roles=frozenset({Role(membership.role)}),
+                roles=frozenset({role}),
+                permissions=permissions_for(role, getattr(user, "email", None)),
                 entitlements=entitlements_for(status, price_id),
             )
 

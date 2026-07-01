@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { branding } from "@/branding";
 import { LogoMark } from "@/components/brand/LogoMark";
 import { allFlags } from "@/flags";
+import { useCurrentUser } from "@/auth/useCurrentUser";
 import { cn } from "@/lib/utils";
 import { NAV_ITEMS, type NavCategory, type NavItem } from "./nav-items";
 
@@ -30,8 +31,10 @@ export function Sidebar({
   onMobileClose,
 }: SidebarProps) {
   const flags = allFlags();
+  const user = useCurrentUser();
+  const isOperator = user.permissions.includes("operator.access");
   const visible: NavItem[] = NAV_ITEMS.filter(
-    (item) => flags[item.flag] === true,
+    (item) => flags[item.flag] === true && (!item.adminOnly || isOperator),
   );
 
   const grouped = CATEGORY_ORDER.map((cat) => ({

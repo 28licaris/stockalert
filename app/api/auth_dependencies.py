@@ -164,6 +164,37 @@ def require_operator_principal(
     return principal
 
 
+def require_operator(request: Request) -> Principal | None:
+    """Operator gate for admin-only surfaces (system health, ClickHouse
+    console, job registry).
+
+    When ``AUTH_ENABLED=false`` (single-operator dev cockpit) this is a
+    no-op so the local operator keeps full access. Once auth is enabled it
+    enforces the ``operator.access`` permission — 401 if unauthenticated,
+    403 if authenticated without operator rights.
+
+    Note: the identity service is resolved lazily (not via ``Depends``) so
+    that FastAPI does not eagerly construct it — and hit the identity DB —
+    on every admin request while auth is disabled.
+    """
+    from app.config import settings
+
+    if not settings.auth_enabled:
+        return None
+    identity_service = get_identity_service()
+    principal = get_optional_principal(request, identity_service)
+    if principal is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required.",
+            headers={
+                "WWW-Authenticate": "Session",
+                "X-Error-Code": "unauthorized",
+            },
+        )
+    return require_operator_principal(principal)
+
+
 def require_csrf(
     request: Request,
     principal: Principal,

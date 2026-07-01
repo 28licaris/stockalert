@@ -13,7 +13,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
-from app.api.schemas.jobs import JobListing, JobRunResult
+from app.api.schemas.jobs import JobListing, JobRun, JobRunHistory, JobRunResult
 from app.services.jobs import job_registry
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,19 @@ async def list_jobs() -> JobListing:
     """
     items = await asyncio.to_thread(job_registry.list)
     return JobListing(jobs=items)
+
+
+@router.get("/jobs/{name}/runs", response_model=JobRunHistory)
+async def job_runs(name: str, limit: int = 10) -> JobRunHistory:
+    """Recent run history for one job (newest first), for the Status page's
+    per-job log view. `limit` is clamped to [1, 50]."""
+    if job_registry.get(name) is None:
+        raise HTTPException(404, f"no job registered with name {name!r}")
+    lim = max(1, min(50, int(limit)))
+    from app.services.jobs.repo import fetch_recent_runs
+
+    rows = await asyncio.to_thread(fetch_recent_runs, name, lim)
+    return JobRunHistory(job=name, runs=[JobRun(**r) for r in rows])
 
 
 @router.post("/jobs/{name}/run", response_model=JobRunResult)

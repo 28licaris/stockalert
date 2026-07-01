@@ -86,8 +86,8 @@ export function OptionsPage() {
         <div>
           <h1 className="text-2xl font-semibold text-fg-base">Options</h1>
           <p className="mt-1 max-w-3xl text-sm text-fg-muted">
-            Latest Schwab chain snapshots from the ClickHouse hot tier for GEX,
-            positioning, and contract-level opportunity scans.
+            Latest options-chain snapshots for GEX, positioning, and
+            contract-level opportunity scans.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3 text-xs text-fg-subtle">
