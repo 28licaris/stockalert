@@ -882,3 +882,36 @@ should be trained/validated against — on data that includes the losers.
 
 **Next:** Layer-2 learned ranker (P target-before-stop from as-of features), trained
 TRAIN / validated HOLDOUT on this survivorship-clean universe.
+
+---
+
+## EXP-24 · 2026-07-01 · Layer-2 probability ranker (learned, OOS-validated)
+
+The "highest-probability trades" layer. scripts/build_trade_dataset.py emits, for
+every base candidate (breakout while in the dynamic momentum top-15) on the
+survivorship-clean ohlcv_daily universe, AS-OF features + a triple-barrier win/loss
+label (target=+3R / stop=breakout level / 60-day time exit; entry filled next open —
+no look-ahead in features). 3,645 trades, 2006-2026, base win 28% / avg +0.04R.
+
+scripts/train_ranker.py: numpy logistic regression (no new deps), standardized on
+TRAIN stats only, TRAIN <2020 / HOLDOUT >=2020.
+
+HOLDOUT (2020-2026, never trained on):
+- AUC 0.563 (real OOS signal).
+- Predicted-P terciles: low win 26.8%/+0.06R · mid 26.4%/+0.04R · **high 38.0%/+0.385R**.
+- Gate @ P>=median: win 33.7% (base 30.4%), avg R +0.256 (base +0.164) — ~56% more
+  per-trade edge on unseen data.
+
+Learned feature weights (interpretable, sensible): bo_height +0.49 (decisive
+breakouts beat marginal ones), dist_sma50 −0.32 (don't chase over-extended), rsi
++0.28 / ret60 +0.19 (momentum confirmation). Model saved to data/ranker.json.
+
+**Conclusion:** the 3-layer vision is proven end-to-end on honest data — (1) base
+momentum → (2) a learned ranker that separates winners from losers OOS (top tercile
+38% vs bottom 27% win), on the survivorship-clean universe, trained TRAIN / validated
+HOLDOUT (no cheating). This is the data-appropriate ML rung (interpretable logistic,
+not a black box); a gradient-boosted upgrade is a later, dep-tradeoff decision.
+
+**Next:** integrate as a MetaRankFilter (load ranker.json, recompute the SAME as-of
+features from ctx at entry — feature parity is the one correctness risk — gate by
+P-threshold) and re-backtest the gated strategy; then forward-paper it.
