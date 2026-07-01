@@ -1048,3 +1048,63 @@ labels at a momentum entry carry no extra information). The learned-EW weights
 were also collinear/unstable (ew_uncert positive). Per the no-ego doctrine:
 **EW does not earn a place in the ranker.** Last EW hypothesis standing = EW
 as its own entry SOURCE on the dynamic universe (EXP-32).
+
+---
+
+## EXP-30 · 2026-07-01 · top-N percentile response curve + DEV selection
+
+Full-period 2022-25 response curve on the clean 1000-name universe (in-sample,
+used only to pick CANDIDATE bases; final selection on DEV windows below):
+
+| top_n (of 1000) | %ile | Return | Sharpe | Max DD | PF |
+|---|---|---|---|---|---|
+| 15 | 1.5% | −2.7% | 0.10 | −45.7% | 0.96 |
+| **50** | **5%** | +65.8% | 0.59 | −31.9% | 1.15 |
+| 125 | 12.5% | +15.5% | 0.29 | −20.2% | 1.06 |
+
+DEV(2022-23)/HOLDOUT(2024-25) discipline on the two candidates:
+
+| Base | DEV Sharpe | HOLD Sharpe | HOLD ret | HOLD DD |
+|---|---|---|---|---|
+| top50 bare | **+0.76** | +0.64 | +39.7% | −37.2% |
+| top125 bare | +0.56 | +0.19 | +2.0% | −37.4% |
+
+**top50 selected on DEV; holdout confirms.** The momentum edge concentrates
+around the top ~5% of a broad pool — tighter than the 12.6%ile the old
+119-name config implied (a-priori percentile translation was wrong; the
+response curve is hump-shaped: 1.5% = squeeze junk, 12.5% = diluted).
+Bigger ranker dataset fallout: top-125 candidates = **21,338 trades** (5.5×),
+holdout AUC 0.572, gate avg R +0.057→+0.159; GBM re-audited at 21k trades and
+REJECTED again (logistic 0.572 vs GBM 0.567) — the linear model keeps winning.
+
+---
+
+## EXP-31 · 2026-07-01 · Stage-B stacks: the gate FLIPS live; the drawdown brake WINS
+
+DEV(2022-23) / HOLDOUT(2024-25), all on top50 base, $100k, 10 slots, 12% heat:
+
+| Config | DEV Sharpe / DD | HOLD Sharpe / DD | HOLD ret |
+|---|---|---|---|
+| bare | +0.76 / −31% | +0.64 / −37% | +39.7% |
+| **+ dd_brake 0.15** | +0.07 / **−17%** | **+0.82 / −14.8%** | +31.6% |
+| + ranker gate (P≥0.243) | +1.49 / −8.8% | **−0.29 / −35%** | −14.1% |
+| + gate + conviction + ranked | +0.44 / −15% | +0.12 / −46% | −1.7% |
+
+**Conclusions:**
+1. **The drawdown governor is the campaign's win:** holdout DD −37%→−14.8%
+   with Sharpe UP (0.64→0.82) — cutting giveback is free risk-adjusted alpha.
+   In the 2022 bear (DEV) it held the book near-flat (−17% DD vs −31%): the
+   “never lose big” product promise, mechanically enforced. Note: realized DD
+   overshoots the limit ~15-20% (open positions bleed after entries stop) —
+   set the limit ~0.8× the product target.
+2. **The ranker hard gate FLIPPED on holdout** (DEV Sharpe 1.49 → HOLD −0.29)
+   despite positive trade-level lift in every recent year (2024: +0.307R gated
+   vs +0.052R all). Root cause: **candidate-day vs position-day mismatch** —
+   the dataset scores every breakout day (a 10-day streak = 10 rows), the live
+   engine takes ONE position at the first PASSING day, and the bo_height-heavy
+   model passes the more-extended days of a streak → the portfolio buys later,
+   worse entries than the dataset averages. The ranker is a real signal wrongly
+   integrated; rework (first-streak-day gating or sizing-tilt-only) is future
+   work. Gate + conviction + ranked admission: also no benefit in current form.
+3. Ranked admission + conviction machinery is engine-side, tested, default-off —
+   it awaits a signal whose confidence is trustworthy live.

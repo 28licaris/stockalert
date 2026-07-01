@@ -49,6 +49,7 @@ def main(argv=None) -> int:
     ap.add_argument("--split", default="2020-01-01")
     ap.add_argument("--ew", action="store_true",
                     help="include Elliott Wave features (dataset must be built with --ew)")
+    ap.add_argument("--out", default="data/ranker.json")
     a = ap.parse_args(argv)
     global FEATURES
     if a.ew:
@@ -89,11 +90,11 @@ def main(argv=None) -> int:
     print(f"\nTRAIN predicted-P quantiles: p10={q10:.3f}  median={q50:.3f}  p90={q90:.3f}"
           f"  (median = the a-priori min_proba; p10/p90 = sizing calibration)")
 
-    Path("data/ranker.json").write_text(json.dumps({
+    Path(a.out).write_text(json.dumps({
         "features": FEATURES, "mu": mu.tolist(), "sd": sd.tolist(),
         "w": w.tolist(), "b": float(b),
         "train_p10": q10, "train_p50": q50, "train_p90": q90}, indent=2))
-    print("saved model → data/ranker.json")
+    print(f"saved model → {a.out}")
     return 0
 
 
