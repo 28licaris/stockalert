@@ -855,3 +855,30 @@ Result — the wall caught an overfit:
 **Action:** keep momentum_top15 as the shipped baseline; register the 45-day
 time-stop variant as a SEPARATE library strategy and forward-test it cleanly
 alongside the baseline (compare their post-go-live records, no peeking).
+
+---
+
+## EXP-23 · 2026-07-01 · Survivorship-clean deep universe (the honest correction)
+
+Built the liquid + delisted-inclusive DAILY research universe (see
+docs/no_lookahead_audit.md §biases). Pipeline: rank lake 20yr by dollar-volume →
+top-500 (87 delisted incl. Lehman/Merrill/TWTR) → Athena aggregate minute→daily
+(regular-session, ET-bucketed) → tested apply_adjustment (splits) → CH `ohlcv_daily`
+(1.7M adjusted daily bars, 2006-2026). Validated vs BarReader rollup (AAPL median
+0.16%, NVDA 0.27%). Sim reads it via BacktestConfig.daily_table='ohlcv_daily'.
+
+Breakout + dynamic top-15, 2022-2025:
+
+| Universe | Return | Sharpe | Max DD | PF | Trades |
+|---|---|---|---|---|---|
+| Old 119 (survivorship-BIASED) | +354% | 1.28 | −25.8% | 1.62 | 425 |
+| New 500 (survivorship-CLEAN) | **+226%** | 0.94 | **−34.9%** | 1.51 | 466 |
+
+**Conclusion:** ~130 points of the old return was survivorship inflation, and the
+drawdown WORSENED (−26%→−35%) because the clean universe includes names that blew
+up (momentum buys some, they crater). The edge survives (+226%/4yr, PF 1.51) but is
+honestly more sober. This is the corrected baseline the Layer-2 probability ranker
+should be trained/validated against — on data that includes the losers.
+
+**Next:** Layer-2 learned ranker (P target-before-stop from as-of features), trained
+TRAIN / validated HOLDOUT on this survivorship-clean universe.

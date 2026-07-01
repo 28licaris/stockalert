@@ -222,6 +222,14 @@ class BacktestConfig(BaseModel):
     momentum_lookback: int = Field(
         60, ge=2, description="Bars used for the dynamic-universe momentum ranking.",
     )
+    daily_table: Optional[str] = Field(
+        None,
+        description=(
+            "For interval='1d': read pre-adjusted daily bars directly from this CH "
+            "table (e.g. 'ohlcv_daily', the deep+liquid+delisted research universe) "
+            "instead of rolling up ohlcv_1m. None = default rollup."
+        ),
+    )
     starting_cash: float = 40_000.0
     history_window: int = Field(
         200,

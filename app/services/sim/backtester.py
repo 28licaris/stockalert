@@ -420,10 +420,51 @@ class Backtester:
             )
         return out
 
+    def _fetch_bars_daily_table(self, config: BacktestConfig, table: str) -> dict[str, list[Bar]]:
+        """Read pre-adjusted daily bars directly from a CH table (the research
+        universe, e.g. ohlcv_daily). Bar is a structural Protocol, so a tiny
+        record with the OHLCV fields satisfies the rest of the engine."""
+        import re
+        from dataclasses import dataclass
+        from app.db.client import get_client
+
+        if not re.fullmatch(r"[A-Za-z0-9_]+", table):
+            raise ValueError(f"unsafe daily_table name {table!r}")
+
+        @dataclass
+        class _DailyBar:
+            symbol: str
+            timestamp: datetime
+            open: float
+            high: float
+            low: float
+            close: float
+            volume: float
+
+        cli = get_client()
+        a = config.start.strftime("%Y-%m-%d %H:%M:%S")
+        b = config.end.strftime("%Y-%m-%d %H:%M:%S")
+        out: dict[str, list[Bar]] = {}
+        for symbol in config.symbols:
+            rows = cli.query(
+                f"SELECT timestamp, open, high, low, close, volume FROM {table} FINAL "
+                "WHERE symbol = {s:String} AND timestamp >= {a:String} AND timestamp <= {b:String} "
+                "ORDER BY timestamp",
+                parameters={"s": symbol, "a": a, "b": b},
+            ).result_rows
+            out[symbol] = [
+                _DailyBar(symbol, r[0], float(r[1]), float(r[2]), float(r[3]),
+                          float(r[4]), float(r[5])) for r in rows
+            ]
+        return out
+
     def _fetch_bars_ch(
         self, config: BacktestConfig, interval: str,
     ) -> dict[str, list[Bar]]:
-        """All non-1m intervals route through CH via BarReader."""
+        """All non-1m intervals route through CH via BarReader (rollup of ohlcv_1m),
+        unless a `daily_table` is configured for 1d (direct pre-adjusted read)."""
+        if interval == "1d" and config.daily_table:
+            return self._fetch_bars_daily_table(config, config.daily_table)
         from app.services.readers.bar_reader import BarReader
 
         reader = BarReader.from_settings()
