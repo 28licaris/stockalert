@@ -1150,20 +1150,29 @@ top50 + dd_brake(0.15) on windows never touched by ANY of today's selection
 | 2008 (GFC; SPY ~−38% intra) | −15.5% | −1.28 | **−16.0%** | 0.52 |
 | 2020 (COVID; SPY ~−34% intra) | −8.8% | −1.00 | **−15.1%** | 0.37 |
 | 2006-2021 continuous | +27.2% (+1.6%/yr) | 0.30 | **−15.0%** | 1.35 |
+| 2006-2021 continuous, BARE (attribution) | +25.2% (+1.5%/yr) | 0.19 | −44.6% | 1.10 |
 | 2024-25 holdout (from EXP-31) | +31.6% (+15.2%/yr) | 0.82 | −14.8% | 1.29 |
 
 **Conclusions:**
 1. **The DD promise holds everywhere: worst drawdown across 20 years incl.
    two generational crashes ≈ 15-16%** (vs market −34/−38%). That is the
    sellable, mechanically-enforced product property.
-2. **The continuous 16-year return is honestly weak (+1.6%/yr):** proportional
-   braking recovers from deep hits on tiny sizes (the ratchet), and the
-   pre-2015 edge was thinner. Tried the principled fix (participation floor
-   0.5): **rejected on DEV AND holdout** (DD worse −14.8→−19.1%, return
-   +31.6→+11.0%) — the linear brake's near-zero re-entry sizing doubles as a
-   trend filter on the system's own equity; a floor breaks exactly that. One
-   iteration, no further brake-shape tuning (holdout-burning risk).
-3. Where this leaves the platform: **the edge is small and recent-regime-
-   dependent; the risk engineering works.** No config on today's evidence
-   supports a get-rich track record; top50+brake supports an honest
-   "momentum alerts with a hard ~15% drawdown cap" story.
+2. **The weak 16-year return is the EDGE, not the brake** — the attribution
+   run refutes the ratchet hypothesis: bare earns the same +1.5%/yr while
+   drawing down −44.6%. **The brake is strictly dominant** (equal return, ⅓
+   the DD, PF 1.10→1.35). The principled anti-ratchet fix (participation
+   floor 0.5) was also **rejected on DEV AND holdout** (DD −14.8→−19.1%,
+   return +31.6→+11.0%): the linear brake's near-zero re-entry sizing doubles
+   as a trend filter on the system's own equity; a floor breaks exactly that.
+   One iteration, no further brake-shape tuning (holdout-burning risk).
+3. **The edge is era-dependent:** thin 2006-2021 (+1.5%/yr), strong 2022-25
+   (bare +65.8%; braked HOLD Sharpe 0.82) — the post-2020 high-dispersion
+   tape suits breakout-on-leaders. Only a forward paper-trade shows whether
+   that regime persists. No config on today's evidence supports a get-rich
+   track record; **top50+brake supports an honest "momentum alerts with a
+   hard ~15% drawdown cap" story** — M3 forward paper-trade recommendation:
+   run top50+brake AND top50 bare side by side, judge on the live record.
+
+**Production TODO before paper-trading the brake:** empty-book freeze fix
+(if every position stops out exactly at dd ≥ limit, equity freezes and the
+brake never releases — add an idle-reset or minimum re-entry trickle).
