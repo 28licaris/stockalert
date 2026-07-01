@@ -820,3 +820,38 @@ short bottom-15 laggards on the 119-name dynamic pool.
 
 **Next:** stop trying to short this regime. Lock the long-only dynamic-breakout
 config and move to M3 forward paper-trading — the real, sellable track record.
+
+---
+
+## EXP-22 · 2026-06-30 · Improving momentum WITHOUT cheating (train/holdout wall)
+
+Goal: improve the headline momentum strategy while guaranteeing the data used to
+tune is NOT the data used to judge. `scripts/improve_strategy.py` enforces:
+  TRAIN 2022-2023 → tune / select.   HOLDOUT 2024-2025 → never selected on, only revealed.
+Selection is STRICTLY by TRAIN Sharpe; a change ships only if it ALSO beats the
+baseline on the untouched holdout. Grid: top_n {12,15,18} × breakout-lookback
+{20,40} × time-stop {none,45d}.
+
+Baseline top15/bo20/no-stop: train Sharpe +0.71, holdout +0.94, holdout ret +48%.
+
+Result — the wall caught an overfit:
+- TRAIN-selected winner = top15/**bo40** (train Sharpe +0.95, the best on train) →
+  HOLDOUT Sharpe **+0.05**, ret **+1%**. OVERFIT. Verdict: KEEP baseline. Had we
+  tuned on all data we'd have shipped this dud. This is the anti-cheating harness
+  earning its keep.
+- Honest LEAD (not adopted): a 45-day time-stop lifted the HOLDOUT for several
+  configs (top18/bo20/hold45 → holdout Sharpe 1.18, ret +72%; top12/bo20/hold45 →
+  1.12/+70%) but had LOWER train Sharpe — so picking it now = peeking at the
+  holdout. Time-stops are a sound a-priori risk idea, so the honest way to adopt it
+  is to FORWARD-TEST it as a separate strategy, not select it off the holdout.
+
+**Data-hygiene principle (now enforced):**
+1. Tuning/search uses only the TRAIN window; the holdout is revealed once, never
+   optimized against.
+2. The simulated/paper record uses ONLY post-go_live data (future to all tuning) —
+   the live track record can never contain training data.
+3. Past-date "replays" are clearly labeled backtest, not the live record.
+
+**Action:** keep momentum_top15 as the shipped baseline; register the 45-day
+time-stop variant as a SEPARATE library strategy and forward-test it cleanly
+alongside the baseline (compare their post-go-live records, no peeking).
