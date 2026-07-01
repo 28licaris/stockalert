@@ -67,6 +67,16 @@ export function useStrategyAlerts(name: string, enabled: boolean) {
   });
 }
 
+export function useLeaderboard(enabled: boolean) {
+  return useQuery({
+    queryKey: ["library", "leaderboard"],
+    queryFn: () => getJSON<StrategyOwnerStats[]>("/api/v1/strategies/leaderboard"),
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
 export function useStrategyOwnerStats(name: string, enabled: boolean) {
   return useQuery({
     queryKey: ["library", "ownerstats", name],

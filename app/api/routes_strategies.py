@@ -42,6 +42,12 @@ def list_strategies() -> list[StrategyDefinition]:
     return lib.list_definitions()
 
 
+@router.get("/strategies/leaderboard", response_model=list[StrategyOwnerStats])
+def leaderboard() -> list[StrategyOwnerStats]:
+    """OWNER leaderboard: backtest + simulated stats for every strategy, side by side."""
+    return [lib.owner_stats(d) for d in lib.list_definitions()]
+
+
 @router.get("/strategies/{name}/stats", response_model=StrategyOwnerStats)
 def strategy_owner_stats(name: str) -> StrategyOwnerStats:
     """OWNER/dev stats: full backtest metrics + the simulated (paper) summary."""

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Bell, ChevronDown, ChevronRight, Loader2, Lock, Sparkles } from "lucide-react";
 import {
-  useLibrary, useStrategyAlerts, useStrategyOwnerStats,
+  useLeaderboard, useLibrary, useStrategyAlerts, useStrategyOwnerStats,
   type StrategyAlert, type StrategyOwnerStats, type StrategyPublic,
 } from "@/api/library";
 import { cn } from "@/lib/utils";
@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 export function LibraryPage() {
   const q = useLibrary();
   const [owner, setOwner] = useState(false);
+  const leaderboard = useLeaderboard(owner);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-auto p-4 md:p-6">
@@ -47,9 +48,65 @@ export function LibraryPage() {
           <code className="mx-1 rounded bg-bg-base px-1.5 py-0.5 text-xs">scripts/register_strategy.py</code>.
         </div>
       )}
+      {owner && leaderboard.data && leaderboard.data.length > 0 && (
+        <Leaderboard rows={leaderboard.data} />
+      )}
+
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         {q.data?.map((s) => <StrategyCard key={s.name} s={s} owner={owner} />)}
       </div>
+    </div>
+  );
+}
+
+function Leaderboard({ rows }: { rows: StrategyOwnerStats[] }) {
+  // Rank by backtest Sharpe (in-sample R&D signal); paper is the honest forward.
+  const sorted = [...rows].sort((a, b) => (b.backtest?.sharpe_ratio ?? -99) - (a.backtest?.sharpe_ratio ?? -99));
+  return (
+    <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">
+      <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-amber-500">
+        <Lock className="h-3.5 w-3.5" /> owner leaderboard — backtest vs simulated
+      </div>
+      <div className="overflow-auto">
+        <table className="w-full text-left font-mono text-[11px]">
+          <thead className="text-fg-subtle">
+            <tr>
+              <th className="py-1 pr-3">Strategy</th>
+              <th className="pr-3 text-right">BT return</th>
+              <th className="pr-3 text-right">BT Sharpe</th>
+              <th className="pr-3 text-right">BT PF</th>
+              <th className="pr-3 text-right">BT maxDD</th>
+              <th className="pr-3 text-right">BT trades</th>
+              <th className="pr-3 text-right">Paper ret</th>
+              <th className="pr-3 text-right">Paper days</th>
+              <th className="text-right">Balance</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((r, i) => {
+              const b = r.backtest ?? {};
+              return (
+                <tr key={r.name} className="border-t border-border/50">
+                  <td className="py-1 pr-3 text-fg-base">
+                    {i === 0 && <span className="mr-1 text-amber-500">★</span>}{r.title}
+                  </td>
+                  <td className={cn("pr-3 text-right", (b.total_return ?? 0) >= 0 ? "text-up" : "text-down")}>{pct(b.total_return)}</td>
+                  <td className="pr-3 text-right text-fg-base">{num(b.sharpe_ratio)}</td>
+                  <td className="pr-3 text-right text-fg-base">{num(b.profit_factor)}</td>
+                  <td className="pr-3 text-right text-down">{pct(b.max_drawdown)}</td>
+                  <td className="pr-3 text-right text-fg-muted">{Math.round(b.n_trades ?? 0)}</td>
+                  <td className={cn("pr-3 text-right", (r.paper_return ?? 0) >= 0 ? "text-up" : "text-down")}>{pct(r.paper_return)}</td>
+                  <td className="pr-3 text-right text-fg-muted">{r.paper_days}</td>
+                  <td className="text-right text-fg-muted">${Math.round(r.current_balance ?? 0).toLocaleString()}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-1.5 text-[10px] text-fg-subtle">
+        BT = backtest (full history, in-sample R&D). Paper = live simulated forward record (post-go-live, never used for tuning) — the honest comparison as it accrues.
+      </p>
     </div>
   );
 }
