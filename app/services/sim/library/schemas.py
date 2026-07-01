@@ -60,3 +60,19 @@ class BackupResult(BaseModel):
     local_path: str
     s3_uri: Optional[str] = None
     s3_error: Optional[str] = None
+
+
+class StrategyOwnerStats(BaseModel):
+    """OWNER/dev view: full backtest stats (whole history) + the live simulated
+    (paper, post-go-live) summary, for comparing and improving strategies."""
+    name: str
+    title: str
+    backtest: Optional[dict] = None      # full-window RunMetrics (in-sample R&D)
+    paper_return: Optional[float] = None
+    paper_win_rate: Optional[float] = None
+    paper_trades: int = 0
+    paper_days: int = 0
+    starting_capital: Optional[float] = None
+    current_balance: Optional[float] = None
+    last_run_at: Optional[datetime] = None
+    computed_through: Optional[datetime] = None

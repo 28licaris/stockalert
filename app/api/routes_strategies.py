@@ -14,7 +14,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.services.sim.library.schemas import (
-    BackupResult, StrategyAlert, StrategyDefinition, StrategyPublic,
+    BackupResult, StrategyAlert, StrategyDefinition, StrategyOwnerStats, StrategyPublic,
 )
 from app.services.sim.library import service as lib
 
@@ -40,6 +40,15 @@ def register_strategy(definition: StrategyDefinition) -> BackupResult:
 def list_strategies() -> list[StrategyDefinition]:
     """OWNER view — full definitions including config. Admin-only in production."""
     return lib.list_definitions()
+
+
+@router.get("/strategies/{name}/stats", response_model=StrategyOwnerStats)
+def strategy_owner_stats(name: str) -> StrategyOwnerStats:
+    """OWNER/dev stats: full backtest metrics + the simulated (paper) summary."""
+    d = lib.load_definition(name)
+    if d is None:
+        raise HTTPException(status_code=404, detail=f"strategy {name!r} not found")
+    return lib.owner_stats(d)
 
 
 @router.get("/strategies/{name}", response_model=StrategyDefinition)

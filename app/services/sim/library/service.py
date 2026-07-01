@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.services.sim.library.schemas import (
-    BackupResult, StrategyAlert, StrategyDefinition, StrategyPublic,
+    BackupResult, StrategyAlert, StrategyDefinition, StrategyOwnerStats, StrategyPublic,
 )
 from app.services.sim.paper.service import build_status, load_state
 
@@ -113,6 +113,24 @@ def to_public(definition: StrategyDefinition) -> StrategyPublic:
 
 def list_public() -> list[StrategyPublic]:
     return [to_public(d) for d in list_definitions() if d.visibility in ("subscribers", "public")]
+
+
+def owner_stats(definition: StrategyDefinition) -> StrategyOwnerStats:
+    """OWNER/dev view: full backtest metrics + the simulated (paper) summary."""
+    out = StrategyOwnerStats(name=definition.name, title=definition.title)
+    state = load_state(definition.name)
+    if state is not None:
+        out.backtest = state.metrics
+        out.last_run_at = state.last_run_at
+        out.computed_through = state.computed_through
+        s = build_status(state)
+        out.paper_return = s.forward_return
+        out.paper_win_rate = s.forward_win_rate
+        out.paper_trades = s.forward_n_trades
+        out.paper_days = s.days_live
+        out.starting_capital = s.starting_capital
+        out.current_balance = s.current_balance
+    return out
 
 
 def get_alerts(name: str, start: Optional[datetime] = None) -> list[StrategyAlert]:

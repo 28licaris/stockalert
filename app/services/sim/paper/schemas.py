@@ -71,6 +71,7 @@ class PaperState(BaseModel):
     equity_curve: list[tuple[datetime, float]] = Field(default_factory=list)
     trades: list[dict] = Field(default_factory=list)
     open_positions: list[dict] = Field(default_factory=list)
+    metrics: Optional[dict] = None   # full-window RunMetrics (the backtest stats)
 
 
 class PaperStatus(BaseModel):

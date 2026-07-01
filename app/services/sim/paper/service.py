@@ -74,6 +74,7 @@ def run_paper(cfg: PaperRunConfig, now: Optional[datetime] = None) -> PaperState
         equity_curve=list(result.equity_curve),
         trades=[t.model_dump() for t in result.trades],
         open_positions=[p.model_dump() for p in result.open_positions],
+        metrics=result.metrics.model_dump(),   # full-window backtest stats
     )
     save_state(state)
     logger.info(

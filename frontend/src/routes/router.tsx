@@ -14,6 +14,7 @@ import { EconomicPage } from "./economic";
 import { SectorsPage } from "./sectors";
 import { BacktestPage } from "./backtest";
 import { PaperPage } from "./paper";
+import { LibraryPage } from "./library";
 import { NotFoundPage } from "./not-found";
 import { LoginPage } from "./login";
 import { SettingsPage } from "./settings";
@@ -56,6 +57,7 @@ export const router = createBrowserRouter(
             { path: "economic", element: <EconomicPage /> },
             { path: "sectors", element: <SectorsPage /> },
             { path: "backtest", element: <BacktestPage /> },
+            { path: "library", element: <LibraryPage /> },
             { path: "paper", element: <PaperPage /> },
             { path: "runs", element: <BacktestPage /> },
             { path: "settings", element: <SettingsPage /> },
