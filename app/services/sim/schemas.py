@@ -247,6 +247,16 @@ class BacktestConfig(BaseModel):
             "blocked. Direct enforcement of a max-drawdown product constraint."
         ),
     )
+    dd_brake_floor: float = Field(
+        0.0, ge=0.0, lt=1.0,
+        description=(
+            "Participation floor for the drawdown governor: below the limit, scale "
+            "never drops under this fraction (prevents the recovery ratchet — "
+            "proportional braking otherwise forces the climb back from a drawdown "
+            "onto tiny positions). At/beyond the limit, scale is still 0 (hard "
+            "risk-off at the product cap)."
+        ),
+    )
     daily_table: Optional[str] = Field(
         None,
         description=(

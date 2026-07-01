@@ -1108,3 +1108,62 @@ DEV(2022-23) / HOLDOUT(2024-25), all on top50 base, $100k, 10 slots, 12% heat:
    work. Gate + conviction + ranked admission: also no benefit in current form.
 3. Ranked admission + conviction machinery is engine-side, tested, default-off —
    it awaits a signal whose confidence is trustworthy live.
+
+---
+
+## EXP-32 · 2026-07-01 · EW wave-3 SOURCE on the dynamic universe — regime-split, and brake-incompatible
+
+The last standing EW hypothesis (EXP-17's headline, re-tested honestly:
+clean universe, momentum-gated top-125, long-only wave-3, DEV/HOLDOUT wall):
+
+| EW w3 source | DEV 22-23 | HOLD 24-25 |
+|---|---|---|
+| bare | −5.2% / Sharpe 0.00 / DD −39.6% | **+39.5% / Sharpe 0.82 / PF 1.49** / DD −18.5% |
+| + dd_brake 0.15 | −7.5% / −0.34 / win 16% | **−6.9% / −0.18** (!) |
+
+**Conclusions:**
+1. **EW wave-3 is genuinely regime-dependent:** strong in the trending
+   holdout (PF 1.49 — the tight wave-2 trap-door stop pays in trends), dead
+   with a −40% DD in 2022-23 chop. Under DEV selection it loses to momentum
+   (DEV Sharpe 0.00 vs +0.76). EXP-17's +147%/PF 2.45 does not reproduce on
+   honest data.
+2. **The drawdown brake DESTROYS the EW source** (+39.5% → −6.9% on the same
+   holdout): wave-3 entries trigger at wave-2 pullback lows — precisely when
+   the book is in drawdown — so an equity-curve governor suppresses EW's best
+   entries. Momentum breakouts fire near equity highs; the same brake is
+   coherent there. **EXP-13 generalized: RISK OVERLAYS must match the signal's
+   thesis, not just confluences.**
+3. Full EW ledger after EXP-16/29/32: gate → rejected; learned features →
+   rejected; source → not selectable as headline. If EW returns, it's as a
+   trending-regime sleeve with its own invalidation-based (not equity-curve)
+   risk model.
+
+---
+
+## EXP-33 · 2026-07-01 · 20-year finals: the brake holds the DD promise; the alpha is honestly small
+
+top50 + dd_brake(0.15) on windows never touched by ANY of today's selection
+(selection used DEV 2022-23 only):
+
+| Window | Return | Sharpe | Max DD | PF |
+|---|---|---|---|---|
+| 2008 (GFC; SPY ~−38% intra) | −15.5% | −1.28 | **−16.0%** | 0.52 |
+| 2020 (COVID; SPY ~−34% intra) | −8.8% | −1.00 | **−15.1%** | 0.37 |
+| 2006-2021 continuous | +27.2% (+1.6%/yr) | 0.30 | **−15.0%** | 1.35 |
+| 2024-25 holdout (from EXP-31) | +31.6% (+15.2%/yr) | 0.82 | −14.8% | 1.29 |
+
+**Conclusions:**
+1. **The DD promise holds everywhere: worst drawdown across 20 years incl.
+   two generational crashes ≈ 15-16%** (vs market −34/−38%). That is the
+   sellable, mechanically-enforced product property.
+2. **The continuous 16-year return is honestly weak (+1.6%/yr):** proportional
+   braking recovers from deep hits on tiny sizes (the ratchet), and the
+   pre-2015 edge was thinner. Tried the principled fix (participation floor
+   0.5): **rejected on DEV AND holdout** (DD worse −14.8→−19.1%, return
+   +31.6→+11.0%) — the linear brake's near-zero re-entry sizing doubles as a
+   trend filter on the system's own equity; a floor breaks exactly that. One
+   iteration, no further brake-shape tuning (holdout-burning risk).
+3. Where this leaves the platform: **the edge is small and recent-regime-
+   dependent; the risk engineering works.** No config on today's evidence
+   supports a get-rich track record; top50+brake supports an honest
+   "momentum alerts with a hard ~15% drawdown cap" story.

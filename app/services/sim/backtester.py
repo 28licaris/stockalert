@@ -262,7 +262,11 @@ class Backtester:
             brake = 1.0
             if config.dd_brake_limit and peak_equity > 0:
                 dd = 1.0 - eq / peak_equity
-                brake = min(1.0, max(0.0, 1.0 - dd / config.dd_brake_limit))
+                if dd >= config.dd_brake_limit:
+                    brake = 0.0  # hard risk-off at the product cap
+                else:
+                    brake = min(1.0, max(config.dd_brake_floor,
+                                         1.0 - dd / config.dd_brake_limit))
 
             # Pass 2: signals + execution, gated by direction-eligibility.
             # With ranked_admission, entries are deferred and admitted

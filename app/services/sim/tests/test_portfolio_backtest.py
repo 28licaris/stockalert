@@ -164,3 +164,47 @@ def test_ranked_admission_spends_slot_on_highest_confidence(monkeypatch) -> None
                            _cfg(["A", "B"], max_concurrent_positions=1,
                                 ranked_admission=True))
     assert {t.symbol for t in res.trades} == {"B"}
+
+
+class _Churn(BaseStrategy):
+    """Buy `size` when flat; close the position on the next bar. On a falling
+    tape every round trip realizes a loss, so equity drawdown accumulates."""
+    name = "churn"; version = "0"; interval = "1d"
+
+    def __init__(self, size=400):
+        self.size = size
+
+    def on_bar(self, ctx):
+        sym = ctx.bar.symbol
+        pos = ctx.portfolio.positions.get(sym)
+        if pos is not None and pos.quantity > 0:
+            return Action(kind="sell", symbol=sym, size=pos.quantity)
+        if len(ctx.history) >= 2:
+            return Action(kind="buy", symbol=sym, size=self.size,
+                          stop_price=ctx.bar.close * 0.9, confidence=0.5)
+        return hold()
+
+
+def test_dd_brake_caps_loss_on_falling_tape(monkeypatch) -> None:
+    # Churning a falling tape: without the governor losses compound well past
+    # the 4% limit; with it, sizes shrink → total drawdown stays near the cap.
+    bt = Backtester()
+    _patch(bt, monkeypatch, {"X": _falling("X", n=40, base=200.0)})
+    braked = bt.run_portfolio(_Churn(), _cfg(["X"], dd_brake_limit=0.04))
+    bt2 = Backtester()
+    _patch(bt2, monkeypatch, {"X": _falling("X", n=40, base=200.0)})
+    free = bt2.run_portfolio(_Churn(), _cfg(["X"]))
+    assert free.metrics.max_drawdown < -0.05            # unbraked loses > 5%
+    assert braked.metrics.max_drawdown > free.metrics.max_drawdown
+    assert braked.metrics.max_drawdown > -0.05          # capped near the 4% limit
+    assert braked.metrics.final_equity > free.metrics.final_equity
+
+
+def test_dd_brake_floor_keeps_participation(monkeypatch) -> None:
+    # With floor=0.5, admitted entries below the limit are never under half size.
+    bt = Backtester()
+    _patch(bt, monkeypatch, {"X": _falling("X", n=20, base=200.0)})
+    res = bt.run_portfolio(_Churn(),
+                           _cfg(["X"], dd_brake_limit=0.30, dd_brake_floor=0.5))
+    entries = [t for t in res.trades if not t.is_closing]
+    assert entries and all(t.quantity >= 200 for t in entries)
