@@ -20,7 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from train_ranker import FEATURES, _auc, _fit  # noqa: E402
+from train_ranker import EW_FEATURES, _auc, _fit  # noqa: E402
+from train_ranker import FEATURES as BASE_FEATURES  # noqa: E402
 
 
 def main(argv=None) -> int:
@@ -29,7 +30,10 @@ def main(argv=None) -> int:
     ap.add_argument("--split", default="2020-01-01")
     ap.add_argument("--val-frac", type=float, default=0.2,
                     help="chronological tail of TRAIN used for early stopping")
+    ap.add_argument("--ew", action="store_true",
+                    help="include Elliott Wave features (dataset must be built with --ew)")
     a = ap.parse_args(argv)
+    FEATURES = BASE_FEATURES + EW_FEATURES if a.ew else BASE_FEATURES
     import lightgbm as lgb
 
     df = pd.read_parquet(a.data).sort_values("d").reset_index(drop=True)

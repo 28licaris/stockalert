@@ -32,6 +32,7 @@ independent — no portfolio sharing across symbols).
 from __future__ import annotations
 
 import logging
+import math
 import subprocess
 from datetime import datetime, timezone
 from typing import Optional, Sequence
@@ -223,6 +224,8 @@ class Backtester:
         gate_long, gate_short = config.momentum_top_n, config.momentum_bottom_n
         mom_lb = config.momentum_lookback
         price_hist: dict[str, list[float]] = {}
+        # Drawdown governor state: running peak of marked equity.
+        peak_equity = config.starting_cash
 
         for t in timeline:
             # Pass 1: advance cursors, update close history, compute as-of momentum.
@@ -252,7 +255,20 @@ class Backtester:
                 if gate_short:
                     eligible_short = set(ranked[-gate_short:])
 
+            # Drawdown governor: as running drawdown approaches dd_brake_limit,
+            # new-entry sizes + heat budget scale linearly to zero (exits untouched).
+            eq = portfolio.snapshot().equity
+            peak_equity = max(peak_equity, eq)
+            brake = 1.0
+            if config.dd_brake_limit and peak_equity > 0:
+                dd = 1.0 - eq / peak_equity
+                brake = min(1.0, max(0.0, 1.0 - dd / config.dd_brake_limit))
+
             # Pass 2: signals + execution, gated by direction-eligibility.
+            # With ranked_admission, entries are deferred and admitted
+            # best-confidence-first AFTER all exits have freed their heat;
+            # otherwise they execute inline in symbol order (legacy behavior).
+            deferred_entries: list[tuple] = []
             for sym, bar, next_bar in present:
                 ctx = ctx_by_symbol[sym]
                 ctx.advance(bar, portfolio.snapshot())
@@ -275,18 +291,50 @@ class Backtester:
                     continue
                 if eligible_short is not None and action.kind == "sell" and sym not in eligible_short:
                     continue
-                # Risk gate: portfolio heat + concurrent caps.
-                stop = action.stop_price if action.stop_price is not None else bar.close
-                risk_amount = action.size * abs(bar.close - stop)
-                if risk.can_open(sym, risk_amount, portfolio.snapshot().equity):
-                    trade = portfolio.apply(action, bar, next_bar, fees, slippage)
-                    if trade is not None and sym in portfolio.positions:
-                        risk.register(sym, risk_amount)
+                if brake <= 0.0:
+                    continue  # governor fully engaged — no new risk
+                if config.ranked_admission:
+                    deferred_entries.append((sym, bar, next_bar, action))
+                else:
+                    self._try_open(portfolio, risk, sym, bar, next_bar, action,
+                                   fees, slippage, scale=brake)
+
+            # Confidence-ranked admission: spend the scarce heat/slot budget on
+            # the highest-conviction setups first (fixes EXP-12 symbol-order bias).
+            for sym, bar, next_bar, action in sorted(
+                    deferred_entries, key=lambda e: e[3].confidence, reverse=True):
+                self._try_open(portfolio, risk, sym, bar, next_bar, action,
+                               fees, slippage, scale=brake)
 
             portfolio.mark_portfolio(t, dict(last_close))
 
         strategy.teardown(ctx_by_symbol[config.symbols[0]]) if config.symbols else None
         metrics = self._evaluator.compute(portfolio, config)
+        return self._finish_portfolio_result(
+            started_at, strategy, config, snapshot_id, metrics, portfolio)
+
+    @staticmethod
+    def _try_open(portfolio, risk, sym, bar, next_bar, action, fees, slippage,
+                  scale: float = 1.0) -> None:
+        """Open a new position iff it passes the heat + concurrent-count gates.
+
+        scale < 1 (drawdown governor) shrinks BOTH the entry size and the heat
+        budget, so risk comes down even when the budget still has room.
+        """
+        if scale < 1.0:
+            size = math.floor(action.size * scale)
+            if size <= 0:
+                return
+            action = action.model_copy(update={"size": float(size)})
+        stop = action.stop_price if action.stop_price is not None else bar.close
+        risk_amount = action.size * abs(bar.close - stop)
+        if risk.can_open(sym, risk_amount, portfolio.snapshot().equity, heat_scale=scale):
+            trade = portfolio.apply(action, bar, next_bar, fees, slippage)
+            if trade is not None and sym in portfolio.positions:
+                risk.register(sym, risk_amount)
+
+    def _finish_portfolio_result(self, started_at, strategy, config, snapshot_id,
+                                 metrics, portfolio) -> "RunResult":
         open_positions = [p for p in portfolio.positions.values() if p.quantity != 0]
         return RunResult(
             started_at=started_at, finished_at=datetime.now(timezone.utc),

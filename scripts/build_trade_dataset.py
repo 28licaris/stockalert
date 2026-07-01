@@ -57,12 +57,57 @@ def _adx(h, l, c, n=14) -> pd.Series:
     return dx.ewm(alpha=1/n, adjust=False, min_periods=n).mean()
 
 
+EW_LOOKBACK = 300  # bars fed to the wave engine per as-of labeling (matches the sim source)
+
+
+def _ew_features(g, i: int, atr_abs: float) -> dict:
+    """As-of Elliott Wave features for a candidate at bar i (uses bars ≤ i only —
+    the engine's confirmed-pivot filter enforces no look-ahead internally).
+    confidence < 0.5 means 'no clear count' per doctrine; we feed the raw value and
+    let the model learn the threshold."""
+    from app.indicators.pivots import PivotDetector
+    from app.signals.elliott.engine import WaveEngine
+    out = {"ew_has_count": 0.0, "ew_conf": 0.0, "ew_uncert": 1.0, "ew_motive_up": 0.0,
+           "ew_wave3_up": 0.0, "ew_corrective": 0.0, "ew_dist_invalid_atr": 0.0}
+    sub = g.iloc[max(0, i - EW_LOOKBACK + 1): i + 1]
+    if len(sub) < 40:
+        return out
+    close, high, low = sub["close"], sub["high"], sub["low"]
+    pivots = PivotDetector(period=5, source="hl").detect(close, high, low)
+    if len(pivots) < 4:
+        return out
+    if not hasattr(_ew_features, "_engine"):
+        _ew_features._engine = WaveEngine()
+    labeling = _ew_features._engine.label(
+        pivots, last_price=float(close.iloc[-1]), symbol=str(g["symbol"].iloc[0]),
+        interval="1d", as_of_index=len(close) - 1,
+        as_of=sub["d"].iloc[-1].to_pydatetime())
+    prim = labeling.primary
+    if prim is None:
+        return out
+    cw = prim.current_wave or ""
+    out["ew_has_count"] = 1.0
+    out["ew_conf"] = float(labeling.confidence)
+    out["ew_uncert"] = float(labeling.uncertainty)
+    out["ew_motive_up"] = float(prim.direction == "up" and cw in ("1", "3", "5")
+                                and prim.structure in ("impulse", "diagonal"))
+    out["ew_wave3_up"] = float(prim.direction == "up" and cw == "3")
+    out["ew_corrective"] = float(cw in ("A", "B", "C"))
+    if atr_abs > 0 and prim.invalidation_price:
+        d = (float(close.iloc[-1]) - float(prim.invalidation_price)) / atr_abs
+        out["ew_dist_invalid_atr"] = float(np.clip(d, -10.0, 10.0))
+    return out
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--top", type=int, default=15)
     ap.add_argument("--maxhold", type=int, default=60)
     ap.add_argument("--rr", type=float, default=3.0)
     ap.add_argument("--out", default="data/trades.parquet")
+    ap.add_argument("--ew", action="store_true",
+                    help="add as-of Elliott Wave features (wave state, confidence, "
+                         "invalidation distance) to each candidate")
     a = ap.parse_args(argv)
 
     print("loading ohlcv_daily…", flush=True)
@@ -128,6 +173,9 @@ def main(argv=None) -> int:
                                  "adx", "dist_sma50", "dist_sma200", "vol_ratio", "dollar_vol",
                                  "bo_height", "rel_str", "regime_up"]].to_dict()
             row.update({"label": label, "rmult": float(rmult), "held": int(held), "entry": float(entry)})
+            if a.ew:
+                atr_abs = float(g_feat["atr_pct"].values[i]) * float(closes[i])
+                row.update(_ew_features(g, i, atr_abs))
             feats.append(row)
 
     out = pd.DataFrame(feats)

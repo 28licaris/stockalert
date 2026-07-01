@@ -128,3 +128,39 @@ def test_dynamic_universe_gates_long_to_momentum_leaders(monkeypatch) -> None:
     syms = {t.symbol for t in res.trades}
     assert "A" in syms and "B" not in syms
     assert sum(1 for t in res.trades if t.is_closing) == 1   # only the leader round-tripped
+
+
+class _ConfEntry(BaseStrategy):
+    """Enter 10 shares when flat on the 2nd bar, with per-symbol confidence."""
+    name = "conf"; version = "0"; interval = "1d"
+
+    def __init__(self, conf_by_symbol):
+        self.conf_by_symbol = conf_by_symbol
+
+    def on_bar(self, ctx):
+        sym = ctx.bar.symbol
+        pos = ctx.portfolio.positions.get(sym)
+        has = pos is not None and pos.quantity > 0
+        if not has and len(ctx.history) == 2:
+            return Action(kind="buy", symbol=sym, size=10, stop_price=ctx.bar.close * 0.9,
+                          confidence=self.conf_by_symbol[sym])
+        return hold()
+
+
+def test_first_come_admission_spends_slot_in_symbol_order(monkeypatch) -> None:
+    # Legacy behavior (flag off): A wins the single slot despite lower confidence.
+    bt = Backtester()
+    _patch(bt, monkeypatch, {"A": _bars("A"), "B": _bars("B", base=200.0)})
+    res = bt.run_portfolio(_ConfEntry({"A": 0.1, "B": 0.9}),
+                           _cfg(["A", "B"], max_concurrent_positions=1))
+    assert {t.symbol for t in res.trades} == {"A"}
+
+
+def test_ranked_admission_spends_slot_on_highest_confidence(monkeypatch) -> None:
+    # ranked_admission: the SAME same-bar competition goes to B (conf 0.9 > 0.1).
+    bt = Backtester()
+    _patch(bt, monkeypatch, {"A": _bars("A"), "B": _bars("B", base=200.0)})
+    res = bt.run_portfolio(_ConfEntry({"A": 0.1, "B": 0.9}),
+                           _cfg(["A", "B"], max_concurrent_positions=1,
+                                ranked_admission=True))
+    assert {t.symbol for t in res.trades} == {"B"}

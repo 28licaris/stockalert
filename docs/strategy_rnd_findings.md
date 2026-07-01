@@ -952,3 +952,99 @@ just isn't the highest-value way to use it.
 hard gate; (2) a higher a-priori threshold to concentrate on the top-tercile (38%
 win / +0.385R); (3) a richer model (GBM — dep tradeoff) + more features. Ship the
 current momentum baseline; forward-test the ranked variant alongside it.
+
+---
+
+## EXP-26 · 2026-07-01 · Ticker-splice contamination — the data fix that resets everything
+
+The gap-clean top-1000 rebuild (eac9c75, same morning) was silently missing
+V, META/FB, TWTR, COIN, SNOW, MRNA, NOW, ANET, BSC + ~160 more. Root cause:
+**Polygon keys rows by TICKER**, and a reused ticker holds several companies'
+histories separated by multi-month gaps (V = Vivendi'06 → gap → Visa'08+;
+COIN = a 2007-10 predecessor → gap → Coinbase'21+; FB = Facebook'12-22 + a
+sparse junk tail'25+). The gap audit saw the dirty splice and rejected the
+WHOLE symbol — reintroducing survivorship/coverage bias — while the PRE-audit
+table (EXP-23-25) traded the fake gap-jump between unrelated companies.
+
+Fix (`build_ohlcv_daily.py`): **dominant-segment extraction** — split each
+symbol's history on >5-missing-trading-day gaps, keep the max-total-dollar-
+volume contiguous segment (pure fn, 9 unit tests), staging table + atomic
+EXCHANGE for zero-downtime reload. Result: 1400 ranked → 231 symbols trimmed
+(176,763 contaminated rows dropped) → 1280/1400 gap-clean (was 1112) →
+finalized top-1000 (3.27M rows). Boundaries verified against corporate
+history to the DAY: V starts 2008-03-19 (IPO), COIN 2021-04-14, FB
+2012-05-18→2022-06-08 + META 2022-06-09→ (rename), TWTR 2013-11-07→2022-10-27,
+BSC ends 2008-05-30 (JPM close), SMCI relist 2020-01-14, DELL relist 2018-12-28.
+
+**All EXP-23..25 numbers are superseded.** Lesson for the honesty doctrine:
+data provenance bugs (not just methodology bugs) can manufacture alpha —
+a momentum system LOVES a fake +3000% gap-splice.
+
+---
+
+## EXP-27 · 2026-07-01 · Honest rebaseline — the headline strategy COLLAPSES on clean data
+
+Same canonical config (breakout lb20, dynamic top-15, lb60, 10 concurrent,
+12% heat, $100k, 2022-2025) at three data/universe stages:
+
+| Stage | Universe | Return | Sharpe | Max DD | PF |
+|---|---|---|---|---|---|
+| EXP-23 (dirty: splices in) | 500 hand-ranked | +226% | 0.94 | −34.9% | 1.51 |
+| Clean data, old config's 414 surviving names | 414 | +108.5% | 0.65 | −44.7% | 1.27 |
+| Clean data, full clean universe | 1000 | **−2.7%** | **0.10** | **−45.7%** | **0.96** |
+
+**Conclusions:**
+1. **~Half the old “edge” was contamination** (fake splice momentum) — same
+   strategy, same-ish universe, clean data: +226% → +108%.
+2. **top_n does NOT transfer across pool sizes.** Top-15-of-1000 = the 98.5th-
+   percentile extreme movers (meme/squeeze junk, no follow-through) vs the
+   validated EXP-20 config top-15-of-119 ≈ top 12.6%. On 1000 names the edge
+   vanishes entirely (−2.7%). **The real parameter is the percentile, not the
+   count.** A-priori translation: top_n=125 on 1000 names (~12.6%) — being
+   verified; the count-vs-percentile response curve is EXP-30.
+3. We currently have **no validated baseline**. This is the honest floor to
+   rebuild from — better discovered here than in production.
+
+---
+
+## EXP-28 · 2026-07-01 · GBM vs logistic ranker — logistic wins, GBM rejected
+
+Added LightGBM (`scripts/train_ranker_gbm.py`), same TRAIN(<2020)/HOLDOUT(≥2020)
+wall, early stopping on the chronological tail of TRAIN (never the holdout).
+Pre-registered adoption rule: GBM ships only if it beats logistic on the
+untouched holdout. On the clean dataset (3,851 trades):
+
+| Model | Holdout AUC | Top-tercile win / avg R |
+|---|---|---|
+| Logistic | **0.567** | **35.8% / +0.277** |
+| GBM | 0.550 | 34.2% / +0.235 |
+
+**Verdict: keep the logistic.** 3.8k trades is too small for GBM to exploit
+non-linearities; it overfits what the linear model shrugs off. Re-audit if the
+dataset grows (longer history, more candidates/features). `train_ranker.py` now
+also saves TRAIN predicted-P quantiles (p10/median/p90 = 0.162/0.245/0.429) —
+the a-priori gate threshold and the sizing-calibration constants (train-only,
+no leakage).
+
+---
+
+## EXP-29 · 2026-07-01 · Elliott Wave as LEARNED features — no predictive value (clean negative)
+
+Per the “system should learn EW” goal: added as-of EW features to every
+breakout candidate (`build_trade_dataset.py --ew`, engine = pure no-look-ahead
+`app.signals.elliott`): has_count, confidence, uncertainty, motive-up,
+wave-3-up, corrective, distance-to-invalidation (ATRs). Retrained both models:
+
+| Model | Holdout AUC | Top-tercile win / avg R |
+|---|---|---|
+| Logistic base | **0.567** | **35.8% / +0.277** |
+| Logistic + EW | 0.564 | 34.0% / +0.195 |
+| GBM base | 0.550 | 34.2% / +0.235 |
+| GBM + EW | 0.544 | 32.4% / +0.164 |
+
+**EW features make ranking WORSE in both model families** — they add noise,
+not signal, for predicting breakout-candidate outcomes (echoes EXP-16: wave
+labels at a momentum entry carry no extra information). The learned-EW weights
+were also collinear/unstable (ew_uncert positive). Per the no-ego doctrine:
+**EW does not earn a place in the ranker.** Last EW hypothesis standing = EW
+as its own entry SOURCE on the dynamic universe (EXP-32).

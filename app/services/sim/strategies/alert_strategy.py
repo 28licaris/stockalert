@@ -199,6 +199,7 @@ class AlertStrategy(BaseStrategy):
         entry_kind = "buy" if sig.direction == "long" else "sell"
         return Action(kind=entry_kind, symbol=symbol, size=float(qty),
                       stop_price=sig.stop, target_price=sig.target_1,
+                      confidence=min(1.0, max(0.0, sig.confidence)),
                       note=f"{sig.kind} {sig.direction} rr={sig.reward_risk:.2f}: {sig.rationale}")
 
     def _size(self, ctx: Context, sig: Signal) -> int:
