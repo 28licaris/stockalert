@@ -72,6 +72,14 @@ class Action(BaseModel):
     limit_price: Optional[float] = None
     stop_price: Optional[float] = None
     target_price: Optional[float] = None
+    fill_at_level: Optional[float] = Field(
+        None,
+        description=(
+            "Path-aware fill: the strategy verified (via ctx.intraday) that this "
+            "price level traded during the CURRENT bar — fill AT this level on "
+            "the current bar (slippage-adjusted adversely), not at next open."
+        ),
+    )
     confidence: float = Field(
         0.0, ge=0.0, le=1.0,
         description=(
@@ -265,6 +273,16 @@ class BacktestConfig(BaseModel):
             "For interval='1d': read pre-adjusted daily bars directly from this CH "
             "table (e.g. 'ohlcv_daily', the deep+liquid+delisted research universe) "
             "instead of rolling up ohlcv_1m. None = default rollup."
+        ),
+    )
+    hourly_table: Optional[str] = Field(
+        None,
+        description=(
+            "Path-aware fills: CH table of 09:30-anchored ET-session hourly bars "
+            "(build_ohlcv_hourly.py). When set, the engine exposes ctx.intraday and "
+            "exits are ordered/filled by first intraday touch AT the stop/target "
+            "level (instead of worst-case-stop + next-open fills). None = legacy "
+            "daily-bar fills."
         ),
     )
     starting_cash: float = 40_000.0

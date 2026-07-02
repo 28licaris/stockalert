@@ -150,20 +150,54 @@ class AlertStrategy(BaseStrategy):
         # Exit leg: sell to close a long, buy to cover a short.
         exit_kind = "sell" if is_long else "buy"
 
-        # Stop: long stops below (low ≤ stop); short stops above (high ≥ stop).
-        # Stop checked before target (worst case when a bar spans both).
-        stop_hit = bar.low <= plan.stop if is_long else bar.high >= plan.stop
-        if stop_hit:
-            self._plans.pop(symbol, None)
-            ctx.log(event="exit_stop", stop=plan.stop, dir=plan.direction)
-            return Action(kind=exit_kind, symbol=symbol, size=qty,
-                          note=f"stop @ {plan.stop:.4f} ({plan.kind})")
-        target_hit = bar.high >= plan.target_1 if is_long else bar.low <= plan.target_1
-        if target_hit:
-            self._plans.pop(symbol, None)
-            ctx.log(event="exit_target", target=plan.target_1, dir=plan.direction)
-            return Action(kind=exit_kind, symbol=symbol, size=qty,
-                          note=f"target @ {plan.target_1:.4f} ({plan.kind})")
+        # Path-aware exits: when the engine provides the day's hourly path
+        # (ctx.intraday / BacktestConfig.hourly_table), order stop-vs-target by
+        # FIRST intraday touch and fill AT the level on this bar. A day that
+        # GAPS through the level fills at the (worse) open. Falls back to the
+        # legacy whole-bar worst-case checks when no path exists for this day.
+        path = getattr(ctx, "intraday", None)
+        hours = path.bars_for(symbol, bar.timestamp.date()) if path is not None else []
+        if hours:
+            for i, hb in enumerate(hours):
+                stop_hit = hb.low <= plan.stop if is_long else hb.high >= plan.stop
+                target_hit = hb.high >= plan.target_1 if is_long else hb.low <= plan.target_1
+                if stop_hit:  # worst case within a single hour that spans both
+                    level = plan.stop
+                    if i == 0 and ((is_long and hb.open <= level)
+                                   or (not is_long and hb.open >= level)):
+                        level = hb.open  # gapped through the stop → open fill
+                    self._plans.pop(symbol, None)
+                    ctx.log(event="exit_stop", stop=plan.stop, dir=plan.direction,
+                            fill="intraday")
+                    return Action(kind=exit_kind, symbol=symbol, size=qty,
+                                  fill_at_level=level,
+                                  note=f"stop @ {plan.stop:.4f} ({plan.kind})")
+                if target_hit:
+                    level = plan.target_1
+                    if i == 0 and ((is_long and hb.open >= level)
+                                   or (not is_long and hb.open <= level)):
+                        level = hb.open  # gapped through the target → open fill
+                    self._plans.pop(symbol, None)
+                    ctx.log(event="exit_target", target=plan.target_1,
+                            dir=plan.direction, fill="intraday")
+                    return Action(kind=exit_kind, symbol=symbol, size=qty,
+                                  fill_at_level=level,
+                                  note=f"target @ {plan.target_1:.4f} ({plan.kind})")
+        else:
+            # Stop: long stops below (low ≤ stop); short stops above (high ≥ stop).
+            # Stop checked before target (worst case when a bar spans both).
+            stop_hit = bar.low <= plan.stop if is_long else bar.high >= plan.stop
+            if stop_hit:
+                self._plans.pop(symbol, None)
+                ctx.log(event="exit_stop", stop=plan.stop, dir=plan.direction)
+                return Action(kind=exit_kind, symbol=symbol, size=qty,
+                              note=f"stop @ {plan.stop:.4f} ({plan.kind})")
+            target_hit = bar.high >= plan.target_1 if is_long else bar.low <= plan.target_1
+            if target_hit:
+                self._plans.pop(symbol, None)
+                ctx.log(event="exit_target", target=plan.target_1, dir=plan.direction)
+                return Action(kind=exit_kind, symbol=symbol, size=qty,
+                              note=f"target @ {plan.target_1:.4f} ({plan.kind})")
         # Time stop — cap how long capital stays tied up.
         if self.params.max_holding_days is not None:
             held = (bar.timestamp - pos.entry_time).total_seconds() / 86_400.0

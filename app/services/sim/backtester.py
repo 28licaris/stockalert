@@ -207,10 +207,17 @@ class Backtester:
 
         # One Context per symbol (isolated history/indicators); shared benchmark.
         market = self._load_benchmark(config, exec_interval) if config.benchmark else None
+        # Path-aware fills: one lazy hourly-path provider shared across symbols
+        # (engine-side IO; strategies just read ctx.intraday — MarketContext pattern).
+        intraday = None
+        if config.hourly_table:
+            from app.services.sim.intraday import IntradayPath
+            intraday = IntradayPath(config.hourly_table, config.start, config.end)
         ctx_by_symbol: dict[str, Context] = {}
         for sym in config.symbols:
             ctx = Context(config=config, intervals=[exec_interval])
             ctx.market = market
+            ctx.intraday = intraday
             ctx_by_symbol[sym] = ctx
         # setup() runs once (strategy state is per-symbol-keyed internally).
         if config.symbols:

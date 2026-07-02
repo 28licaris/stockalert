@@ -108,7 +108,17 @@ class Portfolio:
             )
             return self.apply(decomposed, current_bar, next_bar, fees, slippage)
 
-        fill_price = slippage.fill_price(action, next_bar)
+        if action.fill_at_level is not None:
+            # Path-aware fill: the strategy verified via ctx.intraday that this
+            # level traded during the CURRENT bar → fill at the level, stamped
+            # on the current bar (next_bar=None so fill_ts = current bar; the
+            # _execute methods use next_bar only for the timestamp).
+            level_fn = getattr(slippage, "fill_at_level", None)
+            fill_price = (level_fn(action, action.fill_at_level) if level_fn
+                          else float(action.fill_at_level))
+            next_bar = None
+        else:
+            fill_price = slippage.fill_price(action, next_bar)
         if math.isnan(fill_price):
             # End of data — fill couldn't happen.
             return None
