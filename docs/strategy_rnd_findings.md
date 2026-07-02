@@ -1176,3 +1176,49 @@ top50 + dd_brake(0.15) on windows never touched by ANY of today's selection
 **Production TODO before paper-trading the brake:** empty-book freeze fix
 (if every position stops out exactly at dd ≥ limit, equity freezes and the
 brake never releases — add an idle-reset or minimum re-entry trickle).
+*(Fixed same day: liveness trickle at 0.1 scale when the book is flat at the
+limit; regression-tested.)*
+
+---
+
+## EXP-34 · 2026-07-02 · Path-aware fills — the daily edge was largely a FILL-MODEL ARTIFACT
+
+Built the intraday program's Stage 0+1: CH `ohlcv_hourly` (22.9M rows,
+09:30-anchored ET session bars from the frozen minute lake, clamped to the
+EXP-26 clean segments; validated to roll up EXACTLY to ohlcv_daily across
+25k+ symbol-days) and a path-aware fill layer (`ctx.intraday`, MarketContext
+pattern): exits ordered by FIRST intraday touch, filled AT the stop/target
+level (gap-through days fill at the open) instead of the legacy
+touch-detected → NEXT-OPEN fill.
+
+Re-baseline of the finalists under honest resting-order fills:
+
+| top50 | DEV 22-23 | HOLD 24-25 |
+|---|---|---|
+| legacy fills | +47.3% / win 38.5% | +39.7% / win 45.6% |
+| honest fills | **−15.8% / win 21.6%** | **−11.7% / win 25.1%** |
+| + brake, honest | −4.7% / DD −16.7% | −10.8% / DD −16.8% |
+
+**Root cause (per-trade diagnostic, NVDA 2024):** the legacy exit model was
+INCOHERENT — pessimistic trigger (intraday touch) + optimistic fill (next
+open). In a momentum book that mismatch is systematically flattering twice:
+(1) target touched → filled at next open = harvesting an extra day of a
+running stock (target 90.03 → fill 95.14: +11.2k vs the honest +7.3k);
+(2) stop touched intraday but recovered by the close → next-open fill often
+ABOVE the level, sometimes above entry — converting honest −1R stop-outs
+into small “wins” (this is the win-rate halving).
+
+**Conclusions:**
+1. **With stops resting AT the breakout level, honest fills leave ~zero
+   expectancy** (win 25% at rr=3 ≈ breakeven − costs). The at-the-level stop
+   is parked where every wick hunts — the geometry, not just the fill model,
+   must change.
+2. All daily-bar backtest numbers (EXP-27..33 included) carry this
+   execution optimism; treat them as upper bounds. **The paper finalists'
+   simulated records use legacy fills too** — their alert LEVELS are honest,
+   but the simulated fills are optimistic; honest-fill variants must replace
+   them before any customer-facing record.
+3. Stage 2 (running) tests three live-executable disciplines under honest
+   fills: retest-limit entries, hourly-pullback entries with structure stops
+   below actual support, and EOD-confirmed stops (a wick doesn't take you
+   out; a close through does).
