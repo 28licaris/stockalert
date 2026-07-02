@@ -63,3 +63,33 @@ Free + production-robust only (no runtime HTML scraping).
   entitlement is renewed; once renewed, re-run the equities Polygon nightly to
   fill the gap. Cold tier only — does not affect ClickHouse freshness (Schwab
   feeds the hot tier).
+
+## GEX / dealer-flow research (chapter opened 2026-07-02 — GEX-0 in strategy_rnd_findings.md)
+Collection flywheel is LIVE: `OPTIONS_SNAPSHOT_ENABLED=true`, 40-name
+pre-registered universe, 15-min cadence, 30 strikes → `options.*` lake
+(first cycle verified: 34/40 underlyings, 23,777 GEX rows; per-symbol
+transient fetch errors self-heal next cycle). Snapshots collect ONLY while
+uvicorn runs — weekday uptime = sample completeness. Historical backfill is
+impossible honestly (no OI outside Polygon's 403 tier); the forward dataset
+IS the moat.
+
+Next steps, in order:
+1. **Methodology validation (before ANY study reads the numbers):** audit
+   sign conventions (dealer-long-call assumption), greeks source (Schwab vs
+   computed), flip-point/wall math in `app/services/options/` against raw
+   chains; add golden tests. The EXP-34 lesson applied preemptively —
+   validate the instrument first.
+2. **Collection health check (~daily for the first week):** ingestion_runs
+   `options_snapshot_refresh` + per-cycle underlying counts; confirm all 40
+   names appear across cycles; watch OPEX-week (monthly expiry) captures.
+3. **GEX-1 wall-pinning study (~2 weeks of data):** cross-sectional — does
+   |spot − nearest wall| predict intraday range compression near walls?
+   Cross-section over 40 names substitutes for calendar depth.
+4. **GEX-2 regime study (~2-3 months of data):** net-GEX sign vs next-day
+   realized vol + trend-vs-chop; OPEX-week effects. Pre-register criteria
+   before running.
+5. **GEX-3:** GEX-regime conditioning of the swing system + alerts; fold
+   into the paper falsification loop.
+Related standing item: Schwab stream expansion (momentum-candidate superset
++ 1m level-watching) serves swing alerts, the day-trading corpus, and
+intraday GEX-vs-price studies.
