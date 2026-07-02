@@ -1289,3 +1289,36 @@ actually take. top-50: 10,655 candidate-days → **7,310 position-trades**
    reality, not the strategy, is wrong). New alpha must come from a different
    trade design — next track per the user: 1-minute day-trading/reversal
    research on the honest platform.
+
+---
+
+## DT-1 · 2026-07-02 · Day-trading base rates (2024 sandbox) — naive setups have no edge; conditioning reads
+
+DT-0 shipped: pre-open scanner (no-look-ahead: D-1 bars + premarket only;
+liquidity floors; ETP exclusion — trade the underlying) + 1m candidate store.
+2024: 245 days × top-30 = 7,350 mover-days, 3.63M 1m bars; picks eyeball-match
+the tape (RIVN/SMCI on 02-22, MSTR-complex on 08-05). Four a-priori setups
+(orb / vwap_reclaim / first_pullback / flush_reclaim), position-event
+semantics, honest fills (trigger-close + range-scaled slippage @1×/2×, stops
+worst-case with gap-through-open, 2R resting targets, 15:55 flat), 9 tests.
+
+**Base rates (2024, 1× slip): every naive setup ≤ breakeven after costs.**
+orb long PF 0.99 (win 45%, 64% EOD exits) · vwap_reclaim PF 0.78-0.82 ·
+first_pullback PF 0.58 · flush_reclaim PF 0.58 (70% stopped — the flush low
+gets re-run; the naive first-test entry is the crowd's stop fuel).
+
+**Conditioning reads (HYPOTHESIS GENERATION ONLY — 2024 is the permanent
+sandbox; validation must come from untouched years):**
+1. ORB is the only family at water level, with weak positive pockets: 8-15%
+   gaps +0.04R (n=136), afternoon entries +0.04R. ORB shorts uniformly worse.
+2. first_pullback in the first 30 minutes = −0.80R (the open fades fake
+   pullbacks); post-11:00 it's ≈ −0.04 — timing window matters more than the
+   pattern.
+3. The 2R-fixed-target exit looks structurally wrong for trend days (orb's
+   64% EOD bucket): v2 should test trail-to-close exit structures.
+4. flush_reclaim v2 = second-test / higher-low entry, not first reclaim.
+
+**Next (DT-2 prep):** pre-register v2 setup definitions (exit structure =
+trail vs fixed; pullback time window; flush second-test), backfill the
+scan/candidate store across 2006-2025, then DEV/HOLDOUT evaluation on years
+2024 never touched. Sample density is real: ~11k trades from ONE year.
