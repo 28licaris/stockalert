@@ -1438,3 +1438,59 @@ conditioning of the swing system + paper falsification integration.
 The counterparty story is structural: dealers MUST hedge; their flow is
 mechanical — the only edge category from the hedge-fund taxonomy where our
 data is genuinely differentiated.
+
+---
+
+## EXP-37 · 2026-07-02 · MCPT layer shipped — the in-sample "edge" of the breakout family is statistically luck
+
+Built the platform's missing statistical gate (per neurotrader888/mcpt //
+Masters bar-permutation): `app/services/sim/permutation.py` (log-relative
+decomposition, gap+body dual shuffle, ONE master-calendar shuffle shared
+across all symbols — cross-sectional correlation preserved, partial
+coverage handled by restriction; volume travels with the body; `start_after`
+keeps a real walk-forward prefix; terminal price + return moments preserved
+exactly), `significance.py` (add-one MCPT p-value, Benjamini-Hochberg),
+runners `scripts/mcpt_insample.py` (Tier-1 vectorized screen) and
+`scripts/mcpt_walkforward.py` (Tier-2 full-engine, resumable/shardable),
+11 unit tests. Promotion gate + pre-registration registry added to
+`docs/standards/trading_subsystem.md` + `docs/research_hypotheses.md` (H-1).
+
+**Tier-1 (in-sample MCPT, DEV 2022-23, 747-symbol clean pool, 1000
+permutations):** the `breakout_vol` family (lookback × vol_mult grid, 24
+configs) optimized on REAL data reaches pooled PF **1.0065**; the same
+optimization on permuted bars averages 0.9842 (sd 0.0456) and beats the
+real result **27.6% of the time (p = 0.276)**. The family's in-sample
+excellence step FAILS the video's very first statistical gate — consistent
+with, and sharper than, the EXP-27 honest floor (−2.7%).
+
+**Tier-2 (full-engine walk-forward MCPT of the EXP-33 candidate
+top50+brake, benchmark permuted too):**
+- 2006-2021: real Sharpe 0.183 / PF 1.186 / DD −14.6% (24-min run;
+  102 h for 200 straight perms → sharded 6-way × 16, 96-perm null).
+- 2024-25 holdout: real vs 200-perm null.
+- RESULTS PENDING (runs in flight; update below when complete).
+
+Interpretation guardrail: H-1 is a RETROACTIVE registration of a
+many-times-selected survivor — even a pass would be an upper bound on
+significance. A fail closes the daily-breakout chapter with a p-value
+attached instead of a shrug.
+
+---
+
+## EXP-38 · 2026-07-02 · Ranker label-permutation null — the "real OOS signal" sits AT the luck boundary (p = 0.058)
+
+Rebuilt the position-day top-50 dataset (7,310 trades, byte-identical
+counts to EXP-36) and nulled the feature→outcome link: shuffle TRAIN labels
+(features, split 2020-01-01, standardization, REAL holdout labels intact),
+retrain the identical logistic, read holdout AUC. 500 permutations
+(`scripts/mcpt_ranker_labels.py`).
+
+**Real holdout AUC 0.5552 vs null 0.4991 ± 0.0344 → p = 0.0579** (28/500
+noise models matched it). The ranker's celebrated "real trade-level edge"
+(EXP-25/36) is NOT significant at 0.05 on tradeable position-day data —
+best read as a weak-positive tilt measured with n=7,310, exactly matching
+the EXP-36 economic read (+0.05R top-tercile whisper). Verdict: keep the
+EXP-36 status (sizing-tilt candidate at most, never a gate); do NOT invest
+further in ranker variants without a new feature source — the label link
+itself is barely above noise.
+

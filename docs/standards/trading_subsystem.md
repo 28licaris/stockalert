@@ -51,6 +51,30 @@ pass.
 - **`agent_runs` is canonical history.** One row per backtest:
   snapshot ID + params + metrics + `git_sha`.
 
+## Statistical promotion gate (MCPT)
+
+Point estimates are not evidence. Before ANY strategy, signal family,
+or learned model advances to paper trading / customer-facing status:
+
+1. **Pre-register the family** (grid + universe + windows + metric) in
+   [`docs/research_hypotheses.md`](../research_hypotheses.md) BEFORE
+   the sweep runs. Post-hoc registration doesn't count.
+2. **Tier-1 screen** — in-sample MCPT (`scripts/mcpt_insample.py`,
+   ~1000 permutations): the optimized in-sample result must beat the
+   permuted-bar null (shared master shuffle preserves cross-sectional
+   structure — `app/services/sim/permutation.py`).
+3. **Tier-2 gate** — full-engine MCPT (`scripts/mcpt_walkforward.py`,
+   ~200 permutations) on windows not used for selection, with
+   Benjamini-Hochberg correction across the registered family
+   (`app/services/sim/significance.py`): **q ≤ 0.05 required**.
+4. Learned models additionally need a label-permutation null
+   (`scripts/mcpt_ranker_labels.py`): holdout skill must beat models
+   trained on shuffled labels.
+
+Report the p/q-values in `strategy_rnd_findings.md` alongside the
+point estimates. A candidate that skips this gate is unvalidated
+regardless of how good its backtest looks.
+
 ## Folder rules
 
 Per [`service_modules.md`](service_modules.md):
