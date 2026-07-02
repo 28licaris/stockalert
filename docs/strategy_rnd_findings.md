@@ -1222,3 +1222,70 @@ into small “wins” (this is the win-rate halving).
    fills: retest-limit entries, hourly-pullback entries with structure stops
    below actual support, and EOD-confirmed stops (a wick doesn't take you
    out; a close through does).
+
+---
+
+## EXP-35 · 2026-07-02 · Entry/exit disciplines under honest fills — none rescue the trade design
+
+Working-order entry policies (armed at signal close, evaluated only on later
+hourly bars — no look-ahead) + the EOD stop discipline, all on top50, honest
+fills, DEV/HOLDOUT:
+
+| Discipline | DEV | HOLD |
+|---|---|---|
+| resting stops @ level (EXP-34) | −15.8% | −11.7% / DD −48% |
+| retest_limit (buy the pullback to the level) | −5.8% / PF 0.96 | −11.2% / PF 0.97 |
+| hourly_pullback (structure stop = pullback low) | −18.6% | **−58.9% / DD −63%** |
+| eod_stop (close-through only) | +15.4% / win 39% | −16.9% / **DD −61%** |
+| + ranker gate P≥0.243 (honest fills) | +40.8% / Sharpe 1.37 | **−13.9% / PF 0.73** |
+| + ranker gate P≥0.32 | +14.4% / 28 trades | −9.2% / PF 0.76 (same flip) |
+
+**Conclusions:**
+1. **No entry or stop discipline rescues the 20d-breakout/3R design.** Tight
+   hourly-structure stops churn (525 trades, PF 0.73); EOD-confirmed stops
+   restore win-rate but un-cap the left tail (closes land far through the
+   stop on real breaks → DD −61%); retest entries are the best and still ≈
+   breakeven (PF 0.97).
+2. **The ranker hard-gate flip REPRODUCES under honest fills** (DEV 1.37 →
+   HOLD −0.37) — EXP-31's rejection was NOT a fill-model confound. The
+   candidate-day/position-day mismatch is structural → EXP-36.
+
+---
+
+## EXP-36 · 2026-07-02 · Position-day dataset — the ranker's edge was mostly candidate-day duplication
+
+Rebuilt the trade dataset with POSITION semantics (`build_trade_dataset.py
+--position-days`): after a candidate, all signal days are skipped until that
+trade's triple-barrier resolves — one row per opportunity a portfolio could
+actually take. top-50: 10,655 candidate-days → **7,310 position-trades**
+(~31% of candidate-days were mid-streak/mid-trade duplicates).
+
+| top-50 dataset | Holdout AUC | top-tercile win / avg R | gate@median lift |
+|---|---|---|---|
+| candidate-day | 0.568 | 31.8% / +0.151 gate | +0.066 → +0.151 |
+| **position-day** | **0.555** | 34.0% / +0.153 (base +0.099) | **+0.099 → +0.100 (none)** |
+
+**Conclusions:**
+1. **Most of the ranker's apparent edge was the duplication artifact**: the
+   model (bo_height-dominant) discriminated late-streak days from early-streak
+   days — a real pattern that is UNTRADEABLE, since a portfolio takes the
+   first day. On tradeable opportunities the median gate adds nothing; the
+   top-tercile tilt shrinks to +0.05R.
+2. **The full honest arc:** data contamination (EXP-26) killed ~half the
+   historical edge; the fill-model artifact (EXP-34) killed most of the rest;
+   candidate-day duplication (this) killed the ranker's rescue. Under fully
+   honest accounting, daily momentum-breakout on liquid US equities carries
+   ≈ +0.05-0.10R per trade before costs — a whisper, not a business. This was
+   established with proper walls at every step and is the platform's most
+   valuable scientific result to date.
+3. **What survives:** the drawdown governor (still strictly dominant as risk
+   engineering), the honest measurement platform itself (segment-clean data,
+   path-aware fills, position-day datasets, DEV/HOLDOUT discipline), and the
+   thin position-day top-tercile tilt (+0.05R — usable as a sizing tilt, not
+   a gate, if the base design ever earns its keep).
+4. **Recommendation:** stop layering on the daily-breakout design. The paper
+   finalists keep running as a LIVE falsification test (honest fills predict
+   ≈ breakeven forward records — if they materially beat that, the model of
+   reality, not the strategy, is wrong). New alpha must come from a different
+   trade design — next track per the user: 1-minute day-trading/reversal
+   research on the honest platform.

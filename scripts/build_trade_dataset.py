@@ -108,6 +108,12 @@ def main(argv=None) -> int:
     ap.add_argument("--ew", action="store_true",
                     help="add as-of Elliott Wave features (wave state, confidence, "
                          "invalidation distance) to each candidate")
+    ap.add_argument("--position-days", action="store_true",
+                    help="POSITION semantics: one candidate per tradeable opportunity — "
+                         "after a candidate, skip all signal days until that trade's "
+                         "triple-barrier resolves (matches what a portfolio can take; "
+                         "candidate-day datasets score every day of a streak and bias "
+                         "the model toward later/extended entries — EXP-31/35 flip)")
     a = ap.parse_args(argv)
 
     print("loading ohlcv_daily…", flush=True)
@@ -150,7 +156,10 @@ def main(argv=None) -> int:
         cand = g_feat[(g_feat["is_breakout"]) & (g_feat["eligible"])].index
         opens, highs, lows, closes = g["open"].values, h.values, l.values, c.values
         n = len(g)
+        busy_until = -1  # position-days mode: index until which a trade is open
         for i in cand:
+            if a.position_days and i <= busy_until:
+                continue  # a real portfolio is still in the prior trade
             if i + 1 >= n:
                 continue
             entry = opens[i + 1]                 # fill at next open (no look-ahead)
@@ -169,6 +178,8 @@ def main(argv=None) -> int:
                 jx = min(i + a.maxhold, n - 1)
                 rmult = (closes[jx] - entry) / risk
                 label, held = int(rmult > 0), jx - (i + 1)
+            if a.position_days:
+                busy_until = (i + 1) + held      # occupied through the exit bar
             row = g_feat.loc[i, ["symbol", "d", "ret20", "ret60", "ret120", "rsi", "atr_pct",
                                  "adx", "dist_sma50", "dist_sma200", "vol_ratio", "dollar_vol",
                                  "bo_height", "rel_str", "regime_up"]].to_dict()
