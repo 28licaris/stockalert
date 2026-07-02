@@ -1322,3 +1322,47 @@ sandbox; validation must come from untouched years):**
 trail vs fixed; pullback time window; flush second-test), backfill the
 scan/candidate store across 2006-2025, then DEV/HOLDOUT evaluation on years
 2024 never touched. Sample density is real: ~11k trades from ONE year.
+
+---
+
+## DT-2 · 2026-07-02 · 20-year verdict: mechanical 1m triggers carry ZERO gross signal
+
+Backfilled the pre-open scanner across 2006-2026: **152,952 mover-days,
+69.5M candidate 1m bars**. Evaluated v1 and v2 setup families with the
+pre-registered walls (DEV 2006-2018 / HOLDOUT 2019-2026 ex-2024 sandbox);
+~450k trade rows per version.
+
+**Every family is negative in essentially every one of 20 years** — DEV,
+holdout, and each year's strip agree (orb_v2 ≈ −0.06R, vwap ≈ −0.13R,
+pullback_v2 ≈ −0.13R, flush_v2 ≈ −0.27R at 1× slip). The v2 refinements
+moved things as pre-registered (pullback timing gate −0.28→−0.13R; flush
+second-test marginal; orb trail slightly negative) but nothing crosses zero.
+
+**Cost decomposition (1×→2× slippage delta isolates cost/unit):**
+
+| family | est. GROSS R @ zero slip | slip cost/unit | net @1× |
+|---|---|---|---|
+| orb_v2 | +0.009 | 0.084 | −0.075 |
+| first_pullback_v2 | +0.009 | 0.133 | −0.125 |
+| vwap_reclaim | −0.018 | 0.115 | −0.133 |
+| flush_reclaim_v2 | −0.101 | 0.169 | −0.270 |
+
+**Conclusion: the raw price-pattern triggers contain ~zero information even
+with FREE execution.** The uniform, decade-stable negativity is costs
+layered on noise — not a weak signal, an absent one. This kills the naked
+setup families at the DT-2 gate before any portfolio work (the gate doing
+its job).
+
+**Last pre-registered arrow for these families:** the conditioning/selection
+layer — with 25k-90k position-events per family and rich pre-entry features
+(gap size/direction, PM volume/range, prior-day context, time, regime), train
+the outcome model on DEV and ask whether any HOLDOUT decile carries positive
+net edge (needs ≥ +0.15R gross in the top slice to clear costs). If deciles
+fail → these families are dead and the intraday track needs different raw
+material.
+
+**Structural honesty note:** professional intraday shops trade with quote/
+depth/imbalance data; our lake is trade aggregates only. Pattern triggers on
+public OHLCV bars are the most crowded, information-poorest corner of
+intraday alpha — the conditioning test is also a test of whether OHLCV-only
+day trading is worth pursuing at all.
