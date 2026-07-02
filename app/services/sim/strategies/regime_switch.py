@@ -83,9 +83,11 @@ class RegimeSwitchStrategy(AlertStrategy):
         )
         self.source = self.up_source  # default; reset per bar in on_bar
         self._plans = {}
+        self._pending = {}  # working entry orders (AlertStrategy contract)
 
     def setup(self, ctx: Context) -> None:
         self._plans = {}
+        self._pending = {}
         self.up_source.setup(ctx)
         if self.down_source is not None:
             self.down_source.setup(ctx)
