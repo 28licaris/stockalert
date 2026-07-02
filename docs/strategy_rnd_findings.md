@@ -1289,3 +1289,152 @@ actually take. top-50: 10,655 candidate-days → **7,310 position-trades**
    reality, not the strategy, is wrong). New alpha must come from a different
    trade design — next track per the user: 1-minute day-trading/reversal
    research on the honest platform.
+
+---
+
+## DT-1 · 2026-07-02 · Day-trading base rates (2024 sandbox) — naive setups have no edge; conditioning reads
+
+DT-0 shipped: pre-open scanner (no-look-ahead: D-1 bars + premarket only;
+liquidity floors; ETP exclusion — trade the underlying) + 1m candidate store.
+2024: 245 days × top-30 = 7,350 mover-days, 3.63M 1m bars; picks eyeball-match
+the tape (RIVN/SMCI on 02-22, MSTR-complex on 08-05). Four a-priori setups
+(orb / vwap_reclaim / first_pullback / flush_reclaim), position-event
+semantics, honest fills (trigger-close + range-scaled slippage @1×/2×, stops
+worst-case with gap-through-open, 2R resting targets, 15:55 flat), 9 tests.
+
+**Base rates (2024, 1× slip): every naive setup ≤ breakeven after costs.**
+orb long PF 0.99 (win 45%, 64% EOD exits) · vwap_reclaim PF 0.78-0.82 ·
+first_pullback PF 0.58 · flush_reclaim PF 0.58 (70% stopped — the flush low
+gets re-run; the naive first-test entry is the crowd's stop fuel).
+
+**Conditioning reads (HYPOTHESIS GENERATION ONLY — 2024 is the permanent
+sandbox; validation must come from untouched years):**
+1. ORB is the only family at water level, with weak positive pockets: 8-15%
+   gaps +0.04R (n=136), afternoon entries +0.04R. ORB shorts uniformly worse.
+2. first_pullback in the first 30 minutes = −0.80R (the open fades fake
+   pullbacks); post-11:00 it's ≈ −0.04 — timing window matters more than the
+   pattern.
+3. The 2R-fixed-target exit looks structurally wrong for trend days (orb's
+   64% EOD bucket): v2 should test trail-to-close exit structures.
+4. flush_reclaim v2 = second-test / higher-low entry, not first reclaim.
+
+**Next (DT-2 prep):** pre-register v2 setup definitions (exit structure =
+trail vs fixed; pullback time window; flush second-test), backfill the
+scan/candidate store across 2006-2025, then DEV/HOLDOUT evaluation on years
+2024 never touched. Sample density is real: ~11k trades from ONE year.
+
+---
+
+## DT-2 · 2026-07-02 · 20-year verdict: mechanical 1m triggers carry ZERO gross signal
+
+Backfilled the pre-open scanner across 2006-2026: **152,952 mover-days,
+69.5M candidate 1m bars**. Evaluated v1 and v2 setup families with the
+pre-registered walls (DEV 2006-2018 / HOLDOUT 2019-2026 ex-2024 sandbox);
+~450k trade rows per version.
+
+**Every family is negative in essentially every one of 20 years** — DEV,
+holdout, and each year's strip agree (orb_v2 ≈ −0.06R, vwap ≈ −0.13R,
+pullback_v2 ≈ −0.13R, flush_v2 ≈ −0.27R at 1× slip). The v2 refinements
+moved things as pre-registered (pullback timing gate −0.28→−0.13R; flush
+second-test marginal; orb trail slightly negative) but nothing crosses zero.
+
+**Cost decomposition (1×→2× slippage delta isolates cost/unit):**
+
+| family | est. GROSS R @ zero slip | slip cost/unit | net @1× |
+|---|---|---|---|
+| orb_v2 | +0.009 | 0.084 | −0.075 |
+| first_pullback_v2 | +0.009 | 0.133 | −0.125 |
+| vwap_reclaim | −0.018 | 0.115 | −0.133 |
+| flush_reclaim_v2 | −0.101 | 0.169 | −0.270 |
+
+**Conclusion: the raw price-pattern triggers contain ~zero information even
+with FREE execution.** The uniform, decade-stable negativity is costs
+layered on noise — not a weak signal, an absent one. This kills the naked
+setup families at the DT-2 gate before any portfolio work (the gate doing
+its job).
+
+**Last pre-registered arrow for these families:** the conditioning/selection
+layer — with 25k-90k position-events per family and rich pre-entry features
+(gap size/direction, PM volume/range, prior-day context, time, regime), train
+the outcome model on DEV and ask whether any HOLDOUT decile carries positive
+net edge (needs ≥ +0.15R gross in the top slice to clear costs). If deciles
+fail → these families are dead and the intraday track needs different raw
+material.
+
+**Structural honesty note:** professional intraday shops trade with quote/
+depth/imbalance data; our lake is trade aggregates only. Pattern triggers on
+public OHLCV bars are the most crowded, information-poorest corner of
+intraday alpha — the conditioning test is also a test of whether OHLCV-only
+day trading is worth pursuing at all.
+
+---
+
+## DT-3 · 2026-07-02 · Conditioning verdict: ALL FOUR FAMILIES DEAD — chapter closed
+
+Per-family conditioning (scripts/daytrade_condition.py): every pre-entry
+feature we possess (gap size/direction, PM dollar-volume/range, prior-day
+structure, price level, scan rank, trigger time, D-1 SPY regime/return),
+logistic + LightGBM trained on DEV 2006-2018, judged once on holdout deciles.
+
+| family | holdout base R | best top-decile R | verdict (bar: ≥ +0.15R) |
+|---|---|---|---|
+| orb_v2 | −0.063 | **+0.017** | DEAD |
+| first_pullback_v2 | −0.129 | −0.003 | DEAD |
+| vwap_reclaim | −0.112 | −0.044 | DEAD |
+| flush_reclaim_v2 | −0.274 | −0.267 (deciles FLAT) | DEAD |
+
+**The subtle result:** for orb/vwap/pullback the deciles are cleanly
+MONOTONE out-of-sample — the models find real, generalizing discrimination —
+but the ceiling of the conditioned edge is ~breakeven. The information in
+pre-open context + bar-pattern triggers is real and microscopic: enough to
+escape some costs, never enough to earn. flush_reclaim has no ordering at
+all. Top features everywhere: trigger time, prior-day range, SPY prior-day
+return — regime/vol context, not setup quality.
+
+**Chapter conclusion (high confidence, pre-registered end-to-end):**
+mechanical bar-pattern day trading on public OHLCV — naked or conditioned —
+carries no tradeable edge on 20 years of gapper universes. Combined with the
+swing verdict (EXP-36), the platform's honest ground truth is: **price-bar
+patterns alone, at any tested timeframe, do not clear real execution costs.**
+
+**Where the alpha search goes next (each with a structural counterparty
+story, in order of data-in-hand):**
+1. **Dealer-flow / GEX** — we already collect options chains + gamma-exposure
+   snapshots (options.* lake). Dealers MUST hedge; their forced flow is the
+   textbook flow-prediction edge and our dataset is genuinely differentiated.
+   Untouched by this campaign.
+2. Event/catalyst tagging (news, earnings) — information bars don't carry.
+3. Quote/depth data — a paid-data decision if the business justifies it.
+4. The product-as-business: honest tools (EW analysis, screeners, Backtest
+   Lab, falsification-tested paper records) are sellable without proprietary
+   alpha claims.
+
+---
+
+## GEX-0 · 2026-07-02 · Dealer-flow chapter opened — the flywheel is the research
+
+Ground truth: the GEX machinery (Schwab chains → canonical contracts → GEX
+at total/expiry/strike/strike-expiry levels, options.* lake) was built but
+never collected — one AAPL smoke row existed. **Historical backfill is
+impossible honestly:** the Polygon key is entitled for contract enumeration
+(incl. expired) and per-contract daily aggregates, but OPEN INTEREST — the
+heart of GEX — exists only in the 403-tier snapshot endpoint. No historical
+OI → no honest historical dealer positioning (volume-proxy GEX rejected as a
+methodology hack). The dataset must be grown forward.
+
+**Flywheel enabled 2026-07-02:** OPTIONS_SNAPSHOT_ENABLED=true, pre-registered
+40-name universe (index complex SPY/QQQ/IWM/DIA + megacaps + high-gamma
+names MSTR/COIN/PLTR/SMCI/HOOD/MARA/GME + macro surfaces TLT/GLD/SLV/XLE/
+XLF/SMH/ARKK), 15-min cadence (~1,000 chain calls/day), 30 strikes.
+Caveat: collects only while the server runs (laptop uptime = sample
+completeness).
+
+**Research ladder (pre-registered):** GEX-0 methodology validation (sign
+conventions, greeks source, flip-point math) BEFORE any study reads the
+numbers → GEX-1 intraday wall-pinning (cross-sectional width substitutes
+for calendar depth; viable in ~2 weeks) → GEX-2 net-GEX regime vs next-day
+realized vol / trend-vs-chop + OPEX effects (~2-3 months) → GEX-3 GEX-regime
+conditioning of the swing system + paper falsification integration.
+The counterparty story is structural: dealers MUST hedge; their flow is
+mechanical — the only edge category from the hedge-fund taxonomy where our
+data is genuinely differentiated.

@@ -39,6 +39,14 @@ def _options_snapshot_request_params() -> dict[str, Any]:
             f"got {contract_type!r}"
         )
     params["contractType"] = contract_type
+    # Near-dated bound (GEX is 0-60 DTE dominated; unbounded index chains are
+    # so large they connection-timeout under load). 0 = full chain.
+    max_dte = int(getattr(settings, "options_snapshot_max_dte", 60))
+    if max_dte > 0:
+        from datetime import date, timedelta
+        today = date.today()
+        params["fromDate"] = today.isoformat()
+        params["toDate"] = (today + timedelta(days=max_dte)).isoformat()
     return params
 
 
