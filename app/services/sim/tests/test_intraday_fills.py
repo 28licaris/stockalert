@@ -109,6 +109,80 @@ def test_no_path_falls_back_to_legacy():
     assert a.kind == "sell" and a.fill_at_level is None and "stop" in a.note
 
 
+def _armed_strategy(policy: str, expiry: int = 5) -> AlertStrategy:
+    """Strategy with a working order armed: signal entry 105, level/stop 100,
+    target 115 (risk 5, rr 2)."""
+    sig = Signal("TEST", "long", entry=105.0, stop=100.0, target_1=115.0,
+                 confidence=0.5, kind="stub")
+    strat = AlertStrategy(AlertStrategyParams(entry_policy=policy,
+                                              entry_expiry_days=expiry))
+    strat.source = _StubSource(sig)
+    strat._pending["TEST"] = [sig, expiry, None, False, None]
+    return strat
+
+
+def _work_day(strat, intraday, *, day=6, close=104.0, high=None, low=None) -> Action:
+    ctx = Context(config=_cfg(), intervals=["1d"])
+    ctx.intraday = intraday
+    bar = _bar(day, close, high=high, low=low)
+    ctx.advance(bar, _flat())
+    return strat.on_bar(ctx)
+
+
+def test_retest_limit_fills_at_level_and_reanchors_plan():
+    day = (T0 + dt.timedelta(days=6)).date()
+    path = _FakePath({day: [
+        _hour(T0 + dt.timedelta(days=6), 0, 104, 104.5, 101, 102),   # no touch
+        _hour(T0 + dt.timedelta(days=6), 1, 102, 102.5, 99.8, 101),  # touches 100
+    ]})
+    strat = _armed_strategy("retest_limit")
+    a = _work_day(strat, path, close=104, high=105, low=99.8)
+    assert a.kind == "buy" and a.fill_at_level == 100.0
+    plan = strat._plans["TEST"]
+    assert plan.stop == 95.0 and plan.target_1 == 110.0  # risk 5, rr 2 re-anchored
+    assert "TEST" not in strat._pending
+
+
+def test_retest_limit_gap_below_fills_at_better_open():
+    day = (T0 + dt.timedelta(days=6)).date()
+    path = _FakePath({day: [
+        _hour(T0 + dt.timedelta(days=6), 0, 98.0, 99.5, 97.5, 99.0),
+    ]})
+    a = _work_day(_armed_strategy("retest_limit"), path, close=99, high=99.5, low=97.5)
+    assert a.kind == "buy" and a.fill_at_level == 98.0  # limit fills at the open
+
+
+def test_working_order_expires_after_n_bars():
+    strat = _armed_strategy("retest_limit", expiry=2)
+    quiet = _FakePath({})  # no touches, no data → just age the order
+    for day in (6, 7):
+        a = _work_day(strat, quiet, day=day, close=104, high=106, low=103)
+        assert a.kind == "hold"
+    assert "TEST" not in strat._pending  # expired
+
+
+def test_working_order_cancelled_on_close_below_level():
+    strat = _armed_strategy("retest_limit")
+    a = _work_day(strat, _FakePath({}), close=99.0, high=106, low=98.5)
+    assert a.kind == "hold" and "TEST" not in strat._pending
+
+
+def test_hourly_pullback_enters_on_turn_up_with_structure_stop():
+    day = (T0 + dt.timedelta(days=6)).date()
+    d6 = T0 + dt.timedelta(days=6)
+    path = _FakePath({day: [
+        _hour(d6, 0, 105, 106, 103, 103.5),   # pullback begins (low < 105)
+        _hour(d6, 1, 103.5, 104, 102, 103),   # pull_low → 102
+        _hour(d6, 2, 103, 105, 103, 104.5),   # close 104.5 > prev high 104 → turn-up
+    ]})
+    strat = _armed_strategy("hourly_pullback")
+    a = _work_day(strat, path, close=104.5, high=106, low=102)
+    assert a.kind == "buy" and a.fill_at_level == 104.5
+    plan = strat._plans["TEST"]
+    assert plan.stop == 102.0                       # hourly structure low
+    assert abs(plan.target_1 - (104.5 + 2 * 2.5)) < 1e-9
+
+
 def test_portfolio_fills_at_level_on_current_bar():
     p = Portfolio(starting_cash=1.0)
     p.positions["TEST"] = Position(symbol="TEST", quantity=80,
