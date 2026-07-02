@@ -1408,3 +1408,33 @@ story, in order of data-in-hand):**
 4. The product-as-business: honest tools (EW analysis, screeners, Backtest
    Lab, falsification-tested paper records) are sellable without proprietary
    alpha claims.
+
+---
+
+## GEX-0 · 2026-07-02 · Dealer-flow chapter opened — the flywheel is the research
+
+Ground truth: the GEX machinery (Schwab chains → canonical contracts → GEX
+at total/expiry/strike/strike-expiry levels, options.* lake) was built but
+never collected — one AAPL smoke row existed. **Historical backfill is
+impossible honestly:** the Polygon key is entitled for contract enumeration
+(incl. expired) and per-contract daily aggregates, but OPEN INTEREST — the
+heart of GEX — exists only in the 403-tier snapshot endpoint. No historical
+OI → no honest historical dealer positioning (volume-proxy GEX rejected as a
+methodology hack). The dataset must be grown forward.
+
+**Flywheel enabled 2026-07-02:** OPTIONS_SNAPSHOT_ENABLED=true, pre-registered
+40-name universe (index complex SPY/QQQ/IWM/DIA + megacaps + high-gamma
+names MSTR/COIN/PLTR/SMCI/HOOD/MARA/GME + macro surfaces TLT/GLD/SLV/XLE/
+XLF/SMH/ARKK), 15-min cadence (~1,000 chain calls/day), 30 strikes.
+Caveat: collects only while the server runs (laptop uptime = sample
+completeness).
+
+**Research ladder (pre-registered):** GEX-0 methodology validation (sign
+conventions, greeks source, flip-point math) BEFORE any study reads the
+numbers → GEX-1 intraday wall-pinning (cross-sectional width substitutes
+for calendar depth; viable in ~2 weeks) → GEX-2 net-GEX regime vs next-day
+realized vol / trend-vs-chop + OPEX effects (~2-3 months) → GEX-3 GEX-regime
+conditioning of the swing system + paper falsification integration.
+The counterparty story is structural: dealers MUST hedge; their flow is
+mechanical — the only edge category from the hedge-fund taxonomy where our
+data is genuinely differentiated.
