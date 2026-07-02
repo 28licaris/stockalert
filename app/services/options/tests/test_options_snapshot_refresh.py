@@ -100,3 +100,18 @@ def test_interval_has_one_minute_floor(monkeypatch) -> None:
     monkeypatch.setattr(refresh.settings, "options_snapshot_interval_seconds", 5)
 
     assert refresh._options_snapshot_interval_seconds() == 60
+
+
+def test_request_params_bound_to_near_dated_expirations(monkeypatch) -> None:
+    # GEX is 0-60 DTE dominated; unbounded index chains connection-timeout.
+    monkeypatch.setattr(refresh.settings, "options_snapshot_max_dte", 60, raising=False)
+    params = refresh._options_snapshot_request_params()
+    from datetime import date, timedelta
+    assert params["fromDate"] == date.today().isoformat()
+    assert params["toDate"] == (date.today() + timedelta(days=60)).isoformat()
+
+
+def test_request_params_unbounded_when_max_dte_zero(monkeypatch) -> None:
+    monkeypatch.setattr(refresh.settings, "options_snapshot_max_dte", 0, raising=False)
+    params = refresh._options_snapshot_request_params()
+    assert "fromDate" not in params and "toDate" not in params

@@ -161,6 +161,10 @@ class Settings(BaseModel):
     options_snapshot_symbols: str = os.getenv("OPTIONS_SNAPSHOT_SYMBOLS", "active")
     options_snapshot_strike_count: int = int(os.getenv("OPTIONS_SNAPSHOT_STRIKE_COUNT", "20"))
     options_snapshot_contract_type: str = os.getenv("OPTIONS_SNAPSHOT_CONTRACT_TYPE", "ALL")
+    # Bound chains to near-dated expirations: gamma exposure is dominated by
+    # 0-60 DTE, and unbounded SPY/QQQ chains (weeklies through LEAPS) are so
+    # large they connection-timeout under load. 0 = no bound (full chain).
+    options_snapshot_max_dte: int = int(os.getenv("OPTIONS_SNAPSHOT_MAX_DTE", "60"))
 
     # Polygon flat-file → futures.polygon_raw → futures.polygon_continuous
     # (see nightly_futures_polygon_refresh). Keeps the authoritative back-
