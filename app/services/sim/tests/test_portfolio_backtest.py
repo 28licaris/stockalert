@@ -210,6 +210,25 @@ def test_dd_brake_floor_keeps_participation(monkeypatch) -> None:
     assert entries and all(t.quantity >= 200 for t in entries)
 
 
+def test_daily_table_bars_are_tz_aware(monkeypatch) -> None:
+    # clickhouse-connect returns naive datetimes; the daily_table fetch must
+    # coerce to aware UTC (Bar contract parity — paper compares curve ts
+    # against an aware go_live).
+    import app.db.client as dbc
+
+    naive = dt.datetime(2024, 5, 14, 14, 30)
+    fake_cli = type("C", (), {})()
+    fake_cli.query = lambda *a, **k: type(
+        "R", (), {"result_rows": [("AAPL", naive, 1.0, 2.0, 0.5, 1.5, 1e6)]})()
+    monkeypatch.setattr(dbc, "get_client", lambda: fake_cli)
+    bt = Backtester()
+    out = bt._fetch_bars_daily_table(
+        _cfg(["AAPL"], daily_table="ohlcv_daily"), "ohlcv_daily")
+    (bar,) = out["AAPL"]
+    assert bar.timestamp.tzinfo is not None
+    assert bar.timestamp == naive.replace(tzinfo=dt.timezone.utc)
+
+
 def test_dd_brake_empty_book_does_not_freeze(monkeypatch) -> None:
     # Fall past the limit (churn goes flat → without the liveness trickle the
     # governor deadlocks: frozen equity, zero entries forever), then rise —

@@ -523,7 +523,11 @@ class Backtester:
         for r in rows:
             sym = r[0]
             if sym in out:
-                out[sym].append(_DailyBar(sym, r[1], float(r[2]), float(r[3]),
+                # clickhouse-connect returns naive datetimes; every other bar
+                # source is tz-aware UTC — enforce the same Bar contract here
+                # (paper build_status compares curve ts against aware go_live).
+                ts = r[1] if r[1].tzinfo is not None else r[1].replace(tzinfo=timezone.utc)
+                out[sym].append(_DailyBar(sym, ts, float(r[2]), float(r[3]),
                                           float(r[4]), float(r[5]), float(r[6])))
         return out
 
