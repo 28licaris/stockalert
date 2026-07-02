@@ -263,7 +263,14 @@ class Backtester:
             if config.dd_brake_limit and peak_equity > 0:
                 dd = 1.0 - eq / peak_equity
                 if dd >= config.dd_brake_limit:
-                    brake = 0.0  # hard risk-off at the product cap
+                    # Hard risk-off at the product cap — EXCEPT a liveness
+                    # trickle when the book is EMPTY: with no positions,
+                    # equity is frozen, so a plain 0 would deadlock the
+                    # governor forever. Trickle-sized re-entries keep the
+                    # system alive; drawdown past the limit can only creep
+                    # at 10%-of-normal risk per position.
+                    flat = not any(p.quantity for p in portfolio.positions.values())
+                    brake = 0.1 if flat else 0.0
                 else:
                     brake = min(1.0, max(config.dd_brake_floor,
                                          1.0 - dd / config.dd_brake_limit))

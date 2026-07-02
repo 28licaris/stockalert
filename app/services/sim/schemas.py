@@ -244,7 +244,9 @@ class BacktestConfig(BaseModel):
             "Drawdown governor: as the portfolio's running drawdown approaches this "
             "fraction of peak equity, new-entry sizes and the heat budget scale "
             "linearly to zero (no new entries at/beyond the limit). Exits are never "
-            "blocked. Direct enforcement of a max-drawdown product constraint."
+            "blocked. Direct enforcement of a max-drawdown product constraint. "
+            "Liveness: at/beyond the limit with an EMPTY book, entries are allowed "
+            "at 0.1 scale — otherwise frozen equity would deadlock the governor."
         ),
     )
     dd_brake_floor: float = Field(

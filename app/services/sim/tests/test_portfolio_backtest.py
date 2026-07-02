@@ -208,3 +208,23 @@ def test_dd_brake_floor_keeps_participation(monkeypatch) -> None:
                            _cfg(["X"], dd_brake_limit=0.30, dd_brake_floor=0.5))
     entries = [t for t in res.trades if not t.is_closing]
     assert entries and all(t.quantity >= 200 for t in entries)
+
+
+def test_dd_brake_empty_book_does_not_freeze(monkeypatch) -> None:
+    # Fall past the limit (churn goes flat → without the liveness trickle the
+    # governor deadlocks: frozen equity, zero entries forever), then rise —
+    # trickle entries must keep the system alive and recover equity.
+    fall = _falling("X", n=25, base=200.0)                      # 200 → 176
+    rise = [_Bar("X", T0 + dt.timedelta(days=25 + i),
+                 176 + 2 * i, 177 + 2 * i, 175 + 2 * i, 176 + 2 * i)
+            for i in range(25)]
+    bt = Backtester()
+    _patch(bt, monkeypatch, {"X": fall + rise})
+    res = bt.run_portfolio(_Churn(), _cfg(["X"], dd_brake_limit=0.02))
+    cutoff = T0 + dt.timedelta(days=26)
+    late_entries = [t for t in res.trades
+                    if not t.is_closing and t.timestamp >= cutoff]
+    assert late_entries, "governor deadlocked: no entries after the dd-limit hit"
+    # the governor rode the recovery: equity climbed back off the trough
+    trough = min(eq for _, eq in res.equity_curve)
+    assert res.metrics.final_equity > trough

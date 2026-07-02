@@ -28,6 +28,10 @@ class PaperRunConfig(BaseModel):
     momentum_bottom_n: Optional[int] = None
     momentum_lookback: int = 60
     history_window: int = 300
+    daily_table: Optional[str] = None       # e.g. 'ohlcv_daily' (deep research universe)
+    ranked_admission: bool = False
+    dd_brake_limit: Optional[float] = None  # drawdown governor (see BacktestConfig)
+    dd_brake_floor: float = 0.0
     history_start: datetime
     go_live: datetime
 
