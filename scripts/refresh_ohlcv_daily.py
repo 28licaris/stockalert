@@ -85,6 +85,12 @@ def main(argv=None) -> int:
     if ch_max is None:
         print("ohlcv_daily is EMPTY — run the full builder (build_ohlcv_daily.py --universe --staging)")
         return 1
+    if not settings.polygon_nightly_enabled:
+        # Operator turned equities lake ingest OFF (e.g. flat-files subscription
+        # lapsed) — a frozen table is the CONFIGURED state, not a failure.
+        print(f"SKIP: equities lake ingest disabled (POLYGON_NIGHTLY_ENABLED=false) — "
+              f"ohlcv_daily stays frozen at {ch_max}")
+        return 0
     end = date.fromisoformat(a.end) if a.end else _yesterday_et()
     start = ch_max + timedelta(days=1)
     if start > end:
