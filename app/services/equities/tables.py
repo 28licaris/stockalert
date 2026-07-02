@@ -31,6 +31,9 @@ from app.services.equities.schemas import (
     MARKET_SPLITS_PARTITION,
     MARKET_SPLITS_SCHEMA,
     MARKET_SPLITS_SORT,
+    POLYGON_DAILY_RAW_PARTITION,
+    POLYGON_DAILY_RAW_SCHEMA,
+    POLYGON_DAILY_RAW_SORT,
     POLYGON_RAW_PARTITION,
     POLYGON_RAW_SCHEMA,
     POLYGON_RAW_SORT,
@@ -131,6 +134,29 @@ def ensure_polygon_raw(catalog: Catalog | None = None) -> Table:
         location=location,
         partition_spec=POLYGON_RAW_PARTITION,
         sort_order=POLYGON_RAW_SORT,
+        properties=_BASE_PROPERTIES,
+    )
+
+
+def ensure_polygon_daily_raw(catalog: Catalog | None = None) -> Table:
+    """Create `equities.polygon_daily_raw` if absent; return the table."""
+    catalog = catalog or get_catalog()
+    _ensure_namespace(catalog)
+
+    table_id = equities_table_id("polygon_daily_raw")
+    try:
+        return catalog.load_table(table_id)
+    except NoSuchTableError:
+        pass
+
+    location = _equities_table_location("polygon_daily_raw")
+    log.info("Creating Iceberg table %s at %s", table_id, location)
+    return catalog.create_table(
+        identifier=table_id,
+        schema=POLYGON_DAILY_RAW_SCHEMA,
+        location=location,
+        partition_spec=POLYGON_DAILY_RAW_PARTITION,
+        sort_order=POLYGON_DAILY_RAW_SORT,
         properties=_BASE_PROPERTIES,
     )
 

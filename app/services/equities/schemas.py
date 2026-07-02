@@ -103,6 +103,48 @@ POLYGON_RAW_SORT = SortOrder(
 
 
 # ─────────────────────────────────────────────────────────────────────
+# equities.polygon_daily_raw — Polygon REST grouped-daily, RAW (unadjusted)
+# ─────────────────────────────────────────────────────────────────────
+#
+# One row per (symbol, trading day) for the WHOLE US market (~12.4k
+# symbols/day, ~3M rows/yr — tiny next to the minute lake). Source of
+# truth for daily bars after the flat-files subscription lapsed
+# (2026-07-01): `/v2/aggs/grouped` needs only the REST key, one call/day.
+# Same canonical OHLCV shape as polygon_raw; unadjusted by definition.
+# No symbol bucketing — the table is small enough that month pruning
+# alone serves both per-day appends and per-symbol reads.
+POLYGON_DAILY_RAW_SCHEMA = Schema(
+    NestedField(1, "symbol", StringType(), required=True),
+    NestedField(2, "timestamp", TimestamptzType(), required=True),
+    NestedField(3, "open", DoubleType(), required=False),
+    NestedField(4, "high", DoubleType(), required=False),
+    NestedField(5, "low", DoubleType(), required=False),
+    NestedField(6, "close", DoubleType(), required=False),
+    NestedField(7, "volume", DoubleType(), required=False),
+    NestedField(8, "vwap", DoubleType(), required=False),
+    NestedField(9, "trade_count", LongType(), required=False),
+    NestedField(10, "source", StringType(), required=False),
+    NestedField(11, "ingestion_ts", TimestamptzType(), required=False),
+    NestedField(12, "ingestion_run_id", StringType(), required=False),
+    identifier_field_ids=[1, 2],
+)
+
+POLYGON_DAILY_RAW_PARTITION = PartitionSpec(
+    PartitionField(
+        source_id=2,
+        field_id=1001,
+        transform=MonthTransform(),
+        name="ts_month",
+    ),
+)
+
+POLYGON_DAILY_RAW_SORT = SortOrder(
+    SortField(source_id=1, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+    SortField(source_id=2, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+)
+
+
+# ─────────────────────────────────────────────────────────────────────
 # equities.polygon_adjusted — RETIRED (lean storage migration)
 # ─────────────────────────────────────────────────────────────────────
 #
