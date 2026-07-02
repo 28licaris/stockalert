@@ -11,11 +11,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from daytrade_setups import (  # noqa: E402
     Trigger,
     detect_flush_reclaim,
+    detect_flush_reclaim_v2,
     detect_first_pullback,
+    detect_first_pullback_v2,
     detect_orb,
     detect_vwap_reclaim,
     run_symbol_day,
     simulate,
+    simulate_trailing,
 )
 
 
@@ -110,6 +113,63 @@ def test_truncation_invariance_of_trigger():
     c2[60:] = 50.0; h2[60:] = 50.0                    # nuke the future
     t2 = detect_orb(o, h2, l, c2, v, 0.05)
     assert t1 == t2
+
+
+def test_pullback_v2_timing_gate():
+    # trigger inside the opening 30 minutes → v1 takes it, v2 refuses
+    # (opening-window fades were −0.80R in the sandbox)
+    n = 80
+    o, h, l, c, v = _flat(n, px=100.0)
+    for i in range(1, 15):
+        h[i] = 100 + 0.25 * i; c[i] = h[i] - 0.05; l[i] = h[i] - 0.1
+    for i in range(15, 22):
+        h[i] = 102.5; l[i] = 101.8; c[i] = 102.0
+    c[25] = 103.0; h[25] = 103.1                      # break at 09:55 (<10:00)
+    assert detect_first_pullback(o, h, l, c, v).i == 25
+    assert detect_first_pullback_v2(o, h, l, c, v) is None
+
+
+def test_flush_v2_waits_for_second_test():
+    n = 100
+    o, h, l, c, v = _flat(n, px=100.0)
+    for i in range(1, 50):
+        l[i] = 100 - 0.05 * i; c[i] = l[i] + 0.02; h[i] = l[i] + 0.05
+    v[50] = 1e5
+    l[50] = 96.0; h[50] = 97.7; c[50] = 96.2; o[50] = 97.6   # flush bar
+    c[51] = 97.8; h[51] = 97.9; l[51] = 97.1                  # v1's first reclaim
+    for i in range(52, 60):                                   # bounce, no retest yet
+        c[i] = 97.2; h[i] = 97.4; l[i] = 97.0
+    l[60] = 96.05; h[60] = 96.6; c[60] = 96.3                 # second test holds low
+    for i in range(61, 64):
+        c[i] = 96.4; h[i] = 96.5; l[i] = 96.2
+    c[64] = 96.8; h[64] = 96.9                                # close above retest high
+    trig = detect_flush_reclaim_v2(o, h, l, c, v)
+    assert trig and trig.i == 64 and trig.stop == 96.0
+    # v1 (first reclaim) enters at bar 51 — v2 waited for the second test
+    assert detect_flush_reclaim(o, h, l, c, v).i == 51
+
+
+def test_trailing_sim_locks_gains_and_rides_trend():
+    n = 400
+    o, h, l, c, v = _flat(n, px=100.0)
+    trig = Trigger("orb_v2", "long", 5, entry=100.0, stop=98.0)
+    for j in range(6, 200):                                   # steady trend up
+        px = 100.0 + 0.05 * (j - 5)
+        o[j] = px; c[j] = px; h[j] = px + 0.02; l[j] = px - 0.02
+    for j in range(200, n):                                   # steady break of trail
+        px = max(90.0, 109.75 - 0.15 * (j - 199))
+        o[j] = px; c[j] = px; h[j] = px + 0.02; l[j] = px - 0.02
+    r = simulate_trailing(trig, o, h, l, c, slip_mult=1.0)
+    # armed after +1R (=102), trailed under the rising 20-bar low → the break
+    # at bar 200 stops it out far ABOVE entry (gains locked, not round-tripped)
+    assert r.exit_reason == "stop" and r.r_mult > 1.0
+    # and a clean trend into the close exits EOD, uncapped by any fixed target
+    o2, h2, l2, c2, _ = _flat(n, px=100.0)
+    for j in range(6, n):
+        px = 100.0 + 0.05 * (j - 5)
+        o2[j] = px; c2[j] = px; h2[j] = px + 0.02; l2[j] = px - 0.02
+    r2 = simulate_trailing(trig, o2, h2, l2, c2, slip_mult=1.0)
+    assert r2.exit_reason == "eod" and r2.r_mult > 2.0
 
 
 def test_run_symbol_day_one_trigger_per_setup():

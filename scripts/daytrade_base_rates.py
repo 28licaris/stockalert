@@ -47,6 +47,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--year", type=int, required=True)
     ap.add_argument("--dump", default="", help="write per-trade parquet")
+    ap.add_argument("--version", choices=("v1", "v2"), default="v1")
     a = ap.parse_args(argv)
 
     scan, bars = _load_year(a.year)
@@ -65,7 +66,8 @@ def main(argv=None) -> int:
         o, h, l, c, v = (g[k].to_numpy(dtype=float)
                          for k in ("open", "high", "low", "close", "volume"))
         for slip in (1.0, 2.0):
-            for r in run_symbol_day(o, h, l, c, v, gap, slip_mult=slip):
+            for r in run_symbol_day(o, h, l, c, v, gap, slip_mult=slip,
+                                    version=a.version):
                 rows.append({
                     "day": day, "symbol": sym, "gap_pct": gap, "slip": slip,
                     "setup": r.setup, "side": r.side, "r": r.r_mult,

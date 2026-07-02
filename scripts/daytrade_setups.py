@@ -202,6 +202,107 @@ def simulate(trig: Trigger, o, h, l, c, slip_mult: float = 1.0) -> Optional[Trad
                        fill, end, "eod", float(r), end - i)
 
 
+# ─────────────────────────────────────────────────────────────────────
+# v2 setups — PRE-REGISTERED 2026-07-02 from the 2024-sandbox conditioning
+# reads, BEFORE any multi-year evaluation. One variable changed per family:
+#   orb_v2            same trigger; EXIT = trail-to-close (no fixed target):
+#                     after the trade moves ≥1R, the stop ratchets to
+#                     max(breakeven, rolling 20-bar low[long]/high[short]).
+#   first_pullback_v2 identical pattern; trigger only allowed ≥10:00 ET
+#                     (the open eats fake pullbacks: <10:00 was −0.80R).
+#   flush_reclaim_v2  same flush bar; entry on the SECOND TEST — a later bar
+#                     holds within 1% above the flush low, then a close above
+#                     that retest bar's high (≤15 bars later). Stop unchanged.
+#   vwap_reclaim      no v2 (no clean conditioning lever) — v1 runs unchanged.
+# ─────────────────────────────────────────────────────────────────────
+
+PB_V2_MIN_ENTRY = 30      # ≥10:00 ET
+FLUSH_RETEST_PCT = 0.01
+FLUSH_RETEST_WINDOW = 15
+TRAIL_ARM_R = 1.0
+TRAIL_BARS = 20
+
+
+def detect_first_pullback_v2(o, h, l, c, v) -> Optional[Trigger]:
+    t = detect_first_pullback(o, h, l, c, v)
+    if t is None or t.i < PB_V2_MIN_ENTRY:
+        return None
+    return Trigger("first_pullback_v2", t.side, t.i, t.entry, t.stop)
+
+
+def detect_flush_reclaim_v2(o, h, l, c, v) -> Optional[Trigger]:
+    n = len(c)
+    if n < 45:
+        return None
+    vol_avg = np.convolve(v, np.ones(20) / 20.0, mode="full")[:n]
+    for f in range(30, min(n, EOD_MINUTE - 20)):
+        is_new_low = l[f] <= l[:f + 1].min()
+        if not is_new_low or vol_avg[f - 1] <= 0 or v[f] < 3.0 * vol_avg[f - 1]:
+            continue
+        flush_low = float(l[f])
+        # second test: a later bar holds WITHIN 1% above the flush low
+        for r in range(f + 2, min(n, EOD_MINUTE - 10)):
+            if l[r] <= flush_low:
+                break                          # low broken — flush failed, move on
+            if l[r] <= flush_low * (1 + FLUSH_RETEST_PCT):
+                j = _first(c > h[r], r + 1)
+                if (j is not None and j <= r + FLUSH_RETEST_WINDOW
+                        and j < EOD_MINUTE - 5 and flush_low < c[j]):
+                    return Trigger("flush_reclaim_v2", "long", j, float(c[j]), flush_low)
+                break                          # retest seen, no trigger — done
+        # only the FIRST qualifying flush is considered (position-event)
+        return None
+    return None
+
+
+def simulate_trailing(trig: Trigger, o, h, l, c, slip_mult: float = 1.0) -> Optional[TradeResult]:
+    """Trail-to-close exit: initial stop as given; once unrealized ≥ TRAIL_ARM_R,
+    the stop ratchets to max(breakeven, rolling TRAIL_BARS-bar extreme).
+    No fixed target; 15:55 flat. Same worst-case/gap fill semantics."""
+    n = len(c)
+    i = trig.i
+    rng = max(float(h[i] - l[i]), 0.0)
+    slip = max(0.01, 0.25 * rng) * slip_mult
+    is_long = trig.side == "long"
+    entry = trig.entry + slip if is_long else trig.entry - slip
+    risk = (entry - trig.stop) if is_long else (trig.stop - entry)
+    if risk <= 0:
+        return None
+    stop = trig.stop
+    armed = False
+    end = min(n - 1, EOD_MINUTE)
+    for j in range(i + 1, end + 1):
+        stop_hit = l[j] <= stop if is_long else h[j] >= stop
+        if stop_hit:
+            fill = (stop - slip) if is_long else (stop + slip)
+            if is_long and o[j] < stop:
+                fill = float(o[j]) - slip
+            if not is_long and o[j] > stop:
+                fill = float(o[j]) + slip
+            r = ((fill - entry) if is_long else (entry - fill)) / risk
+            return TradeResult(trig.setup, trig.side, i, entry, trig.stop,
+                               fill, j, "stop", float(r), j - i)
+        if not armed:
+            moved = (h[j] - entry) if is_long else (entry - l[j])
+            if moved >= TRAIL_ARM_R * risk:
+                armed = True
+        if armed:
+            lo_w = max(i + 1, j - TRAIL_BARS + 1)
+            trail = float(l[lo_w:j + 1].min()) if is_long else float(h[lo_w:j + 1].max())
+            stop = max(stop, entry, trail) if is_long else min(stop, entry, trail)
+    fill = float(c[end])
+    r = ((fill - entry) if is_long else (entry - fill)) / risk
+    return TradeResult(trig.setup, trig.side, i, entry, trig.stop,
+                       fill, end, "eod", float(r), end - i)
+
+
+def detect_orb_v2(o, h, l, c, v, gap_pct: float) -> Optional[Trigger]:
+    t = detect_orb(o, h, l, c, v, gap_pct)
+    if t is None:
+        return None
+    return Trigger("orb_v2", t.side, t.i, t.entry, t.stop)
+
+
 DETECTORS = {
     "orb": lambda o, h, l, c, v, gap: detect_orb(o, h, l, c, v, gap),
     "vwap_reclaim": lambda o, h, l, c, v, gap: detect_vwap_reclaim(o, h, l, c, v),
@@ -209,14 +310,26 @@ DETECTORS = {
     "flush_reclaim": lambda o, h, l, c, v, gap: detect_flush_reclaim(o, h, l, c, v),
 }
 
+DETECTORS_V2 = {
+    "orb_v2": lambda o, h, l, c, v, gap: detect_orb_v2(o, h, l, c, v, gap),
+    "vwap_reclaim": lambda o, h, l, c, v, gap: detect_vwap_reclaim(o, h, l, c, v),
+    "first_pullback_v2": lambda o, h, l, c, v, gap: detect_first_pullback_v2(o, h, l, c, v),
+    "flush_reclaim_v2": lambda o, h, l, c, v, gap: detect_flush_reclaim_v2(o, h, l, c, v),
+}
 
-def run_symbol_day(o, h, l, c, v, gap_pct: float, slip_mult: float = 1.0):
+_TRAILING_SETUPS = {"orb_v2"}
+
+
+def run_symbol_day(o, h, l, c, v, gap_pct: float, slip_mult: float = 1.0,
+                   version: str = "v1"):
     """First trigger per setup, resolved. Returns list[TradeResult]."""
+    detectors = DETECTORS_V2 if version == "v2" else DETECTORS
     out = []
-    for name, det in DETECTORS.items():
+    for name, det in detectors.items():
         trig = det(o, h, l, c, v, gap_pct)
         if trig is not None:
-            res = simulate(trig, o, h, l, c, slip_mult)
+            sim = simulate_trailing if trig.setup in _TRAILING_SETUPS else simulate
+            res = sim(trig, o, h, l, c, slip_mult)
             if res is not None:
                 out.append(res)
     return out

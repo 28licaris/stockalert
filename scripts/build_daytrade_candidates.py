@@ -60,6 +60,8 @@ ETP_EXCLUDE = {
     "WANT", "NAIL", "DFEN", "UDOW", "SDOW", "URTY", "SRTY", "TMF", "TMV",
     "TBT", "UBT", "TYD", "TYO", "BITX", "BITU", "SBIT", "ETHU", "ETHD",
     "IBIT", "GBTC", "FBTC", "ETHA", "BITO", "SETH",
+    "ETHE", "FETH", "ETHV", "EZET", "BITB", "ARKB", "BTCO", "BRRR", "HODL",
+    "BTF", "DEFI", "XBTF", "ETHW",
 }
 
 
