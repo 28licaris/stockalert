@@ -122,6 +122,17 @@ class AlertStrategyParams(BaseModel):
         5, ge=1,
         description="Working-order lifetime in trading bars for retest_limit / hourly_pullback.",
     )
+    stop_trigger: str = Field(
+        "touch",
+        description=(
+            "'touch' (default): a resting stop order — exits the moment the level "
+            "trades (fills at the level with ctx.intraday, else legacy). 'close': "
+            "EOD-confirmed stop — exits only when the bar CLOSES beyond the stop, "
+            "filled at the next open (a wick through the level doesn't take you "
+            "out; the cost is that a hard close-through loses more than 1R). "
+            "Targets are unaffected (resting limit at the level)."
+        ),
+    )
 
 
 class AlertStrategy(BaseStrategy):
@@ -182,9 +193,11 @@ class AlertStrategy(BaseStrategy):
         # legacy whole-bar worst-case checks when no path exists for this day.
         path = getattr(ctx, "intraday", None)
         hours = path.bars_for(symbol, bar.timestamp.date()) if path is not None else []
+        eod_stop = self.params.stop_trigger == "close"
         if hours:
             for i, hb in enumerate(hours):
-                stop_hit = hb.low <= plan.stop if is_long else hb.high >= plan.stop
+                stop_hit = (not eod_stop) and (
+                    hb.low <= plan.stop if is_long else hb.high >= plan.stop)
                 target_hit = hb.high >= plan.target_1 if is_long else hb.low <= plan.target_1
                 if stop_hit:  # worst case within a single hour that spans both
                     level = plan.stop
@@ -208,10 +221,21 @@ class AlertStrategy(BaseStrategy):
                     return Action(kind=exit_kind, symbol=symbol, size=qty,
                                   fill_at_level=level,
                                   note=f"target @ {plan.target_1:.4f} ({plan.kind})")
+            # EOD-confirmed stop: the day's wicks didn't matter; the CLOSE did.
+            if eod_stop:
+                closed_through = (bar.close <= plan.stop if is_long
+                                  else bar.close >= plan.stop)
+                if closed_through:
+                    self._plans.pop(symbol, None)
+                    ctx.log(event="exit_stop", stop=plan.stop, dir=plan.direction,
+                            fill="eod_close")
+                    return Action(kind=exit_kind, symbol=symbol, size=qty,
+                                  note=f"stop(close) @ {plan.stop:.4f} ({plan.kind})")
         else:
             # Stop: long stops below (low ≤ stop); short stops above (high ≥ stop).
             # Stop checked before target (worst case when a bar spans both).
-            stop_hit = bar.low <= plan.stop if is_long else bar.high >= plan.stop
+            stop_hit = ((bar.close if eod_stop else bar.low) <= plan.stop if is_long
+                        else (bar.close if eod_stop else bar.high) >= plan.stop)
             if stop_hit:
                 self._plans.pop(symbol, None)
                 ctx.log(event="exit_stop", stop=plan.stop, dir=plan.direction)

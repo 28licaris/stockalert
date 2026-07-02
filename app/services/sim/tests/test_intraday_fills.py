@@ -183,6 +183,29 @@ def test_hourly_pullback_enters_on_turn_up_with_structure_stop():
     assert abs(plan.target_1 - (104.5 + 2 * 2.5)) < 1e-9
 
 
+def test_eod_stop_ignores_wick_but_exits_on_close_through():
+    day5 = T0 + dt.timedelta(days=5)
+    wick_day = _FakePath({day5.date(): [
+        _hour(day5, 0, 100, 101, 94.0, 100.5),   # wick through 95, recovers
+    ]})
+    sig = Signal("TEST", "long", entry=100.0, stop=95.0, target_1=110.0,
+                 confidence=0.5, kind="stub")
+    strat = AlertStrategy(AlertStrategyParams(stop_trigger="close"))
+    strat.source = _StubSource(sig)
+    strat._plans["TEST"] = sig
+    ctx = Context(config=_cfg(), intervals=["1d"])
+    ctx.intraday = wick_day
+    ctx.advance(_bar(5, 100.5, high=101, low=94), _with_pos(80, 100.0))
+    assert strat.on_bar(ctx).kind == "hold"        # wick didn't take us out
+    # next day CLOSES through the stop → exit, next-open fill (no level fill)
+    day6 = T0 + dt.timedelta(days=6)
+    ctx2 = Context(config=_cfg(), intervals=["1d"])
+    ctx2.intraday = _FakePath({day6.date(): [_hour(day6, 0, 96, 96.5, 93, 93.5)]})
+    ctx2.advance(_bar(6, 93.5, high=96.5, low=93), _with_pos(80, 100.0))
+    a = strat.on_bar(ctx2)
+    assert a.kind == "sell" and a.fill_at_level is None and "stop(close)" in a.note
+
+
 def test_portfolio_fills_at_level_on_current_bar():
     p = Portfolio(starting_cash=1.0)
     p.positions["TEST"] = Position(symbol="TEST", quantity=80,
