@@ -1366,3 +1366,45 @@ depth/imbalance data; our lake is trade aggregates only. Pattern triggers on
 public OHLCV bars are the most crowded, information-poorest corner of
 intraday alpha — the conditioning test is also a test of whether OHLCV-only
 day trading is worth pursuing at all.
+
+---
+
+## DT-3 · 2026-07-02 · Conditioning verdict: ALL FOUR FAMILIES DEAD — chapter closed
+
+Per-family conditioning (scripts/daytrade_condition.py): every pre-entry
+feature we possess (gap size/direction, PM dollar-volume/range, prior-day
+structure, price level, scan rank, trigger time, D-1 SPY regime/return),
+logistic + LightGBM trained on DEV 2006-2018, judged once on holdout deciles.
+
+| family | holdout base R | best top-decile R | verdict (bar: ≥ +0.15R) |
+|---|---|---|---|
+| orb_v2 | −0.063 | **+0.017** | DEAD |
+| first_pullback_v2 | −0.129 | −0.003 | DEAD |
+| vwap_reclaim | −0.112 | −0.044 | DEAD |
+| flush_reclaim_v2 | −0.274 | −0.267 (deciles FLAT) | DEAD |
+
+**The subtle result:** for orb/vwap/pullback the deciles are cleanly
+MONOTONE out-of-sample — the models find real, generalizing discrimination —
+but the ceiling of the conditioned edge is ~breakeven. The information in
+pre-open context + bar-pattern triggers is real and microscopic: enough to
+escape some costs, never enough to earn. flush_reclaim has no ordering at
+all. Top features everywhere: trigger time, prior-day range, SPY prior-day
+return — regime/vol context, not setup quality.
+
+**Chapter conclusion (high confidence, pre-registered end-to-end):**
+mechanical bar-pattern day trading on public OHLCV — naked or conditioned —
+carries no tradeable edge on 20 years of gapper universes. Combined with the
+swing verdict (EXP-36), the platform's honest ground truth is: **price-bar
+patterns alone, at any tested timeframe, do not clear real execution costs.**
+
+**Where the alpha search goes next (each with a structural counterparty
+story, in order of data-in-hand):**
+1. **Dealer-flow / GEX** — we already collect options chains + gamma-exposure
+   snapshots (options.* lake). Dealers MUST hedge; their forced flow is the
+   textbook flow-prediction edge and our dataset is genuinely differentiated.
+   Untouched by this campaign.
+2. Event/catalyst tagging (news, earnings) — information bars don't carry.
+3. Quote/depth data — a paid-data decision if the business justifies it.
+4. The product-as-business: honest tools (EW analysis, screeners, Backtest
+   Lab, falsification-tested paper records) are sellable without proprietary
+   alpha claims.
