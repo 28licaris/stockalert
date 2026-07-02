@@ -36,6 +36,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         momentum_bottom_n=r.get("momentum_bottom_n"),
         momentum_lookback=int(r.get("momentum_lookback", 60)),
         daily_table=r.get("daily_table"),
+        hourly_table=r.get("hourly_table"),
+        ranked_admission=bool(r.get("ranked_admission", False)),
+        dd_brake_limit=r.get("dd_brake_limit"),
+        dd_brake_floor=float(r.get("dd_brake_floor", 0.0)),
     )
     strat = _load_strategy(r["strategy"], r.get("strategy_params", {}), interval=cfg.interval)
     res = Backtester().run_portfolio(strat, cfg)

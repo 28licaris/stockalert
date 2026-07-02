@@ -114,6 +114,10 @@ class NextBarOpenFill:
             return float("nan")
         return float(next_bar.open)
 
+    def fill_at_level(self, action: Action, level: float) -> float:
+        """Path-aware fill at a verified intra-bar level. No adjustment."""
+        return float(level)
+
 
 class PercentSlippage:
     """
@@ -131,6 +135,15 @@ class PercentSlippage:
         if next_bar is None:
             return float("nan")
         base = float(next_bar.open)
+        if action.kind == "buy":
+            return base * (1.0 + self.pct)
+        if action.kind == "sell":
+            return base * (1.0 - self.pct)
+        return base
+
+    def fill_at_level(self, action: Action, level: float) -> float:
+        """Path-aware fill at a verified intra-bar level, pct against the trader."""
+        base = float(level)
         if action.kind == "buy":
             return base * (1.0 + self.pct)
         if action.kind == "sell":

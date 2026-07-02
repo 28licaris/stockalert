@@ -1,0 +1,9 @@
+name: momentum_top50
+title: Deep Momentum 50
+tagline: Long-only breakouts on the strongest 5% of a 1,000-name universe.
+description: Each day ranks a survivorship-clean 1,000-name cross-sector universe (2006-2026, delisted
+  names included) by trailing strength and trades breakouts among the top 50. Long only, risk-based sizing.
+  The honest rebuild of our momentum research after the EXP-26 data correction.
+category: momentum
+visibility: subscribers
+config_file: configs/paper_momentum_top50.yaml

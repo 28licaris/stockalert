@@ -200,6 +200,24 @@ async def refresh_polygon_lake_yesterday(
 
         per_day_results.append(out)
 
+    # NO SILENT FAILURES: if every processed day errored and nothing was
+    # persisted, this run is a FAILURE (e.g. flat-files credentials 403),
+    # not an "ok" with quietly-zero output. Raising marks the audit_run
+    # as error so the health page surfaces it.
+    def _day_failed(r: dict[str, Any]) -> bool:
+        kinds_res = [r[k] for k in r.get("kinds", []) if isinstance(r.get(k), dict)]
+        return bool(kinds_res) and all(
+            kr.get("days_errored", 0) > 0 and kr.get("bars_persisted", 0) == 0
+            for kr in kinds_res
+        )
+
+    if per_day_results and all(_day_failed(r) for r in per_day_results):
+        raise RuntimeError(
+            f"nightly polygon refresh: ALL {len(per_day_results)} day(s) errored with "
+            f"0 bars persisted — check Polygon flat-files S3 credentials "
+            f"(403 Forbidden = expired key or lapsed subscription)"
+        )
+
     # Backwards-compatible return shape: when called with explicit `target`,
     # callers expect the single-day dict. Auto-catchup returns a wrapper.
     if target is not None:

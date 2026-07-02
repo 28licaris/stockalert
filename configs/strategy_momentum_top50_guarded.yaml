@@ -1,0 +1,9 @@
+name: momentum_top50_guarded
+title: "Deep Momentum 50 \xB7 Drawdown-Guarded"
+tagline: The same momentum engine with a hard ~15% drawdown governor.
+description: 'Deep Momentum 50 plus an equity-curve drawdown governor: as portfolio drawdown approaches
+  15%, new-entry risk scales to zero (exits never blocked). Capped drawdown at ~15-16% through 2008, 2020
+  and 2022 in backtests while matching the unguarded long-run return.'
+category: momentum
+visibility: subscribers
+config_file: configs/paper_momentum_top50_guarded.yaml

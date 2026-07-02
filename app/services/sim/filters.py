@@ -432,8 +432,16 @@ class MetaRankFilter(BaseFilter):
         feats["regime_up"] = 1.0 if regime else 0.0
         p = predict_proba(self._model, feats)
         ok = p >= self.min_proba
-        # score = P → FilteredSignalSource sets confidence = P (conviction by prob).
-        return FilterResult(ok, p if ok else 0.0, f"P(win)={p:.2f}")
+        # score → FilteredSignalSource sets confidence (conviction by probability).
+        # Calibrate against the TRAIN-set predicted-P distribution when the model
+        # carries its quantiles (p10→0, p90→1), so conviction sizing spans the
+        # full risk ramp; raw P (~0.15-0.45) would barely engage it. Train-only
+        # constants — no holdout leakage.
+        conf = p
+        p10, p90 = self._model.get("train_p10"), self._model.get("train_p90")
+        if p10 is not None and p90 is not None and p90 > p10:
+            conf = min(1.0, max(0.0, (p - p10) / (p90 - p10)))
+        return FilterResult(ok, conf if ok else 0.0, f"P(win)={p:.2f}")
 
 
 _FILTERS = {

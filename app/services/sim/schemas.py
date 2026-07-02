@@ -72,6 +72,21 @@ class Action(BaseModel):
     limit_price: Optional[float] = None
     stop_price: Optional[float] = None
     target_price: Optional[float] = None
+    fill_at_level: Optional[float] = Field(
+        None,
+        description=(
+            "Path-aware fill: the strategy verified (via ctx.intraday) that this "
+            "price level traded during the CURRENT bar — fill AT this level on "
+            "the current bar (slippage-adjusted adversely), not at next open."
+        ),
+    )
+    confidence: float = Field(
+        0.0, ge=0.0, le=1.0,
+        description=(
+            "Signal confidence carried onto the action so the portfolio harness "
+            "can admit competing same-bar entries best-first (ranked admission)."
+        ),
+    )
     note: str = Field("", description="Optional reason from the strategy (for audit + log).")
 
 
@@ -222,12 +237,52 @@ class BacktestConfig(BaseModel):
     momentum_lookback: int = Field(
         60, ge=2, description="Bars used for the dynamic-universe momentum ranking.",
     )
+    ranked_admission: bool = Field(
+        False,
+        description=(
+            "Portfolio backtest: at each timestamp admit competing new entries in "
+            "DESCENDING signal-confidence order instead of symbol order, so a scarce "
+            "heat/slot budget is spent on the highest-conviction setups first "
+            "(fixes the EXP-12 first-come symbol-order bias)."
+        ),
+    )
+    dd_brake_limit: Optional[float] = Field(
+        None, gt=0.0, le=1.0,
+        description=(
+            "Drawdown governor: as the portfolio's running drawdown approaches this "
+            "fraction of peak equity, new-entry sizes and the heat budget scale "
+            "linearly to zero (no new entries at/beyond the limit). Exits are never "
+            "blocked. Direct enforcement of a max-drawdown product constraint. "
+            "Liveness: at/beyond the limit with an EMPTY book, entries are allowed "
+            "at 0.1 scale — otherwise frozen equity would deadlock the governor."
+        ),
+    )
+    dd_brake_floor: float = Field(
+        0.0, ge=0.0, lt=1.0,
+        description=(
+            "Participation floor for the drawdown governor: below the limit, scale "
+            "never drops under this fraction (prevents the recovery ratchet — "
+            "proportional braking otherwise forces the climb back from a drawdown "
+            "onto tiny positions). At/beyond the limit, scale is still 0 (hard "
+            "risk-off at the product cap)."
+        ),
+    )
     daily_table: Optional[str] = Field(
         None,
         description=(
             "For interval='1d': read pre-adjusted daily bars directly from this CH "
             "table (e.g. 'ohlcv_daily', the deep+liquid+delisted research universe) "
             "instead of rolling up ohlcv_1m. None = default rollup."
+        ),
+    )
+    hourly_table: Optional[str] = Field(
+        None,
+        description=(
+            "Path-aware fills: CH table of 09:30-anchored ET-session hourly bars "
+            "(build_ohlcv_hourly.py). When set, the engine exposes ctx.intraday and "
+            "exits are ordered/filled by first intraday touch AT the stop/target "
+            "level (instead of worst-case-stop + next-open fills). None = legacy "
+            "daily-bar fills."
         ),
     )
     starting_cash: float = 40_000.0

@@ -29,15 +29,20 @@ class RiskManager:
     def open_risk_total(self) -> float:
         return sum(self._open_risk.values())
 
-    def can_open(self, symbol: str, risk_amount: float, equity: float) -> bool:
-        """Allow a new position iff it fits the concurrent-count and heat caps."""
+    def can_open(self, symbol: str, risk_amount: float, equity: float,
+                 heat_scale: float = 1.0) -> bool:
+        """Allow a new position iff it fits the concurrent-count and heat caps.
+
+        heat_scale < 1 shrinks the heat budget for this admission (drawdown
+        governor); it never affects already-open risk or exits.
+        """
         if symbol in self._open_risk:
             return True  # already counted (shouldn't happen — strategy is 1/symbol)
         if self.open_count >= self.max_concurrent:
             return False
         if equity <= 0:
             return False
-        if (self.open_risk_total + risk_amount) > self.max_portfolio_heat * equity:
+        if (self.open_risk_total + risk_amount) > self.max_portfolio_heat * heat_scale * equity:
             return False
         return True
 

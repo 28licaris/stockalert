@@ -20,6 +20,8 @@ import pandas as pd  # noqa: E402
 
 FEATURES = ["ret20", "ret60", "ret120", "rsi", "atr_pct", "adx", "dist_sma50",
             "dist_sma200", "vol_ratio", "dollar_vol", "bo_height", "rel_str", "regime_up"]
+EW_FEATURES = ["ew_has_count", "ew_conf", "ew_uncert", "ew_motive_up", "ew_wave3_up",
+               "ew_corrective", "ew_dist_invalid_atr"]
 
 
 def _auc(y, p) -> float:
@@ -45,7 +47,13 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="data/trades.parquet")
     ap.add_argument("--split", default="2020-01-01")
+    ap.add_argument("--ew", action="store_true",
+                    help="include Elliott Wave features (dataset must be built with --ew)")
+    ap.add_argument("--out", default="data/ranker.json")
     a = ap.parse_args(argv)
+    global FEATURES
+    if a.ew:
+        FEATURES = FEATURES + EW_FEATURES
     df = pd.read_parquet(a.data).sort_values("d").reset_index(drop=True)
     tr, ho = df[df.d < a.split], df[df.d >= a.split]
     print(f"TRAIN {len(tr)} trades (<{a.split})  |  HOLDOUT {len(ho)} trades (>={a.split})")
@@ -75,10 +83,18 @@ def main(argv=None) -> int:
     for f, wi in sorted(zip(FEATURES, w), key=lambda kv: -abs(kv[1])):
         print(f"  {f:12} {wi:+.3f}")
 
-    Path("data/ranker.json").write_text(json.dumps({
+    # Train-set predicted-P distribution: the a-priori gate threshold (median) and
+    # the sizing-calibration quantiles (p10→conf 0, p90→conf 1). TRAIN-only stats.
+    ptr = 1 / (1 + np.exp(-(Xtr @ w + b)))
+    q10, q50, q90 = (float(np.quantile(ptr, q)) for q in (0.10, 0.50, 0.90))
+    print(f"\nTRAIN predicted-P quantiles: p10={q10:.3f}  median={q50:.3f}  p90={q90:.3f}"
+          f"  (median = the a-priori min_proba; p10/p90 = sizing calibration)")
+
+    Path(a.out).write_text(json.dumps({
         "features": FEATURES, "mu": mu.tolist(), "sd": sd.tolist(),
-        "w": w.tolist(), "b": float(b)}, indent=2))
-    print("\nsaved model → data/ranker.json")
+        "w": w.tolist(), "b": float(b),
+        "train_p10": q10, "train_p50": q50, "train_p90": q90}, indent=2))
+    print(f"saved model → {a.out}")
     return 0
 
 

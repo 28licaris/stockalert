@@ -133,6 +133,51 @@ async def test_refresh_target_path_uses_equities_sink(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_refresh_all_days_errored_raises(monkeypatch):
+    """NO SILENT FAILURES: if every processed day errors with 0 bars persisted
+    (e.g. flat-files credentials 403), the run must RAISE so audit_run records
+    an error — not report 'ok' with quietly-zero output."""
+    from datetime import date
+
+    monkeypatch.setattr(nightly.settings, "polygon_nightly_enabled", True)
+    monkeypatch.setattr(nightly.settings, "stock_lake_bucket", "test-bucket")
+    monkeypatch.setattr(nightly.settings, "polygon_nightly_symbols", "AAPL")
+    monkeypatch.setattr(nightly.settings, "polygon_nightly_kind", "minute")
+    monkeypatch.setattr(
+        nightly.EquitiesIcebergSink, "for_polygon_raw",
+        MagicMock(return_value=MagicMock()),
+    )
+    monkeypatch.setattr(
+        nightly.PolygonFlatFilesClient, "from_settings",
+        classmethod(lambda cls: MagicMock(name="ff_client")),
+    )
+
+    fake_svc = MagicMock()
+    fake_result = MagicMock()
+    fake_result.to_summary.return_value = {
+        "days_ok": 0, "days_errored": 1, "bars_persisted": 0,
+    }
+    fake_svc.backfill_range = AsyncMock(return_value=fake_result)
+
+    class FakeServiceClass:
+        DEFAULT_SOURCE_TAG = "polygon-flatfiles"
+
+        def __new__(cls, *args, **kwargs):
+            return fake_svc
+
+    monkeypatch.setattr(nightly, "FlatFilesBackfillService", FakeServiceClass)
+    monkeypatch.setattr(
+        "app.services.equities.gaps.loaded_dates_in_range", lambda *a, **k: set(),
+    )
+    monkeypatch.setattr(
+        "app.services.equities.tables.ensure_polygon_raw", lambda *a, **k: MagicMock(),
+    )
+
+    with pytest.raises(RuntimeError, match="ALL 1 day"):
+        await nightly.refresh_polygon_lake_yesterday(target=date(2024, 5, 14))
+
+
+@pytest.mark.asyncio
 async def test_refresh_gated_off_when_lake_disabled(monkeypatch):
     """When POLYGON_NIGHTLY_ENABLED is false, must short-circuit
     without touching any v2 helper — keeps the v1-disabled deploy

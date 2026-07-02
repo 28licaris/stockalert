@@ -952,3 +952,340 @@ just isn't the highest-value way to use it.
 hard gate; (2) a higher a-priori threshold to concentrate on the top-tercile (38%
 win / +0.385R); (3) a richer model (GBM — dep tradeoff) + more features. Ship the
 current momentum baseline; forward-test the ranked variant alongside it.
+
+---
+
+## EXP-26 · 2026-07-01 · Ticker-splice contamination — the data fix that resets everything
+
+The gap-clean top-1000 rebuild (eac9c75, same morning) was silently missing
+V, META/FB, TWTR, COIN, SNOW, MRNA, NOW, ANET, BSC + ~160 more. Root cause:
+**Polygon keys rows by TICKER**, and a reused ticker holds several companies'
+histories separated by multi-month gaps (V = Vivendi'06 → gap → Visa'08+;
+COIN = a 2007-10 predecessor → gap → Coinbase'21+; FB = Facebook'12-22 + a
+sparse junk tail'25+). The gap audit saw the dirty splice and rejected the
+WHOLE symbol — reintroducing survivorship/coverage bias — while the PRE-audit
+table (EXP-23-25) traded the fake gap-jump between unrelated companies.
+
+Fix (`build_ohlcv_daily.py`): **dominant-segment extraction** — split each
+symbol's history on >5-missing-trading-day gaps, keep the max-total-dollar-
+volume contiguous segment (pure fn, 9 unit tests), staging table + atomic
+EXCHANGE for zero-downtime reload. Result: 1400 ranked → 231 symbols trimmed
+(176,763 contaminated rows dropped) → 1280/1400 gap-clean (was 1112) →
+finalized top-1000 (3.27M rows). Boundaries verified against corporate
+history to the DAY: V starts 2008-03-19 (IPO), COIN 2021-04-14, FB
+2012-05-18→2022-06-08 + META 2022-06-09→ (rename), TWTR 2013-11-07→2022-10-27,
+BSC ends 2008-05-30 (JPM close), SMCI relist 2020-01-14, DELL relist 2018-12-28.
+
+**All EXP-23..25 numbers are superseded.** Lesson for the honesty doctrine:
+data provenance bugs (not just methodology bugs) can manufacture alpha —
+a momentum system LOVES a fake +3000% gap-splice.
+
+---
+
+## EXP-27 · 2026-07-01 · Honest rebaseline — the headline strategy COLLAPSES on clean data
+
+Same canonical config (breakout lb20, dynamic top-15, lb60, 10 concurrent,
+12% heat, $100k, 2022-2025) at three data/universe stages:
+
+| Stage | Universe | Return | Sharpe | Max DD | PF |
+|---|---|---|---|---|---|
+| EXP-23 (dirty: splices in) | 500 hand-ranked | +226% | 0.94 | −34.9% | 1.51 |
+| Clean data, old config's 414 surviving names | 414 | +108.5% | 0.65 | −44.7% | 1.27 |
+| Clean data, full clean universe | 1000 | **−2.7%** | **0.10** | **−45.7%** | **0.96** |
+
+**Conclusions:**
+1. **~Half the old “edge” was contamination** (fake splice momentum) — same
+   strategy, same-ish universe, clean data: +226% → +108%.
+2. **top_n does NOT transfer across pool sizes.** Top-15-of-1000 = the 98.5th-
+   percentile extreme movers (meme/squeeze junk, no follow-through) vs the
+   validated EXP-20 config top-15-of-119 ≈ top 12.6%. On 1000 names the edge
+   vanishes entirely (−2.7%). **The real parameter is the percentile, not the
+   count.** A-priori translation: top_n=125 on 1000 names (~12.6%) — being
+   verified; the count-vs-percentile response curve is EXP-30.
+3. We currently have **no validated baseline**. This is the honest floor to
+   rebuild from — better discovered here than in production.
+
+---
+
+## EXP-28 · 2026-07-01 · GBM vs logistic ranker — logistic wins, GBM rejected
+
+Added LightGBM (`scripts/train_ranker_gbm.py`), same TRAIN(<2020)/HOLDOUT(≥2020)
+wall, early stopping on the chronological tail of TRAIN (never the holdout).
+Pre-registered adoption rule: GBM ships only if it beats logistic on the
+untouched holdout. On the clean dataset (3,851 trades):
+
+| Model | Holdout AUC | Top-tercile win / avg R |
+|---|---|---|
+| Logistic | **0.567** | **35.8% / +0.277** |
+| GBM | 0.550 | 34.2% / +0.235 |
+
+**Verdict: keep the logistic.** 3.8k trades is too small for GBM to exploit
+non-linearities; it overfits what the linear model shrugs off. Re-audit if the
+dataset grows (longer history, more candidates/features). `train_ranker.py` now
+also saves TRAIN predicted-P quantiles (p10/median/p90 = 0.162/0.245/0.429) —
+the a-priori gate threshold and the sizing-calibration constants (train-only,
+no leakage).
+
+---
+
+## EXP-29 · 2026-07-01 · Elliott Wave as LEARNED features — no predictive value (clean negative)
+
+Per the “system should learn EW” goal: added as-of EW features to every
+breakout candidate (`build_trade_dataset.py --ew`, engine = pure no-look-ahead
+`app.signals.elliott`): has_count, confidence, uncertainty, motive-up,
+wave-3-up, corrective, distance-to-invalidation (ATRs). Retrained both models:
+
+| Model | Holdout AUC | Top-tercile win / avg R |
+|---|---|---|
+| Logistic base | **0.567** | **35.8% / +0.277** |
+| Logistic + EW | 0.564 | 34.0% / +0.195 |
+| GBM base | 0.550 | 34.2% / +0.235 |
+| GBM + EW | 0.544 | 32.4% / +0.164 |
+
+**EW features make ranking WORSE in both model families** — they add noise,
+not signal, for predicting breakout-candidate outcomes (echoes EXP-16: wave
+labels at a momentum entry carry no extra information). The learned-EW weights
+were also collinear/unstable (ew_uncert positive). Per the no-ego doctrine:
+**EW does not earn a place in the ranker.** Last EW hypothesis standing = EW
+as its own entry SOURCE on the dynamic universe (EXP-32).
+
+---
+
+## EXP-30 · 2026-07-01 · top-N percentile response curve + DEV selection
+
+Full-period 2022-25 response curve on the clean 1000-name universe (in-sample,
+used only to pick CANDIDATE bases; final selection on DEV windows below):
+
+| top_n (of 1000) | %ile | Return | Sharpe | Max DD | PF |
+|---|---|---|---|---|---|
+| 15 | 1.5% | −2.7% | 0.10 | −45.7% | 0.96 |
+| **50** | **5%** | +65.8% | 0.59 | −31.9% | 1.15 |
+| 125 | 12.5% | +15.5% | 0.29 | −20.2% | 1.06 |
+
+DEV(2022-23)/HOLDOUT(2024-25) discipline on the two candidates:
+
+| Base | DEV Sharpe | HOLD Sharpe | HOLD ret | HOLD DD |
+|---|---|---|---|---|
+| top50 bare | **+0.76** | +0.64 | +39.7% | −37.2% |
+| top125 bare | +0.56 | +0.19 | +2.0% | −37.4% |
+
+**top50 selected on DEV; holdout confirms.** The momentum edge concentrates
+around the top ~5% of a broad pool — tighter than the 12.6%ile the old
+119-name config implied (a-priori percentile translation was wrong; the
+response curve is hump-shaped: 1.5% = squeeze junk, 12.5% = diluted).
+Bigger ranker dataset fallout: top-125 candidates = **21,338 trades** (5.5×),
+holdout AUC 0.572, gate avg R +0.057→+0.159; GBM re-audited at 21k trades and
+REJECTED again (logistic 0.572 vs GBM 0.567) — the linear model keeps winning.
+
+---
+
+## EXP-31 · 2026-07-01 · Stage-B stacks: the gate FLIPS live; the drawdown brake WINS
+
+DEV(2022-23) / HOLDOUT(2024-25), all on top50 base, $100k, 10 slots, 12% heat:
+
+| Config | DEV Sharpe / DD | HOLD Sharpe / DD | HOLD ret |
+|---|---|---|---|
+| bare | +0.76 / −31% | +0.64 / −37% | +39.7% |
+| **+ dd_brake 0.15** | +0.07 / **−17%** | **+0.82 / −14.8%** | +31.6% |
+| + ranker gate (P≥0.243) | +1.49 / −8.8% | **−0.29 / −35%** | −14.1% |
+| + gate + conviction + ranked | +0.44 / −15% | +0.12 / −46% | −1.7% |
+
+**Conclusions:**
+1. **The drawdown governor is the campaign's win:** holdout DD −37%→−14.8%
+   with Sharpe UP (0.64→0.82) — cutting giveback is free risk-adjusted alpha.
+   In the 2022 bear (DEV) it held the book near-flat (−17% DD vs −31%): the
+   “never lose big” product promise, mechanically enforced. Note: realized DD
+   overshoots the limit ~15-20% (open positions bleed after entries stop) —
+   set the limit ~0.8× the product target.
+2. **The ranker hard gate FLIPPED on holdout** (DEV Sharpe 1.49 → HOLD −0.29)
+   despite positive trade-level lift in every recent year (2024: +0.307R gated
+   vs +0.052R all). Root cause: **candidate-day vs position-day mismatch** —
+   the dataset scores every breakout day (a 10-day streak = 10 rows), the live
+   engine takes ONE position at the first PASSING day, and the bo_height-heavy
+   model passes the more-extended days of a streak → the portfolio buys later,
+   worse entries than the dataset averages. The ranker is a real signal wrongly
+   integrated; rework (first-streak-day gating or sizing-tilt-only) is future
+   work. Gate + conviction + ranked admission: also no benefit in current form.
+3. Ranked admission + conviction machinery is engine-side, tested, default-off —
+   it awaits a signal whose confidence is trustworthy live.
+
+---
+
+## EXP-32 · 2026-07-01 · EW wave-3 SOURCE on the dynamic universe — regime-split, and brake-incompatible
+
+The last standing EW hypothesis (EXP-17's headline, re-tested honestly:
+clean universe, momentum-gated top-125, long-only wave-3, DEV/HOLDOUT wall):
+
+| EW w3 source | DEV 22-23 | HOLD 24-25 |
+|---|---|---|
+| bare | −5.2% / Sharpe 0.00 / DD −39.6% | **+39.5% / Sharpe 0.82 / PF 1.49** / DD −18.5% |
+| + dd_brake 0.15 | −7.5% / −0.34 / win 16% | **−6.9% / −0.18** (!) |
+
+**Conclusions:**
+1. **EW wave-3 is genuinely regime-dependent:** strong in the trending
+   holdout (PF 1.49 — the tight wave-2 trap-door stop pays in trends), dead
+   with a −40% DD in 2022-23 chop. Under DEV selection it loses to momentum
+   (DEV Sharpe 0.00 vs +0.76). EXP-17's +147%/PF 2.45 does not reproduce on
+   honest data.
+2. **The drawdown brake DESTROYS the EW source** (+39.5% → −6.9% on the same
+   holdout): wave-3 entries trigger at wave-2 pullback lows — precisely when
+   the book is in drawdown — so an equity-curve governor suppresses EW's best
+   entries. Momentum breakouts fire near equity highs; the same brake is
+   coherent there. **EXP-13 generalized: RISK OVERLAYS must match the signal's
+   thesis, not just confluences.**
+3. Full EW ledger after EXP-16/29/32: gate → rejected; learned features →
+   rejected; source → not selectable as headline. If EW returns, it's as a
+   trending-regime sleeve with its own invalidation-based (not equity-curve)
+   risk model.
+
+---
+
+## EXP-33 · 2026-07-01 · 20-year finals: the brake holds the DD promise; the alpha is honestly small
+
+top50 + dd_brake(0.15) on windows never touched by ANY of today's selection
+(selection used DEV 2022-23 only):
+
+| Window | Return | Sharpe | Max DD | PF |
+|---|---|---|---|---|
+| 2008 (GFC; SPY ~−38% intra) | −15.5% | −1.28 | **−16.0%** | 0.52 |
+| 2020 (COVID; SPY ~−34% intra) | −8.8% | −1.00 | **−15.1%** | 0.37 |
+| 2006-2021 continuous | +27.2% (+1.6%/yr) | 0.30 | **−15.0%** | 1.35 |
+| 2006-2021 continuous, BARE (attribution) | +25.2% (+1.5%/yr) | 0.19 | −44.6% | 1.10 |
+| 2024-25 holdout (from EXP-31) | +31.6% (+15.2%/yr) | 0.82 | −14.8% | 1.29 |
+
+**Conclusions:**
+1. **The DD promise holds everywhere: worst drawdown across 20 years incl.
+   two generational crashes ≈ 15-16%** (vs market −34/−38%). That is the
+   sellable, mechanically-enforced product property.
+2. **The weak 16-year return is the EDGE, not the brake** — the attribution
+   run refutes the ratchet hypothesis: bare earns the same +1.5%/yr while
+   drawing down −44.6%. **The brake is strictly dominant** (equal return, ⅓
+   the DD, PF 1.10→1.35). The principled anti-ratchet fix (participation
+   floor 0.5) was also **rejected on DEV AND holdout** (DD −14.8→−19.1%,
+   return +31.6→+11.0%): the linear brake's near-zero re-entry sizing doubles
+   as a trend filter on the system's own equity; a floor breaks exactly that.
+   One iteration, no further brake-shape tuning (holdout-burning risk).
+3. **The edge is era-dependent:** thin 2006-2021 (+1.5%/yr), strong 2022-25
+   (bare +65.8%; braked HOLD Sharpe 0.82) — the post-2020 high-dispersion
+   tape suits breakout-on-leaders. Only a forward paper-trade shows whether
+   that regime persists. No config on today's evidence supports a get-rich
+   track record; **top50+brake supports an honest "momentum alerts with a
+   hard ~15% drawdown cap" story** — M3 forward paper-trade recommendation:
+   run top50+brake AND top50 bare side by side, judge on the live record.
+
+**Production TODO before paper-trading the brake:** empty-book freeze fix
+(if every position stops out exactly at dd ≥ limit, equity freezes and the
+brake never releases — add an idle-reset or minimum re-entry trickle).
+*(Fixed same day: liveness trickle at 0.1 scale when the book is flat at the
+limit; regression-tested.)*
+
+---
+
+## EXP-34 · 2026-07-02 · Path-aware fills — the daily edge was largely a FILL-MODEL ARTIFACT
+
+Built the intraday program's Stage 0+1: CH `ohlcv_hourly` (22.9M rows,
+09:30-anchored ET session bars from the frozen minute lake, clamped to the
+EXP-26 clean segments; validated to roll up EXACTLY to ohlcv_daily across
+25k+ symbol-days) and a path-aware fill layer (`ctx.intraday`, MarketContext
+pattern): exits ordered by FIRST intraday touch, filled AT the stop/target
+level (gap-through days fill at the open) instead of the legacy
+touch-detected → NEXT-OPEN fill.
+
+Re-baseline of the finalists under honest resting-order fills:
+
+| top50 | DEV 22-23 | HOLD 24-25 |
+|---|---|---|
+| legacy fills | +47.3% / win 38.5% | +39.7% / win 45.6% |
+| honest fills | **−15.8% / win 21.6%** | **−11.7% / win 25.1%** |
+| + brake, honest | −4.7% / DD −16.7% | −10.8% / DD −16.8% |
+
+**Root cause (per-trade diagnostic, NVDA 2024):** the legacy exit model was
+INCOHERENT — pessimistic trigger (intraday touch) + optimistic fill (next
+open). In a momentum book that mismatch is systematically flattering twice:
+(1) target touched → filled at next open = harvesting an extra day of a
+running stock (target 90.03 → fill 95.14: +11.2k vs the honest +7.3k);
+(2) stop touched intraday but recovered by the close → next-open fill often
+ABOVE the level, sometimes above entry — converting honest −1R stop-outs
+into small “wins” (this is the win-rate halving).
+
+**Conclusions:**
+1. **With stops resting AT the breakout level, honest fills leave ~zero
+   expectancy** (win 25% at rr=3 ≈ breakeven − costs). The at-the-level stop
+   is parked where every wick hunts — the geometry, not just the fill model,
+   must change.
+2. All daily-bar backtest numbers (EXP-27..33 included) carry this
+   execution optimism; treat them as upper bounds. **The paper finalists'
+   simulated records use legacy fills too** — their alert LEVELS are honest,
+   but the simulated fills are optimistic; honest-fill variants must replace
+   them before any customer-facing record.
+3. Stage 2 (running) tests three live-executable disciplines under honest
+   fills: retest-limit entries, hourly-pullback entries with structure stops
+   below actual support, and EOD-confirmed stops (a wick doesn't take you
+   out; a close through does).
+
+---
+
+## EXP-35 · 2026-07-02 · Entry/exit disciplines under honest fills — none rescue the trade design
+
+Working-order entry policies (armed at signal close, evaluated only on later
+hourly bars — no look-ahead) + the EOD stop discipline, all on top50, honest
+fills, DEV/HOLDOUT:
+
+| Discipline | DEV | HOLD |
+|---|---|---|
+| resting stops @ level (EXP-34) | −15.8% | −11.7% / DD −48% |
+| retest_limit (buy the pullback to the level) | −5.8% / PF 0.96 | −11.2% / PF 0.97 |
+| hourly_pullback (structure stop = pullback low) | −18.6% | **−58.9% / DD −63%** |
+| eod_stop (close-through only) | +15.4% / win 39% | −16.9% / **DD −61%** |
+| + ranker gate P≥0.243 (honest fills) | +40.8% / Sharpe 1.37 | **−13.9% / PF 0.73** |
+| + ranker gate P≥0.32 | +14.4% / 28 trades | −9.2% / PF 0.76 (same flip) |
+
+**Conclusions:**
+1. **No entry or stop discipline rescues the 20d-breakout/3R design.** Tight
+   hourly-structure stops churn (525 trades, PF 0.73); EOD-confirmed stops
+   restore win-rate but un-cap the left tail (closes land far through the
+   stop on real breaks → DD −61%); retest entries are the best and still ≈
+   breakeven (PF 0.97).
+2. **The ranker hard-gate flip REPRODUCES under honest fills** (DEV 1.37 →
+   HOLD −0.37) — EXP-31's rejection was NOT a fill-model confound. The
+   candidate-day/position-day mismatch is structural → EXP-36.
+
+---
+
+## EXP-36 · 2026-07-02 · Position-day dataset — the ranker's edge was mostly candidate-day duplication
+
+Rebuilt the trade dataset with POSITION semantics (`build_trade_dataset.py
+--position-days`): after a candidate, all signal days are skipped until that
+trade's triple-barrier resolves — one row per opportunity a portfolio could
+actually take. top-50: 10,655 candidate-days → **7,310 position-trades**
+(~31% of candidate-days were mid-streak/mid-trade duplicates).
+
+| top-50 dataset | Holdout AUC | top-tercile win / avg R | gate@median lift |
+|---|---|---|---|
+| candidate-day | 0.568 | 31.8% / +0.151 gate | +0.066 → +0.151 |
+| **position-day** | **0.555** | 34.0% / +0.153 (base +0.099) | **+0.099 → +0.100 (none)** |
+
+**Conclusions:**
+1. **Most of the ranker's apparent edge was the duplication artifact**: the
+   model (bo_height-dominant) discriminated late-streak days from early-streak
+   days — a real pattern that is UNTRADEABLE, since a portfolio takes the
+   first day. On tradeable opportunities the median gate adds nothing; the
+   top-tercile tilt shrinks to +0.05R.
+2. **The full honest arc:** data contamination (EXP-26) killed ~half the
+   historical edge; the fill-model artifact (EXP-34) killed most of the rest;
+   candidate-day duplication (this) killed the ranker's rescue. Under fully
+   honest accounting, daily momentum-breakout on liquid US equities carries
+   ≈ +0.05-0.10R per trade before costs — a whisper, not a business. This was
+   established with proper walls at every step and is the platform's most
+   valuable scientific result to date.
+3. **What survives:** the drawdown governor (still strictly dominant as risk
+   engineering), the honest measurement platform itself (segment-clean data,
+   path-aware fills, position-day datasets, DEV/HOLDOUT discipline), and the
+   thin position-day top-tercile tilt (+0.05R — usable as a sizing tilt, not
+   a gate, if the base design ever earns its keep).
+4. **Recommendation:** stop layering on the daily-breakout design. The paper
+   finalists keep running as a LIVE falsification test (honest fills predict
+   ≈ breakeven forward records — if they materially beat that, the model of
+   reality, not the strategy, is wrong). New alpha must come from a different
+   trade design — next track per the user: 1-minute day-trading/reversal
+   research on the honest platform.

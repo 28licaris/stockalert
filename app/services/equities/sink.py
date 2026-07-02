@@ -232,6 +232,23 @@ class EquitiesIcebergSink:
         )
 
     @classmethod
+    def for_polygon_daily_raw(cls) -> "EquitiesIcebergSink":
+        """Whole-market daily bars from the REST grouped-daily endpoint
+        (same canonical arrow shape as polygon_raw; day kind only)."""
+        from app.services.equities.tables import ensure_polygon_daily_raw
+        catalog = get_catalog()
+        table = ensure_polygon_daily_raw(catalog)
+        return cls(
+            table=table,
+            name="equities_polygon_daily_raw",
+            arrow_schema=_POLYGON_RAW_ARROW,
+            accepted_providers={
+                ("polygon-rest", "day"),
+                ("polygon", "day"),
+            },
+        )
+
+    @classmethod
     def for_schwab_universe(cls) -> "EquitiesIcebergSink":
         catalog = get_catalog()
         table = ensure_schwab_universe(catalog)
