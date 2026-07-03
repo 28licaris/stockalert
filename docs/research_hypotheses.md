@@ -35,7 +35,7 @@ close-to-close accounting.
 
 | ID | Family | Grid | Screen verdict (raw p; BH q at battery close) |
 |----|--------|------|------|
-| H-3 | `meanrev_rsi` — RSI(n) oversold entry, strength exit | n {2,3,4} × entry {10,15,20,25,30} × exit {50,70} (30) | **PASS p = 0.0040** (PF 1.1002 vs null 1.0282±0.0216; best n=4/entry 10/exit 50). Random-exit locator: edge is in the ADAPTIVE EXIT (real entries + random exits → PF 1.0236, 0/500 ≥ real) — Tier-2 must implement the RSI exit faithfully. Noise test running. |
+| H-3 | `meanrev_rsi` — RSI(n) oversold entry, strength exit | n {2,3,4} × entry {10,15,20,25,30} × exit {50,70} (30) | **PASS p = 0.0040** (PF 1.1002 vs null 1.0282±0.0216; best n=4/entry 10/exit 50). Random-exit locator: edge is in the ADAPTIVE EXIT (real entries + random exits → PF 1.0236, 0/500 ≥ real) — Tier-2 must implement the RSI exit faithfully. Noise test **ROBUST**: 1000 jittered histories, 100% profitable, mean 1.0979±0.0070, p5 = 1.0868. |
 | H-4 | `meanrev_zscore` — z of close vs SMA(n) entry, mean exit | n {10,20} × z {1.5,2.0,2.5} (6) | running (p ≈ 0.14 at 360/1000) |
 | H-5 | `xsec_momentum` — cross-sectional top-bucket by trailing return, 21-bar rebalance | lookback {60,120,12-1} × bucket {decile,quintile} (6) | queued |
 | H-6 | `vol_compression` — ATR%ile squeeze arm + range break entry, range-low exit | atr-pctile {0.10,0.20} × breakout lookback {5,10} (4) | **DEAD p = 0.344** (PF 1.0367 vs null 1.0259±0.0303) |

@@ -89,7 +89,12 @@ def main(argv=None) -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--metric", default="sharpe_ratio", choices=METRICS,
                     help="primary metric for the p-value (all four are recorded)")
-    ap.add_argument("--out", default=None, help="JSONL results path (default data/mcpt/)")
+    ap.add_argument("--bars", default=None,
+                    help="bar snapshot (local path or s3://) from research_bars.py; "
+                         "when set, no ClickHouse needed — cloud-worker mode")
+    ap.add_argument("--out", default=None,
+                    help="JSONL results path (default data/mcpt/; s3:// supported — "
+                         "shard syncs to S3 after every permutation)")
     a = ap.parse_args(argv)
 
     r = yaml.safe_load(Path(a.config).read_text())
@@ -98,9 +103,31 @@ def main(argv=None) -> int:
     if start_after and start_after.tzinfo is None:
         start_after = start_after.replace(tzinfo=UTC)
 
-    out = Path(a.out) if a.out else Path("data/mcpt") / (
-        f"wf_{Path(a.config).stem}_{str(cfg.start)[:10]}_{str(cfg.end)[:10]}.jsonl")
-    out.parent.mkdir(parents=True, exist_ok=True)
+    s3_sink = None
+    if a.out and a.out.startswith("s3://"):
+        import tempfile
+
+        from scripts.research_bars import _s3_client, _split_s3
+        bucket, key = _split_s3(a.out)
+        s3 = _s3_client()
+        out = Path(tempfile.gettempdir()) / f"mcpt_shard_{Path(key).name}"
+        try:
+            s3.download_file(bucket, str(key), str(out))
+            print(f"resuming from {a.out}", flush=True)
+        except Exception as exc:  # botocore ClientError — 404 means fresh shard
+            code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
+            if code not in ("404", "NoSuchKey"):
+                raise
+        s3_sink = (s3, bucket, key)
+    else:
+        out = Path(a.out) if a.out else Path("data/mcpt") / (
+            f"wf_{Path(a.config).stem}_{str(cfg.start)[:10]}_{str(cfg.end)[:10]}.jsonl")
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+    def _sync() -> None:
+        if s3_sink:
+            s3_sink[0].upload_file(str(out), s3_sink[1], s3_sink[2])
+
     done: dict[int, dict] = {}
     real_row = None
     if out.exists():
@@ -113,8 +140,13 @@ def main(argv=None) -> int:
         print(f"resuming: {len(done)} permutations already in {out}", flush=True)
 
     bt = Backtester()
-    print(f"loading {len(cfg.symbols)} symbols from ClickHouse (once)…", flush=True)
-    full = bt._fetch_bars_multi(cfg, [cfg.interval])
+    if a.bars:
+        from scripts.research_bars import load_bar_lists
+        full = {cfg.interval: load_bar_lists(
+            a.bars, symbols=cfg.symbols, start=cfg.start, end=cfg.end)}
+    else:
+        print(f"loading {len(cfg.symbols)} symbols from ClickHouse (once)…", flush=True)
+        full = bt._fetch_bars_multi(cfg, [cfg.interval])
     n_bars = sum(len(v) for v in full[cfg.interval].values())
     print(f"  loaded {n_bars:,} bars across "
           f"{sum(1 for v in full[cfg.interval].values() if v)} populated symbols", flush=True)
@@ -135,6 +167,7 @@ def main(argv=None) -> int:
                     "elapsed_s": round(time.time() - t0, 1)}
         with out.open("a") as fh:
             fh.write(json.dumps(real_row) + "\n")
+        _sync()
         print(f"REAL run ({real_row['elapsed_s']}s): "
               + "  ".join(f"{k}={v if v is not None else float('nan'):.4f}"
                           for k, v in real.items()),
@@ -162,6 +195,7 @@ def main(argv=None) -> int:
         done[i] = row
         with out.open("a") as fh:
             fh.write(json.dumps(row) + "\n")
+        _sync()
         vals = [d["metrics"][a.metric] for d in done.values()
                 if d["metrics"][a.metric] is not None]
         n_asgood = sum(1 for v in vals if v >= real_metric)

@@ -1528,8 +1528,11 @@ locator, DD resample bands (`dd_resample.py`).
   reached the real PF). Buying oversold alone earns nothing; harvesting
   the specific bounce does. Tier-2 implementation MUST carry the RSI-exit
   (a fixed target/time-stop would test a different, edgeless rule).
-- Noise test (1000 price-jittered histories, params fixed): running;
-  interim distribution centered on the real PF (healthy).
+- **Noise test: ROBUST.** 1000 price-jittered histories (scale 0.25,
+  params fixed): 100% profitable, mean PF 1.0979±0.0070, 5th percentile
+  1.0868 — the edge does not depend on exact price levels (tight
+  distribution centered on the real 1.1002). Contrast: this is the test
+  the old breakout design would have failed (EXP-34's wick-hunted stops).
 - p tightened monotonically as the ensemble grew (0.011 → 0.009 → 0.003 →
   0.0040 final) — the signature of a true effect, not a fluke draw.
 

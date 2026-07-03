@@ -278,6 +278,9 @@ def main(argv=None) -> int:
                          "noise: price-jitter fragility of the REAL optimum. "
                          "random_exit: entries kept, exits redrawn (edge locator).")
     ap.add_argument("--scale", type=float, default=0.25, help="noise jitter scale")
+    ap.add_argument("--bars", default=None,
+                    help="bar snapshot (local path or s3://) from research_bars.py; "
+                         "when set, no ClickHouse needed — cloud-worker mode")
     ap.add_argument("--out", default=None, help="JSON result path (default data/mcpt/)")
     a = ap.parse_args(argv)
 
@@ -288,7 +291,11 @@ def main(argv=None) -> int:
     else:
         raise SystemExit("supply --symbols or --config")
 
-    frames = _load_frames(symbols, a.start, a.end)
+    if a.bars:
+        from scripts.research_bars import load_frames as _snapshot_frames
+        frames = _snapshot_frames(a.bars, symbols=symbols, start=a.start, end=a.end)
+    else:
+        frames = _load_frames(symbols, a.start, a.end)
     real_params, real_pf = _optimize(a.family, frames)
     print(f"REAL  {a.family}: best={real_params} pooled_PF={real_pf:.4f}", flush=True)
 

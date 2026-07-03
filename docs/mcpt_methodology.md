@@ -62,6 +62,38 @@ snooping, Tier-2 (#5) for costs.
 - Results land in `data/mcpt/` (gitignored, worktree-fragile). **Copy final
   numbers into `strategy_rnd_findings.md` the day they land.**
 
+## Local vs cloud execution (dual-mode by configuration)
+
+Every runner takes its bars from ClickHouse by default, or from an
+immutable parquet snapshot via `--bars <path|s3://…>` — cloud workers
+need no database. `scripts/research_bars.py` produces snapshots:
+
+```bash
+# once, from the machine with ClickHouse (S3 needs AWS_PROFILE=stock-lake):
+poetry run python scripts/research_bars.py export \
+  --config configs/<universe>.yaml --start 2006-01-01 --end 2026-06-30 \
+  --out s3://$STOCK_LAKE_BUCKET/research/mcpt/<name>.parquet
+
+# any worker, anywhere — no ClickHouse:
+poetry run python scripts/mcpt_walkforward.py --config configs/<c>.yaml \
+  --bars s3://$STOCK_LAKE_BUCKET/research/mcpt/<name>.parquet \
+  --seed <base + worker_index> --n-perms <k> \
+  --out s3://$STOCK_LAKE_BUCKET/research/mcpt/<study>_s<worker_index>.jsonl
+```
+
+Shards written to `--out s3://…` sync to S3 after EVERY permutation and
+resume from S3 on restart — spot interruption costs at most one
+permutation. Merge shards with
+`mcpt_report.py --walkforward '<downloaded glob>'` (real-row agreement is
+enforced). Seed spacing between workers ≥ 1000. Canonical snapshot:
+`research/mcpt/universe1000_2006_2026.parquet` (1000-name clean universe).
+Economics: a 200-perm 16-yr Tier-2 study ≈ 80 core-hours ≈ ~30-40 min and
+a few dollars on one large spot box or an AWS Batch array job — run the
+full stack on every survivor rather than rationing it.
+
+Snapshots are immutable study inputs: re-export (new name) rather than
+edit; the snapshot file pins the exact data a study read.
+
 ## Reading results honestly
 
 - p ≤ 0.05 common minimum; we require **q ≤ 0.05 after BH within the
