@@ -138,5 +138,5 @@ primary metric Sharpe.
 
 | ID | Config | Verdict |
 |----|--------|---------|
-| H-23 | `configs/tom_t2_spy.yaml` — SPY only, 95% of cash (how TOM is traded in practice: one liquid instrument, minimal friction, unbounded capacity) | — |
-| H-24 | `configs/tom_t2_sectors.yaml` — equal-weight across the 11 SPDR sector ETFs (9% slots; closest liquid rendering of the pooled-universe claim without 800-name turnover) | — |
+| H-23 | `configs/tom_t2_spy.yaml` — SPY only, 95% of cash (how TOM is traded in practice: one liquid instrument, minimal friction, unbounded capacity) | **FAIL** p = 0.329 (Sharpe 0.53 vs null 0.39±0.28) |
+| H-24 | `configs/tom_t2_sectors.yaml` — equal-weight across the 11 SPDR sector ETFs (9% slots; closest liquid rendering of the pooled-universe claim without 800-name turnover) | **FAIL** p = 0.149, q = 0.298 (Sharpe 0.58, +32.9%, DD −10.8% — directionally positive, unpromotable at n≈90 events). TOM PARKED. |

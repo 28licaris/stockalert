@@ -1695,3 +1695,41 @@ diagnostic.
 equal-weight-basket configs as a BH pair, full-engine nulls on
 2019-2026) and the Wave-3 battery (H-17..H-22).
 
+
+---
+
+## EXP-43 · 2026-07-03 · TOM Tier-2 — both tradeable renderings fail the gate (directionally positive, unpromotable)
+
+New `calendar_tom` engine strategy (enter ≤8 calendar days before
+month-end → next-open fill ≈5 trading days out; exit after the 2nd
+trading day of the new month; window-tested). Pre-registered H-23/H-24,
+untouched 2019-2026, zero commission + 5bps/side, 160-perm nulls each.
+
+| Config | Return | Sharpe | PF | DD | p | q |
+|---|---|---|---|---|---|---|
+| H-23 SPY-only 95% | — | 0.53 | — | — | 0.329 | 0.329 |
+| H-24 11 sector SPDRs eq-wt | +32.9% | 0.58 | 1.49 | −10.8% | 0.149 | 0.298 |
+
+**Conclusions:**
+1. Both FAIL q ≤ 0.05 → TOM is NOT promotable. Precision matters here:
+   both real Sharpes sit ABOVE their null means (0.53 vs 0.39, 0.58 vs
+   0.31) — the verdict is "cannot be distinguished from luck at n≈90
+   month-events on tradeable renderings," not "proven zero." The screen's
+   power came from pooling 806 names × 13 years; a tradeable instrument
+   gets ~90 events in the holdout. Small real effects are unpromotable at
+   that sample size BY DESIGN — that is the gate doing its job, since
+   capital deployed on it would face exactly that uncertainty.
+2. Post-2018 decay is a live alternative (TOM is among the most-published
+   anomalies). Either way the business answer is identical.
+3. Program-level pattern now firmly established across EXP-40/43:
+   wide-pooled in-sample significance (statistical existence) does not
+   certify tradeable out-of-sample expressions (business existence).
+   Both screen survivors passed the first and failed the second. The bar
+   for daily-price-derived signals on liquid US equities appears to be
+   exactly as high as the efficient-markets prior says it is.
+
+Chapter status: TOM parked (not closed with prejudice — a decade more
+data or a pooled multi-instrument rendering with more events could
+re-adjudicate; any such re-test is a new registration). Remaining open
+daily-bars work: the Wave-3 battery (in flight).
+
