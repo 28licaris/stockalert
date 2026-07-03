@@ -26,6 +26,7 @@ from collections import deque
 from datetime import datetime
 from typing import Any, Optional
 
+import numpy as np
 import pandas as pd
 
 from app.indicators.registry import get_indicator
@@ -43,15 +44,34 @@ class BarHistory:
     standard pandas APIs.
     """
 
+    _COLS = ("open", "high", "low", "close", "volume")
+
     def __init__(self, maxlen: int) -> None:
         if maxlen < 1:
             raise ValueError(f"BarHistory maxlen must be >= 1, got {maxlen}")
         self._bars: deque[Bar] = deque(maxlen=maxlen)
+        # Parallel per-column buffers (floats + int64 epoch-ns timestamps) so
+        # DataFrames/Series build from arrays via pandas' fast C paths instead
+        # of a list of dicts — this runs once per bar per symbol and dominated
+        # engine profiles (EXP-40 perf pass). Same values, same index, same
+        # column order as the original list-of-dicts construction; equivalence
+        # enforced by scripts/dev/engine_fingerprint.py.
+        self._ts_ns: deque = deque(maxlen=maxlen)
+        self._tz = None  # tzinfo of the appended bars (assumed consistent per run)
+        self._cols: dict[str, deque] = {c: deque(maxlen=maxlen) for c in self._COLS}
         self._df_cache: Optional[pd.DataFrame] = None
+        self._index_cache: Optional[pd.DatetimeIndex] = None
+        self._series_cache: dict[str, pd.Series] = {}
 
     def append(self, bar: Bar) -> None:
         self._bars.append(bar)
+        self._ts_ns.append(pd.Timestamp(bar.timestamp).value)
+        self._tz = bar.timestamp.tzinfo
+        for c, dq in self._cols.items():
+            dq.append(getattr(bar, c))
         self._df_cache = None  # invalidate
+        self._index_cache = None
+        self._series_cache.clear()
 
     def __len__(self) -> int:
         return len(self._bars)
@@ -60,22 +80,40 @@ class BarHistory:
     def maxlen(self) -> int:
         return self._bars.maxlen or 0
 
+    def _index(self) -> pd.DatetimeIndex:
+        if self._index_cache is None:
+            ns = np.fromiter(self._ts_ns, dtype="int64", count=len(self._ts_ns))
+            idx = pd.DatetimeIndex(ns.view("datetime64[ns]"), name="timestamp")
+            if self._tz is not None:
+                # Timestamp.value is epoch-ns UTC; localize then present in the
+                # bars' own tz (identical to indexing the aware datetimes directly).
+                idx = idx.tz_localize("UTC").tz_convert(self._tz)
+            self._index_cache = idx
+        return self._index_cache
+
+    def _column(self, col: str) -> np.ndarray:
+        dq = self._cols[col]
+        return np.fromiter(dq, dtype="float64", count=len(dq))
+
+    def series(self, col: str) -> pd.Series:
+        """One OHLCV column as a timestamp-indexed Series (cached per bar)."""
+        cached = self._series_cache.get(col)
+        if cached is None:
+            cached = pd.Series(self._column(col), index=self._index(), name=col)
+            self._series_cache[col] = cached
+        return cached
+
     def to_dataframe(self) -> pd.DataFrame:
         """OHLCV DataFrame indexed by timestamp. Cached until the next `append`."""
         if self._df_cache is not None:
             return self._df_cache
 
-        rows = [
-            {
-                "timestamp": b.timestamp,
-                "open": b.open, "high": b.high, "low": b.low,
-                "close": b.close, "volume": b.volume,
-            }
-            for b in self._bars
-        ]
-        df = pd.DataFrame(rows)
-        if not df.empty:
-            df = df.set_index("timestamp")
+        if not self._bars:
+            df = pd.DataFrame()
+        else:
+            df = pd.DataFrame(
+                {c: self._column(c) for c in self._COLS}, index=self._index()
+            )
         self._df_cache = df
         return df
 
@@ -270,15 +308,14 @@ class Context:
         if cached is not None:
             return cached
 
-        df = self._histories[target_interval].to_dataframe()
-        if df.empty:
+        hist = self._histories[target_interval]
+        if len(hist) == 0:
             result = pd.Series(dtype="float64", name=name)
         else:
             ind = get_indicator(name, **params)
-            close = df["close"]
-            high = df["high"] if "high" in df.columns else None
-            low = df["low"] if "low" in df.columns else None
-            result = ind.compute(close, high, low)
+            # Per-column cached Series — avoids materializing the full OHLCV
+            # DataFrame for every indicator call (EXP-40 perf pass).
+            result = ind.compute(hist.series("close"), hist.series("high"), hist.series("low"))
 
         self._indicator_cache[key] = result
         return result
