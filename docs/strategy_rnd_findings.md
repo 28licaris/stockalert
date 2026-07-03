@@ -1580,3 +1580,67 @@ the verdict (see `research_hypotheses.md` candidate queue).
 *(Entry retitled from IN PROGRESS to final on 2026-07-03 when the last
 family and both EXP-37 Tier-2 nulls completed.)*
 
+
+---
+
+## EXP-40 · 2026-07-03 · Tier-2 of the survivor — the SIGNAL is real, the TRADE isn't: both configs decisively fail the full-engine null
+
+The EXP-39 survivor became a real engine strategy with proven parity
+(`rsi_wilder` indicator — true alpha=1/n Wilder, since the platform's
+"rsi" turned out to be span-EMA mislabeled as Wilder, filed as
+`rsi-indicator-not-wilder`; `rsi_reversion` v0.2 rsi_kind=wilder;
+decision-bar-exact match to the screen state machine in
+`tests/test_rsi_wilder_parity.py`). Pre-registered H-9/H-10, untouched
+2019-01-01..2026-06-30, zero commission + 5bps/side slippage, next-open
+fills, 20 slots × 5% of cash. (En route: engine hot loop profiled and
+made 3.8-5x faster, bit-identical via `scripts/dev/engine_fingerprint.py`;
+CodeBuild studies died on a mystery 45-min timeout cap —
+`codebuild-timeout-pinned-45min` — so nulls ran locally, merged with the
+banked cloud shards by seed.)
+
+**Real runs (net of costs, honest fills):**
+
+| Config | Return | Sharpe | PF | Max DD |
+|---|---|---|---|---|
+| H-9 bare | +17.8% (~2.2%/yr) | 0.28 | 1.19 | **−72.2%** |
+| H-10 + dd_brake 0.15 | −4.6% | −0.09 | 0.90 | −22.5% |
+
+**MCPT verdicts (full-engine nulls, benchmark permuted):**
+
+| Hypothesis | n perms | real vs null | p | BH q |
+|---|---|---|---|---|
+| H-9 bare | 224 | Sharpe 0.28 vs 0.67±0.37 | **0.884** | 0.99 |
+| H-10 brake | 192 | Sharpe −0.09 vs 0.68±0.37 | **0.995** | 0.99 |
+
+**Conclusions:**
+1. **Both configs fail catastrophically — shuffled markets BEAT the real
+   strategy** (198/224 and 191/192). Mechanism: permutation preserves
+   drift but destroys volatility clustering; a long-only oversold-buyer
+   on a crash-free tape with the same returns collects the drift without
+   ever eating a March-2020. The real market's crash clustering is this
+   design's dominant risk, and the null makes that visible: the −72% DD
+   *is* the vol clustering.
+2. **The Tier-1 result stands** — the bar-level timing signal is real
+   (p=0.004, q=0.024, noise-robust, exit-driven). Tier-2 localizes the
+   failure precisely: the EDGE is in the bars; the LOSS is in the trade
+   design (unbounded crash-loading converts panic-buying edge into
+   panic-holding risk). PF 1.19 net of costs confirms costs were NOT the
+   killer — risk expression was.
+3. **The brake is structurally incompatible with reversion** (mirror of
+   EXP-33 where it was free for momentum): this edge is paid for
+   providing liquidity in panics; the brake's job is to stop providing
+   liquidity in panics. DD −72→−22% at the price of the entire return.
+4. **Methodological note for the standards:** Tier-2 MCPT on Sharpe for
+   long-only always-scanning designs is a JOINT test of (edge + risk
+   expression) against a vol-clustering-free null — a harsher and more
+   honest bar than "beats zero". A candidate that can't beat shuffled
+   tapes risk-adjusted has no business case regardless of its entry
+   signal.
+5. **Chapter status:** per the pre-declared desk rule, ONE
+   mechanism-motivated redesign of the risk expression may be registered
+   (vol-scaled sizing / hard exposure caps — mechanisms that cap
+   crash-loading without refusing panic entries, which is where the
+   brake failed). If that fails, the daily-reversion chapter closes.
+   Registered as a Wave-2 item, not iterated ad hoc; the 2019-2026
+   window's evidentiary value degrades with every additional look.
+

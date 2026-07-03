@@ -58,8 +58,13 @@ slippage, window **2019-01-01 → 2026-06-30**, ~224-perm null
 
 | ID | Config | Verdict |
 |----|--------|---------|
-| H-9 | `configs/rsi_meanrev_t2_bare.yaml` — the faithful validated rule | — |
-| H-10 | `configs/rsi_meanrev_t2_brake.yaml` — same + dd_brake 0.15 (crash-clustering risk governor) | — |
+| H-9 | `configs/rsi_meanrev_t2_bare.yaml` — the faithful validated rule | **FAILED p = 0.884, q = 0.99** (224 perms). Real: +17.8%/Sharpe 0.28/PF 1.19/DD −72%. Shuffled tapes beat it 198/224 — the null has the drift without the crashes. |
+| H-10 | `configs/rsi_meanrev_t2_brake.yaml` — same + dd_brake 0.15 (crash-clustering risk governor) | **FAILED p = 0.995, q = 0.99** (192 perms). Brake caps DD (−22%) by refusing panic entries — amputates the edge (−4.6% return). Structurally incompatible with reversion. |
+
+EXP-40 adjudicated 2026-07-03: the Tier-1 signal stands; the trade
+design fails. ONE mechanism-motivated risk-expression redesign may be
+registered (Wave-2); if it fails, the daily-reversion chapter closes.
+Full write-up: `strategy_rnd_findings.md` EXP-40.
 
 **Wave-2 candidate queue (NOT yet registered — mechanisms noted so the
 future registration is honest, grids to be locked at registration time):**
