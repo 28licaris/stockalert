@@ -74,22 +74,39 @@ poetry run python scripts/research_bars.py export \
   --config configs/<universe>.yaml --start 2006-01-01 --end 2026-06-30 \
   --out s3://$STOCK_LAKE_BUCKET/research/mcpt/<name>.parquet
 
-# any worker, anywhere — no ClickHouse:
-poetry run python scripts/mcpt_walkforward.py --config configs/<c>.yaml \
+# a complete study, local or cloud — one command (the driver runs the
+# REAL backtest once, pre-seeds shards, fans out workers, merges):
+poetry run python scripts/mcpt_cloud_study.py \
+  --config configs/<c>.yaml \
   --bars s3://$STOCK_LAKE_BUCKET/research/mcpt/<name>.parquet \
-  --seed <base + worker_index> --n-perms <k> \
-  --out s3://$STOCK_LAKE_BUCKET/research/mcpt/<study>_s<worker_index>.jsonl
+  --start ... --end ... --workers 6 --perms-per-worker 16 \
+  --out-prefix s3://$STOCK_LAKE_BUCKET/research/mcpt/studies/<study>
+
+# in-region on CodeBuild (72 vCPU: --workers 32; branch must be pushed):
+AWS_PROFILE=stockalert-admin aws codebuild start-build \
+  --project-name sockalert-silver-full-backfill \
+  --buildspec-override scripts/codebuild/buildspec_mcpt_study.yml \
+  --source-version <branch> \
+  --compute-type-override BUILD_GENERAL1_2XLARGE \
+  --timeout-in-minutes-override 480 \
+  --environment-variables-override \
+      "name=MCPT_STUDY,value=<study>,type=PLAINTEXT" \
+      "name=MCPT_CONFIG,value=configs/<c>.yaml,type=PLAINTEXT" \
+      "name=MCPT_START,value=...,type=PLAINTEXT" "name=MCPT_END,value=...,type=PLAINTEXT" \
+  --region us-east-1
 ```
 
-Shards written to `--out s3://…` sync to S3 after EVERY permutation and
-resume from S3 on restart — spot interruption costs at most one
-permutation. Merge shards with
-`mcpt_report.py --walkforward '<downloaded glob>'` (real-row agreement is
-enforced). Seed spacing between workers ≥ 1000. Canonical snapshot:
-`research/mcpt/universe1000_2006_2026.parquet` (1000-name clean universe).
-Economics: a 200-perm 16-yr Tier-2 study ≈ 80 core-hours ≈ ~30-40 min and
-a few dollars on one large spot box or an AWS Batch array job — run the
-full stack on every survivor rather than rationing it.
+Shards under an s3:// prefix sync after EVERY permutation and resume on
+restart — re-running the same study name continues where it stopped
+(interruption costs at most one permutation per worker). The driver
+enforces seed spacing (1000 per worker) and real-row agreement at merge.
+Canonical snapshot: `research/mcpt/universe1000_2006_2026.parquet`
+(1000-name clean universe, row-count-verified against ohlcv_daily).
+Economics: a ~224-perm 16-yr Tier-2 study on one 2XLARGE box ≈ a few
+hours and a few dollars — run the full stack on every survivor rather
+than rationing it. When ClickHouse moves to the cloud, only the export
+step relocates; studies keep reading immutable snapshots (better
+reproducibility than a live database regardless of where CH lives).
 
 Snapshots are immutable study inputs: re-export (new name) rather than
 edit; the snapshot file pins the exact data a study read.

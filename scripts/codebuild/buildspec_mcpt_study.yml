@@ -1,0 +1,87 @@
+# CodeBuild buildspec for scripts/mcpt_cloud_study.py — a full Tier-2 MCPT
+# study (real run + N-worker permutation null + merged adjudication) in-region.
+#
+# No ClickHouse in the cloud: bars come from an immutable snapshot on S3
+# (export with scripts/research_bars.py — see docs/mcpt_methodology.md).
+# Shards sync to S3 per-permutation; re-running the same study name resumes.
+# The existing CodeBuild role suffices (s3 Get/Put/List on STOCK_LAKE_BUCKET).
+#
+# Launch (reuses the silver project; branch must be pushed to origin):
+#   AWS_PROFILE=stockalert-admin aws codebuild start-build \
+#     --project-name sockalert-silver-full-backfill \
+#     --buildspec-override scripts/codebuild/buildspec_mcpt_study.yml \
+#     --source-version <branch> \
+#     --compute-type-override BUILD_GENERAL1_2XLARGE \
+#     --timeout-in-minutes-override 480 \
+#     --environment-variables-override \
+#         "name=MCPT_STUDY,value=top50brake_2006_2021,type=PLAINTEXT" \
+#         "name=MCPT_CONFIG,value=configs/dyn_breakout_v2_top50_brake.yaml,type=PLAINTEXT" \
+#         "name=MCPT_START,value=2006-01-01T00:00:00Z,type=PLAINTEXT" \
+#         "name=MCPT_END,value=2021-12-31T23:59:59Z,type=PLAINTEXT" \
+#     --region us-east-1
+#
+# Sizing: 2XLARGE = 72 vCPU / 145 GB -> MCPT_WORKERS=32 is comfortable
+# (each worker holds the bar universe in memory, ~1-2 GB for the 20-yr
+# 1000-name snapshot). 32 workers x 7 perms ~= 224-perm null; wall-clock
+# ~= (per-run minutes) x 7 + install overhead.
+
+version: 0.2
+
+env:
+  variables:
+    AWS_REGION: us-east-1
+    STOCK_LAKE_BUCKET: stock-lake-562741918372-us-east-1-an
+    STOCK_LAKE_REGION: us-east-1
+    # Study parameters — override per build.
+    MCPT_STUDY: "smoke"
+    MCPT_CONFIG: "configs/dyn_breakout_v2_top50_brake.yaml"
+    MCPT_BARS: "s3://stock-lake-562741918372-us-east-1-an/research/mcpt/universe1000_2006_2026.parquet"
+    MCPT_START: ""
+    MCPT_END: ""
+    MCPT_START_AFTER: ""
+    MCPT_METRIC: "sharpe_ratio"
+    MCPT_WORKERS: "32"
+    MCPT_PERMS_PER_WORKER: "7"
+    MCPT_SEED_BASE: "1000"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - echo "=== install ==="
+      - pip install --upgrade pip
+      - pip install poetry==1.8.3
+      - poetry config virtualenvs.create false
+      - poetry install --without dev --no-interaction --no-ansi
+
+  pre_build:
+    commands:
+      - echo "=== pre_build ==="
+      - 'echo "Study    $MCPT_STUDY"'
+      - 'echo "Config   $MCPT_CONFIG"'
+      - 'echo "Bars     $MCPT_BARS"'
+      - 'echo "Window   $MCPT_START .. $MCPT_END (start_after=$MCPT_START_AFTER)"'
+      - 'echo "Null     $MCPT_WORKERS workers x $MCPT_PERMS_PER_WORKER perms"'
+      - aws s3 ls "$MCPT_BARS"   # fail fast if the snapshot is missing
+
+  build:
+    commands:
+      - echo "=== build ==="
+      - |
+        python scripts/mcpt_cloud_study.py \
+          --config "$MCPT_CONFIG" \
+          --bars "$MCPT_BARS" \
+          ${MCPT_START:+--start "$MCPT_START"} \
+          ${MCPT_END:+--end "$MCPT_END"} \
+          ${MCPT_START_AFTER:+--start-after "$MCPT_START_AFTER"} \
+          --metric "$MCPT_METRIC" \
+          --workers "$MCPT_WORKERS" \
+          --perms-per-worker "$MCPT_PERMS_PER_WORKER" \
+          --seed-base "$MCPT_SEED_BASE" \
+          --out-prefix "s3://$STOCK_LAKE_BUCKET/research/mcpt/studies/$MCPT_STUDY"
+
+  post_build:
+    commands:
+      - echo "=== post_build ==="
+      - aws s3 ls "s3://$STOCK_LAKE_BUCKET/research/mcpt/studies/$MCPT_STUDY/"

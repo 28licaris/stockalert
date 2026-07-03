@@ -205,6 +205,9 @@ def main(argv=None) -> int:
               flush=True)
 
     vals = [d["metrics"][a.metric] for d in done.values()]
+    if not vals:
+        print(f"\nreal run only (n-perms=0) — no null ensemble. results: {out}")
+        return 0
     dropped = sum(1 for v in vals if v is None)
     if dropped:
         print(f"  NOTE: {dropped} permutations produced no {a.metric} (excluded from null)")
