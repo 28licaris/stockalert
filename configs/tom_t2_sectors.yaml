@@ -1,0 +1,14 @@
+benchmark: SPY
+daily_table: ohlcv_daily
+end: '2026-06-30T23:59:59Z'
+fees_model: zero
+history_window: 30
+interval: 1d
+max_concurrent_positions: 11
+slippage_model: percent
+slippage_params: {pct: 0.0005}
+start: '2019-01-01T00:00:00Z'
+starting_cash: 100000
+strategy: calendar_tom
+strategy_params: {enter_calendar_days: 8, exit_after_bars: 2, position_size_pct: 0.09}
+symbols: [XLB, XLC, XLE, XLF, XLI, XLK, XLP, XLRE, XLU, XLV, XLY]

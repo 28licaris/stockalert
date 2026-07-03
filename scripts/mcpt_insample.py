@@ -164,6 +164,90 @@ def _lag1_reversal(wide, threshold: float) -> pd.DataFrame:
     return (r < threshold).astype(float)
 
 
+def _volume_capitulation(wide, down: float, vol_mult: float, hold: int) -> pd.DataFrame:
+    """Down day on climactic volume = forced-seller exhaustion; fixed hold."""
+    r = np.log(wide["close"]).diff()
+    volume = wide["volume"]
+    vol_avg = volume.rolling(20).mean().shift(1)
+    trigger = ((r < -down) & (volume >= vol_mult * vol_avg)).astype(float)
+    return trigger.rolling(hold, min_periods=1).max().fillna(0.0)
+
+
+def _breadth(wide, ma: int) -> pd.Series:
+    close = wide["close"]
+    above = (close > close.rolling(ma).mean())
+    return above.sum(axis=1) / close.notna().sum(axis=1).clip(lower=1)
+
+
+def _breadth_timing(wide, rule: str, ma: int) -> pd.DataFrame:
+    """Participation regime times broad exposure (signal broadcast to all names)."""
+    b = _breadth(wide, ma)
+    if rule == "level_0.5":
+        sig = (b > 0.5).astype(float)
+    elif rule == "level_0.6":
+        sig = (b > 0.6).astype(float)
+    else:  # thrust: <0.4 -> >0.6 within 10 days, hold 20
+        trigger = ((b > 0.6) & (b.rolling(10).min() < 0.4)).astype(float)
+        sig = trigger.rolling(20, min_periods=1).max().fillna(0.0)
+    close = wide["close"]
+    return pd.DataFrame(
+        np.repeat(sig.to_numpy()[:, None], close.shape[1], axis=1),
+        index=close.index, columns=close.columns,
+    )
+
+
+def _market_relative_reversion(wide, n: int, entry: float) -> pd.DataFrame:
+    """RSI on the stock-minus-SPY log spread: idiosyncratic panic, market removed."""
+    close = wide["close"]
+    if "SPY" not in close.columns:
+        raise SystemExit("market_relative_reversion requires SPY in the universe")
+    spread = np.log(close).sub(np.log(close["SPY"]), axis=0)
+    rsi = _wilder_rsi_wide(spread, n)
+    return _state(close, rsi < entry, rsi > 50)
+
+
+def _xsec_lowvol_max(wide, metric: str, bucket: float, rebalance: int = 21) -> pd.DataFrame:
+    """Monthly bottom-bucket on realized vol or prior-month max daily return."""
+    close = wide["close"]
+    r = np.log(close).diff()
+    m = r.rolling(63).std() if metric == "vol63" else r.rolling(21).max()
+    rb = m.iloc[::rebalance]
+    thresh = rb.quantile(bucket, axis=1)
+    member = rb.le(thresh, axis=0) & rb.notna()
+    return member.reindex(close.index).ffill().fillna(False).astype(float)
+
+
+def _leadlag_spy(wide, spy_thr: float, hold: int) -> pd.DataFrame:
+    """Big SPY UP day -> long that day's bottom-quintile laggards, fixed hold."""
+    close = wide["close"]
+    if "SPY" not in close.columns:
+        raise SystemExit("leadlag_spy requires SPY in the universe")
+    r = np.log(close).diff()
+    big_up = r["SPY"] > spy_thr
+    lag_thresh = r.quantile(0.2, axis=1)
+    laggard = r.le(lag_thresh, axis=0)
+    trigger = laggard.mul(big_up, axis=0).astype(float)
+    return trigger.rolling(hold, min_periods=1).max().fillna(0.0)
+
+
+def _survivor_conditioning(wide, gate: str) -> pd.DataFrame:
+    """The H-3 winner (RSI(4)<10 / >50, LOCKED) gated by market regime."""
+    close = wide["close"]
+    if "SPY" not in close.columns:
+        raise SystemExit("survivor_conditioning requires SPY in the universe")
+    base = _meanrev_rsi(wide, n=4, entry=10, exit=50)
+    spy_r = np.log(close["SPY"]).diff()
+    vol20 = spy_r.rolling(20).std()
+    calm = vol20 < vol20.rolling(252).median()
+    b = _breadth(wide, 200)
+    gates = {
+        "calm": calm, "stressed": ~calm,
+        "breadth_up": b > 0.5, "breadth_down": b <= 0.5,
+    }
+    g = gates[gate].astype(float)
+    return base.mul(g, axis=0)
+
+
 def _seasonality_tom(wide, before: int, after: int) -> pd.DataFrame:
     """Long the turn-of-month window: last `before` and first `after` trading days."""
     close = wide["close"]
@@ -228,6 +312,31 @@ FAMILIES = {
     ],
     "seasonality_tom": [
         ({"before": b, "after": a}, _seasonality_tom) for b in (3, 5) for a in (2, 3)
+    ],
+    # EXP-42 Wave-3 battery — registered as H-17..H-22 BEFORE implementation;
+    # grids must match the registry exactly.
+    "volume_capitulation": [
+        ({"down": d, "vol_mult": v, "hold": h}, _volume_capitulation)
+        for d in (0.01, 0.02) for v in (3.0, 5.0) for h in (1, 3)
+    ],
+    "breadth_timing": [
+        ({"rule": r, "ma": m}, _breadth_timing)
+        for r in ("level_0.5", "level_0.6", "thrust") for m in (100, 200)
+    ],
+    "market_relative_reversion": [
+        ({"n": n, "entry": e}, _market_relative_reversion)
+        for n in (2, 4) for e in (10, 15)
+    ],
+    "xsec_lowvol_max": [
+        ({"metric": m, "bucket": b}, _xsec_lowvol_max)
+        for m in ("vol63", "max21") for b in (0.1, 0.2)
+    ],
+    "leadlag_spy": [
+        ({"spy_thr": t, "hold": h}, _leadlag_spy) for t in (0.01, 0.02) for h in (1, 3)
+    ],
+    "survivor_conditioning": [
+        ({"gate": g}, _survivor_conditioning)
+        for g in ("calm", "stressed", "breadth_up", "breadth_down")
     ],
 }
 
