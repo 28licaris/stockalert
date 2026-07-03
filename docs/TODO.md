@@ -93,3 +93,12 @@ Next steps, in order:
 Related standing item: Schwab stream expansion (momentum-candidate superset
 + 1m level-watching) serves swing alerts, the day-trading corpus, and
 intraday GEX-vs-price studies.
+
+## Strategy R&D — MCPT extensions (parked)
+- **Fitness-across-permutations (Build Alpha "pre-simulation" use).** When
+  parameter searching resumes (walkforward_search / improve_strategy),
+  average the selection fitness across the real history AND K permuted
+  variants (`permutation.permute_frames`) so parameters fit to the one
+  historical sequence are penalized during selection, not just caught
+  after. Only worth wiring if a family survives the EXP-39 battery and
+  earns further parameter work. Source: buildalpha.com/monte-carlo-permutation.

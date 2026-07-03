@@ -8,7 +8,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from app.services.sim.permutation import PermutedBar, permute_bar_lists, permute_frames
+from app.services.sim.permutation import (
+    PermutedBar,
+    noise_frames,
+    permute_bar_lists,
+    permute_frames,
+)
 from app.services.sim.schemas import Bar
 from app.services.sim.significance import benjamini_hochberg, mcpt_pvalue
 
@@ -131,6 +136,34 @@ def test_validation_rejects_bad_input():
         permute_frames({"A": good.drop(columns=["high"])}, seed=1)
     with pytest.raises(ValueError, match="nothing to shuffle"):
         permute_frames({"A": good}, seed=1, start_after=good.index[-1])
+
+
+# ── noise test kernel ────────────────────────────────────────────────
+
+
+def test_noise_preserves_sequence_but_moves_prices():
+    real = _walk_frame(n=300, seed=17)
+    noisy = noise_frames({"A": real}, seed=3, scale=0.25)["A"]
+    r_real = np.diff(np.log(real["close"]))
+    r_noise = np.diff(np.log(noisy["close"]))
+    corr = np.corrcoef(r_real, r_noise)[0, 1]
+    assert corr > 0.9  # the SEQUENCE survives (unlike a permutation)
+    assert not np.allclose(noisy["close"], real["close"])  # but prices moved
+    # bar 0 anchors; volume untouched
+    assert noisy.iloc[0][["open", "high", "low", "close"]].tolist() == pytest.approx(
+        real.iloc[0][["open", "high", "low", "close"]].tolist())
+    np.testing.assert_array_equal(noisy["volume"], real["volume"])
+
+
+def test_noise_keeps_ohlc_valid_and_deterministic():
+    real = _walk_frame(n=200, seed=23)
+    n1 = noise_frames({"A": real}, seed=9)["A"]
+    n2 = noise_frames({"A": real}, seed=9)["A"]
+    pd.testing.assert_frame_equal(n1, n2)
+    assert (n1["high"] >= np.maximum(n1["open"], n1["close"]) - 1e-12).all()
+    assert (n1["low"] <= np.minimum(n1["open"], n1["close"]) + 1e-12).all()
+    with pytest.raises(ValueError, match="scale"):
+        noise_frames({"A": real}, seed=1, scale=1.5)
 
 
 # ── Bar-list adapter ─────────────────────────────────────────────────

@@ -157,6 +157,66 @@ def permute_bar_lists(
     return out
 
 
+def noise_frames(
+    frames: Mapping[str, pd.DataFrame],
+    *,
+    seed: int,
+    scale: float = 0.25,
+) -> dict[str, pd.DataFrame]:
+    """
+    Noise test companion to MCPT (Build Alpha / Masters stack): keep the
+    REAL sequence, jitter the exact prices. Answers "what if prices had
+    been slightly different along the same path?" — catches strategies
+    fit to exact historical levels (a permutation test cannot, because
+    it destroys the sequence those levels live in).
+
+    Per bar: gap and close components get iid N(0, (scale*sigma)^2)
+    noise (sigma = that symbol's daily close-to-close log-return std);
+    high/low wick extents scale by U(1-scale, 1+scale) and are
+    re-clamped so OHLC stays valid. Bar 0 anchors (unchanged). Volume
+    unchanged. Deterministic under seed (symbols processed in sorted
+    order).
+    """
+    if not frames:
+        raise ValueError("noise_frames: no symbols supplied")
+    if not (0.0 < scale < 1.0):
+        raise ValueError(f"noise_frames: scale {scale} outside (0, 1)")
+    rng = np.random.default_rng(seed)
+    out: dict[str, pd.DataFrame] = {}
+    for sym in sorted(frames):
+        df = frames[sym]
+        _validate_frame(sym, df)
+        k = len(df)
+        vol = df["volume"].to_numpy(dtype=float) if "volume" in df.columns else np.zeros(k)
+        log_px = np.log(df[list(_OHLC)].to_numpy(dtype=float))
+        lo, lh, ll, lc = (log_px[:, i] for i in range(4))
+        if k < 3:
+            out[sym] = _emit(sym, df, lo, lh, ll, lc, vol)
+            continue
+
+        sigma = float(np.std(np.diff(lc)))
+        r_o = np.empty(k)
+        r_o[0] = 0.0
+        r_o[1:] = lo[1:] - lc[:-1]
+        r_h, r_l, r_c = lh - lo, ll - lo, lc - lo
+
+        r_o2 = r_o + rng.normal(0.0, scale * sigma, k)
+        r_c2 = r_c + rng.normal(0.0, scale * sigma, k)
+        r_h2 = np.maximum.reduce([r_h * rng.uniform(1 - scale, 1 + scale, k), r_c2,
+                                  np.zeros(k)])
+        r_l2 = np.minimum.reduce([r_l * rng.uniform(1 - scale, 1 + scale, k), r_c2,
+                                  np.zeros(k)])
+
+        lo2, lh2, ll2, lc2 = lo.copy(), lh.copy(), ll.copy(), lc.copy()
+        tgt = np.arange(1, k)
+        lc2[tgt] = lc[0] + np.cumsum(r_o2[tgt] + r_c2[tgt])
+        lo2[tgt] = lc2[tgt] - r_c2[tgt]
+        lh2[tgt] = lo2[tgt] + r_h2[tgt]
+        ll2[tgt] = lo2[tgt] + r_l2[tgt]
+        out[sym] = _emit(sym, df, lo2, lh2, ll2, lc2, vol)
+    return out
+
+
 # ─────────────────────────────────────────────────────────────────────
 # internals
 # ─────────────────────────────────────────────────────────────────────

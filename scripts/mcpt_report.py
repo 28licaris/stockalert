@@ -38,8 +38,8 @@ def _battery(pattern: str, alpha: float) -> int:
     rows = []
     for p in paths:
         d = json.loads(Path(p).read_text())
-        if d.get("kind") != "insample_mcpt":
-            raise SystemExit(f"{p} is not an insample_mcpt result")
+        if d.get("kind") not in ("insample_mcpt", "insample_permutation"):
+            raise SystemExit(f"{p} is not an in-sample MCPT result (kind={d.get('kind')})")
         rows.append({
             "family": d["family"], "window": f"{d['start']}..{d['end']}",
             "n_perms": d["result"]["n_permutations"], "real": d["result"]["real"],

@@ -32,7 +32,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import yaml  # noqa: E402
 
-from app.services.sim.permutation import permute_frames  # noqa: E402
+from app.services.sim.permutation import noise_frames, permute_frames  # noqa: E402
 from app.services.sim.significance import mcpt_pvalue  # noqa: E402
 
 UTC = timezone.utc
@@ -184,11 +184,15 @@ def _pooled_pf(sig: pd.DataFrame, fwd_ret: pd.DataFrame) -> float:
     return float(gains / losses) if losses > 0 else 0.0
 
 
-def _optimize(family: str, frames: dict[str, pd.DataFrame]) -> tuple[dict, float]:
-    wide = {
+def _wide(frames: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    return {
         col: pd.DataFrame({s: f[col] for s, f in frames.items()}).sort_index()
         for col in ("open", "high", "low", "close", "volume")
     }
+
+
+def _optimize(family: str, frames: dict[str, pd.DataFrame]) -> tuple[dict, float]:
+    wide = _wide(frames)
     fwd_ret = np.log(wide["close"]).diff().shift(-1)
     best_params, best_pf = {}, 0.0
     for params, fn in FAMILIES[family]:
@@ -196,6 +200,35 @@ def _optimize(family: str, frames: dict[str, pd.DataFrame]) -> tuple[dict, float
         if pf > best_pf:
             best_params, best_pf = params, pf
     return best_params, best_pf
+
+
+def _runs_by_column(sig: pd.DataFrame) -> tuple[list[np.ndarray], np.ndarray]:
+    """Per-column entry indices + the pooled empirical holding-duration set."""
+    a = sig.to_numpy()
+    starts_by_col: list[np.ndarray] = []
+    durations: list[int] = []
+    for j in range(a.shape[1]):
+        d = np.diff(np.concatenate([[0.0], a[:, j], [0.0]]))
+        starts = np.flatnonzero(d == 1)
+        ends = np.flatnonzero(d == -1)
+        starts_by_col.append(starts)
+        durations.extend((ends - starts).tolist())
+    return starts_by_col, np.asarray(durations, dtype=int)
+
+
+def _random_exit_signal(
+    n_rows: int, starts_by_col: list[np.ndarray], dur_pool: np.ndarray, rng
+) -> np.ndarray:
+    """Real entries, exits redrawn from the empirical duration distribution."""
+    delta = np.zeros((n_rows + 1, len(starts_by_col)))
+    for j, starts in enumerate(starts_by_col):
+        if len(starts) == 0:
+            continue
+        durs = rng.choice(dur_pool, size=len(starts))
+        ends = np.minimum(starts + durs, n_rows)
+        np.add.at(delta[:, j], starts, 1.0)
+        np.add.at(delta[:, j], ends, -1.0)
+    return (np.cumsum(delta[:-1], axis=0) > 0).astype(float)
 
 
 # ── data ─────────────────────────────────────────────────────────────
@@ -239,6 +272,12 @@ def main(argv=None) -> int:
     ap.add_argument("--end", required=True)
     ap.add_argument("--n-perms", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--null", default="permutation",
+                    choices=("permutation", "noise", "random_exit"),
+                    help="permutation: MCPT (re-optimizes per variant). "
+                         "noise: price-jitter fragility of the REAL optimum. "
+                         "random_exit: entries kept, exits redrawn (edge locator).")
+    ap.add_argument("--scale", type=float, default=0.25, help="noise jitter scale")
     ap.add_argument("--out", default=None, help="JSON result path (default data/mcpt/)")
     a = ap.parse_args(argv)
 
@@ -253,35 +292,94 @@ def main(argv=None) -> int:
     real_params, real_pf = _optimize(a.family, frames)
     print(f"REAL  {a.family}: best={real_params} pooled_PF={real_pf:.4f}", flush=True)
 
-    permuted_pfs: list[float] = []
+    if a.null != "permutation":
+        if not real_params:
+            raise SystemExit("no profitable config on real data — nothing to test")
+        best_fn = next(fn for params, fn in FAMILIES[a.family] if params == real_params)
+    variant_pfs: list[float] = []
     t0 = time.time()
-    for i in range(a.n_perms):
-        perm = permute_frames(frames, seed=a.seed + i)
-        p_params, p_pf = _optimize(a.family, perm)
-        permuted_pfs.append(p_pf)
-        if i == 0:
-            per = time.time() - t0
-            print(f"  first permutation took {per:.1f}s -> estimated total "
-                  f"{per * a.n_perms / 60:.1f} min", flush=True)
-        n_asgood = sum(1 for v in permuted_pfs if v >= real_pf)
-        print(f"  perm {i + 1:>4}/{a.n_perms}  PF={p_pf:.4f}  best={p_params}  "
-              f"running p={(1 + n_asgood) / (2 + i):.4f}", flush=True)
 
-    res = mcpt_pvalue(real_pf, permuted_pfs, greater_is_better=True)
-    print(f"\nIN-SAMPLE MCPT [{a.family}] {a.start}..{a.end} "
-          f"({len(frames)} symbols, {a.n_perms} permutations)")
-    print(f"  {res.summary()}")
+    if a.null == "random_exit":
+        wide = _wide(frames)
+        fwd_ret = np.log(wide["close"]).diff().shift(-1)
+        real_sig = best_fn(wide, **real_params)
+        starts_by_col, dur_pool = _runs_by_column(real_sig)
+        if len(dur_pool) == 0:
+            raise SystemExit("random_exit: the real optimum never enters — nothing to test")
+        print(f"  {sum(len(s) for s in starts_by_col):,} entries, "
+              f"median hold {int(np.median(dur_pool))} bars", flush=True)
+        rng = np.random.default_rng(a.seed)
+        for i in range(a.n_perms):
+            sig = pd.DataFrame(
+                _random_exit_signal(len(real_sig), starts_by_col, dur_pool, rng),
+                index=real_sig.index, columns=real_sig.columns)
+            variant_pfs.append(_pooled_pf(sig, fwd_ret))
+            _progress(a, i, t0, variant_pfs, real_pf)
+    else:
+        for i in range(a.n_perms):
+            if a.null == "noise":
+                var = noise_frames(frames, seed=a.seed + i, scale=a.scale)
+                w = _wide(var)
+                pf = _pooled_pf(best_fn(w, **real_params),
+                                np.log(w["close"]).diff().shift(-1))
+            else:
+                perm = permute_frames(frames, seed=a.seed + i)
+                _, pf = _optimize(a.family, perm)
+            variant_pfs.append(pf)
+            _progress(a, i, t0, variant_pfs, real_pf)
+
+    arr = np.asarray(variant_pfs)
+    payload = {
+        "kind": f"insample_{a.null}", "family": a.family, "start": a.start,
+        "end": a.end, "n_symbols": len(frames), "seed": a.seed,
+        "real_params": real_params, "variant_pfs": variant_pfs,
+    }
+    if a.null == "permutation":
+        res = mcpt_pvalue(real_pf, variant_pfs, greater_is_better=True)
+        print(f"\nIN-SAMPLE MCPT [{a.family}] {a.start}..{a.end} "
+              f"({len(frames)} symbols, {a.n_perms} permutations)")
+        print(f"  {res.summary()}")
+        payload["result"] = res.model_dump()
+    elif a.null == "noise":
+        frac_prof = float((arr > 1.0).mean())
+        p5 = float(np.percentile(arr, 5))
+        print(f"\nNOISE TEST [{a.family}] {a.start}..{a.end} scale={a.scale} "
+              f"({a.n_perms} variants, params fixed at real optimum)")
+        print(f"  real PF={real_pf:.4f}  noise mean={arr.mean():.4f} sd={arr.std():.4f}"
+              f"  p5={p5:.4f}  profitable {frac_prof:.0%}")
+        print(f"  verdict: {'ROBUST' if frac_prof >= 0.8 and p5 > 1.0 else 'FRAGILE'}"
+              " (heuristic: >=80% variants profitable AND 5th percentile PF > 1)")
+        payload["result"] = {"real": real_pf, "mean": float(arr.mean()),
+                             "sd": float(arr.std()), "p5": p5,
+                             "frac_profitable": frac_prof, "scale": a.scale}
+    else:
+        frac_asgood = float((arr >= real_pf).mean())
+        print(f"\nRANDOM-EXIT DIAGNOSTIC [{a.family}] {a.start}..{a.end} "
+              f"({a.n_perms} variants, entries real, exits redrawn)")
+        print(f"  real PF={real_pf:.4f}  random-exit mean={arr.mean():.4f} "
+              f"sd={arr.std():.4f}  P(random >= real)={frac_asgood:.3f}")
+        print("  read: LOW P -> the exit rule carries real value; "
+              "HIGH P -> the edge (if any) lives in the entries")
+        payload["result"] = {"real": real_pf, "mean": float(arr.mean()),
+                             "sd": float(arr.std()), "frac_asgood": frac_asgood}
 
     out = Path(a.out) if a.out else Path("data/mcpt") / (
-        f"insample_{a.family}_{a.start}_{a.end}_{datetime.now(UTC):%Y%m%dT%H%M%S}.json")
+        f"insample_{a.null}_{a.family}_{a.start}_{a.end}_"
+        f"{datetime.now(UTC):%Y%m%dT%H%M%S}.json")
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps({
-        "kind": "insample_mcpt", "family": a.family, "start": a.start, "end": a.end,
-        "n_symbols": len(frames), "seed": a.seed, "real_params": real_params,
-        "result": res.model_dump(), "permuted_pfs": permuted_pfs,
-    }, indent=2))
+    out.write_text(json.dumps(payload, indent=2))
     print(f"  wrote {out}")
     return 0
+
+
+def _progress(a, i: int, t0: float, vals: list[float], real_pf: float) -> None:
+    if i == 0:
+        per = time.time() - t0
+        print(f"  first variant took {per:.1f}s -> estimated total "
+              f"{per * a.n_perms / 60:.1f} min", flush=True)
+    n_asgood = sum(1 for v in vals if v >= real_pf)
+    print(f"  {a.null} {i + 1:>4}/{a.n_perms}  PF={vals[-1]:.4f}  "
+          f"running frac>=real={(1 + n_asgood) / (2 + i):.4f}", flush=True)
 
 
 if __name__ == "__main__":
