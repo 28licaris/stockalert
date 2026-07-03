@@ -125,3 +125,18 @@ that mapping first and would be registered separately). H-22 is
 diagnostic as much as alpha-seeking: if the panic-bounce signal pays
 only in calm regimes, that is itself the crash-risk answer EXP-40
 demanded.
+
+**EXP-43 TOM Tier-2 registrations** (2026-07-03, BEFORE implementation;
+BH across H-23/H-24). Full-engine walk-forward MCPT of the EXP-41
+survivor on untouched **2019-01-01 → 2026-06-30**: new `calendar_tom`
+engine strategy — enter when remaining calendar days in month ≤ 8 (fill
+at next open ≈ 5 trading days before month-end), exit at the open after
+the 2nd trading day of the new month (the tradeable next-open rendering
+of the validated close-to-close window; calendar is ex-ante knowledge,
+no look-ahead). Zero commission + 5 bps/side slippage, ~160-perm nulls,
+primary metric Sharpe.
+
+| ID | Config | Verdict |
+|----|--------|---------|
+| H-23 | `configs/tom_t2_spy.yaml` — SPY only, 95% of cash (how TOM is traded in practice: one liquid instrument, minimal friction, unbounded capacity) | — |
+| H-24 | `configs/tom_t2_sectors.yaml` — equal-weight across the 11 SPDR sector ETFs (9% slots; closest liquid rendering of the pooled-universe claim without 800-name turnover) | — |
