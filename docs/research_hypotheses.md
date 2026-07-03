@@ -101,3 +101,27 @@ Notes:
 - Closed tracks (do not re-register without new information sources):
   bar-pattern day-trading (DT-0..3), EW-as-momentum-gate (EXP-13..16),
   ranker as hard gate (EXP-31/35/36).
+
+**EXP-42 Wave-3 battery** (registered 2026-07-03, grids LOCKED before
+implementation; queued behind Wave-2 adjudication so BH families stay
+clean; BH jointly across H-17..H-22). Screens: 1000-name clean universe,
+2006-01-01 → 2018-12-31, pooled PF, 1000 permutations; 2019-2026
+untouched. New indicators earning their place: OBV/MFI/relative-volume
++ a universe-breadth series builder (volume and participation are new
+information columns; more price-transform indicators are not).
+
+| ID | Family (mechanism) | Grid |
+|----|--------------------|------|
+| H-17 | `volume_capitulation` — down day on climactic volume = forced-seller exhaustion | down > {1%,2%} × vol ≥ {3,5}× avg20 × hold {1,3} (8) |
+| H-18 | `breadth_timing` — participation regime times broad exposure (universe-wide signal) | rule {level>0.5, level>0.6, thrust <0.4→>0.6 in 10d} × MA {100,200} (6) |
+| H-19 | `market_relative_reversion` — RSI on the stock-minus-SPY spread (idiosyncratic panic, market move removed) | n {2,4} × entry {10,15}, exit 50 (4) |
+| H-20 | `xsec_lowvol_max` — monthly buckets on realized vol / prior-month max daily return (low-vol + lottery-aversion anomalies) | metric {vol63, max21} × bottom bucket {decile, quintile} (4) |
+| H-21 | `leadlag_spy` — big index day → laggard constituents catch up | \|SPY\| > {1%,2%} × hold {1,3}, long the bottom-quintile laggards in the index direction (4) |
+| H-22 | `survivor_conditioning` — the H-3 winner (RSI(4)<10 / >50, LOCKED — no re-tuning) gated by market regime; maps WHERE the real signal pays | gate {vol20<median252, vol20>median252, breadth>0.5, breadth<0.5} (4) |
+
+Notes: H-19 uses SPY as the relative benchmark (no full GICS membership
+map exists in the platform yet; a proper sector-relative variant needs
+that mapping first and would be registered separately). H-22 is
+diagnostic as much as alpha-seeking: if the panic-bounce signal pays
+only in calm regimes, that is itself the crash-risk answer EXP-40
+demanded.
