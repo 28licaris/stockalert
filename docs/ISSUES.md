@@ -17,6 +17,26 @@ phase docs. This file is for the "things that are wrong" list.
 2. **Pick one or more area tags** (see the taxonomy below).
 3. **Add a new section at the top of `## Open
 
+### `codebuild-timeout-pinned-45min`
+
+- **Area:** infra, research
+- **Filed:** 2026-07-03
+- **Status:** open
+- **Symptom:** every build of `sockalert-silver-full-backfill` gets
+  `timeoutInMinutes: 45` regardless of `--timeout-in-minutes-override 480`
+  and despite the project's configured timeout being 480/480
+  (build/queued). Killed both EXP-40 MCPT studies mid-null (BUILD phase
+  "Build has timed out" at exactly 45:00); reproduced on a build with NO
+  override. Also: 2XLARGE vCPUs run the engine ~3x slower than the local
+  M-series (real run 908s vs 267s).
+- **Root cause:** unknown — needs investigation (service quota? fleet
+  config? org policy?). The 45 is not in the project config we can read.
+- **Suggested fix:** investigate account-level CodeBuild quotas/policies;
+  until then MCPT studies run locally (5x engine makes it viable) or in
+  resumable 45-min chained builds — shards checkpoint per-permutation to
+  S3, so chaining loses nothing.
+
+
 ### `rsi-indicator-not-wilder`
 
 - **Area:** indicators, alerts
