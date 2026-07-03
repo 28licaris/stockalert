@@ -1644,3 +1644,54 @@ banked cloud shards by seed.)
    Registered as a Wave-2 item, not iterated ad hoc; the 2019-2026
    window's evidentiary value degrades with every additional look.
 
+
+---
+
+## EXP-41 · 2026-07-03 · Wave-2: turn-of-month is the second real signal (q = 0.044); the reversion chapter CLOSES
+
+Four pre-registered screen families (H-11..H-14, 1000 perms each,
+2006-2018) + the pre-declared single reversion redesign (H-16, Tier-2
+exposure-cap pair on untouched 2019-2026). H-15 fomc_drift stays
+REGISTERED-PENDING (no historical FOMC calendar in-platform).
+
+**Screens (BH across the four):**
+
+| Family | real PF | null | p | q | verdict |
+|---|---|---|---|---|---|
+| **seasonality_tom** | **1.1078** | 1.0300±0.0288 | **0.0110** | **0.0440** | **SURVIVOR → Tier-2** (best: last 5 days of month + first 2) |
+| lag1_reversal | 1.0412 | 1.0164±0.0159 | 0.0719 | 0.1439 | dead — shallow reversion is a whisper, consistent with EXP-39 (only DEEP panic was real) |
+| overnight_condition | 1.1132 | 1.1028±0.0164 | 0.2398 | 0.3197 | dead |
+| xsec_reversal | 1.0121 | 1.0100±0.0104 | 0.4166 | 0.4166 | dead — RELATIVE losers don't bounce; absolute capitulation did |
+
+TOM mechanism: month-boundary contribution flows (pension/401k). The
+permutation null is exact for calendar claims (the shuffle destroys
+return-calendar alignment and nothing else); 10/1000 shuffles matched.
+Random-exit locator N/A by construction (calendar-fixed exit). **Noise
+gate: ROBUST** — 1000 jittered histories, 100% profitable, mean PF
+1.0963±0.0015, p5 = 1.0938 (a calendar signal barely depends on exact
+price levels; the tight distribution confirms it). Trade-shape advantages over the H-3 survivor:
+calendar-capped exposure (~1/3 of days, cannot crash-load), one round
+trip/month, zero computation.
+
+**H-16 — the one permitted reversion redesign: BOTH FAIL; chapter CLOSED.**
+
+| Config | Return | Sharpe | PF | Max DD | p (160 perms) |
+|---|---|---|---|---|---|
+| cap4 (20% max deployed) | +5.3% | 0.17 | 1.15 | −10.6% | **0.752** |
+| cap6 (30% max deployed) | +18.9% | 0.35 | 1.22 | −14.8% | **0.652** |
+
+The engineering WORKED — DD −72% → −11/−15% with panic entries intact —
+and the result still loses to shuffled tapes 2:1. Full anatomy of daily
+reversion across EXP-39/40/41: bar-level signal real (p=0.004,
+noise-robust, exit-driven); every portfolio expression dominated by its
+null (bare: crash-loading; brake: edge amputation; caps: too small to
+distinguish from luck). Per the pre-declared desk rule: **no further
+redesigns without a new information source.** The signal's remaining
+value: (a) a conditioning/feature input where crash exposure is managed
+by something else, (b) Wave-3 H-22 maps its regime boundaries as a
+diagnostic.
+
+**Next:** TOM Tier-2 (spec + registration to follow: SPY-only and
+equal-weight-basket configs as a BH pair, full-engine nulls on
+2019-2026) and the Wave-3 battery (H-17..H-22).
+

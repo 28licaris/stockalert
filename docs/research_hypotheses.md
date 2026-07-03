@@ -74,12 +74,12 @@ permutations, pooled PF; 2019-2026 untouched.
 
 | ID | Family (mechanism) | Grid | Verdict |
 |----|--------------------|------|---------|
-| H-11 | `overnight_condition` — hold close→open only, conditioned on the prior day (risk transfer at illiquid hours; gap-return stream) | condition {down_day, up_day, down_1pct, up_1pct} (4) | — |
-| H-12 | `xsec_reversal` — long the cross-sectional BOTTOM bucket by trailing return, hold = lookback (liquidity provision, xsec cousin of the H-3 survivor) | lookback {5,10,21} × bucket {decile, quintile} (6) | — |
-| H-13 | `lag1_reversal` — long after a down day, 1-bar hold (simplest reversion formulation; from the user's notebook) | prior-day return < {0, −1%, −2%} (3) | — |
-| H-14 | `seasonality_tom` — long the turn-of-month window (pension/401k flow) | days before month-end {3,5} × days after {2,3} (4) | — |
+| H-11 | `overnight_condition` — hold close→open only, conditioned on the prior day (risk transfer at illiquid hours; gap-return stream) | condition {down_day, up_day, down_1pct, up_1pct} (4) | **DEAD** p = 0.240, q = 0.320 |
+| H-12 | `xsec_reversal` — long the cross-sectional BOTTOM bucket by trailing return, hold = lookback (liquidity provision, xsec cousin of the H-3 survivor) | lookback {5,10,21} × bucket {decile, quintile} (6) | **DEAD** p = 0.417, q = 0.417 — relative losers don't bounce |
+| H-13 | `lag1_reversal` — long after a down day, 1-bar hold (simplest reversion formulation; from the user's notebook) | prior-day return < {0, −1%, −2%} (3) | **DEAD** p = 0.072, q = 0.144 — shallow-reversion whisper, fails FDR |
+| H-14 | `seasonality_tom` — long the turn-of-month window (pension/401k flow) | days before month-end {3,5} × days after {2,3} (4) | **SURVIVOR p = 0.0110, q = 0.0440** (best 5/2; 10/1000 shuffles matched) → Tier-2 |
 | H-15 | `fomc_drift` — long the pre-FOMC window | **REGISTERED-PENDING**: needs a historical FOMC meeting calendar (economic_data starts 2026-06); not runnable until a date backfill lands. Grid to be locked then. | pending data |
-| H-16 | **the one reversion redesign (Tier-2)** — H-9's exact rule with a hard exposure cap: crash-loading bounded by slot count, panic ENTRIES still taken (what the brake wrongly refused) | max_concurrent {4, 6} × 5% slots (20%/30% max deployment); same costs/window/nulls as EXP-40 | — |
+| H-16 | **the one reversion redesign (Tier-2)** — H-9's exact rule with a hard exposure cap: crash-loading bounded by slot count, panic ENTRIES still taken (what the brake wrongly refused) | max_concurrent {4, 6} × 5% slots (20%/30% max deployment); same costs/window/nulls as EXP-40 | **BOTH FAIL**: cap4 p = 0.752 (Sharpe 0.17/DD −10.6%), cap6 p = 0.652 (Sharpe 0.35/DD −14.8%). DD engineering worked; what remains is luck-indistinguishable. **Daily-reversion chapter CLOSED** per the pre-declared rule. |
 
 **Wave-2 candidate queue (NOT yet registered — mechanisms noted so the
 future registration is honest, grids to be locked at registration time):**
