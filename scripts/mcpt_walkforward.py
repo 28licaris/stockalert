@@ -59,6 +59,10 @@ def _build_cfg(r: dict, start: str | None, end: str | None) -> BacktestConfig:
         ranked_admission=bool(r.get("ranked_admission", False)),
         dd_brake_limit=r.get("dd_brake_limit"),
         dd_brake_floor=float(r.get("dd_brake_floor", 0.0)),
+        fees_model=r.get("fees_model", "per_share"),
+        fees_params=r.get("fees_params", {}),
+        slippage_model=r.get("slippage_model", "next_bar_open"),
+        slippage_params=r.get("slippage_params", {}),
     )
 
 

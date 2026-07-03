@@ -22,6 +22,7 @@ from app.indicators.ema import EMA
 from app.indicators.macd import MACD
 from app.indicators.pivots import PivotDetector
 from app.indicators.rsi import RSI
+from app.indicators.rsi_wilder import RSIWilder
 from app.indicators.sma import SMA
 from app.indicators.stochastic import StochasticOscillator
 from app.indicators.tsi import TSI
@@ -39,6 +40,7 @@ _INDICATOR_REGISTRY: dict[str, Callable[..., Indicator]] = {
     "wma": WMA,
     # Momentum
     "rsi": RSI,
+    "rsi_wilder": RSIWilder,
     "macd": MACD,
     "tsi": TSI,
     "stochastic": StochasticOscillator,

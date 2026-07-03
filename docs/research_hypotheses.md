@@ -46,6 +46,21 @@ Battery adjudicated 2026-07-03 (`mcpt_report.py --battery
 'data/mcpt/exp39_t1_*.json'`): **1/6 survive at q ≤ 0.05.** Full
 write-up: `strategy_rnd_findings.md` EXP-39.
 
+**EXP-40 Tier-2 registrations** (2026-07-03, registered BEFORE the study
+runs; BH across H-9/H-10 jointly). Full-engine walk-forward MCPT of the
+EXP-39 survivor on the untouched window: `rsi_reversion` v0.2
+(rsi_kind=wilder — decision-bar parity with the screen proven by
+`tests/test_rsi_wilder_parity.py`), RSI(4) < 10 enter / > 50 exit
+(faithful adaptive exit, NO stop, NO time-cap), 1000-name universe, 20
+slots × 5% of cash, next-open fills, zero commission + 5 bps/side
+slippage, window **2019-01-01 → 2026-06-30**, ~224-perm null
+(cloud study), primary metric Sharpe, all four metrics recorded.
+
+| ID | Config | Verdict |
+|----|--------|---------|
+| H-9 | `configs/rsi_meanrev_t2_bare.yaml` — the faithful validated rule | — |
+| H-10 | `configs/rsi_meanrev_t2_brake.yaml` — same + dd_brake 0.15 (crash-clustering risk governor) | — |
+
 **Wave-2 candidate queue (NOT yet registered — mechanisms noted so the
 future registration is honest, grids to be locked at registration time):**
 overnight-vs-intraday session split (risk transfer at illiquid hours; both

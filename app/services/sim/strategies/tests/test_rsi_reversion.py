@@ -242,7 +242,7 @@ def test_buy_size_zero_when_cash_insufficient() -> None:
 def test_strategy_metadata() -> None:
     strat = RsiReversionStrategy()
     assert strat.name == "rsi_reversion"
-    assert strat.version == "0.1"
+    assert strat.version == "0.2"
     assert strat.interval == "1d"  # default
 
     strat_1h = RsiReversionStrategy(interval="1h")

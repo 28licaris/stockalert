@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Optional
+from typing import Literal, Optional
 
 import pandas as pd
 from pydantic import BaseModel, Field
@@ -61,6 +61,15 @@ class RsiReversionParams(BaseModel):
         gt=0.0, le=1.0,
         description="Fraction of cash to deploy on entry. 95% leaves headroom for fees + slippage.",
     )
+    rsi_kind: Literal["ema", "wilder"] = Field(
+        "ema",
+        description=(
+            "'ema' = the platform's original span-based RSI (kept as default so "
+            "existing runs are unchanged). 'wilder' = true Wilder smoothing "
+            "(alpha=1/n) — REQUIRED for rules validated by the MCPT screen "
+            "(EXP-39/40), which uses Wilder math."
+        ),
+    )
 
     def validate_thresholds(self) -> None:
         if self.oversold_threshold >= self.exit_threshold:
@@ -90,7 +99,7 @@ class RsiReversionStrategy(BaseStrategy):
     """
 
     name: str = "rsi_reversion"
-    version: str = "0.1"
+    version: str = "0.2"  # 0.2: rsi_kind param (wilder parity for MCPT-validated rules)
 
     def __init__(
         self,
@@ -111,7 +120,9 @@ class RsiReversionStrategy(BaseStrategy):
         if len(ctx.history) < p.rsi_period + 2:
             return hold()
 
-        rsi_series = ctx.indicator("rsi", period=p.rsi_period)
+        rsi_series = ctx.indicator(
+            "rsi_wilder" if p.rsi_kind == "wilder" else "rsi", period=p.rsi_period
+        )
         if len(rsi_series) == 0:
             return hold()
         latest = float(rsi_series.iloc[-1])

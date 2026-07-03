@@ -15,7 +15,26 @@ phase docs. This file is for the "things that are wrong" list.
    `dashboard-banner-flicker-on-reconnect`. Avoid dates and ticket
    numbers — IDs outlive both.
 2. **Pick one or more area tags** (see the taxonomy below).
-3. **Add a new section at the top of `## Open`** using the entry
+3. **Add a new section at the top of `## Open
+
+### `rsi-indicator-not-wilder`
+
+- **Area:** indicators, alerts
+- **Filed:** 2026-07-03
+- **Status:** open
+- **Symptom:** `app/indicators/rsi.py` claims Wilder's smoothing but uses
+  `ewm(span=period)` (alpha = 2/(n+1)); true Wilder is alpha = 1/n
+  (span = 2n-1). RSI(14) values differ from every standard charting
+  platform; the divergence grows at small periods (RSI(4): alpha 0.4 vs
+  0.25). Live RSI alerts/filters/UI therefore fire at nonstandard levels.
+- **Root cause:** span-vs-alpha confusion in the original implementation;
+  docstring asserts the equivalence incorrectly.
+- **Suggested fix:** decide whether to fix `rsi` in place (changes live
+  alert behavior — needs product signoff + re-baseline of anything tuned
+  to it) or keep the pair explicit: `rsi` (legacy EMA) vs `rsi_wilder`
+  (true Wilder, added 2026-07-03 for EXP-40 screen parity). Either way,
+  correct the docstring.
+`** using the entry
    template. New items go on top; older items sink down.
 4. **Reference the ID in PRs / commits** that touch it
    (`fix(schwab-chart-fields-test-drift): align test fixtures`).
