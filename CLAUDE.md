@@ -129,6 +129,7 @@ Options lake (separate `options.*` Glue DB + `iceberg/options/` S3):
 | `docs/COMMANDS.md` | Cheatsheet |
 | `docs/architecture_v2/07_runbook.md` | Operator procedures |
 | `docs/trading_subsystem_design.md` | Trading subsystem contract |
+| `docs/mcpt_methodology.md` | Strategy-validation manual — MCPT gate; pre-register in `docs/research_hypotheses.md` BEFORE any sweep |
 
 Plan vs code conflict: code wins. The journal lives in detailed
 commit messages; BUILD_JOURNAL was retired 2026-05-18 and the file
