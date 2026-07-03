@@ -33,14 +33,25 @@ Tier-1 in-sample MCPT, 1000-name clean universe, window **2006-01-01 →
 stays untouched for Tier-2 of survivors. All signals long-only,
 close-to-close accounting.
 
-| ID | Family | Grid |
-|----|--------|------|
-| H-3 | `meanrev_rsi` — RSI(n) oversold entry, strength exit | n {2,3,4} × entry {10,15,20,25,30} × exit {50,70} (30) |
-| H-4 | `meanrev_zscore` — z of close vs SMA(n) entry, mean exit | n {10,20} × z {1.5,2.0,2.5} (6) |
-| H-5 | `xsec_momentum` — cross-sectional top-bucket by trailing return, 21-bar rebalance | lookback {60,120,12-1} × bucket {decile,quintile} (6) |
-| H-6 | `vol_compression` — ATR%ile squeeze arm + range break entry, range-low exit | atr-pctile {0.10,0.20} × breakout lookback {5,10} (4) |
-| H-7 | `gap` — overnight gap trigger, fixed hold | direction {follow,fade} × gap {1,2,3}% × hold {1,3,5} (18) |
-| H-8 | `high_52wk` — pullback low within prox of 52-wk high; exit at 2×prox distance | prox {2,5,10}% × pullback {3,5} (6) |
+| ID | Family | Grid | Screen verdict (raw p; BH q at battery close) |
+|----|--------|------|------|
+| H-3 | `meanrev_rsi` — RSI(n) oversold entry, strength exit | n {2,3,4} × entry {10,15,20,25,30} × exit {50,70} (30) | **PASS p = 0.0040** (PF 1.1002 vs null 1.0282±0.0216; best n=4/entry 10/exit 50). Random-exit locator: edge is in the ADAPTIVE EXIT (real entries + random exits → PF 1.0236, 0/500 ≥ real) — Tier-2 must implement the RSI exit faithfully. Noise test running. |
+| H-4 | `meanrev_zscore` — z of close vs SMA(n) entry, mean exit | n {10,20} × z {1.5,2.0,2.5} (6) | running (p ≈ 0.14 at 360/1000) |
+| H-5 | `xsec_momentum` — cross-sectional top-bucket by trailing return, 21-bar rebalance | lookback {60,120,12-1} × bucket {decile,quintile} (6) | queued |
+| H-6 | `vol_compression` — ATR%ile squeeze arm + range break entry, range-low exit | atr-pctile {0.10,0.20} × breakout lookback {5,10} (4) | **DEAD p = 0.344** (PF 1.0367 vs null 1.0259±0.0303) |
+| H-7 | `gap` — overnight gap trigger, fixed hold | direction {follow,fade} × gap {1,2,3}% × hold {1,3,5} (18) | running (p ≈ 0.53 at 326/1000 — dying) |
+| H-8 | `high_52wk` — pullback low within prox of 52-wk high; exit at 2×prox distance | prox {2,5,10}% × pullback {3,5} (6) | queued |
+
+**Wave-2 candidate queue (NOT yet registered — mechanisms noted so the
+future registration is honest, grids to be locked at registration time):**
+overnight-vs-intraday session split (risk transfer at illiquid hours; both
+prices already in daily bars) · cross-sectional short-term reversal (the
+xsec cousin of H-3 — convergent-evidence test) · calendar/flow seasonality:
+turn-of-month + pre-FOMC drift (FOMC dates already in `economic_data`;
+permutation null is exact for calendar claims) · meanrev_rsi conditioning
+(vol regime / sector / hourly / overnight-entry — survivor boundary-mapping,
+not a new family) · PEAD via EDGAR events (third wave; needs an
+event-study harness).
 
 Notes:
 - H-1 and H-2 are **retroactive registrations** of the already-selected

@@ -1494,3 +1494,55 @@ EXP-36 status (sizing-tilt candidate at most, never a gate); do NOT invest
 further in ranker variants without a new feature source — the label link
 itself is barely above noise.
 
+
+---
+
+## EXP-39 · 2026-07-02 · Pre-registered 6-family signal battery — first-ever screen survivor: fast mean reversion (IN PROGRESS)
+
+The first battery run UNDER the gate rather than before it: six long-only
+daily families registered with locked grids (H-3..H-8,
+`docs/research_hypotheses.md`) BEFORE implementation; Tier-1 in-sample
+MCPT (1000 permutations each) on the 1000-name clean universe (806 load),
+screen window 2006-2018; 2019-2026 untouched for Tier-2 of survivors; BH
+correction across the battery at close. Methodology manual:
+`docs/mcpt_methodology.md`. The robustness stack grew mid-battery
+(committed before use): noise test (price-jitter fragility), random-exit
+locator, DD resample bands (`dd_resample.py`).
+
+**Verdicts so far (final numbers, 1000 perms each):**
+
+| Family | real PF | null | p | verdict |
+|---|---|---|---|---|
+| meanrev_rsi (H-3) | **1.1002** | 1.0282±0.0216 | **0.0040** | **screen PASS** — 3/1000 shuffles matched |
+| vol_compression (H-6) | 1.0367 | 1.0259±0.0303 | 0.344 | dead |
+| meanrev_zscore (H-4) | — | — | ≈0.14 @ 360 perms | trending dead |
+| gap (H-7) | — | — | ≈0.53 @ 326 perms | trending dead |
+| xsec_momentum (H-5), high_52wk (H-8) | — | — | queued | — |
+
+**meanrev_rsi diagnostics (screen window only, no holdout contact):**
+- Best config RSI(4) < 10 entry / RSI > 50 exit — deep 3-4-day panic,
+  hold ~2-5 days until the bounce registers.
+- **Random-exit locator: the edge is the ADAPTIVE EXIT, not the entry.**
+  Real entries + exits redrawn from the empirical duration distribution
+  collapse to PF 1.0236±0.0064 (≈ the permutation null; 0/500 variants
+  reached the real PF). Buying oversold alone earns nothing; harvesting
+  the specific bounce does. Tier-2 implementation MUST carry the RSI-exit
+  (a fixed target/time-stop would test a different, edgeless rule).
+- Noise test (1000 price-jittered histories, params fixed): running;
+  interim distribution centered on the real PF (healthy).
+- p tightened monotonically as the ensemble grew (0.011 → 0.009 → 0.003 →
+  0.0040 final) — the signature of a true effect, not a fluke draw.
+
+**Interpretation guardrails:** PF 1.10 is GROSS of costs on close-to-close
+accounting; short-hold reversion is the canonical "real gross, dead net"
+effect, and the signal clusters in crashes (its best trades and worst risk
+live in the same weeks). A screen pass = real temporal structure exists;
+Tier-2 (honest fills + costs + sizing on untouched 2019-2026, 200-perm
+null) decides tradeability. Also honest: adjacent-family failures
+(zscore reversion trending dead) suggest the effect is specific to fast
+multi-day panic, not generic below-average prices — cleaner than a battery
+where everything weakly passes.
+
+*(Entry to be finalized with the remaining three verdicts + BH q-values +
+noise verdict when the battery closes tonight.)*
+
