@@ -1463,17 +1463,31 @@ real result **27.6% of the time (p = 0.276)**. The family's in-sample
 excellence step FAILS the video's very first statistical gate — consistent
 with, and sharper than, the EXP-27 honest floor (−2.7%).
 
-**Tier-2 (full-engine walk-forward MCPT of the EXP-33 candidate
-top50+brake, benchmark permuted too):**
-- 2006-2021: real Sharpe 0.183 / PF 1.186 / DD −14.6% (24-min run;
-  102 h for 200 straight perms → sharded 6-way × 16, 96-perm null).
-- 2024-25 holdout: real vs 200-perm null.
-- RESULTS PENDING (runs in flight; update below when complete).
+**Tier-2 FINAL (full-engine walk-forward MCPT of the EXP-33 candidate
+top50+brake, benchmark permuted too) — NOT SIGNIFICANT on both windows:**
 
-Interpretation guardrail: H-1 is a RETROACTIVE registration of a
-many-times-selected survivor — even a pass would be an upper bound on
-significance. A fail closes the daily-breakout chapter with a p-value
-attached instead of a shrug.
+| Window | real Sharpe | null mean±sd | n perms | p |
+|---|---|---|---|---|
+| 2006-2021 | 0.183 (PF 1.186, DD −14.6%) | 0.076±0.267 | 96 (6 shards × 16) | **0.320** |
+| 2024-2025 holdout | 0.823 (ret +31.6%, DD −14.8%) | 0.279±0.722 | 200 | **0.254** |
+
+30 of 96 shuffled 16-year markets and 50 of 200 shuffled holdout markets
+produced a Sharpe at least as good as the real candidate. Even the
+celebrated holdout window (Sharpe 0.82) is matched by a quarter of
+structureless tapes — a top-N long book on a dispersed, drifting tape
+just does that. (Ops note: 24 min/run → 102 h serial for 200 perms;
+sharded 6-way with pre-seeded real rows; this pain drove the cloud
+study driver, `scripts/mcpt_cloud_study.py`.)
+
+**VERDICT — the daily momentum-breakout chapter is CLOSED with numbers:**
+in-sample family p = 0.276, full-engine 2006-21 p = 0.320, holdout
+p = 0.254, ranker label-null p = 0.058 (EXP-38), and honest fills ≈
+breakeven (EXP-34/36). Every angle agrees: indistinguishable from luck.
+The brake survives as risk engineering only (EXP-33's DD property is
+mechanical, not an alpha claim). Paper finalists keep running solely as
+live falsification. Do not revisit daily breakout/momentum without a NEW
+information source. H-1 was a retroactive registration of a
+many-times-selected survivor — even these p-values are upper bounds.
 
 ---
 
@@ -1497,7 +1511,7 @@ itself is barely above noise.
 
 ---
 
-## EXP-39 · 2026-07-02 · Pre-registered 6-family signal battery — first-ever screen survivor: fast mean reversion (IN PROGRESS)
+## EXP-39 · 2026-07-02/03 · Pre-registered 6-family signal battery — first-ever statistical survivor: fast mean reversion (q = 0.024)
 
 The first battery run UNDER the gate rather than before it: six long-only
 daily families registered with locked grids (H-3..H-8,
@@ -1509,15 +1523,26 @@ correction across the battery at close. Methodology manual:
 (committed before use): noise test (price-jitter fragility), random-exit
 locator, DD resample bands (`dd_resample.py`).
 
-**Verdicts so far (final numbers, 1000 perms each):**
+**FINAL adjudication (1000 perms each; BH q across the six-family
+battery via `mcpt_report.py --battery`) — ONE survivor:**
 
-| Family | real PF | null | p | verdict |
-|---|---|---|---|---|
-| meanrev_rsi (H-3) | **1.1002** | 1.0282±0.0216 | **0.0040** | **screen PASS** — 3/1000 shuffles matched |
-| vol_compression (H-6) | 1.0367 | 1.0259±0.0303 | 0.344 | dead |
-| meanrev_zscore (H-4) | — | — | ≈0.14 @ 360 perms | trending dead |
-| gap (H-7) | — | — | ≈0.53 @ 326 perms | trending dead |
-| xsec_momentum (H-5), high_52wk (H-8) | — | — | queued | — |
+| Family | real PF | null mean±sd | p | q | verdict |
+|---|---|---|---|---|---|
+| meanrev_rsi (H-3) | **1.1002** | 1.0282±0.0216 | **0.0040** | **0.0240** | **SURVIVOR → Tier-2** |
+| xsec_momentum (H-5) | 1.0371 | 1.0157±0.0114 | 0.0390 | 0.1169 | dead — raw-significant, fails FDR |
+| meanrev_zscore (H-4) | 1.0571 | 1.0290±0.0278 | 0.1339 | 0.2677 | dead |
+| vol_compression (H-6) | 1.0367 | 1.0259±0.0303 | 0.3437 | 0.4843 | dead |
+| high_52wk (H-8) | 1.0510 | 1.0487±0.0327 | 0.4036 | 0.4843 | dead |
+| gap (H-7) | 1.0233 | 1.0320±0.0275 | 0.5504 | 0.5504 | dead — real BELOW the null mean |
+
+The xsec_momentum row is the methodological showcase: the most-documented
+factor in finance comes in raw-significant (p = 0.039, best config = the
+academic 12-1 decile) and correctly DIES under FDR correction — exactly
+the trap BH exists for. Its full-engine cousin (EXP-37) independently
+failed anyway. Also coherent: 12-1 momentum (skip the last month) shows
+weak signal while our 60-day-entry breakout book doesn't — the classic
+factor's construction skips precisely the short-term-reversal window that
+meanrev_rsi trades. The two results are two sides of the same structure.
 
 **meanrev_rsi diagnostics (screen window only, no holdout contact):**
 - Best config RSI(4) < 10 entry / RSI > 50 exit — deep 3-4-day panic,
@@ -1540,12 +1565,18 @@ locator, DD resample bands (`dd_resample.py`).
 accounting; short-hold reversion is the canonical "real gross, dead net"
 effect, and the signal clusters in crashes (its best trades and worst risk
 live in the same weeks). A screen pass = real temporal structure exists;
-Tier-2 (honest fills + costs + sizing on untouched 2019-2026, 200-perm
-null) decides tradeability. Also honest: adjacent-family failures
-(zscore reversion trending dead) suggest the effect is specific to fast
-multi-day panic, not generic below-average prices — cleaner than a battery
-where everything weakly passes.
+Tier-2 (honest fills + costs + sizing on untouched 2019-2026, ~200-perm
+null on the cloud pipeline) decides tradeability. Also honest:
+adjacent-family failures (zscore reversion p = 0.134) show the effect is
+specific to fast multi-day panic, not generic below-average prices —
+cleaner and more credible than a battery where everything weakly passes.
 
-*(Entry to be finalized with the remaining three verdicts + BH q-values +
-noise verdict when the battery closes tonight.)*
+**Next:** EXP-40 = Tier-2 of meanrev_rsi — implement an `rsi_meanrev`
+signal source in the engine carrying the adaptive RSI exit faithfully,
+pre-register the study, run on untouched 2019-2026 with honest
+fills/costs via `mcpt_cloud_study.py`. Wave-2 registrations queue behind
+the verdict (see `research_hypotheses.md` candidate queue).
+
+*(Entry retitled from IN PROGRESS to final on 2026-07-03 when the last
+family and both EXP-37 Tier-2 nulls completed.)*
 
