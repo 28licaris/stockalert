@@ -66,6 +66,21 @@ design fails. ONE mechanism-motivated risk-expression redesign may be
 registered (Wave-2); if it fails, the daily-reversion chapter closes.
 Full write-up: `strategy_rnd_findings.md` EXP-40.
 
+**EXP-41 Wave-2 battery** (registered 2026-07-03 BEFORE implementation;
+BH jointly across H-11..H-14 for the Tier-1 screens; H-16 is a Tier-2
+pair BH'd separately as the pre-declared single redesign). Screens:
+1000-name clean universe, window 2006-01-01 → 2018-12-31, 1000
+permutations, pooled PF; 2019-2026 untouched.
+
+| ID | Family (mechanism) | Grid | Verdict |
+|----|--------------------|------|---------|
+| H-11 | `overnight_condition` — hold close→open only, conditioned on the prior day (risk transfer at illiquid hours; gap-return stream) | condition {down_day, up_day, down_1pct, up_1pct} (4) | — |
+| H-12 | `xsec_reversal` — long the cross-sectional BOTTOM bucket by trailing return, hold = lookback (liquidity provision, xsec cousin of the H-3 survivor) | lookback {5,10,21} × bucket {decile, quintile} (6) | — |
+| H-13 | `lag1_reversal` — long after a down day, 1-bar hold (simplest reversion formulation; from the user's notebook) | prior-day return < {0, −1%, −2%} (3) | — |
+| H-14 | `seasonality_tom` — long the turn-of-month window (pension/401k flow) | days before month-end {3,5} × days after {2,3} (4) | — |
+| H-15 | `fomc_drift` — long the pre-FOMC window | **REGISTERED-PENDING**: needs a historical FOMC meeting calendar (economic_data starts 2026-06); not runnable until a date backfill lands. Grid to be locked then. | pending data |
+| H-16 | **the one reversion redesign (Tier-2)** — H-9's exact rule with a hard exposure cap: crash-loading bounded by slot count, panic ENTRIES still taken (what the brake wrongly refused) | max_concurrent {4, 6} × 5% slots (20%/30% max deployment); same costs/window/nulls as EXP-40 | — |
+
 **Wave-2 candidate queue (NOT yet registered — mechanisms noted so the
 future registration is honest, grids to be locked at registration time):**
 overnight-vs-intraday session split (risk transfer at illiquid hours; both

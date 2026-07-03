@@ -138,6 +138,46 @@ def _high_52wk(wide, prox: float, pullback: int) -> pd.DataFrame:
     return _state(close, near & at_pullback_low, close < hi52 * (1 - 2 * prox))
 
 
+def _overnight_condition(wide, condition: str) -> pd.DataFrame:
+    """Hold close->open ONLY (gap-return family), conditioned on the prior day."""
+    r = np.log(wide["close"]).diff()
+    masks = {
+        "down_day": r < 0, "up_day": r > 0,
+        "down_1pct": r < -0.01, "up_1pct": r > 0.01,
+    }
+    return masks[condition].astype(float)
+
+
+def _xsec_reversal(wide, lookback: int, bucket: float) -> pd.DataFrame:
+    """Long the cross-sectional BOTTOM bucket by trailing return; hold = lookback."""
+    close = wide["close"]
+    mom = close / close.shift(lookback) - 1.0
+    rb = mom.iloc[::lookback]
+    thresh = rb.quantile(bucket, axis=1)
+    member = rb.le(thresh, axis=0) & rb.notna()
+    return member.reindex(close.index).ffill().fillna(False).astype(float)
+
+
+def _lag1_reversal(wide, threshold: float) -> pd.DataFrame:
+    """Long for one bar after a down day (simplest reversion formulation)."""
+    r = np.log(wide["close"]).diff()
+    return (r < threshold).astype(float)
+
+
+def _seasonality_tom(wide, before: int, after: int) -> pd.DataFrame:
+    """Long the turn-of-month window: last `before` and first `after` trading days."""
+    close = wide["close"]
+    idx = close.index
+    period = pd.PeriodIndex(idx, freq="M")
+    pos = pd.Series(np.arange(len(idx)), index=idx).groupby(period).cumcount()
+    counts = pd.Series(pos.to_numpy(), index=idx).groupby(period).transform("count")
+    in_window = (pos < after) | (pos >= counts - before)
+    return pd.DataFrame(
+        np.repeat(in_window.to_numpy()[:, None], close.shape[1], axis=1).astype(float),
+        index=idx, columns=close.columns,
+    )
+
+
 FAMILIES = {
     "donchian": [({"lookback": lb}, _donchian) for lb in range(10, 105, 5)],
     "ma_cross": [
@@ -173,7 +213,34 @@ FAMILIES = {
     "high_52wk": [
         ({"prox": p, "pullback": pb}, _high_52wk) for p in (0.02, 0.05, 0.10) for pb in (3, 5)
     ],
+    # EXP-41 Wave-2 battery — registered as H-11..H-14 BEFORE implementation;
+    # grids must match the registry exactly.
+    "overnight_condition": [
+        ({"condition": c}, _overnight_condition)
+        for c in ("down_day", "up_day", "down_1pct", "up_1pct")
+    ],
+    "xsec_reversal": [
+        ({"lookback": lb, "bucket": b}, _xsec_reversal)
+        for lb in (5, 10, 21) for b in (0.1, 0.2)
+    ],
+    "lag1_reversal": [
+        ({"threshold": t}, _lag1_reversal) for t in (0.0, -0.01, -0.02)
+    ],
+    "seasonality_tom": [
+        ({"before": b, "after": a}, _seasonality_tom) for b in (3, 5) for a in (2, 3)
+    ],
 }
+
+# Per-family forward-return stream: "cc" = close(t) -> close(t+1) (default);
+# "overnight" = close(t) -> open(t+1) (the gap — H-11's claim is specifically
+# about the overnight session, and the position exits at the open).
+RETURN_KIND: dict[str, str] = {"overnight_condition": "overnight"}
+
+
+def _fwd_returns(wide: dict[str, pd.DataFrame], kind: str) -> pd.DataFrame:
+    if kind == "overnight":
+        return np.log(wide["open"]).shift(-1) - np.log(wide["close"])
+    return np.log(wide["close"]).diff().shift(-1)
 
 
 def _pooled_pf(sig: pd.DataFrame, fwd_ret: pd.DataFrame) -> float:
@@ -193,7 +260,7 @@ def _wide(frames: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
 
 def _optimize(family: str, frames: dict[str, pd.DataFrame]) -> tuple[dict, float]:
     wide = _wide(frames)
-    fwd_ret = np.log(wide["close"]).diff().shift(-1)
+    fwd_ret = _fwd_returns(wide, RETURN_KIND.get(family, "cc"))
     best_params, best_pf = {}, 0.0
     for params, fn in FAMILIES[family]:
         pf = _pooled_pf(fn(wide, **params), fwd_ret)
@@ -308,7 +375,7 @@ def main(argv=None) -> int:
 
     if a.null == "random_exit":
         wide = _wide(frames)
-        fwd_ret = np.log(wide["close"]).diff().shift(-1)
+        fwd_ret = _fwd_returns(wide, RETURN_KIND.get(a.family, "cc"))
         real_sig = best_fn(wide, **real_params)
         starts_by_col, dur_pool = _runs_by_column(real_sig)
         if len(dur_pool) == 0:
@@ -328,7 +395,7 @@ def main(argv=None) -> int:
                 var = noise_frames(frames, seed=a.seed + i, scale=a.scale)
                 w = _wide(var)
                 pf = _pooled_pf(best_fn(w, **real_params),
-                                np.log(w["close"]).diff().shift(-1))
+                                _fwd_returns(w, RETURN_KIND.get(a.family, "cc")))
             else:
                 perm = permute_frames(frames, seed=a.seed + i)
                 _, pf = _optimize(a.family, perm)
