@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import { Bell, Download, Loader2, Radio } from "lucide-react";
-import { usePaperStatus, type EquityPoint, type PaperStatus } from "@/api/backtest";
+import { usePaperStatus, type PaperStatus } from "@/api/backtest";
+import { EquityTradeChart } from "@/components/charts/EquityTradeChart";
+import { RoundTripsTable } from "@/components/tables/RoundTripsTable";
 import { useLibrary } from "@/api/library";
 import { cn } from "@/lib/utils";
 
@@ -140,7 +142,7 @@ function PaperBody({ s, unit }: { s: PaperStatus; unit: Unit }) {
             {money(s.starting_capital)} → {money(s.current_balance)}
           </span>
         </div>
-        <EquityWithMarker points={s.equity_curve} goLive={s.go_live} />
+        <EquityTradeChart points={s.equity_curve} trades={s.forward_trades} vlines={[{ t: s.go_live, label: "go-live" }]} emptyText="No forward history yet — the live record just started." />
         <p className="mt-1 text-[10px] text-fg-subtle">
           Balance from {money(s.starting_capital)} at {s.start_date.slice(0, 10)}.
           The <span className="text-accent">dashed marker</span> is the locked go-live — only the segment to its right is the real (no-look-ahead) forward record; anything left of it is backtest replay.
@@ -149,7 +151,7 @@ function PaperBody({ s, unit }: { s: PaperStatus; unit: Unit }) {
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         <Holdings positions={s.open_positions} />
-        <ForwardTrades trades={s.forward_trades} />
+        <RoundTripsTable trades={s.forward_trades} title="Forward closed trades" emptyText="No closed forward trades yet — the live record just started." maxRows={30} />
       </div>
     </>
   );
@@ -189,40 +191,6 @@ function TodaysSignals({ s }: { s: PaperStatus }) {
   );
 }
 
-function EquityWithMarker({ points, goLive }: { points: EquityPoint[]; goLive: string }) {
-  const g = useMemo(() => {
-    if (points.length < 2) return null;
-    const ys = points.map((p) => p.equity);
-    const min = Math.min(...ys), max = Math.max(...ys);
-    const range = max - min || 1;
-    const W = 1000, H = 240;
-    const step = W / (points.length - 1);
-    const coord = (p: EquityPoint, i: number) => [i * step, H - ((p.equity - min) / range) * H] as const;
-    const line = points.map((p, i) => `${i === 0 ? "M" : "L"}${coord(p, i)[0].toFixed(1)},${coord(p, i)[1].toFixed(1)}`).join(" ");
-    const area = `${line} L${W},${H} L0,${H} Z`;
-    const goTs = Date.parse(goLive);
-    let liveIdx = points.findIndex((p) => Date.parse(p.t) >= goTs);
-    if (liveIdx < 0) liveIdx = points.length - 1;
-    const markerX = liveIdx * step;
-    const up = points[points.length - 1].equity >= points[0].equity;
-    return { line, area, markerX, W, H, up };
-  }, [points, goLive]);
-  if (!g) return (
-    <div className="py-8 text-center text-xs text-fg-muted">
-      No forward history yet — the live record just started. Set an earlier <strong>start date</strong> above to replay the strategy forward from a past date.
-    </div>
-  );
-  const color = g.up ? "#22c55e" : "#f43f5e";
-  return (
-    <svg viewBox={`0 0 ${g.W} ${g.H}`} className="h-56 w-full" preserveAspectRatio="none">
-      <path d={g.area} fill={color} opacity={0.1} />
-      <path d={g.line} fill="none" stroke={color} strokeWidth={2} vectorEffect="non-scaling-stroke" />
-      <line x1={g.markerX} y1={0} x2={g.markerX} y2={g.H} stroke="var(--accent, #38bdf8)"
-            strokeWidth={2} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
-    </svg>
-  );
-}
-
 function Holdings({ positions }: { positions: PaperStatus["open_positions"] }) {
   return (
     <div className="surface-panel rounded-lg p-3">
@@ -256,46 +224,6 @@ function Holdings({ positions }: { positions: PaperStatus["open_positions"] }) {
                 </td>
               </tr>
             ); })}
-          </tbody>
-        </table>
-      )}
-    </div>
-  );
-}
-
-function ForwardTrades({ trades }: { trades: PaperStatus["forward_trades"] }) {
-  const closed = trades.filter((t) => t.is_closing).slice(-30).reverse();
-  return (
-    <div className="surface-panel rounded-lg p-3">
-      <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-fg-subtle">
-        Forward closed trades ({closed.length})
-      </div>
-      {closed.length === 0 ? (
-        <div className="py-4 text-center text-xs text-fg-muted">
-          No closed forward trades yet — the live record just started.
-        </div>
-      ) : (
-        <table className="w-full text-left font-mono text-[11px]">
-          <thead className="text-fg-subtle">
-            <tr><th className="py-1 pr-2">Symbol</th><th className="pr-2">Entered</th>
-              <th className="pr-2">Exited</th><th className="pr-2 text-right">Entry $</th>
-              <th className="pr-2 text-right">Exit $</th><th className="pr-2 text-right">Held</th>
-              <th className="text-right">P&amp;L</th></tr>
-          </thead>
-          <tbody>
-            {closed.map((t, i) => (
-              <tr key={i} className="border-t border-border/50">
-                <td className="py-1 pr-2 text-fg-base">{t.symbol}</td>
-                <td className="pr-2 text-fg-subtle">{(t.entry_date ?? "").slice(0, 10) || "—"}</td>
-                <td className="pr-2 text-fg-subtle">{(t.exit_date ?? t.timestamp).slice(0, 10)}</td>
-                <td className="pr-2 text-right text-fg-muted">{t.entry_price != null ? `$${t.entry_price.toFixed(2)}` : "—"}</td>
-                <td className="pr-2 text-right text-fg-muted">{t.exit_price != null ? `$${t.exit_price.toFixed(2)}` : "—"}</td>
-                <td className="pr-2 text-right text-fg-muted">{Math.round(t.holding_days)}d</td>
-                <td className={cn("text-right", t.realized_pnl >= 0 ? "text-up" : "text-down")}>
-                  {t.realized_pnl >= 0 ? "+" : ""}{Math.round(t.realized_pnl).toLocaleString()}
-                </td>
-              </tr>
-            ))}
           </tbody>
         </table>
       )}

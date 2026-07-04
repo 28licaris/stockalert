@@ -25,10 +25,12 @@ export function EquityTradeChart({
   points,
   trades,
   vlines,
+  emptyText = "No equity data.",
 }: {
   points: EquityChartPoint[];
   trades?: TradeLeg[];
   vlines?: VLine[];
+  emptyText?: string;
 }) {
   const model = useMemo(() => {
     if (points.length < 2) return null;
@@ -78,7 +80,7 @@ export function EquityTradeChart({
     return { line, area, up, markers, refs };
   }, [points, trades, vlines]);
 
-  if (!model) return <div className="py-8 text-center text-xs text-fg-muted">No equity data.</div>;
+  if (!model) return <div className="py-8 text-center text-xs text-fg-muted">{emptyText}</div>;
   const color = model.up ? "#22c55e" : "#f43f5e";
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="h-48 w-full" preserveAspectRatio="none">
@@ -91,9 +93,9 @@ export function EquityTradeChart({
           y1={0}
           x2={r.x}
           y2={H}
-          stroke="#a3a3a3"
-          strokeWidth={1}
-          strokeDasharray="4 4"
+          stroke="var(--accent, #38bdf8)"
+          strokeWidth={2}
+          strokeDasharray="6 4"
           vectorEffect="non-scaling-stroke"
         >
           {r.label ? <title>{r.label}</title> : null}
