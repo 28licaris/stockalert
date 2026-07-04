@@ -45,8 +45,10 @@ class CalendarFomcParams(BaseModel):
         description=("ISO dates of scheduled FOMC announcements (ex-ante public). "
                      "Defaults to the built-in Fed calendar 2006-2026."))
     pre_weekdays: int = Field(
-        1, ge=1, le=5,
-        description="Enter so the fill lands this many weekdays before the announcement.")
+        2, ge=1, le=5,
+        description=("Enter so the fill lands this many weekdays before the announcement. "
+                     "Default 2 = the VALIDATED H-26 rendering (EXP-44); 1 failed Tier-2 "
+                     "under next-open fills — override only for research."))
     position_size_pct: float = Field(0.95, gt=0.0, le=1.0)
 
 
