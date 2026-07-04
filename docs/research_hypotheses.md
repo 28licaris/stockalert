@@ -327,3 +327,27 @@ nulls as standard (1000-name daily, 2006-2018, 1000 perms).
 | ID | Family | Grid |
 |----|--------|------|
 | H-43 | `asymmetric_exit_overlay` | entry cycle {10, 21 bars} × trail {5%, 10%} (4) |
+
+**EXP-53 registration** (2026-07-04, BEFORE implementation and BEFORE
+any data contact beyond feature construction). The scheduled-flows +
+new-trade-structure wave. Motivation: the campaign law — both survivors
+(FOMC daily + hourly) are scheduled flows; every discovered price
+pattern is dead. H-44/H-45 exploit the per-stock dividend calendar
+already in the lake (`equities.market_corp_actions`); H-46 is the one
+ML idea that changes the TRADE STRUCTURE (market-neutral residuals)
+rather than the model; H-47/H-48 extend the calendar recipe to macro
+prints and option-expiration flows. Screens: standard gauntlet
+(2006-2018 dev, 1000 master-calendar permutations, BH within the wave,
+2019-2026 untouched). H-44/H-45/H-46 on the 1000-name daily universe;
+H-47/H-48 on SPY (mirroring the fomc_drift screen design).
+Price-only-return caveat handled by construction: H-44 exits at the
+cum-dividend close (no ex-day cash flow inside the window); H-45
+enters at the ex-day close (post-drop).
+
+| ID | Family | Grid |
+|----|--------|------|
+| H-44 | `dividend_runup` — long the `lead` trading days ending at the cum-dividend close (signal days [ex−1−lead, ex−2], earning cc into close(ex−1)) | lead {3, 5, 10} (3) |
+| H-45 | `dividend_ex_drift` — long `hold` days from the ex-day close (post-drop recovery/drift) | hold {3, 5, 10} (3) |
+| H-46 | `pca_residual_reversion` — trailing-252d log-return PCA refit every 21d; residual z = 21d cum-residual / (σ_res·√21); enter long z < −z_thr / short z > +z_thr, fixed 10d hold, both legs always on (market-neutral) | n_factors {1, 5} × z_thr {1.5, 2.0} (4) |
+| H-47 | `macro_release_drift` — long the k trading days ending at the release-day close (CPI / NFP 08:30 ET prints; scheduled dates from BLS) | release {cpi, nfp} × k {1, 2, 3} (6) |
+| H-48 | `opex_flows` — monthly option-expiration flow windows: the 4 trading days ending at the 3rd Friday (into_opex) vs the following 5 (post_opex), both directions registered | segment {into_opex, post_opex} × side {long, short} (4) |
