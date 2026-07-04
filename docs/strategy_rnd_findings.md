@@ -1828,9 +1828,7 @@ existed (no-peek recorded in the registry).
 | Hypothesis | horizon | real PF | null | p |
 |---|---|---|---|---|
 | H-27 spike_analog | 1 day | 1.1571 | 1.1439±0.1236 | **0.4286** |
-| H-28 spike_analog_multiday | 2-3 days | 1.1286 | 1.2670±0.0825* | **0.4286** |
-
-*null mean 1.1267.
+| H-28 spike_analog_multiday | 2-3 days | 1.1286 | 1.1267±0.0825 | **0.4286** |
 
 **Verdict:** window SHAPE carries no information beyond what magnitude
 conditioning already extracts (and EXP-39/40 showed even that isn't
