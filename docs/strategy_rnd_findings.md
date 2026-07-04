@@ -2039,3 +2039,33 @@ multipliers on edge, not sources of it; a dead entry signal cannot be
 rescued by exit engineering, and Tier-2 designs should spend their
 complexity budget on WHEN to be in the market, not how to leave it.
 Ensemble: data/mcpt/exp52_t1_asym_exit.json.
+
+## FOMC forward-audit — trade concentration, splits, timestamp proof (2026-07-04)
+
+Prompted by an external (GPT) review of the paper strategies. Script:
+scripts/fomc_trade_audit.py (reproduces both LOCKED Tier-2 configs
+trade-by-trade); full artifact data/mcpt/fomc_trade_audit.json.
+
+**Daily (n=58, +$27,490):** win rate 62%; top-5 winners = 60% of
+profit; ex-best-trade +$22.8k; ex-best-year(2020) +$17.6k; ex-2022
++$21.4k. By year: 2019 +1.4k, 2020 +9.9k, 2021 −2.5k, 2022 +6.1k,
+2023 +7.7k, 2024 +4.4k, 2025 +0.4k, 2026 +0.2k. SEP +$8.6k /
+non-SEP +$15.6k (both positive). Verdict: NOT dominated by a single
+year or trade — the result survives every exclusion. Honest flag:
+2025-26 are near-flat (~10 meetings, +$0.55k combined) — a soft decay
+watch-item for the forward record, not yet distinguishable from noise.
+
+**Hourly (n=56, +$15,646):** timestamp proof 56/56 — every exit fill
+lands before 14:00 ET on the announcement day (the ET/UTC-class
+failure GPT called existential is affirmatively absent). BUT: top-5
+winners = 94% of profit; 2021 −$3.1k, 2026 −$1.6k; SEP meetings
+contribute only +$1.7k of the +$15.6k. The PF 2.52 headline is
+carried by a handful of trades — exactly the small-n fragility the
+review hypothesized. Stays on paper; the daily rendering is the
+sturdier claim and the hourly one needs its forward record more.
+
+Review disposition: the reviewer's multiple-testing critique does not
+apply (dev/holdout wall + pre-registration ledger + BH — the reported
+Tier-2 p-values are one-shot OOS tests of locked configs); its
+concentration/split audit was the one item with teeth and is now a
+standing artifact.
