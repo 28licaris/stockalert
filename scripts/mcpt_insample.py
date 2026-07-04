@@ -317,6 +317,17 @@ def _tom_last_hour(wide, last_bars: int) -> pd.DataFrame:
     )
 
 
+def _early_run(wide, r_min: float, v_min: float, hold: int) -> pd.DataFrame:
+    """H-42: catch the run YOUNG — fresh 20d high + young momentum (ret20)
+    + a volume-regime shift (10d vs 60d avg = money flowing in) -> fixed hold."""
+    close, volume = wide["close"], wide["volume"]
+    fresh_high = close > close.rolling(20).max().shift(1)
+    young_mom = (close / close.shift(20) - 1.0) >= r_min
+    vol_shift = (volume.rolling(10).mean() / volume.rolling(60).mean()) >= v_min
+    trigger = (fresh_high & young_mom & vol_shift).astype(float)
+    return trigger.rolling(hold, min_periods=1).max().fillna(0.0)
+
+
 def _consolidation_breakout(wide, base_len: int, tight: float, hold: int) -> pd.DataFrame:
     """H-40: a base_len-day range tighter than `tight` x price resolves upward
     (close breaks the base high) -> fixed hold. Daily bars."""
@@ -652,6 +663,10 @@ FAMILIES = {
     ],
     "leader_pullback": [
         ({"lead": ld, "hold": h}, _leader_pullback) for ld in (0.3, 0.5) for h in (5, 10)
+    ],
+    "early_run": [
+        ({"r_min": r, "v_min": v, "hold": h}, _early_run)
+        for r in (0.08, 0.15) for v in (1.0, 1.5) for h in (5, 10)
     ],
 }
 
