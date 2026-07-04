@@ -1813,3 +1813,33 @@ eligible for paper trading.** Proposed next step (needs sign-off):
 paper-trade spec running calendar_fomc(k=2, SPY) alongside the existing
 momentum finalists, with the standard go-live wall.
 
+
+---
+
+## EXP-45 · 2026-07-04 · Analog/pattern matching dead at every horizon — "past patterns predict future moves" is CLOSED as a class
+
+The nonparametric superset test of chart-pattern knowledge: on spike
+days, k-NN over normalized prior-window shapes (pooled cross-symbol,
+strictly-prior expanding library; multi-day votes banked only after
+RESOLUTION so nothing leaks), 40-name liquid universe, 2006-2018,
+1000 permutations each. H-28 was pre-registered before the H-27 verdict
+existed (no-peek recorded in the registry).
+
+| Hypothesis | horizon | real PF | null | p |
+|---|---|---|---|---|
+| H-27 spike_analog | 1 day | 1.1571 | 1.1439±0.1236 | **0.4286** |
+| H-28 spike_analog_multiday | 2-3 days | 1.1286 | 1.2670±0.0825* | **0.4286** |
+
+*null mean 1.1267.
+
+**Verdict:** window SHAPE carries no information beyond what magnitude
+conditioning already extracts (and EXP-39/40 showed even that isn't
+tradeable). Because k-NN analog matching subsumes every named bar
+pattern (flags, flushes, V-bottoms, ...), this closes "learn historical
+patterns, recognize them recurring" as an entire class on daily bars —
+1-3 day holds included — rather than pattern-by-pattern. Combined with
+DT-0..3 (1m patterns, 450k trades): pattern recognition on price alone
+is dead at every tested timescale. What was ever real in this space:
+flow/calendar mechanisms (FOMC promoted, TOM parked) and deep-panic
+magnitude (real signal, untradeable expression).
+

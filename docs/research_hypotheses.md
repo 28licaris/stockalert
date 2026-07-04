@@ -175,7 +175,7 @@ compute bound), 2006-01-01 → 2018-12-31, pooled PF, 1000 permutations;
 
 | ID | Family | Grid |
 |----|--------|------|
-| H-27 | `spike_analog` | spike threshold s {2.5, 3.5} × window w {10, 20} × neighbors k {25, 100} (8) |
+| H-27 | `spike_analog` | spike threshold s {2.5, 3.5} × window w {10, 20} × neighbors k {25, 100} (8) | **DEAD p = 0.4286** |
 
 **EXP-45 addendum** (2026-07-03, registered while the H-27 screen was
 still RUNNING — locked before any 1-day verdict existed). H-28
@@ -187,4 +187,4 @@ Same 40-name universe/window/permutation count; BH within the family.
 
 | ID | Family | Grid |
 |----|--------|------|
-| H-28 | `spike_analog_multiday` | s {2.5, 3.5} × w {10, 20} × k {25, 100} × horizon h {2, 3} (16) |
+| H-28 | `spike_analog_multiday` | s {2.5, 3.5} × w {10, 20} × k {25, 100} × horizon h {2, 3} (16) | **DEAD p = 0.4286** — pattern-matching CLOSED as a class at all tested horizons |
