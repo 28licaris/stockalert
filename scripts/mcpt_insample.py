@@ -626,32 +626,40 @@ def _pca_residuals(close: pd.DataFrame, k: int, fit_win: int = 252, refit: int =
     multiple z-thresholds per evaluation and both k's share one tape."""
     key = (id(close), k, fit_win, refit)
     if key in _PCA_CACHE:
-        return _PCA_CACHE[key]
+        return _PCA_CACHE[key][1]
     for stale in [c for c in _PCA_CACHE if c[0] != id(close)]:
         _PCA_CACHE.pop(stale)  # new permutation tape -> drop the old one
 
     r = np.log(close).diff().to_numpy()
     T, N = r.shape
     resid = np.full((T, N), np.nan)
+    # Union-calendar robustness: a handful of missing bars per window is
+    # normal (per-exchange stray dates), so validity tolerates a few NaNs
+    # and standardized gaps are zero-filled (a missing day carries no
+    # residual information). Strict no-NaN validity leaves ZERO symbols
+    # with an unbroken residual series on the 800-name universe.
+    max_miss = max(2, fit_win // 50)
     for t0 in range(fit_win, T, refit):
         win = r[t0 - fit_win:t0]
-        valid = ~np.isnan(win).any(axis=0)
-        std = win[:, valid].std(axis=0, ddof=1)
-        ok = std > 0
-        cols = np.flatnonzero(valid)[ok]
+        miss = np.isnan(win).sum(axis=0)
+        std = np.nanstd(win, axis=0, ddof=1)
+        with np.errstate(invalid="ignore"):
+            valid = (miss <= max_miss) & (std > 0)
+        cols = np.flatnonzero(valid)
         if len(cols) < k + 1:
             continue
-        mu, sd = win[:, cols].mean(axis=0), std[ok]
-        x_fit = (win[:, cols] - mu) / sd
+        mu, sd = np.nanmean(win[:, cols], axis=0), std[cols]
+        x_fit = np.nan_to_num((win[:, cols] - mu) / sd)
         _, _, vt = np.linalg.svd(x_fit, full_matrices=False)
         v = vt[:k]  # (k, n_valid) loadings
         block = r[t0:t0 + refit][:, cols]
-        x = (block - mu) / sd  # standardized with FIT-window stats (OOS-safe)
+        x = np.nan_to_num((block - mu) / sd)  # FIT-window stats (OOS-safe)
         e = x - (x @ v.T) @ v
-        e[np.isnan(block)] = np.nan
+        e[np.isnan(block)] = 0.0  # missing day -> no residual information
         resid[t0:t0 + refit, cols] = e
     out = pd.DataFrame(resid, index=close.index, columns=close.columns)
-    _PCA_CACHE[key] = out
+    # hold a ref to `close` so its id() can't be recycled onto a new tape
+    _PCA_CACHE[key] = (close, out)
     return out
 
 
@@ -661,7 +669,8 @@ def _pca_residual_reversion(wide, n_factors: int, z_thr: float, hold: int = 10) 
     fixed 10d hold, both legs always eligible."""
     close = wide["close"]
     resid = _pca_residuals(close, n_factors)
-    z = resid.rolling(21).sum() / (resid.rolling(252).std() * np.sqrt(21))
+    z = resid.rolling(21).sum() / (
+        resid.rolling(252, min_periods=126).std() * np.sqrt(21))
     long_leg = (z < -z_thr).astype(float).rolling(hold, min_periods=1).max()
     short_leg = (z > z_thr).astype(float).rolling(hold, min_periods=1).max()
     return (long_leg - short_leg).fillna(0.0)
