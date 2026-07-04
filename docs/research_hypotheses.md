@@ -300,6 +300,16 @@ recomputed across the full EXP-51 family H-40..H-42.
 |----|--------|------|
 | H-42 | `early_run` — close breaks the 20d high AND ret20 ≥ r AND vol10/vol60 ≥ v → fixed hold | r {8%, 15%} × v {1.0 (no volume gate), 1.5} × hold {5, 10} (8) |
 
+**EXP-51 verdicts (2026-07-04, FINAL — BH across H-40..H-42):** 0/3
+survive. H-40 consolidation_breakout p=0.2637 q=0.6503 (best real PF
+1.107, null 1.084±0.043) — **DEAD**. H-41 leader_pullback p=0.4336
+q=0.6503 (real PF 0.988 — below 1 gross) — **DEAD**. H-42 early_run
+p=0.9421 q=0.9421 (real PF 0.979 UNDERPERFORMS the null mean 1.022 —
+fresh-high+volume-surge entries did *worse* than random timing) —
+**DEAD**. The discretionary playbook chapter closes consistent with
+the campaign law: momentum/breakout structure is arbitrated away at
+daily resolution regardless of the base/leader/volume framing.
+
 **EXP-52 registration** (2026-07-04, BEFORE implementation). H-43
 `asymmetric_exit_overlay` — the last untested pillar of the
 discretionary-trader worldview: does "cut losses fast, let winners run"

@@ -1990,3 +1990,32 @@ and net-tradeable 2006-2018 (all 12 grid cells profitable, best Sharpe
 rendering. Full g×h response surface on record in
 data/mcpt/exp50_dev_grid.json (archived with the campaign ensembles).
 
+
+## EXP-51 — the discretionary swing playbook, encoded and screened (2026-07-04)
+
+The user's actual money-making playbook, translated to rules and put
+through the standard gauntlet (1000-name daily universe, 2006-2018,
+pooled PF vs 1000 master-calendar permutations, BH across the family):
+
+| ID | Family | Real PF | Null | p | q | Verdict |
+|---|---|---|---|---|---|---|
+| H-40 | consolidation_breakout (base_len×tight×hold, 8 cfgs) | 1.107 | 1.084±0.043 | 0.2637 | 0.6503 | DEAD |
+| H-41 | leader_pullback (lead×hold, 4 cfgs) | 0.988 | 0.985±0.029 | 0.4336 | 0.6503 | DEAD |
+| H-42 | early_run (r_min×v_min×hold, 8 cfgs) | 0.979 | 1.022±0.030 | 0.9421 | 0.9421 | DEAD |
+
+**0/3 survive.** Notable: early_run's real PF sits BELOW its null mean —
+fresh-20d-high entries confirmed by a volume-regime surge did *worse*
+than information-free timing on the same tape; the volume-footprint
+"money flowing in" confirmation selects into subsequent underperformance
+(consistent with the high-volume-day reversal literature). H-41's
+leaders-resuming trigger never even cleared PF 1.0 gross.
+
+Chapter verdict: every framing of daily momentum/breakout structure —
+squeeze (vol_compression), any-high (breakout_vol), 52wk proximity,
+long bases (H-40), leader resumption (H-41), young runs with volume
+(H-42) — lands between p=0.26 and p=0.94. The playbook's historical
+profitability is not evidence against these nulls; a discretionary
+overlay (which names, when to walk away) is not in the encoding and
+cannot be backtested. What CAN be tested is now tested: the mechanical
+skeleton carries no edge on today's tape. Raw ensembles:
+data/mcpt/exp51_t1_{consolidation_breakout,leader_pullback,early_run}.json.
