@@ -317,6 +317,63 @@ def _tom_last_hour(wide, last_bars: int) -> pd.DataFrame:
     )
 
 
+def _hold_sessions(trigger: pd.DataFrame, h: int) -> pd.DataFrame:
+    """Fixed hold of ~h sessions expressed in hourly bars (7 bars/session)."""
+    return trigger.rolling(7 * h, min_periods=1).max().fillna(0.0)
+
+
+def _hourly_capitulation_swing(wide, s: float, h: int) -> pd.DataFrame:
+    """H-33: intraday panic hour -> enter during the flush, hold h sessions."""
+    r = np.log(wide["close"]).diff()
+    sigma = r.rolling(100).std().shift(1)
+    trigger = (r < -s * sigma).astype(float)
+    return _hold_sessions(trigger, h)
+
+
+def _close_strength_swing(wide, thr: float, h: int) -> pd.DataFrame:
+    """H-34: final-2-bar strength >= thr -> hold h sessions from the close."""
+    close = wide["close"]
+    r = np.log(close).diff()
+    _, from_end = _day_positions(close.index)
+    day = pd.Series(close.index.date, index=close.index)
+    tail_ret = r.where(pd.Series(from_end <= 1, index=close.index), 0.0)
+    tail_ret = tail_ret.groupby(day.values).transform("sum")
+    on_close = pd.Series(from_end == 0, index=close.index)
+    trigger = tail_ret.gt(thr).mul(on_close, axis=0).astype(float)
+    return _hold_sessions(trigger, h)
+
+
+def _gap_hold_swing(wide, g: float, h: int) -> pd.DataFrame:
+    """H-35: overnight gap >= g that HOLDS through the first two hours ->
+    enter at the 2nd bar's close, hold h sessions."""
+    open_, close = wide["open"], wide["close"]
+    pos, _ = _day_positions(close.index)
+    day = pd.Series(close.index.date, index=close.index)
+    first_open = open_.where(pd.Series(pos == 0, index=close.index))
+    first_open = first_open.groupby(day.values).transform("max")
+    prev_close = close.shift(1).where(pd.Series(pos == 0, index=close.index))
+    prev_close = prev_close.groupby(day.values).transform("max")
+    gapped = (first_open / prev_close - 1.0) >= g
+    held_above = close >= first_open  # the gap has not been faded intraday
+    on_bar2 = pd.Series(pos == 1, index=close.index)
+    trigger = (gapped & held_above).mul(on_bar2, axis=0).astype(float)
+    return _hold_sessions(trigger, h)
+
+
+def _first_hour_break_swing(wide, h: int) -> pd.DataFrame:
+    """H-36: first bar closes above the PRIOR session's high -> hold h sessions."""
+    close, high = wide["close"], wide["high"]
+    pos, _ = _day_positions(close.index)
+    day = pd.Series(close.index.date, index=close.index)
+    daily_high = high.groupby(day.values).max()           # index = session date
+    prev_daily_high = daily_high.shift(1)
+    prev_full = pd.DataFrame(prev_daily_high.loc[day.values].to_numpy(),
+                             index=close.index, columns=close.columns)
+    on_first = pd.Series(pos == 0, index=close.index)
+    trigger = close.gt(prev_full).mul(on_first, axis=0).astype(float)
+    return _hold_sessions(trigger, h)
+
+
 def _spike_analog(wide, s: float, w: int, k: int) -> pd.DataFrame:
     """H-27: on a spike day (|1d return| > s x trailing-20d sigma), find the k
     nearest STRICTLY-PRIOR spike-windows (normalized prior-w-day return
@@ -552,6 +609,18 @@ FAMILIES = {
         ({"entry": "prior_close", "exit_start": "13:30"}, _fomc_hourly),
     ],
     "tom_last_hour": [({"last_bars": b}, _tom_last_hour) for b in (1, 2)],
+    # EXP-48 Wave-H2 (hourly-triggered 1-3 day stock swings; --table
+    # ohlcv_hourly --session-aware, registered 40-stock universe).
+    "hourly_capitulation_swing": [
+        ({"s": s, "h": h}, _hourly_capitulation_swing) for s in (3.0, 4.0) for h in (1, 3)
+    ],
+    "close_strength_swing": [
+        ({"thr": t, "h": h}, _close_strength_swing) for t in (0.005, 0.01) for h in (1, 3)
+    ],
+    "gap_hold_swing": [
+        ({"g": g, "h": h}, _gap_hold_swing) for g in (0.01, 0.02) for h in (1, 3)
+    ],
+    "first_hour_break_swing": [({"h": h}, _first_hour_break_swing) for h in (1, 3)],
 }
 
 # Per-family forward-return stream: "cc" = close(t) -> close(t+1) (default);
