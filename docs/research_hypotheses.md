@@ -176,3 +176,15 @@ compute bound), 2006-01-01 → 2018-12-31, pooled PF, 1000 permutations;
 | ID | Family | Grid |
 |----|--------|------|
 | H-27 | `spike_analog` | spike threshold s {2.5, 3.5} × window w {10, 20} × neighbors k {25, 100} (8) |
+
+**EXP-45 addendum** (2026-07-03, registered while the H-27 screen was
+still RUNNING — locked before any 1-day verdict existed). H-28
+`spike_analog_multiday` — identical analog machinery, vote target and
+hold extended to h-day forward returns (the user's 1-3-day scalp
+horizon). Runs after H-27 adjudicates regardless of its outcome (pass →
+horizon map; fail → class exhaustion before accepting the verdict).
+Same 40-name universe/window/permutation count; BH within the family.
+
+| ID | Family | Grid |
+|----|--------|------|
+| H-28 | `spike_analog_multiday` | s {2.5, 3.5} × w {10, 20} × k {25, 100} × horizon h {2, 3} (16) |
