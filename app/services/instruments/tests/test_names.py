@@ -1,15 +1,52 @@
 """Unit tests for the durable company-name resolver.
 
 CH + Polygon access is stubbed so these stay pure unit tests (no live tier).
+
+Architecture under test:
+  - resolve_names = READ path — ClickHouse only, never touches the provider.
+  - warm          = WRITE path — the only Polygon caller; fills CH.
 """
 from __future__ import annotations
 
 import app.services.instruments.names as names
 
 
-def test_resolve_ch_first_then_polygon_on_miss(monkeypatch):
-    """Known symbols come from CH; misses are fetched from Polygon exactly
-    once and written back; every requested symbol gets an entry."""
+# ── read path: resolve_names is CH-only ──────────────────────────────
+
+def test_resolve_names_is_ch_only(monkeypatch):
+    """resolve_names reads ClickHouse and NEVER calls the provider; misses
+    come back with an empty description, and every symbol gets an entry."""
+    monkeypatch.setattr(names, "_ch_get", lambda syms: {
+        "AAPL": {"description": "Apple Inc.", "exchange": "XNAS", "asset_type": "CS"},
+    })
+    # Fail loudly if the read path ever touches the provider.
+    monkeypatch.setattr(names, "_polygon_fetch", lambda s: (_ for _ in ()).throw(
+        AssertionError("read path must not call the provider")))
+
+    out = names.resolve_names(["AAPL", "NVDA", "ZZZZ"])
+
+    assert out["AAPL"]["description"] == "Apple Inc."
+    assert out["NVDA"]["description"] == ""   # not cached -> empty, no fetch
+    assert out["ZZZZ"]["description"] == ""
+    assert set(out) == {"AAPL", "NVDA", "ZZZZ"}
+
+
+def test_resolve_names_dedups_and_uppercases(monkeypatch):
+    monkeypatch.setattr(names, "_ch_get", lambda syms: {})
+    out = names.resolve_names(["aapl", "AAPL", " aapl "])
+    assert list(out) == ["AAPL"]
+
+
+def test_resolve_names_empty_input():
+    assert names.resolve_names([]) == {}
+    assert names.resolve_names(["", "  "]) == {}
+
+
+# ── write path: warm fetches from Polygon + caches ───────────────────
+
+def test_warm_fetches_misses_and_negative_caches(monkeypatch):
+    """warm skips already-cached symbols, fetches the rest from Polygon once,
+    and writes back — including negatives so unknowns aren't re-fetched."""
     monkeypatch.setattr(names, "ensure_table", lambda: None)
     monkeypatch.setattr(names, "_ch_get", lambda syms: {
         "AAPL": {"description": "Apple Inc.", "exchange": "XNAS", "asset_type": "CS"},
@@ -23,33 +60,24 @@ def test_resolve_ch_first_then_polygon_on_miss(monkeypatch):
 
     monkeypatch.setattr(names, "_polygon_fetch", fake_poly)
 
-    out = names.resolve_names(["AAPL", "NVDA", "ZZZZ"])
+    named = names.warm(["AAPL", "NVDA", "ZZZZ"])
 
-    # CH hit not re-fetched; both misses fetched exactly once.
-    assert set(fetched) == {"NVDA", "ZZZZ"}
-    assert out["AAPL"]["description"] == "Apple Inc."
-    assert out["NVDA"]["description"] == "NVDA Co"
-    # Unresolved symbol kept with an empty description (negative-cached).
-    assert out["ZZZZ"]["description"] == ""
-    # Every requested symbol is present.
-    assert set(out) == {"AAPL", "NVDA", "ZZZZ"}
-    # Both misses (including the negative) were written back so they won't
-    # hit Polygon again.
-    assert set(put) == {"NVDA", "ZZZZ"}
+    assert set(fetched) == {"NVDA", "ZZZZ"}      # cached AAPL not re-fetched
+    assert set(put) == {"NVDA", "ZZZZ"}          # both misses written (incl. negative)
+    assert put["ZZZZ"]["description"] == ""      # negative cached
+    assert named == 2                            # AAPL (cached) + NVDA (fetched)
 
 
-def test_resolve_dedups_and_uppercases(monkeypatch):
+def test_warm_refresh_refetches_cached(monkeypatch):
+    """refresh=True re-fetches even already-cached symbols (catches renames)."""
     monkeypatch.setattr(names, "ensure_table", lambda: None)
-    monkeypatch.setattr(names, "_ch_get", lambda syms: {})
-    monkeypatch.setattr(names, "_ch_put", lambda recs: None)
-    calls = []
-    monkeypatch.setattr(names, "_polygon_fetch", lambda s: calls.append(s) or None)
+    monkeypatch.setattr(names, "_ch_get", lambda syms: {
+        "AAPL": {"description": "OLD NAME", "exchange": "", "asset_type": ""},
+    })
+    put = {}
+    monkeypatch.setattr(names, "_ch_put", lambda recs: put.update(recs))
+    monkeypatch.setattr(names, "_polygon_fetch",
+                        lambda s: {"description": "Apple Inc.", "exchange": "XNAS", "asset_type": "CS"})
 
-    out = names.resolve_names(["aapl", "AAPL", " aapl "])
-    assert list(out) == ["AAPL"]
-    assert calls == ["AAPL"]  # fetched once despite three spellings
-
-
-def test_resolve_empty_input(monkeypatch):
-    assert names.resolve_names([]) == {}
-    assert names.resolve_names(["", "  "]) == {}
+    names.warm(["AAPL"], refresh=True)
+    assert put["AAPL"]["description"] == "Apple Inc."  # re-fetched despite being cached

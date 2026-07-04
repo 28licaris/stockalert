@@ -313,6 +313,32 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(_warm_names())
 
+    # Daily refresh of the instrument-name cache (re-fetch from Polygon to
+    # catch renames + fill gaps). The read path stays CH-only; this loop is
+    # the only scheduled provider call. Registered so it shows on the health
+    # page. Best-effort; never blocks startup.
+    try:
+        from app.config import settings as _names_settings
+        from app.services.instruments.names import refresh_names, run_names_refresh_loop
+
+        app.state.names_refresh_task = asyncio.create_task(
+            run_names_refresh_loop(), name="instrument_names_refresh",
+        )
+
+        async def _run_names_refresh_once() -> None:
+            async with audit_run("instrument_names_refresh") as rec:
+                rec.result = await asyncio.to_thread(refresh_names)
+
+        job_registry.register(
+            name="instrument_names_refresh",
+            display_name="Instrument names refresh",
+            schedule=f"daily at {int(_names_settings.instrument_names_refresh_run_hour_utc):02d}:00 UTC",
+            setting_key="INSTRUMENT_NAMES_REFRESH_RUN_HOUR_UTC",
+            run_now=_run_names_refresh_once,
+        )
+    except Exception as e:  # noqa: BLE001 — never break startup
+        logger.warning("instrument_names refresh loop failed to start: %s", e)
+
     await _safe_start("Watchlist service", lambda: watchlist_service.start())
     try:
         status = watchlist_service.status()

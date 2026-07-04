@@ -125,71 +125,123 @@ def _polygon_fetch(symbol: str) -> dict | None:
 
 
 def resolve_names(symbols: Iterable[str]) -> dict[str, dict]:
-    """Resolve company names for `symbols`. CH-first; fills misses from
-    Polygon and caches them (including negatives). Always returns an entry
-    per requested symbol."""
+    """READ path — ClickHouse only. Returns a name entry per requested symbol
+    (empty strings for any not yet cached). This never touches the provider:
+    the hot path must not depend on Polygon being reachable or rate-limited.
+
+    Coverage is maintained out-of-band by ``warm``/``warm_stream_universe``
+    (invoked on startup, on the nightly refresh, and when a symbol is newly
+    added to a watchlist/stream) — see run_names_refresh_loop."""
     syms = list(dict.fromkeys(s.strip().upper() for s in symbols if s and s.strip()))
     if not syms:
         return {}
 
     try:
-        ensure_table()
         known = _ch_get(syms)
     except Exception as exc:  # noqa: BLE001 — CH down: degrade to empty names
         logger.warning("instrument_names CH read failed: %s", exc)
         known = {}
 
-    missing = [s for s in syms if s not in known]
+    return {s: known.get(s, {"description": "", "exchange": "", "asset_type": ""}) for s in syms}
+
+
+def warm(symbols: Iterable[str], *, refresh: bool = False) -> int:
+    """WRITE path — the ONLY place that touches the provider. Fetches company
+    names from Polygon (concurrently, bounded) and writes them to ClickHouse
+    so the CH-only read path serves them instantly.
+
+    Skips symbols already cached unless ``refresh=True`` (nightly re-fetch to
+    catch renames). Negatives are cached so unknown symbols aren't re-fetched.
+    Returns the number of symbols that ended up with a non-empty name.
+    """
+    syms = list(dict.fromkeys(s.strip().upper() for s in symbols if s and s.strip()))
+    if not syms:
+        return 0
+    try:
+        ensure_table()
+        cached = {} if refresh else _ch_get(syms)
+    except Exception as exc:  # noqa: BLE001 — CH down
+        logger.warning("instrument_names warm CH read failed: %s", exc)
+        cached = {}
+
+    to_fetch = [s for s in syms if s not in cached]
     fetched: dict[str, dict] = {}
-    to_fetch = missing[:_MAX_FETCH_PER_CALL]
     if to_fetch:
-        # Concurrent fetch — bounded so we don't burst the API. Turns N
-        # sequential ~300ms round-trips into ~N/concurrency batches.
         with ThreadPoolExecutor(max_workers=_FETCH_CONCURRENCY) as ex:
             recs = list(ex.map(_polygon_fetch, to_fetch))
         for sym, rec in zip(to_fetch, recs):
-            # Cache negatives too (empty description) so we don't re-hit Polygon.
             fetched[sym] = rec or {"description": "", "exchange": "", "asset_type": ""}
-    if len(missing) > _MAX_FETCH_PER_CALL:
-        logger.info(
-            "resolve_names: capped Polygon fetches at %d (%d symbols uncached this round)",
-            _MAX_FETCH_PER_CALL, len(missing) - _MAX_FETCH_PER_CALL,
-        )
+        try:
+            _ch_put({s: {**r, "source": "polygon"} for s, r in fetched.items()})
+        except Exception as exc:  # noqa: BLE001 — cache write best-effort
+            logger.warning("instrument_names warm CH write failed: %s", exc)
 
-    try:
-        _ch_put({s: {**r, "source": "polygon"} for s, r in fetched.items()})
-    except Exception as exc:  # noqa: BLE001 — cache write is best-effort
-        logger.warning("instrument_names CH write failed: %s", exc)
-
-    out = {**known, **fetched}
-    for s in syms:  # guarantee an entry for every requested symbol
-        out.setdefault(s, {"description": "", "exchange": "", "asset_type": ""})
-    return out
+    named = sum(1 for v in {**cached, **fetched}.values() if v.get("description"))
+    logger.info(
+        "instrument_names warm: %d symbols (%d fetched, %d already cached) — %d named",
+        len(syms), len(to_fetch), len(syms) - len(to_fetch), named,
+    )
+    return named
 
 
-def warm(symbols: Iterable[str]) -> int:
-    """Pre-resolve + cache names for `symbols` so later lookups are instant CH
-    hits. Reuses resolve_names (concurrent, CH-first). Returns the count that
-    ended up with a non-empty name. Chunked to the per-call fetch cap."""
-    syms = list(dict.fromkeys(s.strip().upper() for s in symbols if s and s.strip()))
-    resolved = 0
-    for i in range(0, len(syms), _MAX_FETCH_PER_CALL):
-        out = resolve_names(syms[i : i + _MAX_FETCH_PER_CALL])
-        resolved += sum(1 for v in out.values() if v.get("description"))
-    logger.info("instrument_names warm: %d/%d symbols have names", resolved, len(syms))
-    return resolved
-
-
-def warm_stream_universe() -> int:
-    """Warm names for the live streaming universe (the symbols shown on the
-    Stream page). Safe to call on startup / nightly."""
+def _stream_universe_symbols() -> list[str]:
     try:
         from app.db.client import get_client
 
-        syms = [r[0] for r in get_client().query(
+        return [r[0] for r in get_client().query(
             "SELECT DISTINCT symbol FROM stream_universe WHERE symbol NOT LIKE '/%'"
         ).result_rows]
     except Exception as exc:  # noqa: BLE001 — best effort
-        logger.warning("warm_stream_universe: could not read stream_universe: %s", exc)
-        return 0
-    return warm(syms)
+        logger.warning("instrument_names: could not read stream_universe: %s", exc)
+        return []
+
+
+def warm_stream_universe() -> int:
+    """Fill any MISSING names for the live streaming universe (fast — skips
+    already-cached symbols). Safe to call on startup / on universe change."""
+    return warm(_stream_universe_symbols())
+
+
+def refresh_names() -> dict:
+    """Nightly job body — RE-FETCH names for the streaming universe from
+    Polygon (catches renames + fills gaps). The only scheduled provider call.
+    Returns a small summary for the job audit."""
+    syms = _stream_universe_symbols()
+    named = warm(syms, refresh=True)
+    return {"symbols": len(syms), "named": named}
+
+
+def _seconds_until_next_run(hour_utc: int, *, now: datetime | None = None) -> float:
+    from datetime import timedelta
+
+    now = now or datetime.now(timezone.utc)
+    h = max(0, min(23, int(hour_utc)))
+    target = now.replace(hour=h, minute=0, second=0, microsecond=0)
+    if target <= now:
+        target = target + timedelta(days=1)
+    return max(1.0, (target - now).total_seconds())
+
+
+async def run_names_refresh_loop() -> None:
+    """Daily loop: sleep until the configured hour, then refresh_names().
+    Keeps the CH name cache current without any provider calls on the read
+    path. Registered + audited in main_api."""
+    import asyncio
+
+    from app.config import settings
+
+    hour = int(getattr(settings, "instrument_names_refresh_run_hour_utc", 8))
+    logger.info("instrument_names refresh: loop armed (run hour %02d:00 UTC)", hour)
+    while True:
+        try:
+            await asyncio.sleep(_seconds_until_next_run(hour))
+            from app.services.jobs.service import audit_run
+
+            async with audit_run("instrument_names_refresh") as rec:
+                rec.result = await asyncio.to_thread(refresh_names)
+        except asyncio.CancelledError:
+            logger.info("instrument_names refresh: loop cancelled")
+            raise
+        except Exception as e:  # noqa: BLE001 — keep the loop alive
+            logger.exception("instrument_names refresh: loop error: %s", e)
+            await asyncio.sleep(300)

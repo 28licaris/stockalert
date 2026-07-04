@@ -147,6 +147,13 @@ class Settings(BaseModel):
     futures_nightly_run_hour_utc: int = int(os.getenv("FUTURES_NIGHTLY_RUN_HOUR_UTC", "22"))
     futures_nightly_symbols: str = os.getenv("FUTURES_NIGHTLY_SYMBOLS", "active")
 
+    # Daily re-fetch of instrument company names from Polygon reference into the
+    # ClickHouse instrument_names cache (the /instruments/lookup read path is
+    # CH-only and never calls the provider).
+    instrument_names_refresh_run_hour_utc: int = int(
+        os.getenv("INSTRUMENT_NAMES_REFRESH_RUN_HOUR_UTC", "8")
+    )
+
     # Schwab REST option-chain snapshots → options.* Iceberg tables.
     # OFF by default to avoid surprise provider/API load. When enabled,
     # runs during FastAPI startup on a fixed interval and can also be
