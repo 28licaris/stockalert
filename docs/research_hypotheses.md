@@ -158,3 +158,21 @@ primary.
 |----|--------|---------|
 | H-25 | `configs/fomc_t2_spy_k1.yaml` — pre_weekdays 1 (the validated k=1 window: hold the single day before the announcement) | FAIL p = 0.248 (Sharpe 0.19 — the next-open fill shifts the tight window off the drift) |
 | H-26 | `configs/fomc_t2_spy_k2.yaml` — pre_weekdays 2 (wider window hedging the next-open timing shift) | **PASS p = 0.0062, q = 0.0124 — 0/160 shuffled tapes matched.** +27.5%/Sharpe 0.79/PF 3.17/DD −3.5% OOS. **FIRST FULL-GAUNTLET SURVIVOR → eligible for paper trading.** |
+
+**EXP-45 registration** (2026-07-03, BEFORE implementation; single-family
+BH). H-27 `spike_analog` — nonparametric analog matching: on a spike day
+(|1-day return| > s × trailing-20d σ, observable at the close), find the
+k nearest historical spike-windows (normalized prior-w-day return
+vectors, pooled cross-symbol, STRICTLY-PRIOR history only — expanding,
+no look-ahead) and take the analogs' mean next-day return as the vote;
+long next bar iff the vote is positive (long-only platform). This is the
+nonparametric superset of named bar patterns — a pass finds what named
+patterns missed; a fail closes "pattern knowledge" as a class. Screen:
+**40-name options/GEX universe** (liquid megacaps+ETFs; k-NN cost is
+quadratic in trigger count, so the registered universe is the deliberate
+compute bound), 2006-01-01 → 2018-12-31, pooled PF, 1000 permutations;
+2019-2026 untouched.
+
+| ID | Family | Grid |
+|----|--------|------|
+| H-27 | `spike_analog` | spike threshold s {2.5, 3.5} × window w {10, 20} × neighbors k {25, 100} (8) |
