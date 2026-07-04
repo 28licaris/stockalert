@@ -248,6 +248,53 @@ def _survivor_conditioning(wide, gate: str) -> pd.DataFrame:
     return base.mul(g, axis=0)
 
 
+def _spike_analog(wide, s: float, w: int, k: int) -> pd.DataFrame:
+    """H-27: on a spike day (|1d return| > s x trailing-20d sigma), find the k
+    nearest STRICTLY-PRIOR spike-windows (normalized prior-w-day return
+    vectors, pooled cross-symbol, expanding history — no look-ahead) and go
+    long next bar iff the analogs' mean next-day return was positive.
+    The nonparametric superset of named bar patterns."""
+    close = wide["close"]
+    rmat = np.log(close).to_numpy()
+    rmat = np.vstack([np.full((1, rmat.shape[1]), np.nan), np.diff(rmat, axis=0)])
+    r = pd.DataFrame(rmat, index=close.index, columns=close.columns)
+    sigma = r.rolling(20).std().shift(1)
+    z = (r / sigma).to_numpy()
+    T, N = rmat.shape
+    sig = np.zeros((T, N))
+
+    # Collect triggers in time order with their normalized windows + outcomes.
+    trig_by_day: dict[int, list[tuple[int, np.ndarray]]] = {}
+    for t in range(w + 21, T):
+        for n in np.flatnonzero(np.abs(z[t]) > s):
+            win = rmat[t - w:t, n]
+            if np.isnan(win).any():
+                continue
+            sd = win.std()
+            if sd <= 0:
+                continue
+            trig_by_day.setdefault(t, []).append((n, (win - win.mean()) / sd))
+
+    bank_w: list[np.ndarray] = []   # past windows (normalized)
+    bank_f: list[float] = []        # each past window's NEXT-day return
+    for t in sorted(trig_by_day):
+        if len(bank_w) >= k:
+            M = np.asarray(bank_w)
+            F = np.asarray(bank_f)
+            for n, q in trig_by_day[t]:
+                d = ((M - q) ** 2).sum(axis=1)
+                vote = F[np.argpartition(d, k - 1)[:k]].mean()
+                if vote > 0:
+                    sig[t, n] = 1.0
+        # Append this day's windows AFTER matching (strictly-prior history);
+        # their outcome r[t+1] is only ever read by LATER days, so no look-ahead.
+        for n, q in trig_by_day[t]:
+            if t + 1 < T and not np.isnan(rmat[t + 1, n]):
+                bank_w.append(q)
+                bank_f.append(rmat[t + 1, n])
+    return pd.DataFrame(sig, index=close.index, columns=close.columns)
+
+
 def _fomc_drift(wide, k: int) -> pd.DataFrame:
     """Long the k trading days ending at the FOMC announcement close
     (Lucca-Moench pre-announcement drift). Scheduled meetings only, from
@@ -365,6 +412,11 @@ FAMILIES = {
     ],
     # H-15 (Wave-2, unlocked 2026-07-03 by the Fed calendar backfill).
     "fomc_drift": [({"k": k}, _fomc_drift) for k in (1, 2, 3)],
+    # EXP-45 H-27: nonparametric analog matching on spike days.
+    "spike_analog": [
+        ({"s": s, "w": w, "k": k}, _spike_analog)
+        for s in (2.5, 3.5) for w in (10, 20) for k in (25, 100)
+    ],
 }
 
 # Per-family forward-return stream: "cc" = close(t) -> close(t+1) (default);
