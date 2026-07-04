@@ -149,7 +149,8 @@ def main(argv=None) -> int:
     if a.bars:
         from scripts.research_bars import load_bar_lists
         full = {cfg.interval: load_bar_lists(
-            a.bars, symbols=cfg.symbols, start=cfg.start, end=cfg.end)}
+            a.bars, symbols=cfg.symbols, start=cfg.start, end=cfg.end,
+            align=a.session_aware)}
     else:
         print(f"loading {len(cfg.symbols)} symbols from ClickHouse (once)…", flush=True)
         full = bt._fetch_bars_multi(cfg, [cfg.interval])

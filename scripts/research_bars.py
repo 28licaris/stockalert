@@ -102,8 +102,11 @@ def _filter(df: pd.DataFrame, symbols, start, end) -> pd.DataFrame:
 
 def load_frames(
     source: str, symbols=None, start=None, end=None, min_bars: int = 30,
+    align: bool = False,
 ) -> dict[str, pd.DataFrame]:
-    """Snapshot -> Tier-1 shape: dict[symbol -> OHLCV DataFrame indexed by timestamp]."""
+    """Snapshot -> Tier-1 shape: dict[symbol -> OHLCV DataFrame indexed by timestamp].
+    align=True inner-joins all calendars (session-aware nulls require full
+    alignment) and reports exactly what that trims."""
     df = _filter(read_snapshot(source), symbols, start, end)
     frames: dict[str, pd.DataFrame] = {}
     dropped = 0
@@ -120,15 +123,24 @@ def load_frames(
           f"{sum(len(f) for f in frames.values()):,} bars", flush=True)
     if not frames:
         raise SystemExit(f"no usable symbols in {source} after filtering")
+    if align:
+        common = None
+        for f in frames.values():
+            common = f.index if common is None else common.intersection(f.index)
+        before = {s: len(f) for s, f in frames.items()}
+        frames = {s: f.loc[common] for s, f in frames.items()}
+        trimmed = {s: before[s] - len(common) for s in frames if before[s] != len(common)}
+        print(f"aligned to {len(common):,} common bars"
+              + (f" (trimmed: {trimmed})" if trimmed else " (no trims)"), flush=True)
     return frames
 
 
 def load_bar_lists(
-    source: str, symbols=None, start=None, end=None,
+    source: str, symbols=None, start=None, end=None, align: bool = False,
 ) -> dict[str, list[PermutedBar]]:
     """Snapshot -> Tier-2 shape: dict[symbol -> list[Bar]] (PermutedBar satisfies the
     sim Bar Protocol; here it just carries real values)."""
-    frames = load_frames(source, symbols, start, end, min_bars=1)
+    frames = load_frames(source, symbols, start, end, min_bars=1, align=align)
     out: dict[str, list[PermutedBar]] = {}
     for sym, df in frames.items():
         out[sym] = [
