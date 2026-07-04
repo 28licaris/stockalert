@@ -114,6 +114,8 @@ def run_paper(cfg: PaperRunConfig, now: Optional[datetime] = None) -> PaperState
         momentum_lookback=cfg.momentum_lookback,
         daily_table=cfg.daily_table, ranked_admission=cfg.ranked_admission,
         dd_brake_limit=cfg.dd_brake_limit, dd_brake_floor=cfg.dd_brake_floor,
+        fees_model=cfg.fees_model, fees_params=cfg.fees_params,
+        slippage_model=cfg.slippage_model, slippage_params=cfg.slippage_params,
     )
     strat = build_strategy(cfg.strategy, cfg.strategy_params, interval=cfg.interval)
     result = Backtester().run_portfolio(strat, bt_cfg)

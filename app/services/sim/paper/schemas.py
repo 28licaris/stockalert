@@ -32,6 +32,13 @@ class PaperRunConfig(BaseModel):
     ranked_admission: bool = False
     dd_brake_limit: Optional[float] = None  # drawdown governor (see BacktestConfig)
     dd_brake_floor: float = 0.0
+    # Cost model — defaults match the engine defaults, so paper runs registered
+    # before these fields existed keep byte-identical behavior. New runs should
+    # lock the SAME cost model their Tier-2 validation used (EXP-44 doctrine).
+    fees_model: str = "per_share"
+    fees_params: dict[str, Any] = {}
+    slippage_model: str = "next_bar_open"
+    slippage_params: dict[str, Any] = {}
     history_start: datetime
     go_live: datetime
 

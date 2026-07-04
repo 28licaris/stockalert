@@ -1,0 +1,10 @@
+category: calendar
+config_file: configs/paper_fomc_drift.yaml
+description: "Holds SPY for the two trading days before each scheduled FOMC announcement, exiting at the\
+  \ announcement day's open \u2014 the pre-FOMC drift. In the market ~16 days a year. First strategy to\
+  \ pass the platform's full statistical gauntlet (EXP-44)."
+name: fomc_drift_spy
+tagline: Long the two days before every Fed announcement
+title: FOMC Drift (SPY)
+version: 1
+visibility: private
