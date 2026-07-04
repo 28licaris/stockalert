@@ -69,3 +69,14 @@ def test_min_bars_drop(tmp_path):
     assert "TINY" not in frames
     # numeric coercion survives
     assert isinstance(frames["AAA"]["close"].to_numpy()[0], np.float64)
+
+
+def test_fomc_calendar_module_matches_csv():
+    """The built-in Fed calendar (strategy default) must equal the collected CSV."""
+    import pandas as pd
+
+    from app.services.sim.strategies.fomc_calendar import FOMC_ANNOUNCEMENT_DATES
+
+    csv = pd.read_csv("scripts/data/fomc_scheduled_meetings.csv",
+                      comment="#")["announcement_date"].tolist()
+    assert FOMC_ANNOUNCEMENT_DATES == csv

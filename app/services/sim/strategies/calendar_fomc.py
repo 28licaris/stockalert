@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from app.services.sim.context import Context
 from app.services.sim.schemas import Action, hold
+from app.services.sim.strategies.fomc_calendar import FOMC_ANNOUNCEMENT_DATES
 from app.services.sim.strategy import BaseStrategy
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,9 @@ def _weekdays_between(a: date, b: date) -> int:
 
 class CalendarFomcParams(BaseModel):
     announcement_dates: list[str] = Field(
-        description="ISO dates of scheduled FOMC announcements (ex-ante public).")
+        default_factory=lambda: list(FOMC_ANNOUNCEMENT_DATES),
+        description=("ISO dates of scheduled FOMC announcements (ex-ante public). "
+                     "Defaults to the built-in Fed calendar 2006-2026."))
     pre_weekdays: int = Field(
         1, ge=1, le=5,
         description="Enter so the fill lands this many weekdays before the announcement.")
@@ -59,9 +62,7 @@ class CalendarFomcStrategy(BaseStrategy):
         *,
         interval: str = "1d",
     ) -> None:
-        if params is None:
-            raise ValueError("calendar_fomc requires params (announcement_dates)")
-        self.params = params
+        self.params = params or CalendarFomcParams()
         self.interval = interval
         self._dates = sorted(date.fromisoformat(d) for d in params.announcement_dates)
 
