@@ -140,3 +140,21 @@ primary metric Sharpe.
 |----|--------|---------|
 | H-23 | `configs/tom_t2_spy.yaml` — SPY only, 95% of cash (how TOM is traded in practice: one liquid instrument, minimal friction, unbounded capacity) | **FAIL** p = 0.329 (Sharpe 0.53 vs null 0.39±0.28) |
 | H-24 | `configs/tom_t2_sectors.yaml` — equal-weight across the 11 SPDR sector ETFs (9% slots; closest liquid rendering of the pooled-universe claim without 800-name turnover) | **FAIL** p = 0.149, q = 0.298 (Sharpe 0.58, +32.9%, DD −10.8% — directionally positive, unpromotable at n≈90 events). TOM PARKED. |
+
+**EXP-44 FOMC Tier-2 registrations** (2026-07-03, BEFORE implementation;
+BH across H-25/H-26). New `calendar_fomc` engine strategy: announcement
+dates passed via config (ex-ante public); entry decision when the count
+of weekdays strictly between the bar and the announcement equals
+`pre_weekdays` (fill next open ≈ that many trading days before the
+announcement; holiday slippage of one day accepted as rendering noise);
+exit decision at the close before the announcement day (fill at the
+announcement day's open — the position holds the pre-announcement
+session(s), exiting before the 2pm decision itself). SPY only, 95% of
+cash, zero commission + 5 bps/side, untouched **2019-01-01 →
+2026-06-30** (60 scheduled announcements), 160-perm nulls, Sharpe
+primary.
+
+| ID | Config | Verdict |
+|----|--------|---------|
+| H-25 | `configs/fomc_t2_spy_k1.yaml` — pre_weekdays 1 (the validated k=1 window: hold the single day before the announcement) | — |
+| H-26 | `configs/fomc_t2_spy_k2.yaml` — pre_weekdays 2 (wider window hedging the next-open timing shift) | — |
