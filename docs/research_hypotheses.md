@@ -214,4 +214,6 @@ decision). 95% of cash, zero commission + 5bps/side, hourly interval,
 untouched **2019-01-01 → 2026-06-12** (hourly lake end), 160-perm
 SESSION-AWARE null, Sharpe primary. A pass registers a SECOND paper run
 (`fomc_drift_hourly_spy`) beside the daily one — both live from the
-2026-07-29 meeting.
+2026-07-29 meeting. **VERDICT: corrected screen PF 1.6859 p=0.0020;
+Tier-2 p = 0.0186 (2/160) — PASS. Enrolled 2026-07-04.** (Initial
+run VOID — ET/UTC bug, see EXP-46 CORRECTION.)

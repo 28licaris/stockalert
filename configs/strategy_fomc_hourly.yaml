@@ -1,0 +1,11 @@
+name: fomc_drift_hourly_spy
+title: FOMC Drift Hourly (SPY)
+tagline: Prior close through the announcement morning, out before the Fed speaks
+description: Holds SPY from the prior day's close through the FOMC announcement
+  morning, exiting at 1:30pm ET — before the 2pm decision. In the market ~22 hours
+  per meeting, 8 meetings a year. Second full-gauntlet survivor (EXP-47); runs
+  beside the daily rendering as a forward-record head-to-head.
+category: calendar
+version: 1
+visibility: private
+config_file: configs/paper_fomc_hourly.yaml

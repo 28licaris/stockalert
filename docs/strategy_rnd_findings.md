@@ -1895,3 +1895,33 @@ Fixes (all ET-clock now, 368 tests pass): screen family, kernel pools,
 strategy, test fixtures. The REGISTERED claim (hold through 13:30) is
 being re-screened corrected; EXP-47 Tier-2 re-runs after it.
 
+
+---
+
+## EXP-47 · 2026-07-04 · SECOND full-gauntlet survivor: the hourly FOMC rendering (Tier-2 p = 0.0186)
+
+After the ET/UTC correction (two layers: UTC wall-clock strings, then
+the naive-means-UTC ClickHouse convention — both now handled in the
+screen family, kernel pools, strategy, and paper status; the giveaway
+each time was output smell, not tests: nan PF + buy-and-hold return,
+then a bugged result reproducing to 4dp):
+
+**Corrected screen** (registered claim, prior_close → exit 13:30):
+PF 1.6859, p = 0.0020 (1/1000) — stands. The bug's accidental
+measurement (overnight + first hour only, PF 2.78) shows WHERE the
+drift concentrates: the overnight gap + opening hour are the densest
+slice; the late morning adds absolute P&L at lower per-hour intensity.
+
+**Tier-2 (calendar_fomc_hourly, SPY, 2019-2026-06, costs, 160-perm
+session-aware null): p = 0.0186 — PASS** (2/160). Real: +15.7%,
+Sharpe 0.68, PF 2.52, max DD −3.4%, in-market ~22h/meeting.
+
+**Honest comparison:** the hourly rendering does NOT dominate the daily
+one OOS (daily H-26: +27.5%, Sharpe 0.79 — it holds ~2 days and caught
+more absolute drift in this window). Both independently pass everything;
+which harvests the drift better forward is now an EMPIRICAL question —
+**both run as paper strategies side-by-side**: `fomc_drift_spy` (daily)
+and `fomc_drift_hourly_spy` (hourly, go-live 2026-07-04, first trade
+2026-07-28 15:30 ET → 2026-07-29 13:30 ET). The head-to-head forward
+record is the arbiter.
+

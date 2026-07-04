@@ -1,0 +1,17 @@
+# LOCKED paper config — EXP-47 survivor (H-32, hourly FOMC rendering).
+# Cost model matches the Tier-2 validation (zero commission + 5bps/side).
+# Changing any field invalidates the forward record; start a new run (new name).
+name: fomc_drift_hourly_spy
+strategy: calendar_fomc_hourly
+strategy_params: {}
+symbols: [SPY]
+interval: 1h
+benchmark: SPY
+starting_cash: 100000.0
+max_concurrent_positions: 1
+history_window: 30
+fees_model: zero
+slippage_model: percent
+slippage_params: {pct: 0.0005}
+history_start: '2019-01-01T00:00:00Z'
+go_live: '2026-07-04T00:00:00Z'

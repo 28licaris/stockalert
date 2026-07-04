@@ -154,7 +154,12 @@ def build_status(
     if start_date.tzinfo is None:  # date-only query params arrive naive; curve ts are tz-aware
         start_date = start_date.replace(tzinfo=timezone.utc)
     starting_capital = capital if capital is not None else cfg.starting_cash
-    curve = state.equity_curve
+    # Curve timestamps may be NAIVE-UTC (ClickHouse convention; e.g. the 1h
+    # resample path) — normalize so comparisons never mix naive and aware.
+    curve = [
+        (t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t, e)
+        for t, e in state.equity_curve
+    ]
 
     # Baseline equity at start_date (last point at/before it; else first point).
     baseline = None
@@ -220,7 +225,7 @@ def build_status(
     fwd_closed = [t for t in fwd_trades if t.get("is_closing")]
     wins = [t for t in fwd_closed if t.get("realized_pnl", 0.0) > 0]
     win_rate = (len(wins) / len(fwd_closed)) if fwd_closed else None
-    days_live = max(0, ((state.computed_through or start_date) - start_date).days)
+    days_live = max(0, (_ts(state.computed_through or start_date) - start_date).days)
 
     # "Today" = the latest computed bar date — the alertable activity for this run.
     through = state.computed_through
@@ -325,4 +330,7 @@ def append_alerts(status: PaperStatus) -> int:
 
 
 def _ts(v) -> datetime:
-    return v if isinstance(v, datetime) else datetime.fromisoformat(str(v))
+    dt = v if isinstance(v, datetime) else datetime.fromisoformat(str(v))
+    # Naive timestamps are UTC by platform convention (ClickHouse) — normalize
+    # so downstream comparisons never mix naive and aware.
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
