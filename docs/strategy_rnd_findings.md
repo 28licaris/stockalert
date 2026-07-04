@@ -2019,3 +2019,23 @@ overlay (which names, when to walk away) is not in the encoding and
 cannot be backtested. What CAN be tested is now tested: the mechanical
 skeleton carries no edge on today's tape. Raw ensembles:
 data/mcpt/exp51_t1_{consolidation_breakout,leader_pullback,early_run}.json.
+
+## EXP-52 — is "cut losses, let winners run" an edge by itself? (2026-07-04)
+
+Motivated by the user's challenge ("are we properly adjusting position
+sizing and entry/exit?"). Design: information-free cyclic entries
+(every cycle-th bar when flat) + pure trailing-stop exits (close <
+running-max × (1−trail), no target) — any excess PF over the
+permutation null (which preserves fat tails and drift, destroys serial
+structure) can come ONLY from exit convexity harvesting real trend
+persistence. 1000-name universe, 2006-2018, 1000 perms.
+
+**H-43 FINAL: p=0.1109 — FAIL.** Real pooled PF 1.0416 vs null
+1.0293±0.0096 (best: cycle=10, trail=10%). The +1.3σ excess is the
+strongest non-calendar reading of the campaign — trailing stops DO
+harvest a little genuine serial structure — but it is not promotable
+evidence. Verdict for the methodology question: exits/sizing are
+multipliers on edge, not sources of it; a dead entry signal cannot be
+rescued by exit engineering, and Tier-2 designs should spend their
+complexity budget on WHEN to be in the market, not how to leave it.
+Ensemble: data/mcpt/exp52_t1_asym_exit.json.

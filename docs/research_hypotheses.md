@@ -328,6 +328,16 @@ nulls as standard (1000-name daily, 2006-2018, 1000 perms).
 |----|--------|------|
 | H-43 | `asymmetric_exit_overlay` | entry cycle {10, 21 bars} × trail {5%, 10%} (4) |
 
+**EXP-52 verdict (2026-07-04, FINAL):** H-43 **p=0.1109 — FAIL** (real
+pooled PF 1.0416 vs null 1.0293±0.0096; best cfg cycle=10/trail=10%).
+The real tape sits +1.3σ above its null — the strongest non-calendar
+reading of the campaign, consistent with trailing stops harvesting a
+LITTLE genuine trend persistence — but it does not clear the gate.
+Answer to the motivating question: exit asymmetry ("cut losses, let
+winners run") is NOT an edge by itself; sizing/exit machinery remains a
+multiplier, and Tier-2 failures cannot be rescued by exit redesign
+alone.
+
 **EXP-53 registration** (2026-07-04, BEFORE implementation and BEFORE
 any data contact beyond feature construction). The scheduled-flows +
 new-trade-structure wave. Motivation: the campaign law — both survivors
