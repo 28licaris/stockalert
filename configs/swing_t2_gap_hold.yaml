@@ -1,0 +1,14 @@
+end: '2026-06-12T23:59:59Z'
+fees_model: zero
+history_window: 30
+interval: 1h
+max_concurrent_positions: 8
+slippage_model: percent
+slippage_params: {pct: 0.0005}
+start: '2019-01-01T00:00:00Z'
+starting_cash: 100000
+strategy: hourly_swing
+strategy_params: {gap_min: 0.01, hold_bars: 7, position_size_pct: 0.12, trigger: gap_hold}
+symbols: [AAPL, GOOG, AMZN, BAC, MSFT, C, XOM, JPM, GE, INTC, GS, CSCO, WFC, NFLX, PFE, T, CVX, BIDU,
+  IBM, QCOM, JNJ, WMT, ORCL, PG, NVDA, SLB, FCX, GILD, COP, MRK, HD, CMCSA, CAT, F, BA, MU, DIS, KO, AIG,
+  MCD]
