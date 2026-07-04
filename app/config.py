@@ -331,6 +331,8 @@ class Settings(BaseModel):
     # Empty by default so existing developer-cockpit deployments do not
     # accidentally connect to a relational database before auth is enabled.
     identity_database_url: str = os.getenv("IDENTITY_DATABASE_URL", "")
+    # Pretend-position size stamped when a symbol joins a user watchlist.
+    watchlist_default_qty: float = float(os.getenv("WATCHLIST_DEFAULT_QTY", "100"))
     auth_enabled: bool = os.getenv("AUTH_ENABLED", "false").lower() == "true"
     # Operator/admin allowlist: comma-separated emails that are granted the
     # `operator.access` permission (system health, ClickHouse console, job

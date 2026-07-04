@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hmac
+import uuid
 from datetime import timedelta
 from functools import lru_cache
 
@@ -263,3 +264,50 @@ def clear_auth_dependency_caches() -> None:
     get_provider_session_cipher.cache_clear()
     get_mfa_service.cache_clear()
     get_billing_service.cache_clear()
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Dev-fallback principal (per-user features in auth-less dev)
+# ─────────────────────────────────────────────────────────────────────
+
+_DEV_NAMESPACE = uuid.UUID("00000000-0000-0000-0000-000000000000")
+DEV_USER_EMAIL = "dev@stockalert.local"
+DEV_USER_ID = uuid.uuid5(_DEV_NAMESPACE, "dev-user")
+
+
+def get_principal_or_dev(
+    principal: Principal | None = Depends(get_optional_principal),
+) -> Principal:
+    """Principal for per-user features (e.g. watchlists).
+
+    AUTH_ENABLED=true  -> behaves exactly like get_principal (401 without a
+                          valid session; the dev fallback is unreachable).
+    AUTH_ENABLED=false -> a fixed local dev principal, so per-user features
+                          work in single-user dev without a login flow. The
+                          identity DB must still be configured (the data
+                          lives there either way).
+    """
+    from app.config import settings
+
+    if settings.auth_enabled:
+        if principal is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required.",
+                headers={"WWW-Authenticate": "Session", "X-Error-Code": "unauthorized"},
+            )
+        return principal
+    if not settings.identity_database_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Identity database is not configured (set IDENTITY_DATABASE_URL).",
+            headers={"X-Error-Code": "identity_not_configured"},
+        )
+    return Principal(
+        user_id=DEV_USER_ID,
+        tenant_id=uuid.uuid5(_DEV_NAMESPACE, "dev-tenant"),
+        session_id=uuid.uuid5(_DEV_NAMESPACE, "dev-session"),
+        roles=frozenset(),
+        permissions=frozenset(),
+        entitlements=frozenset(),
+    )
