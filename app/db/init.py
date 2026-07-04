@@ -483,6 +483,27 @@ def init_schema() -> None:
         """
     )
 
+    # Instrument reference names — durable symbol→company-name cache, filled
+    # lazily from Polygon reference (see app/services/instruments/names.py).
+    # Customer surfaces (watchlists, stream rows) read this so tickers show a
+    # human-readable name without depending on the live provider.
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS instrument_names (
+            symbol       LowCardinality(String),
+            name         String DEFAULT '',
+            exchange     String DEFAULT '',
+            asset_type   LowCardinality(String) DEFAULT '',
+            source       LowCardinality(String) DEFAULT '',
+            updated_at   DateTime64(3, 'UTC'),
+            row_version  UInt64
+        )
+        ENGINE = ReplacingMergeTree(row_version)
+        ORDER BY symbol
+        SETTINGS index_granularity = 8192
+        """
+    )
+
     # Backtest / agent run registry — one row per completed run.
     # Reproducibility-enabling fields: snapshot_id pins the Iceberg
     # data version; git_sha pins the code; strategy_params + config

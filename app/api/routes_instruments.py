@@ -194,67 +194,22 @@ async def lookup_instruments(
     if len(raw) > 500:
         raise HTTPException(400, "too many symbols (max 500 per call)")
 
-    provider = stream_service.get_provider()
+    # Durable ClickHouse names (filled lazily from Polygon reference) are the
+    # source of truth — the live provider doesn't reliably resolve company
+    # descriptions in every deployment. resolve_names always returns an entry
+    # per symbol (empty strings if still unresolved) and caches results,
+    # including negatives, so a symbol hits Polygon at most once.
+    from app.services.instruments.names import resolve_names
 
-    # Pass 1: collect cache hits; compile the list of symbols that still
-    # need an upstream call.
-    cached_count = 0
-    fresh: dict[str, dict] = {}  # symbol -> normalized instrument dict
-    needed: list[str] = []
-    for sym in raw:
-        c = _cache_get(_lookup_cache_key(sym))
-        if c is not None:
-            hit = next((r for r in c if (r.get("symbol") or "").upper() == sym), None)
-            if hit is not None:
-                fresh[sym] = hit
-                cached_count += 1
-                continue
-            # Cached miss (we asked Schwab once, it didn't know the symbol).
-            # Treat as cached so we don't re-hammer Schwab.
-            fresh[sym] = _missing_match(sym)
-            cached_count += 1
-            continue
-        needed.append(sym)
-
-    # Pass 2: ONE batch Schwab call for everything not in cache.
-    if needed and provider is not None:
-        try:
-            data = await provider.get_instruments(needed, projection="symbol-search")
-            normalize = getattr(provider, "_normalize_instrument", None)
-            for it in (data or {}).get("instruments", []) or []:
-                norm = normalize(it) if normalize else {
-                    "symbol": (it.get("symbol") or "").upper(),
-                    "description": it.get("description") or "",
-                    "exchange": it.get("exchange") or "",
-                    "asset_type": it.get("assetType") or it.get("type") or "",
-                }
-                sym = norm["symbol"]
-                if sym:
-                    fresh[sym] = norm
-                    # Cache per symbol so future single-symbol lookups
-                    # (e.g. autocomplete pick) hit the warm path.
-                    _cache_put(_lookup_cache_key(sym), [norm])
-            # Symbols Schwab didn't return -> cache the miss so we don't
-            # re-call upstream for unknown tickers.
-            for sym in needed:
-                if sym not in fresh:
-                    fresh[sym] = _missing_match(sym)
-                    _cache_put(_lookup_cache_key(sym), [])
-        except Exception as e:  # noqa: BLE001 — boundary
-            logger.warning(
-                "lookup_instruments batch (%d syms) provider error: %s",
-                len(needed), e,
-            )
-            for sym in needed:
-                fresh.setdefault(sym, _missing_match(sym))
-    else:
-        # Provider not ready — return placeholders for the needed set
-        # without caching (so a future call after warm-up hits upstream).
-        for sym in needed:
-            fresh.setdefault(sym, _missing_match(sym))
-
-    # Pass 3: emit results in the order the caller asked for.
+    names = await asyncio.to_thread(resolve_names, raw)
     results: list[InstrumentMatch] = [
-        InstrumentMatch(**fresh[sym]) for sym in raw
+        InstrumentMatch(
+            symbol=sym,
+            description=names[sym]["description"],
+            exchange=names[sym]["exchange"],
+            asset_type=names[sym]["asset_type"],
+        )
+        for sym in raw
     ]
+    cached_count = sum(1 for sym in raw if names[sym]["description"])
     return InstrumentLookupResponse(results=results, cached_count=cached_count)
