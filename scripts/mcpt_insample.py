@@ -317,6 +317,30 @@ def _tom_last_hour(wide, last_bars: int) -> pd.DataFrame:
     )
 
 
+def _consolidation_breakout(wide, base_len: int, tight: float, hold: int) -> pd.DataFrame:
+    """H-40: a base_len-day range tighter than `tight` x price resolves upward
+    (close breaks the base high) -> fixed hold. Daily bars."""
+    close, high, low = wide["close"], wide["high"], wide["low"]
+    base_hi = high.rolling(base_len).max().shift(1)
+    base_lo = low.rolling(base_len).min().shift(1)
+    tight_ok = (base_hi - base_lo) <= tight * close.shift(1)
+    trigger = (tight_ok & (close > base_hi)).astype(float)
+    return trigger.rolling(hold, min_periods=1).max().fillna(0.0)
+
+
+def _leader_pullback(wide, lead: float, hold: int) -> pd.DataFrame:
+    """H-41: a leader (ret60 >= lead) pulls back >=5% off its 20d high, entry
+    when the close reclaims the prior day's high (resumption) -> fixed hold."""
+    close, high = wide["close"], wide["high"]
+    leader = (close / close.shift(60) - 1.0) >= lead
+    off_high = close / close.rolling(20).max().shift(1) - 1.0
+    pulled = off_high <= -0.05
+    was_pulled = pulled.shift(1).fillna(False).astype(bool)
+    resume = close > high.shift(1)
+    trigger = (leader & was_pulled & resume).astype(float)
+    return trigger.rolling(hold, min_periods=1).max().fillna(0.0)
+
+
 def _hold_sessions(trigger: pd.DataFrame, h: int) -> pd.DataFrame:
     """Fixed hold of ~h sessions expressed in hourly bars (7 bars/session)."""
     return trigger.rolling(7 * h, min_periods=1).max().fillna(0.0)
@@ -621,6 +645,14 @@ FAMILIES = {
         ({"g": g, "h": h}, _gap_hold_swing) for g in (0.01, 0.02) for h in (1, 3)
     ],
     "first_hour_break_swing": [({"h": h}, _first_hour_break_swing) for h in (1, 3)],
+    # EXP-51 (the user's swing playbook, daily bars).
+    "consolidation_breakout": [
+        ({"base_len": b, "tight": tt, "hold": h}, _consolidation_breakout)
+        for b in (30, 60) for tt in (0.08, 0.12) for h in (5, 10)
+    ],
+    "leader_pullback": [
+        ({"lead": ld, "hold": h}, _leader_pullback) for ld in (0.3, 0.5) for h in (5, 10)
+    ],
 }
 
 # Per-family forward-return stream: "cc" = close(t) -> close(t+1) (default);
