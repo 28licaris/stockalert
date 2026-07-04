@@ -275,9 +275,7 @@ DEV_USER_EMAIL = "dev@stockalert.local"
 DEV_USER_ID = uuid.uuid5(_DEV_NAMESPACE, "dev-user")
 
 
-def get_principal_or_dev(
-    principal: Principal | None = Depends(get_optional_principal),
-) -> Principal:
+def get_principal_or_dev(request: Request) -> Principal:
     """Principal for per-user features (e.g. watchlists).
 
     AUTH_ENABLED=true  -> behaves exactly like get_principal (401 without a
@@ -290,6 +288,10 @@ def get_principal_or_dev(
     from app.config import settings
 
     if settings.auth_enabled:
+        # Resolve lazily — get_optional_principal's dependency chain 503s when
+        # auth is off, which would shadow the dev fallback below.
+        token = request.cookies.get(settings.auth_cookie_name, "")
+        principal = get_identity_service().authenticate_session(token) if token else None
         if principal is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
