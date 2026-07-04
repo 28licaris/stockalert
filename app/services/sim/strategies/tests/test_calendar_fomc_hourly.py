@@ -11,7 +11,9 @@ from app.services.sim.strategies.calendar_fomc_hourly import (
     CalendarFomcHourlyStrategy,
 )
 
-UTC = dt.timezone.utc
+from zoneinfo import ZoneInfo
+
+ET = ZoneInfo("America/New_York")
 
 
 @dataclass
@@ -30,7 +32,7 @@ def _session_bars(start: dt.date, end: dt.date) -> list[_Bar]:
     while d <= end:
         if d.weekday() < 5:
             for h in range(7):  # 09:30..15:30 starts
-                t = dt.datetime(d.year, d.month, d.day, 9 + h, 30, tzinfo=UTC)
+                t = dt.datetime(d.year, d.month, d.day, 9 + h, 30, tzinfo=ET)
                 bars.append(_Bar("SPY", t, px, px + 0.2, px - 0.2, px))
                 px += 0.01
         d += dt.timedelta(days=1)

@@ -62,6 +62,10 @@ class CalendarFomcHourlyStrategy(BaseStrategy):
     def on_bar(self, ctx: Context) -> Action:
         p = self.params
         ts = ctx.bar.timestamp
+        if ts.tzinfo is not None:
+            from zoneinfo import ZoneInfo
+
+            ts = ts.astimezone(ZoneInfo("America/New_York"))
         today = ts.date()
         hhmm = ts.strftime("%H:%M")
         symbol = ctx.bar.symbol

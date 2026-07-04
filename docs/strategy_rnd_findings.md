@@ -1874,3 +1874,24 @@ paper run beside the daily one (new run, never a mutation of the live
 record) — the two renderings then compete on the forward record from
 the 2026-07-29 meeting onward. Noise gate running.
 
+
+## EXP-46 CORRECTION · 2026-07-04 · ET/UTC bug in fomc_hourly — what PF 2.78 actually measured
+
+The Tier-2 run (EXP-47) failed loudly (PF=nan, +171% ≈ SPY buy-and-hold,
+null sd 0.03) and exposed an ET-vs-UTC bug: hourly bars are ET sessions
+stored tz-aware UTC, and both the screen family and the strategy
+compared WALL-CLOCK strings in UTC. Effects: (a) the strategy entered
+once and never exited (Tier-2 verdict VOID); (b) the screen's intraday
+holding mask never fired, so the winning "prior_close → 13:30" config
+ACTUALLY measured: hold from the prior day's 16:00 close through the
+announcement day's FIRST hour (10:30 ET). That as-measured claim —
+overnight + opening hour into FOMC day, PF 2.7826, p = 0.0010 vs the
+session-aware null — REMAINS VALID; its label was wrong. (This is the
+platform's documented ET-vs-UTC trap, walked into again; the session-
+aware kernel's hour pools had the same skew across DST regimes and are
+also fixed to pool on the ET clock.)
+
+Fixes (all ET-clock now, 368 tests pass): screen family, kernel pools,
+strategy, test fixtures. The REGISTERED claim (hold through 13:30) is
+being re-screened corrected; EXP-47 Tier-2 re-runs after it.
+

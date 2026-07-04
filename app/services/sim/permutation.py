@@ -131,8 +131,11 @@ def permute_frames(
         # hour-of-day except the first bar of each calendar day, which is
         # an overnight gap (its own pool). Shuffling WITHIN pools yields a
         # bijection on `permutable` that maps every slot to a same-pool slot.
-        times = master.time
-        dates = master.date
+        # Pool by the SESSION clock (ET) — UTC wall-times shift with DST and
+        # would pool the 09:30 open with mid-morning bars across regimes.
+        session = master.tz_convert("America/New_York") if master.tz is not None else master
+        times = session.time
+        dates = session.date
         body_key = np.array([t.isoformat() for t in times])
         gap_key = body_key.copy()
         is_overnight = np.ones(n, dtype=bool)

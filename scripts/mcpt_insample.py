@@ -280,8 +280,11 @@ def _fomc_hourly(wide, entry: str, exit_start: str) -> pd.DataFrame:
     csv = Path(__file__).resolve().parent / "data" / "fomc_scheduled_meetings.csv"
     ann = set(pd.to_datetime(pd.read_csv(csv, comment="#")["announcement_date"]).dt.date)
     idx = close.index
-    is_ann = pd.Series([d in ann for d in idx.date], index=idx)
-    hhmm = pd.Series([t.strftime("%H:%M") for t in idx.time], index=idx)
+    # Session clock lives in ET; bars are stored tz-aware UTC. Comparing UTC
+    # wall-times silently never matches (the EXP-46 fomc_hourly bug).
+    et = idx.tz_convert("America/New_York") if idx.tz is not None else idx
+    is_ann = pd.Series([d in ann for d in et.date], index=idx)
+    hhmm = pd.Series([t.strftime("%H:%M") for t in et.time], index=idx)
     pos, from_end = _day_positions(idx)
     held = is_ann & (hhmm < exit_start)
     if entry == "prior_close":

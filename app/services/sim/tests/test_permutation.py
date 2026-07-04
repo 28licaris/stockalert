@@ -224,7 +224,12 @@ def test_benjamini_hochberg_known_example():
 
 
 def _hourly_frame(days=120, seed=5, start=T0):
-    """Synthetic 7-bar-per-day session frames with hour-of-day vol structure."""
+    """Synthetic 7-bar-per-day ET session frames with hour-of-day vol structure.
+    Timestamps are built on the ET wall clock (the kernel pools by session
+    time), spanning a DST boundary on purpose."""
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo("America/New_York")
     rng = np.random.default_rng(seed)
     rows, ts, px = [], [], 100.0
     vol_by_bar = [0.006, 0.003, 0.002, 0.002, 0.002, 0.003, 0.005]  # U-shape
@@ -233,7 +238,7 @@ def _hourly_frame(days=120, seed=5, start=T0):
         if d.weekday() < 5:
             for h, v in zip(range(7), vol_by_bar):
                 px *= float(np.exp(v * rng.standard_normal()))
-                t = d.replace(hour=9 + h, minute=30)
+                t = dt.datetime(d.year, d.month, d.day, 9 + h, 30, tzinfo=et)
                 ts.append(t)
                 rows.append((px * 0.999, px * 1.001, px * 0.998, px))
         d += dt.timedelta(days=1)
@@ -250,7 +255,7 @@ def test_session_aware_preserves_time_of_day_pools():
     lp_p = np.log(perm[["open", "high", "low", "close"]].to_numpy())
     body_r = lp_r[:, 3] - lp_r[:, 0]
     body_p = lp_p[:, 3] - lp_p[:, 0]
-    hours = np.array([t.hour for t in real.index])
+    hours = np.array([t.hour for t in real.index.tz_convert("America/New_York")])
     for h in np.unique(hours):
         m = hours == h  # bodies shuffled only WITHIN each hour pool
         np.testing.assert_allclose(np.sort(body_p[m]), np.sort(body_r[m]), atol=1e-12)
