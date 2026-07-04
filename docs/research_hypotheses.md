@@ -188,3 +188,19 @@ Same 40-name universe/window/permutation count; BH within the family.
 | ID | Family | Grid |
 |----|--------|------|
 | H-28 | `spike_analog_multiday` | s {2.5, 3.5} × w {10, 20} × k {25, 100} × horizon h {2, 3} (16) | **DEAD p = 0.4286** — pattern-matching CLOSED as a class at all tested horizons |
+
+**EXP-46 Wave-H battery** (registered 2026-07-04 BEFORE implementation;
+BH across H-29..H-31). The first HOURLY screens: session bars
+(`ohlcv_hourly`, 09:30-16:00 ET, 2006-2018; 2019-2026 untouched), pooled
+PF, 1000 permutations, with a SESSION-AWARE permutation kernel (bodies
+shuffle within hour-of-day pools; overnight gaps shuffle only among
+overnight gaps) so the null preserves intraday seasonality marginals
+and destroys only serial dependence — required for honest intraday
+claims. Mechanism class: flow-and-clock (the only class that has ever
+passed here).
+
+| ID | Family (mechanism) | Universe | Grid |
+|----|--------------------|----------|------|
+| H-29 | `intraday_momentum` — first-hour(s) return sign predicts the last hour (MOC/rebalancing/gamma flows; Gao-Han-Li-Zhou 2018) | SPY QQQ IWM DIA + 11 sector SPDRs (15) | predictor {first 1, first 2 bars} × min |move| {0, 0.25%} (4) |
+| H-30 | `fomc_hourly` — the PROMOTED drift's exit sharpened: hold announcement-day from open to just before the 2pm decision (Lucca-Moench accrual continues all morning) | SPY | exit bar {12:30, 13:30} + prior-close→13:30 variant (3). A pass earns its own Tier-2 on 2019-2026 and would upgrade the paper strategy as a NEW run. |
+| H-31 | `tom_last_hour` — the parked TOM effect concentrated into the close (contribution flows execute near the close) | SPY QQQ IWM DIA + 11 SPDRs | window locked at H-14 best (5/2) × {last 1, last 2 bars} (2) |
