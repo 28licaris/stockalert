@@ -1841,3 +1841,36 @@ is dead at every tested timescale. What was ever real in this space:
 flow/calendar mechanisms (FOMC promoted, TOM parked) and deep-panic
 magnitude (real signal, untradeable expression).
 
+
+---
+
+## EXP-46 · 2026-07-04 · Wave-H (first hourly battery): the FOMC morning is the largest effect ever measured here (PF 2.78, q = 0.003)
+
+First hourly-resolution screens (ohlcv_hourly session bars, 2006-2018),
+run under a new SESSION-AWARE permutation kernel (bodies shuffle within
+hour-of-day pools; overnight gaps among themselves — the null preserves
+intraday seasonality marginals and destroys only serial dependence;
+alignment-enforced, 16 kernel tests, default path byte-identical).
+
+| Family | real PF | null | p | q | verdict |
+|---|---|---|---|---|---|
+| **fomc_hourly** (SPY; best: prior_close → exit 13:30) | **2.7826** | 1.1265±0.3214 | **0.0010** | **0.0030** | **SURVIVOR → Tier-2** — 0/1000 shuffles matched |
+| intraday_momentum (13-ETF complex) | 1.1379 | 1.0371±0.0675 | 0.0759 | 0.1139 | dead — the published (Gao et al. 2018) effect shows a pulse but fails FDR; post-publication decay visible in our window |
+| tom_last_hour | 0.9962 | 1.0344±0.0860 | 0.6474 | 0.6474 | dead — TOM does NOT concentrate in the close |
+
+**The headline:** holding SPY from the PRIOR day's close through the
+announcement morning and exiting ~13:30 (before the 2pm decision) nearly
+doubles the harvested pre-FOMC edge vs the promoted daily rendering
+(which exits at the open) — exactly the Lucca-Moench accrual profile.
+This is a REFINEMENT of the validated H-26 effect (not independent
+evidence), but the increment is enormous and the exit-before-decision
+property is risk-relevant: the position never faces the announcement
+itself. One round trip per meeting — cost-trivial.
+
+**Next: EXP-47 Tier-2** of the hourly rendering (engine strategy with
+hourly interval, costs, untouched 2019-2026 — the hourly lake covers
+through 2026-06) with the standard nulls; a pass registers a SECOND
+paper run beside the daily one (new run, never a mutation of the live
+record) — the two renderings then compete on the forward record from
+the 2026-07-29 meeting onward. Noise gate running.
+
