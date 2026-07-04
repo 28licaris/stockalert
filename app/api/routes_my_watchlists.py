@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
 from app.api.auth_dependencies import DEV_USER_EMAIL, get_principal_or_dev
 from app.services.identity.schemas import Principal
@@ -64,11 +64,22 @@ def delete_watchlist(name: str, principal: Principal = Depends(get_principal_or_
 
 
 @router.post("/{name}/members", response_model=WatchlistDetail)
-def add_members(name: str, body: MemberAdd, principal: Principal = Depends(get_principal_or_dev)):
+def add_members(
+    name: str,
+    body: MemberAdd,
+    background: BackgroundTasks,
+    principal: Principal = Depends(get_principal_or_dev),
+):
     try:
-        return _service().add_symbols(_user_id(principal), name, body.symbols, body.quantity)
+        detail = _service().add_symbols(_user_id(principal), name, body.symbols, body.quantity)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"watchlist {name!r} not found") from None
+    # Fetch company names for any newly-added symbols out-of-band, so the
+    # CH-only read path serves them on the next render (no provider call on read).
+    from app.services.instruments.names import warm
+
+    background.add_task(warm, list(body.symbols))
+    return detail
 
 
 @router.delete("/{name}/members/{symbol}", response_model=WatchlistDetail)
