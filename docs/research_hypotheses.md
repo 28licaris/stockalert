@@ -217,3 +217,21 @@ SESSION-AWARE null, Sharpe primary. A pass registers a SECOND paper run
 2026-07-29 meeting. **VERDICT: corrected screen PF 1.6859 p=0.0020;
 Tier-2 p = 0.0186 (2/160) — PASS. Enrolled 2026-07-04.** (Initial
 run VOID — ET/UTC bug, see EXP-46 CORRECTION.)
+
+**EXP-48 Wave-H2 battery** (registered 2026-07-04 BEFORE implementation;
+BH across H-33..H-36). Hourly-TRIGGERED 1-3 day swing entries on
+individual STOCKS — the hourly clock conditions on how the day unfolds,
+not just how it closes. Universe chosen by COVERAGE (≥99.9% of SPY's
+hourly bar count 2006-2018) then liquidity, 40 stocks: AAPL GOOG AMZN
+BAC MSFT C XOM JPM GE INTC GS CSCO WFC NFLX PFE T CVX BIDU IBM QCOM JNJ
+WMT ORCL PG NVDA SLB FCX GILD COP MRK HD CMCSA CAT F BA MU DIS KO AIG
+MCD. Screen: ohlcv_hourly 2006-2018 (2019-2026 untouched), pooled PF,
+1000 perms, SESSION-AWARE null, inner-join alignment (shrinkage
+reported). Holds expressed as h sessions ≈ 7h hourly bars.
+
+| ID | Family (mechanism) | Grid |
+|----|--------------------|------|
+| H-33 | `hourly_capitulation_swing` — intraday panic hour (return < −s × trailing-100-bar σ) → enter DURING the flush, hold h days (the real deep-panic signal, entered at the hourly trigger instead of the daily close) | s {3, 4} × h {1, 3} (4) |
+| H-34 | `close_strength_swing` — final-2-bar strength ≥ thr → hold h days (institutional parent orders split across days; the strong CLOSE is the footprint) | thr {0.5%, 1%} × h {1, 3} (4) |
+| H-35 | `gap_hold_swing` — overnight gap ≥ g that HOLDS through the first two hours → enter at 2nd bar close, hold h days (the intraday confirmation daily bars can't see) | g {1%, 2%} × h {1, 3} (4) |
+| H-36 | `first_hour_break_swing` — first bar closes above the prior day's high → hold h days (ORB as a swing entry, not the cost-dead day-trade) | h {1, 3} (2) |
