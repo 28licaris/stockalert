@@ -1,14 +1,15 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Play, Loader2 } from "lucide-react";
 import {
   useBacktestCatalog,
   useBacktestRuns,
   useRunBacktest,
   type BacktestRunResponse,
-  type EquityPoint,
   type RunSummary,
   type TradeOut,
 } from "@/api/backtest";
+import { EquityTradeChart } from "@/components/charts/EquityTradeChart";
+import { RoundTripsTable } from "@/components/tables/RoundTripsTable";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
 import { cn } from "@/lib/utils";
 
@@ -225,73 +226,10 @@ function Results({ result }: { result: BacktestRunResponse }) {
           <span className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">Equity curve</span>
           <span className="font-mono text-xs text-fg-muted">${Math.round(m.final_equity).toLocaleString()}</span>
         </div>
-        <EquityCurve points={result.equity_curve} />
+        <EquityTradeChart points={result.equity_curve} trades={result.trades} />
       </div>
-      <TradesTable trades={result.trades} />
+      <RoundTripsTable trades={result.trades} />
     </>
-  );
-}
-
-function EquityCurve({ points }: { points: EquityPoint[] }) {
-  const path = useMemo(() => {
-    if (points.length < 2) return null;
-    const ys = points.map((p) => p.equity);
-    const min = Math.min(...ys), max = Math.max(...ys);
-    const range = max - min || 1;
-    const W = 1000, H = 220;
-    const step = W / (points.length - 1);
-    const coords = points.map((p, i) => {
-      const x = i * step;
-      const y = H - ((p.equity - min) / range) * H;
-      return [x, y] as const;
-    });
-    const line = coords.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
-    const area = `${line} L${W},${H} L0,${H} Z`;
-    const up = points[points.length - 1].equity >= points[0].equity;
-    return { line, area, up, W, H };
-  }, [points]);
-  if (!path) return <div className="py-8 text-center text-xs text-fg-muted">No equity data.</div>;
-  const color = path.up ? "#22c55e" : "#f43f5e";
-  return (
-    <svg viewBox={`0 0 ${path.W} ${path.H}`} className="h-48 w-full" preserveAspectRatio="none">
-      <path d={path.area} fill={color} opacity={0.12} />
-      <path d={path.line} fill="none" stroke={color} strokeWidth={2} vectorEffect="non-scaling-stroke" />
-    </svg>
-  );
-}
-
-function TradesTable({ trades }: { trades: TradeOut[] }) {
-  const closed = trades.filter((t) => t.is_closing).slice(-40).reverse();
-  return (
-    <div className="surface-panel rounded-lg p-3">
-      <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-fg-subtle">
-        Closed trades ({closed.length})
-      </div>
-      <div className="max-h-64 overflow-auto">
-        <table className="w-full text-left font-mono text-[11px]">
-          <thead className="text-fg-subtle">
-            <tr>
-              <th className="py-1 pr-2">Symbol</th><th className="pr-2">Exit</th>
-              <th className="pr-2 text-right">P&amp;L</th><th className="pr-2 text-right">Held</th>
-              <th>When</th>
-            </tr>
-          </thead>
-          <tbody>
-            {closed.map((t, i) => (
-              <tr key={i} className="border-t border-border/50">
-                <td className="py-1 pr-2 text-fg-base">{t.symbol}</td>
-                <td className="pr-2 text-fg-muted">{t.side === "buy" ? "cover" : "sell"}</td>
-                <td className={cn("pr-2 text-right", t.realized_pnl >= 0 ? "text-up" : "text-down")}>
-                  {t.realized_pnl >= 0 ? "+" : ""}{Math.round(t.realized_pnl)}
-                </td>
-                <td className="pr-2 text-right text-fg-muted">{Math.round(t.holding_days)}d</td>
-                <td className="text-fg-subtle">{t.timestamp.slice(0, 10)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
   );
 }
 
