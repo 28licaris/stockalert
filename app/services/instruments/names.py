@@ -188,8 +188,12 @@ def _stream_universe_symbols() -> list[str]:
     try:
         from app.db.client import get_client
 
+        # FINAL + is_active=1 mirrors the app's active-universe read: only warm
+        # symbols that are actually live (skips soft-deleted tombstones and the
+        # /-prefixed futures roots, which Polygon reference doesn't cover).
         return [r[0] for r in get_client().query(
-            "SELECT DISTINCT symbol FROM stream_universe WHERE symbol NOT LIKE '/%'"
+            "SELECT symbol FROM stream_universe FINAL "
+            "WHERE is_active = 1 AND symbol NOT LIKE '/%'"
         ).result_rows]
     except Exception as exc:  # noqa: BLE001 — best effort
         logger.warning("instrument_names: could not read stream_universe: %s", exc)
