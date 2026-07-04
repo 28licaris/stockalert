@@ -6,6 +6,7 @@ import {
   useDeleteMyWatchlist,
   useMyWatchlistDetail,
   useMyWatchlists,
+  useRemoveMyWatchlistMember,
 } from "@/api/queries";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
