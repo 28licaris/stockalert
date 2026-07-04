@@ -248,8 +248,8 @@ zero commission + 5 bps/side, untouched **2019-01-01 → 2026-06-12**,
 
 | ID | Config | Trigger (locked from screen) | Verdict |
 |----|--------|------------------------------|---------|
-| H-37 | `configs/swing_t2_gap_hold.yaml` | gap ≥ 1% vs prior close, still ≥ first open at the 2nd bar's close | — |
-| H-38 | `configs/swing_t2_fhb.yaml` | first bar's close > prior session's high | — |
+| H-37 | `configs/swing_t2_gap_hold.yaml` | gap ≥ 1% vs prior close, still ≥ first open at the 2nd bar's close | **FAIL p = 0.304** (Sharpe 0.09, PF 1.01 net — see EXP-50: the edge decayed post-2019, costs were NOT the killer) |
+| H-38 | `configs/swing_t2_fhb.yaml` | first bar's close > prior session's high | **FAIL p = 0.776** (Sharpe −0.36) |
 
 **EXP-50 registration** (2026-07-04, registered while EXP-49 finals were
 completing; design conditioned only on the ALREADY-KNOWN screen result

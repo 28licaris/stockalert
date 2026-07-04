@@ -1951,3 +1951,32 @@ intraday confirmation) died in EXP-39. Random-exit diagnostic N/A
 (fixed-timer holds). Next: EXP-49 Tier-2 — portfolio expressions with
 costs on untouched 2019-2026 (spec to be registered).
 
+
+---
+
+## EXP-49/50 · 2026-07-04 · Swing Tier-2: the gap-hold edge was REAL AND TRADEABLE — until 2019
+
+**EXP-49 (naive renderings, holdout 2019-2026, costs, session-aware
+160-perm nulls): both FAIL.**
+
+| Config | Sharpe | Return | PF | p |
+|---|---|---|---|---|
+| H-37 gap_hold (g=1%, 1-day) | 0.09 | +3.3% | 1.01 | **0.304** |
+| H-38 first_hour_break | −0.36 | −24.8% | 0.95 | **0.776** |
+
+(Ops: first launch crashed on the session-aware alignment guard —
+snapshot loaders gained align=inner-join; a resume-file subtlety mixed
+unaligned real rows with aligned nulls on the first re-run — deleted
+and re-run fresh so real and null share identical bars.)
+
+**EXP-50 H-39-dev (the reframe): the g × h grid on 2006-2018 WITH COSTS
+is uniformly profitable** — every one of 12 cells nets PF 1.09-1.50;
+winner g=1.5%/h=1: **Sharpe 0.88, +128%, PF 1.29, DD −12%, 2,653
+trades**. So the EXP-49 failure is NOT a cost story: the same machinery
+with the same costs earned Sharpe ~0.9 for thirteen years and ~0 after
+2019. The open-continuation edge was real, net-tradeable for a decade
+(plausibly 2008-2011-regime-rich), and has since been absorbed/decayed.
+"We're late" is a different fact than "it was never real" — and only
+the walls + nulls let us tell them apart. H-39-holdout (dev winner's
+one-shot null on 2019-2026) running; expectation set accordingly.
+
