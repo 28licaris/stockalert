@@ -51,6 +51,11 @@ class BacktestRunRequest(BaseModel):
     momentum_top_n: Optional[int] = Field(None, description="Dynamic universe: long only the top-N as-of momentum names.")
     momentum_bottom_n: Optional[int] = Field(None, description="Dynamic universe: short only the bottom-N as-of momentum names.")
     momentum_lookback: int = 60
+    daily_table: Optional[str] = Field(
+        None,
+        description=("Daily bar source: 'ohlcv_daily' = the 20-year survivorship-clean "
+                     "research table; None = the live/streaming tier (recent data only)."),
+    )
     store: bool = Field(True, description="Persist the run to the registry for the history list.")
 
 
@@ -136,6 +141,7 @@ def backtest_run(body: BacktestRunRequest = Body(...)) -> BacktestRunResponse:
         momentum_top_n=body.momentum_top_n,
         momentum_bottom_n=body.momentum_bottom_n,
         momentum_lookback=body.momentum_lookback,
+        daily_table=body.daily_table,
     )
     try:
         strategy = build_strategy(body.strategy, body.strategy_params, interval=body.interval)

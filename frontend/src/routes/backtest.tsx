@@ -81,6 +81,9 @@ export function BacktestPage() {
       starting_cash: cash,
       max_concurrent_positions: maxConcurrent,
       max_portfolio_heat: heat / 100,
+      // Daily runs read the 20-year survivorship-clean research table so deep
+      // history (e.g. calendar strategies back to 2006) works from the Lab.
+      ...(interval === "1d" ? { daily_table: "ohlcv_daily" } : {}),
       store: true,
     });
   }
