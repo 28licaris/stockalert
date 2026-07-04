@@ -133,7 +133,9 @@ def permute_frames(
         # bijection on `permutable` that maps every slot to a same-pool slot.
         # Pool by the SESSION clock (ET) — UTC wall-times shift with DST and
         # would pool the 09:30 open with mid-morning bars across regimes.
-        session = master.tz_convert("America/New_York") if master.tz is not None else master
+        # Naive timestamps are UTC by platform convention (ClickHouse).
+        session = (master.tz_localize("UTC") if master.tz is None else master
+                   ).tz_convert("America/New_York")
         times = session.time
         dates = session.date
         body_key = np.array([t.isoformat() for t in times])
