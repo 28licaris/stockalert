@@ -250,3 +250,22 @@ zero commission + 5 bps/side, untouched **2019-01-01 → 2026-06-12**,
 |----|--------|------------------------------|---------|
 | H-37 | `configs/swing_t2_gap_hold.yaml` | gap ≥ 1% vs prior close, still ≥ first open at the 2nd bar's close | — |
 | H-38 | `configs/swing_t2_fhb.yaml` | first bar's close > prior session's high | — |
+
+**EXP-50 registration** (2026-07-04, registered while EXP-49 finals were
+completing; design conditioned only on the ALREADY-KNOWN screen result
+and cost arithmetic, not on unseen holdout data). The gap-hold edge is
+statistically real (H-35: q = 0.004) but its h=1/g=1% portfolio
+rendering nets ≈ PF 1.01 — costs consume the edge. H-39 searches for a
+COST-EFFICIENT rendering with clean walls:
+
+- **H-39-dev**: engine grid on the DEV window 2006-2018 (40-stock
+  aligned hourly universe, costs included): gap g {1%, 1.5%, 2%, 3%} ×
+  hold h {1, 3, 5} sessions (12 configs). Selection metric: net Sharpe.
+  Pure selection — no significance claims from this stage; all 12
+  results documented. Mechanism: fewer/fatter trades (higher g) and
+  cost amortization (longer h).
+- **H-39-holdout**: the SINGLE dev winner → full Tier-2 MCPT
+  (2019-01-01 → 2026-06-12, 160-perm session-aware null, costs).
+  One hypothesis; p ≤ 0.05 required. If it fails, the gap-hold chapter
+  closes as "real signal, no retail-cost expression" with the entire
+  g×h response surface on record.
