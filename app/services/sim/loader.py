@@ -14,7 +14,7 @@ from typing import Any
 STRATEGY_NAMES: list[str] = [
     "alert_driven", "regime_switch", "sma_crossover", "ema_crossover",
     "rsi_reversion", "bollinger_mean_revert", "mtf_ema_trend_filtered", "llm_agent",
-    "calendar_tom", "calendar_fomc",
+    "calendar_tom", "calendar_fomc", "calendar_fomc_hourly",
 ]
 
 
@@ -40,6 +40,11 @@ def build_strategy(name: str, params: dict[str, Any], interval: str) -> Any:
     if name == "calendar_fomc":
         from app.services.sim.strategies.calendar_fomc import CalendarFomcParams, CalendarFomcStrategy
         return CalendarFomcStrategy(params=CalendarFomcParams(**params), interval=interval)
+    if name == "calendar_fomc_hourly":
+        from app.services.sim.strategies.calendar_fomc_hourly import (
+            CalendarFomcHourlyParams, CalendarFomcHourlyStrategy,
+        )
+        return CalendarFomcHourlyStrategy(params=CalendarFomcHourlyParams(**params), interval=interval)
     if name == "bollinger_mean_revert":
         from app.services.sim.strategies.bollinger_mean_revert import (
             BollingerMeanRevertParams, BollingerMeanRevertStrategy,

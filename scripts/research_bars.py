@@ -140,13 +140,14 @@ def load_bar_lists(
     return out
 
 
-def export(symbols: list[str], start: str, end: str, dest: str) -> None:
-    """ClickHouse ohlcv_daily -> snapshot parquet at dest (local or s3://)."""
+def export(symbols: list[str], start: str, end: str, dest: str,
+           table: str = "ohlcv_daily") -> None:
+    """ClickHouse bar table -> snapshot parquet at dest (local or s3://)."""
     from app.db.client import get_client
 
     rows = get_client().query(
         "SELECT symbol, timestamp, open, high, low, close, volume "
-        "FROM ohlcv_daily FINAL "
+        f"FROM {table} FINAL "
         "WHERE symbol IN %(symbols)s AND toDate(timestamp) BETWEEN %(start)s AND %(end)s "
         "ORDER BY symbol, timestamp",
         parameters={"symbols": symbols, "start": start, "end": end},
@@ -171,6 +172,7 @@ def main(argv=None) -> int:
     ex.add_argument("--start", required=True)
     ex.add_argument("--end", required=True)
     ex.add_argument("--out", required=True, help="local path or s3://bucket/key")
+    ex.add_argument("--table", default="ohlcv_daily")
     a = ap.parse_args(argv)
     if a.symbols:
         symbols = a.symbols
@@ -178,7 +180,7 @@ def main(argv=None) -> int:
         symbols = yaml.safe_load(Path(a.config).read_text())["symbols"]
     else:
         raise SystemExit("supply --symbols or --config")
-    export(symbols, a.start, a.end, a.out)
+    export(symbols, a.start, a.end, a.out, table=a.table)
     return 0
 
 

@@ -93,6 +93,8 @@ def main(argv=None) -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--metric", default="sharpe_ratio", choices=METRICS,
                     help="primary metric for the p-value (all four are recorded)")
+    ap.add_argument("--session-aware", action="store_true",
+                    help="intraday null: hour-of-day body pools, overnight-gap pool")
     ap.add_argument("--bars", default=None,
                     help="bar snapshot (local path or s3://) from research_bars.py; "
                          "when set, no ClickHouse needed — cloud-worker mode")
@@ -192,7 +194,8 @@ def main(argv=None) -> int:
         t0 = time.time()
         seed_i = a.seed + i
         perm_bars = permute_bar_lists(full[cfg.interval], seed=seed_i,
-                                      start_after=start_after)
+                                      start_after=start_after,
+                                      session_aware=a.session_aware)
         metrics = _run(perm_bars)
         row = {"perm": i, "seed": seed_i, "metrics": metrics,
                "elapsed_s": round(time.time() - t0, 1)}

@@ -164,6 +164,7 @@ def permute_bar_lists(
     *,
     seed: int,
     start_after: Optional[datetime] = None,
+    session_aware: bool = False,
 ) -> dict[str, list[PermutedBar]]:
     """
     Adapter for the backtester's bar shape: dict[symbol -> list[Bar]] in,
@@ -184,7 +185,8 @@ def permute_bar_lists(
             },
             index=pd.DatetimeIndex([b.timestamp for b in bars]),
         )
-    permuted = permute_frames(frames, seed=seed, start_after=start_after)
+    permuted = permute_frames(frames, seed=seed, start_after=start_after,
+                              session_aware=session_aware)
     out: dict[str, list[PermutedBar]] = {s: [] for s in bars_by_symbol}
     for sym, df in permuted.items():
         # zip over columns (not iterrows) — this runs millions of times per MCPT.
