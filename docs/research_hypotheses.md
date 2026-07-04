@@ -287,3 +287,15 @@ this platform) are reserved for the Tier-2 stage of any survivor.
 |----|--------|------|
 | H-40 | `consolidation_breakout` — rolling base_len-day range ≤ tight × price, then close breaks the base high → fixed hold | base_len {30, 60} × tightness {8%, 12%} × hold {5, 10} (8) |
 | H-41 | `leader_pullback` — ret60 ≥ lead, pulled back ≥5% off the 20d high, entry when close reclaims the prior day's high (resumption) → fixed hold | lead {30%, 50%} × hold {5, 10} (4) |
+
+**EXP-51 addendum** (2026-07-04, registered while H-40/H-41 screens were
+RUNNING — no verdicts existed; counts recorded at registration). H-42
+`early_run` — catch the run BEFORE it qualifies as a +30% leader: fresh
+20-day high with YOUNG momentum (ret20, not ret60) and a volume-regime
+shift as the money-flow confirmation (10d avg volume vs 60d — the
+institutional-accumulation footprint). Same universe/window/nulls; BH
+recomputed across the full EXP-51 family H-40..H-42.
+
+| ID | Family | Grid |
+|----|--------|------|
+| H-42 | `early_run` — close breaks the 20d high AND ret20 ≥ r AND vol10/vol60 ≥ v → fixed hold | r {8%, 15%} × v {1.0 (no volume gate), 1.5} × hold {5, 10} (8) |
