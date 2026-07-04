@@ -1925,3 +1925,29 @@ and `fomc_drift_hourly_spy` (hourly, go-live 2026-07-04, first trade
 2026-07-28 15:30 ET → 2026-07-29 13:30 ET). The head-to-head forward
 record is the arbiter.
 
+
+---
+
+## EXP-48 · 2026-07-04 · Wave-H2: the OPEN's verdict persists — two swing survivors (gap-hold q=0.004, first-hour-break q=0.018)
+
+Hourly-triggered 1-3 day stock swings on the coverage-selected 40-stock
+universe (alignment cost: ~7 bars/symbol of 22,810), session-aware
+nulls, 1000 perms each, BH across four:
+
+| Family | real PF | p | q | noise | verdict |
+|---|---|---|---|---|---|
+| **gap_hold_swing** (gap ≥1-2% holding through hour 2 → 1-3d) | **1.1742** | **0.0010** | **0.0040** | ROBUST (p5 1.146, 100%) | **SURVIVOR** |
+| **first_hour_break_swing** (first bar > prior session high → 1-3d) | 1.0507 | 0.0090 | 0.0180 | ROBUST (p5 1.034, 100%) | **SURVIVOR** |
+| hourly_capitulation_swing | 0.9785 | 0.9970 | — | — | dead — buying the panic HOUR is bad; the daily signal worked because it waited for the close |
+| close_strength_swing | 0.9806 | 1.0000 | — | — | dead — worse than ALL 1000 shuffles: strong closes REVERSE |
+
+**Coherent mechanism read across all four:** the OPEN's verdict (a gap
+surviving its first test; a first hour clearing yesterday's high)
+carries multi-day information; the CLOSE's verdict carries none (and
+close-strength mean-reverts). Consistent with overnight/auction flows
+resolving information and intraday follow-through revealing real
+demand — and with why the daily gap family (close-to-close, no
+intraday confirmation) died in EXP-39. Random-exit diagnostic N/A
+(fixed-timer holds). Next: EXP-49 Tier-2 — portfolio expressions with
+costs on untouched 2019-2026 (spec to be registered).
+

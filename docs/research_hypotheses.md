@@ -231,7 +231,7 @@ reported). Holds expressed as h sessions ≈ 7h hourly bars.
 
 | ID | Family (mechanism) | Grid |
 |----|--------------------|------|
-| H-33 | `hourly_capitulation_swing` — intraday panic hour (return < −s × trailing-100-bar σ) → enter DURING the flush, hold h days (the real deep-panic signal, entered at the hourly trigger instead of the daily close) | s {3, 4} × h {1, 3} (4) |
-| H-34 | `close_strength_swing` — final-2-bar strength ≥ thr → hold h days (institutional parent orders split across days; the strong CLOSE is the footprint) | thr {0.5%, 1%} × h {1, 3} (4) |
-| H-35 | `gap_hold_swing` — overnight gap ≥ g that HOLDS through the first two hours → enter at 2nd bar close, hold h days (the intraday confirmation daily bars can't see) | g {1%, 2%} × h {1, 3} (4) |
-| H-36 | `first_hour_break_swing` — first bar closes above the prior day's high → hold h days (ORB as a swing entry, not the cost-dead day-trade) | h {1, 3} (2) |
+| H-33 | `hourly_capitulation_swing` — intraday panic hour (return < −s × trailing-100-bar σ) → enter DURING the flush, hold h days (the real deep-panic signal, entered at the hourly trigger instead of the daily close) | s {3, 4} × h {1, 3} (4) | **DEAD** p = 0.997 |
+| H-34 | `close_strength_swing` — final-2-bar strength ≥ thr → hold h days (institutional parent orders split across days; the strong CLOSE is the footprint) | thr {0.5%, 1%} × h {1, 3} (4) | **DEAD** p = 1.000 (strong closes reverse) |
+| H-35 | `gap_hold_swing` — overnight gap ≥ g that HOLDS through the first two hours → enter at 2nd bar close, hold h days (the intraday confirmation daily bars can't see) | g {1%, 2%} × h {1, 3} (4) | **SURVIVOR p = 0.0010, q = 0.0040**, noise-ROBUST → Tier-2 |
+| H-36 | `first_hour_break_swing` — first bar closes above the prior day's high → hold h days (ORB as a swing entry, not the cost-dead day-trade) | h {1, 3} (2) | **SURVIVOR p = 0.0090, q = 0.0180**, noise-ROBUST → Tier-2 |
