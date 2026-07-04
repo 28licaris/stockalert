@@ -22,9 +22,10 @@ export function WatchlistsPage() {
           Watchlists
         </h1>
         <p className="mt-1 max-w-2xl text-sm text-fg-muted">
-          Track the tickers you care about. Every symbol you add is stamped as a
-          pretend position at that moment&rsquo;s price, so each list doubles as a
-          &ldquo;what if I&rsquo;d bought when I first watched it?&rdquo; scoreboard.
+          Organize the symbols you follow into focused lists. Each symbol is
+          recorded as a simulated position at the price when it was added, so
+          every list also tracks its hypothetical performance from that point
+          forward.
         </p>
       </header>
 

@@ -340,8 +340,8 @@ function WatchlistPanel({ name, onDeleted }: { name: string; onDeleted: () => vo
       )}
 
       <div className="border-t border-border px-4 py-2 text-[11px] text-fg-subtle">
-        Each row is a pretend position stamped at the price when you added it —
-        entry date and live P&amp;L update automatically.
+        Each position is simulated from the price when the symbol was added;
+        entry price, current price, and P&amp;L update automatically.
       </div>
       {remove.error ? (
         <div className="px-4 pb-2">
