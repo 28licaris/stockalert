@@ -12,6 +12,7 @@ import {
   type Watchlist,
 } from "@/api/queries";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
+import { MyWatchlists } from "@/components/watchlists/MyWatchlists";
 import { Button } from "@/components/ui/button";
 import { SymbolSearchInput } from "@/components/symbol/SymbolSearchInput";
 import { fmtAgo, fmtInt, fmtPrice } from "@/lib/fmt";
@@ -73,6 +74,8 @@ export function WatchlistsPage() {
         </Button>
         </div>
       </header>
+
+      <MyWatchlists />
 
       {query.error ? <ApiErrorAlert error={query.error} /> : null}
 

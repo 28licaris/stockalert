@@ -1357,3 +1357,115 @@ export function useDeleteTheme() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["sectors"] }),
   });
 }
+
+// ── My watchlists (per-user, Postgres) ────────────────────────────────
+
+export type MyWatchlist = {
+  id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  n_members: number;
+};
+
+export type MyWatchlistMember = {
+  symbol: string;
+  quantity: number;
+  entry_price: number | null;
+  entry_at: string;
+  current_price: number | null;
+  pnl_usd: number | null;
+  pnl_pct: number | null;
+};
+
+export type MyWatchlistDetail = MyWatchlist & {
+  members: MyWatchlistMember[];
+  total_pnl_usd: number | null;
+};
+
+const myWatchlistKeys = {
+  all: ["my-watchlists"] as const,
+  detail: (name: string) => ["my-watchlists", name] as const,
+};
+
+export function useMyWatchlists() {
+  return useQuery({
+    queryKey: myWatchlistKeys.all,
+    queryFn: async (): Promise<MyWatchlist[]> => {
+      const { data } = await apiClient.GET("/api/v1/my/watchlists");
+      return (data ?? []) as MyWatchlist[];
+    },
+  });
+}
+
+export function useMyWatchlistDetail(name: string | null) {
+  return useQuery({
+    queryKey: myWatchlistKeys.detail(name ?? ""),
+    enabled: name != null,
+    refetchInterval: 30_000, // pretend-position returns track live prices
+    queryFn: async (): Promise<MyWatchlistDetail> => {
+      const { data } = await apiClient.GET("/api/v1/my/watchlists/{name}", {
+        params: { path: { name: name ?? "" } },
+      });
+      return data as MyWatchlistDetail;
+    },
+  });
+}
+
+export function useCreateMyWatchlist() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (req: { name: string; description?: string }) => {
+      const { data } = await apiClient.POST("/api/v1/my/watchlists", {
+        body: { name: req.name, description: req.description ?? "" },
+      });
+      return data as MyWatchlist;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: myWatchlistKeys.all }),
+  });
+}
+
+export function useDeleteMyWatchlist() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (name: string) => {
+      await apiClient.DELETE("/api/v1/my/watchlists/{name}", {
+        params: { path: { name } },
+      });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: myWatchlistKeys.all }),
+  });
+}
+
+export function useAddMyWatchlistMembers() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (req: { name: string; symbols: string[]; quantity?: number }) => {
+      const { data } = await apiClient.POST("/api/v1/my/watchlists/{name}/members", {
+        params: { path: { name: req.name } },
+        body: { symbols: req.symbols, quantity: req.quantity ?? null },
+      });
+      return data as MyWatchlistDetail;
+    },
+    onSuccess: (_d, req) => {
+      qc.invalidateQueries({ queryKey: myWatchlistKeys.detail(req.name) });
+      qc.invalidateQueries({ queryKey: myWatchlistKeys.all });
+    },
+  });
+}
+
+export function useRemoveMyWatchlistMember() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (req: { name: string; symbol: string }) => {
+      const { data } = await apiClient.DELETE("/api/v1/my/watchlists/{name}/members/{symbol}", {
+        params: { path: { name: req.name, symbol: req.symbol } },
+      });
+      return data as MyWatchlistDetail;
+    },
+    onSuccess: (_d, req) => {
+      qc.invalidateQueries({ queryKey: myWatchlistKeys.detail(req.name) });
+      qc.invalidateQueries({ queryKey: myWatchlistKeys.all });
+    },
+  });
+}

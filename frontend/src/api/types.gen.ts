@@ -652,6 +652,264 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/backtest/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Backtest Catalog
+         * @description Strategies, pluggable signal sources, and A+ filters the builder offers.
+         */
+        get: operations["backtest_catalog_api_v1_backtest_catalog_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backtest/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Backtest Run
+         * @description Run one strategy config and return metrics + equity curve + trades.
+         */
+        post: operations["backtest_run_api_v1_backtest_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backtest/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Backtest Runs
+         * @description Recent stored backtest runs (history list).
+         */
+        get: operations["backtest_runs_api_v1_backtest_runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/paper/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Paper Status
+         * @description Forward paper-trading track record, rebased to `capital` as of `start`.
+         */
+        get: operations["paper_status_api_v1_paper_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/paper/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Paper Export
+         * @description Download a complete CSV log: start/end balance + closed trades + open positions.
+         */
+        get: operations["paper_export_api_v1_paper_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backtest/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Backtest Run Detail
+         * @description One stored run's summary metrics.
+         */
+        get: operations["backtest_run_detail_api_v1_backtest_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/strategies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Strategies
+         * @description OWNER view — full definitions including config. Admin-only in production.
+         */
+        get: operations["list_strategies_api_v1_strategies_get"];
+        put?: never;
+        /**
+         * Register Strategy
+         * @description Register/update a strategy: persist locally + back up the full copy to S3.
+         */
+        post: operations["register_strategy_api_v1_strategies_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/strategies/leaderboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Leaderboard
+         * @description OWNER leaderboard: backtest + simulated stats for every strategy, side by side.
+         */
+        get: operations["leaderboard_api_v1_strategies_leaderboard_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/strategies/{name}/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Strategy Owner Stats
+         * @description OWNER/dev stats: full backtest metrics + the simulated (paper) summary.
+         */
+        get: operations["strategy_owner_stats_api_v1_strategies__name__stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/strategies/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Strategy */
+        get: operations["get_strategy_api_v1_strategies__name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/library": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Library
+         * @description Subscriber catalog — redacted cards (no config).
+         */
+        get: operations["library_api_v1_library_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/library/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Library Card */
+        get: operations["library_card_api_v1_library__name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/library/{name}/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Library Alerts
+         * @description Actionable alerts (entry/stop/target + closed P&L) — no recipe.
+         */
+        get: operations["library_alerts_api_v1_library__name__alerts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/screener/scan": {
         parameters: {
             query?: never;
@@ -1300,6 +1558,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/my/watchlists": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Watchlists */
+        get: operations["list_watchlists_api_v1_my_watchlists_get"];
+        put?: never;
+        /** Create Watchlist */
+        post: operations["create_watchlist_api_v1_my_watchlists_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/my/watchlists/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Watchlist */
+        get: operations["get_watchlist_api_v1_my_watchlists__name__get"];
+        put?: never;
+        post?: never;
+        /** Delete Watchlist */
+        delete: operations["delete_watchlist_api_v1_my_watchlists__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/my/watchlists/{name}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add Members */
+        post: operations["add_members_api_v1_my_watchlists__name__members_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/my/watchlists/{name}/members/{symbol}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove Member */
+        delete: operations["remove_member_api_v1_my_watchlists__name__members__symbol__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/stream": {
         parameters: {
             query?: never;
@@ -1462,6 +1790,27 @@ export interface paths {
          *     cockpit's Status page at the same cadence as health/services.
          */
         get: operations["list_jobs_api_v1_jobs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{name}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Job Runs
+         * @description Recent run history for one job (newest first), for the Status page's
+         *     per-job log view. `limit` is clamped to [1, 50].
+         */
+        get: operations["job_runs_api_v1_jobs__name__runs_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2145,6 +2494,127 @@ export interface components {
              */
             force: boolean;
         };
+        /** BacktestRunRequest */
+        BacktestRunRequest: {
+            /**
+             * Strategy
+             * @description Strategy name (see /backtest/catalog).
+             * @default alert_driven
+             */
+            strategy: string;
+            /** Strategy Params */
+            strategy_params?: {
+                [key: string]: unknown;
+            };
+            /** Symbols */
+            symbols: string[];
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+            /**
+             * End
+             * Format: date-time
+             */
+            end: string;
+            /**
+             * Interval
+             * @default 1d
+             */
+            interval: string;
+            /**
+             * Benchmark
+             * @default SPY
+             */
+            benchmark: string | null;
+            /**
+             * Portfolio
+             * @description True = shared-capital portfolio with risk caps; False = per-symbol.
+             * @default true
+             */
+            portfolio: boolean;
+            /**
+             * Starting Cash
+             * @default 100000
+             */
+            starting_cash: number;
+            /**
+             * Max Concurrent Positions
+             * @default 6
+             */
+            max_concurrent_positions: number;
+            /**
+             * Max Portfolio Heat
+             * @default 0.1
+             */
+            max_portfolio_heat: number;
+            /**
+             * Momentum Top N
+             * @description Dynamic universe: long only the top-N as-of momentum names.
+             */
+            momentum_top_n?: number | null;
+            /**
+             * Momentum Bottom N
+             * @description Dynamic universe: short only the bottom-N as-of momentum names.
+             */
+            momentum_bottom_n?: number | null;
+            /**
+             * Momentum Lookback
+             * @default 60
+             */
+            momentum_lookback: number;
+            /**
+             * Daily Table
+             * @description Daily bar source: 'ohlcv_daily' = the 20-year survivorship-clean research table; None = the live/streaming tier (recent data only).
+             */
+            daily_table?: string | null;
+            /**
+             * Store
+             * @description Persist the run to the registry for the history list.
+             * @default true
+             */
+            store: boolean;
+        };
+        /** BacktestRunResponse */
+        BacktestRunResponse: {
+            /** Run Id */
+            run_id: string;
+            /** Strategy */
+            strategy: string;
+            /** Symbols */
+            symbols: string[];
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+            /**
+             * End
+             * Format: date-time
+             */
+            end: string;
+            /** Interval */
+            interval: string;
+            /** Portfolio */
+            portfolio: boolean;
+            /** Stored */
+            stored: boolean;
+            metrics: components["schemas"]["RunMetrics"];
+            /** Equity Curve */
+            equity_curve: components["schemas"]["EquityPoint"][];
+            /** Trades */
+            trades: components["schemas"]["TradeOut"][];
+        };
+        /** BackupResult */
+        BackupResult: {
+            /** Local Path */
+            local_path: string;
+            /** S3 Uri */
+            s3_uri?: string | null;
+            /** S3 Error */
+            s3_error?: string | null;
+        };
         /**
          * BannerError
          * @description A per-symbol or whole-batch error explaining why a row is missing.
@@ -2455,6 +2925,15 @@ export interface components {
             name: string;
             /** Value */
             value?: number | null;
+        };
+        /** CatalogResponse */
+        CatalogResponse: {
+            /** Strategies */
+            strategies: string[];
+            /** Signal Sources */
+            signal_sources: string[];
+            /** Filters */
+            filters: string[];
         };
         /**
          * ChartDataRequest
@@ -2890,6 +3369,16 @@ export interface components {
             change: number | null;
             /** Raw Value */
             raw_value: number;
+        };
+        /** EquityPoint */
+        EquityPoint: {
+            /**
+             * T
+             * Format: date-time
+             */
+            t: string;
+            /** Equity */
+            equity: number;
         };
         /**
          * ExcludedGroup
@@ -3339,11 +3828,59 @@ export interface components {
              */
             last_error?: string | null;
             /**
+             * Last Summary
+             * @description Concise one-line summary of what the most recent run did (e.g. 'filled 2 session(s): …', 'stored=3 enriched=2'). None when no run has been recorded.
+             */
+            last_summary?: string | null;
+            /**
              * Running
              * @description True iff a run is currently in flight for this job.
              * @default false
              */
             running: boolean;
+        };
+        /**
+         * JobRun
+         * @description One historical run of a job (from `ingestion_runs`).
+         */
+        JobRun: {
+            /**
+             * Finished At
+             * @description ISO 8601 finish time.
+             */
+            finished_at?: string | null;
+            /**
+             * Status
+             * @description ok | error | partial_fail.
+             * @default unknown
+             */
+            status: string;
+            /**
+             * Summary
+             * @description Concise one-line summary.
+             */
+            summary?: string | null;
+            /**
+             * Error
+             * @description Error message, if any.
+             */
+            error?: string | null;
+            /**
+             * Rows Written
+             * @description Rows written this run.
+             * @default 0
+             */
+            rows_written: number;
+        };
+        /**
+         * JobRunHistory
+         * @description Result of GET /api/v1/jobs/{name}/runs — recent runs, newest first.
+         */
+        JobRunHistory: {
+            /** Job */
+            job: string;
+            /** Runs */
+            runs: components["schemas"]["JobRun"][];
         };
         /**
          * JobRunResult
@@ -3588,6 +4125,45 @@ export interface components {
              * @description Per-symbol or whole-batch failures. Cockpit surfaces these as a small warning chip; the empty case is the happy path.
              */
             errors?: components["schemas"]["BannerError"][];
+        };
+        /** MemberAdd */
+        MemberAdd: {
+            /** Symbols */
+            symbols: string[];
+            /**
+             * Quantity
+             * @description Pretend-position shares; defaults to settings.watchlist_default_qty (100).
+             */
+            quantity?: number | null;
+        };
+        /**
+         * MemberOut
+         * @description One watched symbol with its pretend position, returns computed at read.
+         */
+        MemberOut: {
+            /** Symbol */
+            symbol: string;
+            /** Quantity */
+            quantity: number;
+            /** Entry Price */
+            entry_price: number | null;
+            /**
+             * Entry At
+             * Format: date-time
+             */
+            entry_at: string;
+            /** Current Price */
+            current_price?: number | null;
+            /**
+             * Pnl Usd
+             * @description (current - entry) * quantity
+             */
+            pnl_usd?: number | null;
+            /**
+             * Pnl Pct
+             * @description current / entry - 1
+             */
+            pnl_pct?: number | null;
         };
         /** MfaEnrollmentResponse */
         MfaEnrollmentResponse: {
@@ -4081,6 +4657,86 @@ export interface components {
             quadrant: "leading" | "weakening" | "improving" | "lagging";
         };
         /**
+         * RunMetrics
+         * @description Canonical performance metrics for one backtest run.
+         */
+        RunMetrics: {
+            /**
+             * Total Return
+             * @description final_equity / starting_cash - 1
+             */
+            total_return: number;
+            /** Annualized Return */
+            annualized_return?: number | null;
+            /** Sharpe Ratio */
+            sharpe_ratio?: number | null;
+            /** Sortino Ratio */
+            sortino_ratio?: number | null;
+            /**
+             * Max Drawdown
+             * @description Negative number; -0.15 = 15% peak-to-trough decline.
+             * @default 0
+             */
+            max_drawdown: number;
+            /**
+             * Longest Drawdown Days
+             * @default 0
+             */
+            longest_drawdown_days: number;
+            /**
+             * Win Rate
+             * @description n_winning / n_trades. None when n_trades == 0.
+             */
+            win_rate?: number | null;
+            /**
+             * Profit Factor
+             * @description sum(wins) / abs(sum(losses)). None when no losses.
+             */
+            profit_factor?: number | null;
+            /**
+             * N Trades
+             * @default 0
+             */
+            n_trades: number;
+            /** Avg Trade Pnl */
+            avg_trade_pnl?: number | null;
+            /** Avg Winner Pnl */
+            avg_winner_pnl?: number | null;
+            /** Avg Loser Pnl */
+            avg_loser_pnl?: number | null;
+            /**
+             * Avg Holding Days
+             * @description Mean calendar days held per round-trip (time-in-trade).
+             */
+            avg_holding_days?: number | null;
+            /**
+             * Final Equity
+             * @default 0
+             */
+            final_equity: number;
+        };
+        /** RunSummary */
+        RunSummary: {
+            /** Run Id */
+            run_id: string;
+            /** Started At */
+            started_at?: string | null;
+            /** Strategy Name */
+            strategy_name: string;
+            /** Interval */
+            interval?: string | null;
+            /** Total Return */
+            total_return?: number | null;
+            /** Sharpe Ratio */
+            sharpe_ratio?: number | null;
+            /** Max Drawdown */
+            max_drawdown?: number | null;
+            /** Win Rate */
+            win_rate?: number | null;
+            /** N Trades */
+            n_trades?: number | null;
+        };
+        /**
          * ScreenerResult
          * @description Output of a screener scan. Returned by both the HTTP route and
          *     the MCP tool — single contract across surfaces.
@@ -4523,6 +5179,158 @@ export interface components {
             snapshot_id?: string | null;
         };
         /**
+         * StrategyAlert
+         * @description One actionable alert — what the subscription delivers. Prices + direction,
+         *     no recipe.
+         */
+        StrategyAlert: {
+            /** Symbol */
+            symbol: string;
+            /** Direction */
+            direction: string;
+            /** Status */
+            status: string;
+            /**
+             * Date
+             * Format: date-time
+             */
+            date: string;
+            /** Entry */
+            entry?: number | null;
+            /** Stop */
+            stop?: number | null;
+            /** Target */
+            target?: number | null;
+            /** Current */
+            current?: number | null;
+            /** Exit */
+            exit?: number | null;
+            /** Pnl */
+            pnl?: number | null;
+        };
+        /**
+         * StrategyDefinition
+         * @description OWNER-ONLY full definition. `config` is the SECRET recipe (signal source,
+         *     filters, params, universe-selection, risk) — NEVER serialized to a subscriber.
+         *     Persisted locally + backed up to S3.
+         */
+        StrategyDefinition: {
+            /** Name */
+            name: string;
+            /** Title */
+            title: string;
+            /**
+             * Tagline
+             * @default
+             */
+            tagline: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Category
+             * @default momentum
+             */
+            category: string;
+            /**
+             * Version
+             * @default 1
+             */
+            version: number;
+            /**
+             * Visibility
+             * @default subscribers
+             */
+            visibility: string;
+            /** Config */
+            config: {
+                [key: string]: unknown;
+            };
+            /** Created At */
+            created_at?: string | null;
+        };
+        /**
+         * StrategyOwnerStats
+         * @description OWNER/dev view: full backtest stats (whole history) + the live simulated
+         *     (paper, post-go-live) summary, for comparing and improving strategies.
+         */
+        StrategyOwnerStats: {
+            /** Name */
+            name: string;
+            /** Title */
+            title: string;
+            /** Backtest */
+            backtest?: {
+                [key: string]: unknown;
+            } | null;
+            /** Paper Return */
+            paper_return?: number | null;
+            /** Paper Win Rate */
+            paper_win_rate?: number | null;
+            /**
+             * Paper Trades
+             * @default 0
+             */
+            paper_trades: number;
+            /**
+             * Paper Days
+             * @default 0
+             */
+            paper_days: number;
+            /** Starting Capital */
+            starting_capital?: number | null;
+            /** Current Balance */
+            current_balance?: number | null;
+            /** Last Run At */
+            last_run_at?: string | null;
+            /** Computed Through */
+            computed_through?: string | null;
+        };
+        /**
+         * StrategyPublic
+         * @description Subscriber-facing card — REDACTED. No `config` field exists here, so the
+         *     recipe is structurally impossible to leak through this surface.
+         */
+        StrategyPublic: {
+            /** Name */
+            name: string;
+            /** Title */
+            title: string;
+            /** Tagline */
+            tagline: string;
+            /** Description */
+            description: string;
+            /** Category */
+            category: string;
+            /** Version */
+            version: number;
+            /** Visibility */
+            visibility: string;
+            /** Inception */
+            inception?: string | null;
+            /**
+             * Days Live
+             * @default 0
+             */
+            days_live: number;
+            /** Forward Return */
+            forward_return?: number | null;
+            /** Forward Win Rate */
+            forward_win_rate?: number | null;
+            /**
+             * Forward N Trades
+             * @default 0
+             */
+            forward_n_trades: number;
+            /**
+             * N Open Positions
+             * @default 0
+             */
+            n_open_positions: number;
+        };
+        /**
          * StreamMutationResponse
          * @description Response shape for add / remove / import.
          */
@@ -4827,6 +5635,33 @@ export interface components {
              */
             is_active: boolean;
         };
+        /** TradeOut */
+        TradeOut: {
+            /** Symbol */
+            symbol: string;
+            /** Side */
+            side: string;
+            /** Quantity */
+            quantity: number;
+            /** Price */
+            price: number;
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp: string;
+            /** Realized Pnl */
+            realized_pnl: number;
+            /** Holding Days */
+            holding_days: number;
+            /** Is Closing */
+            is_closing: boolean;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -4896,6 +5731,45 @@ export interface components {
              */
             member_count?: number | null;
         };
+        /** WatchlistCreate */
+        WatchlistCreate: {
+            /** Name */
+            name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+        };
+        /** WatchlistDetail */
+        WatchlistDetail: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * N Members
+             * @default 0
+             */
+            n_members: number;
+            /**
+             * Members
+             * @default []
+             */
+            members: components["schemas"]["MemberOut"][];
+            /** Total Pnl Usd */
+            total_pnl_usd?: number | null;
+        };
         /**
          * WatchlistMembersMutationResponse
          * @description Shape returned by `POST/DELETE /api/v1/watchlists/{name}/members`.
@@ -4924,6 +5798,28 @@ export interface components {
              * @description Full active member list after the mutation.
              */
             members: string[];
+        };
+        /** WatchlistOut */
+        WatchlistOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * N Members
+             * @default 0
+             */
+            n_members: number;
         };
         /**
          * WatchlistSnapshotItem
@@ -6101,6 +6997,412 @@ export interface operations {
             };
         };
     };
+    backtest_catalog_api_v1_backtest_catalog_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogResponse"];
+                };
+            };
+        };
+    };
+    backtest_run_api_v1_backtest_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BacktestRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BacktestRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    backtest_runs_api_v1_backtest_runs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                /** @description Filter to one strategy name. */
+                strategy?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    paper_status_api_v1_paper_status_get: {
+        parameters: {
+            query?: {
+                /** @description Paper run name. */
+                name?: string;
+                /** @description Replay start date (default = locked go_live). Set earlier to replay forward from a past date. */
+                start?: string | null;
+                /** @description Starting capital to rebase to (default = config). The curve/P&L scale to this. */
+                capital?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    paper_export_api_v1_paper_export_get: {
+        parameters: {
+            query?: {
+                name?: string;
+                start?: string | null;
+                capital?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    backtest_run_detail_api_v1_backtest_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_strategies_api_v1_strategies_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyDefinition"][];
+                };
+            };
+        };
+    };
+    register_strategy_api_v1_strategies_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StrategyDefinition"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    leaderboard_api_v1_strategies_leaderboard_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyOwnerStats"][];
+                };
+            };
+        };
+    };
+    strategy_owner_stats_api_v1_strategies__name__stats_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyOwnerStats"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_strategy_api_v1_strategies__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyDefinition"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    library_api_v1_library_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyPublic"][];
+                };
+            };
+        };
+    };
+    library_card_api_v1_library__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    library_alerts_api_v1_library__name__alerts_get: {
+        parameters: {
+            query?: {
+                /** @description Only alerts on/after this date. */
+                start?: string | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyAlert"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     post_screener_scan_api_v1_screener_scan_post: {
         parameters: {
             query?: never;
@@ -7176,6 +8478,186 @@ export interface operations {
             };
         };
     };
+    list_watchlists_api_v1_my_watchlists_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchlistOut"][];
+                };
+            };
+        };
+    };
+    create_watchlist_api_v1_my_watchlists_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WatchlistCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchlistOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_watchlist_api_v1_my_watchlists__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchlistDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_watchlist_api_v1_my_watchlists__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_members_api_v1_my_watchlists__name__members_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemberAdd"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchlistDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_member_api_v1_my_watchlists__name__members__symbol__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchlistDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_stream_universe_api_v1_stream_get: {
         parameters: {
             query?: never;
@@ -7435,6 +8917,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobListing"];
+                };
+            };
+        };
+    };
+    job_runs_api_v1_jobs__name__runs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRunHistory"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
