@@ -1980,3 +1980,13 @@ with the same costs earned Sharpe ~0.9 for thirteen years and ~0 after
 the walls + nulls let us tell them apart. H-39-holdout (dev winner's
 one-shot null on 2019-2026) running; expectation set accordingly.
 
+
+**EXP-50 H-39-holdout FINAL:** the dev winner (g=1.5%, 1-day hold) on
+2019-2026: Sharpe 0.13, +5.0%, PF 1.03, DD −14.1% — **p = 0.348, FAIL**
+(55/160 shuffled tapes matched). The cost-efficiency surface cannot
+rescue a decayed edge. **Swing/open-continuation chapter CLOSED**: real
+and net-tradeable 2006-2018 (all 12 grid cells profitable, best Sharpe
+0.88), indistinguishable from luck 2019-2026 at every registered
+rendering. Full g×h response surface on record in
+data/mcpt/exp50_dev_grid.json (archived with the campaign ensembles).
+

@@ -268,4 +268,6 @@ COST-EFFICIENT rendering with clean walls:
   (2019-01-01 → 2026-06-12, 160-perm session-aware null, costs).
   One hypothesis; p ≤ 0.05 required. If it fails, the gap-hold chapter
   closes as "real signal, no retail-cost expression" with the entire
-  g×h response surface on record.
+  g×h response surface on record. **VERDICT: dev winner g=1.5%/h=1
+  (dev Sharpe 0.88 net) → holdout p = 0.348, FAIL. Chapter CLOSED —
+  the edge decayed post-2019; every rendering measured.**
