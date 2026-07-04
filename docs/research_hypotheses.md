@@ -299,3 +299,21 @@ recomputed across the full EXP-51 family H-40..H-42.
 | ID | Family | Grid |
 |----|--------|------|
 | H-42 | `early_run` — close breaks the 20d high AND ret20 ≥ r AND vol10/vol60 ≥ v → fixed hold | r {8%, 15%} × v {1.0 (no volume gate), 1.5} × hold {5, 10} (8) |
+
+**EXP-52 registration** (2026-07-04, BEFORE implementation). H-43
+`asymmetric_exit_overlay` — the last untested pillar of the
+discretionary-trader worldview: does "cut losses fast, let winners run"
+constitute an edge BY ITSELF? Entries are deterministic and
+information-free (enter when flat on every cycle-th bar per symbol);
+the exit is a trailing stop (close < running-max × (1 − trail)) with no
+target — pure asymmetry. The permutation null preserves fat tails and
+drift exactly, so any excess PF over the null can come ONLY from exit
+asymmetry harvesting real serial structure (trend persistence). A pass
+= exit convexity is promotable machinery in its own right; a fail =
+the creed is a payoff-shape illusion on structureless entries — either
+verdict rewrites how Tier-2 expressions get built. Universe/window/
+nulls as standard (1000-name daily, 2006-2018, 1000 perms).
+
+| ID | Family | Grid |
+|----|--------|------|
+| H-43 | `asymmetric_exit_overlay` | entry cycle {10, 21 bars} × trail {5%, 10%} (4) |
