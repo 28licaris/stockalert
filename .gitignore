@@ -43,4 +43,4 @@ agent-skills/
 # Runtime artifacts
 .cache/
 data_news.db
-data/
+/data/

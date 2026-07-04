@@ -248,6 +248,31 @@ def _survivor_conditioning(wide, gate: str) -> pd.DataFrame:
     return base.mul(g, axis=0)
 
 
+def _fomc_drift(wide, k: int) -> pd.DataFrame:
+    """Long the k trading days ending at the FOMC announcement close
+    (Lucca-Moench pre-announcement drift). Scheduled meetings only, from
+    scripts/data/fomc_scheduled_meetings.csv (Fed public records).
+    sig[t] earns t -> t+1, so the window is the k bars BEFORE the
+    announcement day: positions carry into (and through) the announcement
+    close."""
+    close = wide["close"]
+    csv = Path(__file__).resolve().parent / "data" / "fomc_scheduled_meetings.csv"
+    dates = pd.to_datetime(pd.read_csv(csv, comment="#")["announcement_date"]).dt.date
+    idx_dates = pd.Series(close.index.date, index=close.index)
+    positions = {d: i for i, d in enumerate(idx_dates)}
+    mask = np.zeros(len(close), dtype=bool)
+    for d in dates:
+        # announcement bar = the trading day matching d (skip if outside window)
+        i = positions.get(d)
+        if i is None:
+            continue
+        mask[max(i - k, 0):i] = True
+    return pd.DataFrame(
+        np.repeat(mask[:, None].astype(float), close.shape[1], axis=1),
+        index=close.index, columns=close.columns,
+    )
+
+
 def _seasonality_tom(wide, before: int, after: int) -> pd.DataFrame:
     """Long the turn-of-month window: last `before` and first `after` trading days."""
     close = wide["close"]
@@ -338,6 +363,8 @@ FAMILIES = {
         ({"gate": g}, _survivor_conditioning)
         for g in ("calm", "stressed", "breadth_up", "breadth_down")
     ],
+    # H-15 (Wave-2, unlocked 2026-07-03 by the Fed calendar backfill).
+    "fomc_drift": [({"k": k}, _fomc_drift) for k in (1, 2, 3)],
 }
 
 # Per-family forward-return stream: "cc" = close(t) -> close(t+1) (default);
