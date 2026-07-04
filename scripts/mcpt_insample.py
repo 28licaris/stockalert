@@ -295,6 +295,56 @@ def _spike_analog(wide, s: float, w: int, k: int) -> pd.DataFrame:
     return pd.DataFrame(sig, index=close.index, columns=close.columns)
 
 
+def _spike_analog_multiday(wide, s: float, w: int, k: int, h: int) -> pd.DataFrame:
+    """H-28: spike_analog with h-day vote horizon and h-bar hold. An analog's
+    h-day outcome only joins the library once RESOLVED (h days after its
+    trigger) — the resolution delay is what keeps multi-day voting causal."""
+    close = wide["close"]
+    rmat = np.log(close).to_numpy()
+    rmat = np.vstack([np.full((1, rmat.shape[1]), np.nan), np.diff(rmat, axis=0)])
+    r = pd.DataFrame(rmat, index=close.index, columns=close.columns)
+    sigma = r.rolling(20).std().shift(1)
+    z = (r / sigma).to_numpy()
+    T, N = rmat.shape
+    sig = np.zeros((T, N))
+
+    trig_by_day: dict[int, list[tuple[int, np.ndarray]]] = {}
+    for t in range(w + 21, T):
+        for n in np.flatnonzero(np.abs(z[t]) > s):
+            win = rmat[t - w:t, n]
+            if np.isnan(win).any():
+                continue
+            sd = win.std()
+            if sd <= 0:
+                continue
+            trig_by_day.setdefault(t, []).append((n, (win - win.mean()) / sd))
+
+    bank_w: list[np.ndarray] = []
+    bank_f: list[float] = []
+    pending: list[tuple[int, np.ndarray, float]] = []  # (resolve_day, window, outcome)
+    for t in sorted(trig_by_day):
+        still = []
+        for resolve, q, f in pending:
+            if resolve <= t:
+                bank_w.append(q)
+                bank_f.append(f)
+            else:
+                still.append((resolve, q, f))
+        pending = still
+        if len(bank_w) >= k:
+            M = np.asarray(bank_w)
+            F = np.asarray(bank_f)
+            for n, q in trig_by_day[t]:
+                d = ((M - q) ** 2).sum(axis=1)
+                if F[np.argpartition(d, k - 1)[:k]].mean() > 0:
+                    sig[t:t + h, n] = 1.0  # hold h bars
+        for n, q in trig_by_day[t]:
+            fwd = rmat[t + 1:t + 1 + h, n]
+            if len(fwd) == h and not np.isnan(fwd).any():
+                pending.append((t + h, q, float(fwd.sum())))
+    return pd.DataFrame(sig, index=close.index, columns=close.columns)
+
+
 def _fomc_drift(wide, k: int) -> pd.DataFrame:
     """Long the k trading days ending at the FOMC announcement close
     (Lucca-Moench pre-announcement drift). Scheduled meetings only, from
@@ -416,6 +466,11 @@ FAMILIES = {
     "spike_analog": [
         ({"s": s, "w": w, "k": k}, _spike_analog)
         for s in (2.5, 3.5) for w in (10, 20) for k in (25, 100)
+    ],
+    # EXP-45 H-28: multi-day vote horizon (registered before the H-27 verdict).
+    "spike_analog_multiday": [
+        ({"s": s, "w": w, "k": k, "h": h}, _spike_analog_multiday)
+        for s in (2.5, 3.5) for w in (10, 20) for k in (25, 100) for h in (2, 3)
     ],
 }
 
