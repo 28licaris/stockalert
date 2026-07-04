@@ -1770,3 +1770,46 @@ do not. Next: noise gate + Tier-2 (calendar_fomc strategy, SPY
 rendering; the per-event effect size gives it a real chance where TOM's
 thin margin failed the small-sample test).
 
+
+---
+
+## EXP-44 · 2026-07-03 · FIRST FULL-GAUNTLET SURVIVOR: pre-FOMC drift, 2-day SPY rendering (Tier-2 p = 0.0062, q = 0.0124)
+
+The complete gate, passed end to end for the first time in 44
+experiments:
+
+| Gate | Result |
+|---|---|
+| Tier-1 screen (2006-2018, 1000 perms) | p = 0.0010 — 0/1000 shuffles matched (PF 1.565 pooled, k=1) |
+| BH across the 5-member Wave-2 family | q = 0.0050 |
+| Noise gate (1000 jittered histories) | ROBUST (all variants ≈ PF 1.5; final numbers in data/mcpt/exp41_noise_fomc.json) |
+| **Tier-2 full-engine (2019-2026, 60 events, costs, 160 perms)** | **H-26 p = 0.0062 — 0/160 shuffled tapes matched; BH q = 0.0124 across the registered pair** |
+
+**H-26 out-of-sample profile (calendar_fomc, pre_weekdays=2, SPY 95%,
+zero commission + 5bps/side):** +27.5% total (~3.3%/yr while in-market
+only ~16 days/yr), Sharpe 0.79, PF 3.17, max DD −3.5%. DD resample
+bands (10k paths, block 5): median −4.4%, p95 −7.3%, p99 −9.2%, worst
+−13.6%. H-25 (1-day rendering) failed (p = 0.248, Sharpe 0.19) — the
+next-open fill shifts the tight window off the drift; the 2-day
+rendering was pre-registered exactly as the hedge for that shift.
+
+**Why this one lived where 22 families died:** (1) flow/structural
+mechanism (the market's systematic pre-announcement risk-premium
+accrual — Lucca-Moench 2015), not a price pattern others arbitrage;
+(2) per-event effect size fat enough (screen PF 1.57) to certify at
+n=60 events where TOM's thin 1.11 could not; (3) calendar-bounded
+exposure — it CANNOT crash-load (in the market ~2 days at a time,
+16/yr), which is what killed reversion.
+
+Honest caveats for the record: single instrument, 60 OOS events;
+Lucca-Moench is published (decay risk is real and the forward paper
+record is the only arbiter of it); the effect concentrates around a
+known 2pm event — event risk is the strategy (a hawkish shock during
+the held window is the loss mode; the DD bands price the history of
+exactly that).
+
+**Status: PROMOTABLE under the standards gate — the first candidate
+eligible for paper trading.** Proposed next step (needs sign-off):
+paper-trade spec running calendar_fomc(k=2, SPY) alongside the existing
+momentum finalists, with the standard go-live wall.
+

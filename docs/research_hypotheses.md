@@ -156,5 +156,5 @@ primary.
 
 | ID | Config | Verdict |
 |----|--------|---------|
-| H-25 | `configs/fomc_t2_spy_k1.yaml` — pre_weekdays 1 (the validated k=1 window: hold the single day before the announcement) | — |
-| H-26 | `configs/fomc_t2_spy_k2.yaml` — pre_weekdays 2 (wider window hedging the next-open timing shift) | — |
+| H-25 | `configs/fomc_t2_spy_k1.yaml` — pre_weekdays 1 (the validated k=1 window: hold the single day before the announcement) | FAIL p = 0.248 (Sharpe 0.19 — the next-open fill shifts the tight window off the drift) |
+| H-26 | `configs/fomc_t2_spy_k2.yaml` — pre_weekdays 2 (wider window hedging the next-open timing shift) | **PASS p = 0.0062, q = 0.0124 — 0/160 shuffled tapes matched.** +27.5%/Sharpe 0.79/PF 3.17/DD −3.5% OOS. **FIRST FULL-GAUNTLET SURVIVOR → eligible for paper trading.** |
