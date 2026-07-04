@@ -235,3 +235,18 @@ reported). Holds expressed as h sessions ≈ 7h hourly bars.
 | H-34 | `close_strength_swing` — final-2-bar strength ≥ thr → hold h days (institutional parent orders split across days; the strong CLOSE is the footprint) | thr {0.5%, 1%} × h {1, 3} (4) | **DEAD** p = 1.000 (strong closes reverse) |
 | H-35 | `gap_hold_swing` — overnight gap ≥ g that HOLDS through the first two hours → enter at 2nd bar close, hold h days (the intraday confirmation daily bars can't see) | g {1%, 2%} × h {1, 3} (4) | **SURVIVOR p = 0.0010, q = 0.0040**, noise-ROBUST → Tier-2 |
 | H-36 | `first_hour_break_swing` — first bar closes above the prior day's high → hold h days (ORB as a swing entry, not the cost-dead day-trade) | h {1, 3} (2) | **SURVIVOR p = 0.0090, q = 0.0180**, noise-ROBUST → Tier-2 |
+
+**EXP-49 Tier-2 registrations** (2026-07-04, BEFORE implementation; BH
+across H-37/H-38). New `hourly_swing` engine strategy (1h interval, ET
+session clock): pluggable trigger locked to each screen winner; entry
+decision at the trigger bar's close (fill next bar open); fixed-timer
+exit ~1 session later (decision 7 bars after entry, fill next open —
+the tradeable rendering of the screen's 7-bar hold). Portfolio: the
+registered 40-stock universe, max 8 concurrent positions × 12% of cash,
+zero commission + 5 bps/side, untouched **2019-01-01 → 2026-06-12**,
+160-perm SESSION-AWARE nulls, Sharpe primary.
+
+| ID | Config | Trigger (locked from screen) | Verdict |
+|----|--------|------------------------------|---------|
+| H-37 | `configs/swing_t2_gap_hold.yaml` | gap ≥ 1% vs prior close, still ≥ first open at the 2nd bar's close | — |
+| H-38 | `configs/swing_t2_fhb.yaml` | first bar's close > prior session's high | — |
