@@ -218,3 +218,63 @@ def test_benjamini_hochberg_known_example():
         benjamini_hochberg([])
     with pytest.raises(ValueError, match="outside"):
         benjamini_hochberg([0.5, 1.2])
+
+
+# ── session-aware kernel (intraday) ──────────────────────────────────
+
+
+def _hourly_frame(days=120, seed=5, start=T0):
+    """Synthetic 7-bar-per-day session frames with hour-of-day vol structure."""
+    rng = np.random.default_rng(seed)
+    rows, ts, px = [], [], 100.0
+    vol_by_bar = [0.006, 0.003, 0.002, 0.002, 0.002, 0.003, 0.005]  # U-shape
+    d = start
+    for _ in range(days):
+        if d.weekday() < 5:
+            for h, v in zip(range(7), vol_by_bar):
+                px *= float(np.exp(v * rng.standard_normal()))
+                t = d.replace(hour=9 + h, minute=30)
+                ts.append(t)
+                rows.append((px * 0.999, px * 1.001, px * 0.998, px))
+        d += dt.timedelta(days=1)
+    a = np.array(rows)
+    return pd.DataFrame({"open": a[:, 0], "high": a[:, 1], "low": a[:, 2],
+                         "close": a[:, 3], "volume": 1000.0},
+                        index=pd.DatetimeIndex(ts))
+
+
+def test_session_aware_preserves_time_of_day_pools():
+    real = _hourly_frame()
+    perm = permute_frames({"A": real}, seed=7, session_aware=True)["A"]
+    lp_r = np.log(real[["open", "high", "low", "close"]].to_numpy())
+    lp_p = np.log(perm[["open", "high", "low", "close"]].to_numpy())
+    body_r = lp_r[:, 3] - lp_r[:, 0]
+    body_p = lp_p[:, 3] - lp_p[:, 0]
+    hours = np.array([t.hour for t in real.index])
+    for h in np.unique(hours):
+        m = hours == h  # bodies shuffled only WITHIN each hour pool
+        np.testing.assert_allclose(np.sort(body_p[m]), np.sort(body_r[m]), atol=1e-12)
+    # overnight gaps stay a closed pool: multiset of first-bar gaps preserved
+    dates = np.array([t.date() for t in real.index])
+    overnight = np.ones(len(dates), dtype=bool)
+    overnight[1:] = dates[1:] != dates[:-1]
+    gap_r = lp_r[:, 0] - np.roll(lp_r[:, 3], 1)
+    gap_p = lp_p[:, 0] - np.roll(lp_p[:, 3], 1)
+    np.testing.assert_allclose(
+        np.sort(gap_p[overnight][1:]), np.sort(gap_r[overnight][1:]), atol=1e-12)
+    # and the sequence actually changed
+    assert not np.allclose(perm["close"], real["close"])
+
+
+def test_session_aware_requires_alignment():
+    a = _hourly_frame(days=60)
+    b = _hourly_frame(days=30, start=T0 + dt.timedelta(days=60))
+    with pytest.raises(ValueError, match="aligned"):
+        permute_frames({"A": a, "B": b}, seed=1, session_aware=True)
+
+
+def test_session_aware_default_off_unchanged():
+    real = {"A": _walk_frame()}
+    p_default = permute_frames(real, seed=42)["A"]
+    p_explicit = permute_frames(real, seed=42, session_aware=False)["A"]
+    pd.testing.assert_frame_equal(p_default, p_explicit)

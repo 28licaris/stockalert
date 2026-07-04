@@ -248,6 +248,72 @@ def _survivor_conditioning(wide, gate: str) -> pd.DataFrame:
     return base.mul(g, axis=0)
 
 
+def _day_positions(idx: pd.DatetimeIndex) -> tuple[np.ndarray, np.ndarray]:
+    """(position within day, position from day END) for session-bar indexes."""
+    days = pd.Series(np.arange(len(idx)), index=idx).groupby(idx.date)
+    pos = days.cumcount().to_numpy()
+    counts = days.transform("count").to_numpy()
+    return pos, counts - 1 - pos
+
+
+def _intraday_momentum(wide, pred_bars: int, min_move: float) -> pd.DataFrame:
+    """H-29: first-hour(s) return predicts the last hour. Signal sits on the
+    second-to-last bar of the day (earning that close -> day-close return)
+    when the day's first `pred_bars` returns sum above min_move."""
+    close = wide["close"]
+    r = np.log(close).diff()
+    pos, from_end = _day_positions(close.index)
+    pred = r.where(pd.Series(pos < pred_bars, index=close.index), 0.0)
+    day = pd.Series(close.index.date, index=close.index)
+    day_pred = pred.groupby(day.values).transform("sum")
+    on_bar = pd.Series(from_end == 1, index=close.index)  # second-to-last bar
+    sig = day_pred.gt(min_move).mul(on_bar, axis=0)
+    return sig.astype(float)
+
+
+def _fomc_hourly(wide, entry: str, exit_start: str) -> pd.DataFrame:
+    """H-30: hold SPY on announcement day from `entry` through the bar
+    STARTING at `exit_start` exclusive (exit before the 2pm decision).
+    entry='open' holds intraday bars only; entry='prior_close' also holds
+    the prior day's last bar (capturing the overnight gap)."""
+    close = wide["close"]
+    csv = Path(__file__).resolve().parent / "data" / "fomc_scheduled_meetings.csv"
+    ann = set(pd.to_datetime(pd.read_csv(csv, comment="#")["announcement_date"]).dt.date)
+    idx = close.index
+    is_ann = pd.Series([d in ann for d in idx.date], index=idx)
+    hhmm = pd.Series([t.strftime("%H:%M") for t in idx.time], index=idx)
+    pos, from_end = _day_positions(idx)
+    held = is_ann & (hhmm < exit_start)
+    if entry == "prior_close":
+        # also hold the bar BEFORE an announcement day's first bar
+        nxt_is_ann = np.roll(is_ann.to_numpy(), -1)
+        prior_last = (from_end == 0) & nxt_is_ann
+        prior_last[-1] = False
+        held = held | pd.Series(prior_last, index=idx)
+    sig = pd.DataFrame(0.0, index=idx, columns=close.columns)
+    sig.loc[held] = 1.0
+    return sig
+
+
+def _tom_last_hour(wide, last_bars: int) -> pd.DataFrame:
+    """H-31: the TOM window (locked 5/2 from H-14) concentrated into the
+    final `last_bars` hour(s) of each in-window day."""
+    close = wide["close"]
+    idx = close.index
+    period = pd.PeriodIndex(idx, freq="M")
+    day = pd.Series(idx.date, index=idx)
+    day_rank = day.groupby(period).transform(lambda s: pd.factorize(s)[0])
+    days_in_month = day.groupby(period).transform(lambda s: s.nunique())
+    in_window = (day_rank < 2) | (day_rank >= days_in_month - 5)
+    _, from_end = _day_positions(idx)
+    on_bars = pd.Series((from_end >= 1) & (from_end <= last_bars), index=idx)
+    sig_col = (in_window & on_bars).astype(float)
+    return pd.DataFrame(
+        np.repeat(sig_col.to_numpy()[:, None], close.shape[1], axis=1),
+        index=idx, columns=close.columns,
+    )
+
+
 def _spike_analog(wide, s: float, w: int, k: int) -> pd.DataFrame:
     """H-27: on a spike day (|1d return| > s x trailing-20d sigma), find the k
     nearest STRICTLY-PRIOR spike-windows (normalized prior-w-day return
@@ -472,6 +538,17 @@ FAMILIES = {
         ({"s": s, "w": w, "k": k, "h": h}, _spike_analog_multiday)
         for s in (2.5, 3.5) for w in (10, 20) for k in (25, 100) for h in (2, 3)
     ],
+    # EXP-46 Wave-H (hourly; run with --table ohlcv_hourly --session-aware).
+    "intraday_momentum": [
+        ({"pred_bars": p, "min_move": m}, _intraday_momentum)
+        for p in (1, 2) for m in (0.0, 0.0025)
+    ],
+    "fomc_hourly": [
+        ({"entry": "open", "exit_start": "12:30"}, _fomc_hourly),
+        ({"entry": "open", "exit_start": "13:30"}, _fomc_hourly),
+        ({"entry": "prior_close", "exit_start": "13:30"}, _fomc_hourly),
+    ],
+    "tom_last_hour": [({"last_bars": b}, _tom_last_hour) for b in (1, 2)],
 }
 
 # Per-family forward-return stream: "cc" = close(t) -> close(t+1) (default);
@@ -544,12 +621,16 @@ def _random_exit_signal(
 # ── data ─────────────────────────────────────────────────────────────
 
 
-def _load_frames(symbols: list[str], start: str, end: str) -> dict[str, pd.DataFrame]:
+def _load_frames(
+    symbols: list[str], start: str, end: str,
+    table: str = "ohlcv_daily", align: bool = False,
+) -> dict[str, pd.DataFrame]:
     from app.db.client import get_client
 
+    ts_expr = "toDate(timestamp)" if table == "ohlcv_daily" else "timestamp"
     rows = get_client().query(
-        "SELECT symbol, toDate(timestamp) d, open, high, low, close, volume "
-        "FROM ohlcv_daily FINAL "
+        f"SELECT symbol, {ts_expr} d, open, high, low, close, volume "
+        f"FROM {table} FINAL "
         "WHERE symbol IN %(symbols)s AND toDate(timestamp) BETWEEN %(start)s AND %(end)s "
         "ORDER BY symbol, d",
         parameters={"symbols": symbols, "start": start, "end": end},
@@ -570,6 +651,17 @@ def _load_frames(symbols: list[str], start: str, end: str) -> dict[str, pd.DataF
         frames[sym] = g
     print(f"loaded {len(frames)} symbols ({dropped} dropped: <30 bars or bad prices), "
           f"{sum(len(f) for f in frames.values()):,} bars", flush=True)
+    if align and frames:
+        # Session-aware nulls require a fully aligned universe: inner-join all
+        # calendars and report exactly what that discards (no silent trims).
+        common = None
+        for f in frames.values():
+            common = f.index if common is None else common.intersection(f.index)
+        before = {s: len(f) for s, f in frames.items()}
+        frames = {s: f.loc[common] for s, f in frames.items()}
+        trimmed = {s: before[s] - len(common) for s in frames if before[s] != len(common)}
+        print(f"aligned to {len(common):,} common bars"
+              + (f" (trimmed: {trimmed})" if trimmed else " (no trims)"), flush=True)
     return frames
 
 
@@ -588,6 +680,11 @@ def main(argv=None) -> int:
                          "noise: price-jitter fragility of the REAL optimum. "
                          "random_exit: entries kept, exits redrawn (edge locator).")
     ap.add_argument("--scale", type=float, default=0.25, help="noise jitter scale")
+    ap.add_argument("--table", default="ohlcv_daily",
+                    help="ClickHouse bar table (ohlcv_daily | ohlcv_hourly)")
+    ap.add_argument("--session-aware", action="store_true",
+                    help="intraday null: shuffle within hour-of-day pools, overnight "
+                         "gaps among themselves (requires an aligned universe)")
     ap.add_argument("--bars", default=None,
                     help="bar snapshot (local path or s3://) from research_bars.py; "
                          "when set, no ClickHouse needed — cloud-worker mode")
@@ -605,7 +702,8 @@ def main(argv=None) -> int:
         from scripts.research_bars import load_frames as _snapshot_frames
         frames = _snapshot_frames(a.bars, symbols=symbols, start=a.start, end=a.end)
     else:
-        frames = _load_frames(symbols, a.start, a.end)
+        frames = _load_frames(symbols, a.start, a.end, table=a.table,
+                              align=a.session_aware)
     real_params, real_pf = _optimize(a.family, frames)
     print(f"REAL  {a.family}: best={real_params} pooled_PF={real_pf:.4f}", flush=True)
 
@@ -640,7 +738,8 @@ def main(argv=None) -> int:
                 pf = _pooled_pf(best_fn(w, **real_params),
                                 _fwd_returns(w, RETURN_KIND.get(a.family, "cc")))
             else:
-                perm = permute_frames(frames, seed=a.seed + i)
+                perm = permute_frames(frames, seed=a.seed + i,
+                                      session_aware=a.session_aware)
                 _, pf = _optimize(a.family, perm)
             variant_pfs.append(pf)
             _progress(a, i, t0, variant_pfs, real_pf)

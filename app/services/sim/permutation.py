@@ -65,6 +65,7 @@ def permute_frames(
     *,
     seed: int,
     start_after: Optional[datetime] = None,
+    session_aware: bool = False,
 ) -> dict[str, pd.DataFrame]:
     """
     Permute per-symbol OHLC(V) DataFrames with one shared master shuffle.
@@ -76,6 +77,14 @@ def permute_frames(
 
     Returns new frames (same index per symbol, ohlcv columns only).
     Bars with timestamp <= start_after are returned unchanged.
+
+    session_aware (for INTRADAY bars): bar bodies shuffle only within
+    their own hour-of-day pool, and overnight gaps (first bar of a
+    trading day) shuffle only among overnight gaps, intraday gaps within
+    their hour pool. The null then preserves time-of-day marginals
+    (open/close vol seasonality, overnight-gap distribution) and
+    destroys ONLY serial dependence — the honest null for intraday
+    claims. Daily bars: leave False (single pools, original behavior).
     """
     if not frames:
         raise ValueError("permute_frames: no symbols supplied")
@@ -104,8 +113,45 @@ def permute_frames(
         )
 
     rng = np.random.default_rng(seed)
-    body_perm = rng.permutation(permutable)  # h/l/c relatives + volume
-    gap_perm = rng.permutation(permutable)   # close→open gaps
+    if not session_aware:
+        body_perm = rng.permutation(permutable)  # h/l/c relatives + volume
+        gap_perm = rng.permutation(permutable)   # close→open gaps
+    else:
+        # Session-aware pools are only exact when every symbol shares the
+        # master calendar — the per-symbol restriction of a pooled shuffle
+        # can otherwise pair mismatched pools. Require full alignment.
+        misaligned = [s for s in symbols if len(frames[s]) != n]
+        if misaligned:
+            raise ValueError(
+                "permute_frames(session_aware=True) requires a fully aligned "
+                f"universe; {len(misaligned)} symbols differ from the master "
+                f"calendar (e.g. {misaligned[:3]}) — drop partial-coverage names"
+            )
+        # Pool keys per master slot: bodies by hour-of-day; gaps by
+        # hour-of-day except the first bar of each calendar day, which is
+        # an overnight gap (its own pool). Shuffling WITHIN pools yields a
+        # bijection on `permutable` that maps every slot to a same-pool slot.
+        times = master.time
+        dates = master.date
+        body_key = np.array([t.isoformat() for t in times])
+        gap_key = body_key.copy()
+        is_overnight = np.ones(n, dtype=bool)
+        is_overnight[1:] = dates[1:] != dates[:-1]
+        gap_key[is_overnight] = "overnight"
+
+        def _pooled_perm(keys: np.ndarray) -> np.ndarray:
+            out = np.empty(len(permutable), dtype=int)
+            pos_of = {slot: i for i, slot in enumerate(permutable)}
+            k = keys[permutable]
+            for pool in np.unique(k):
+                slots = permutable[k == pool]
+                shuffled = rng.permutation(slots)
+                for s, src in zip(slots, shuffled):
+                    out[pos_of[s]] = src
+            return out
+
+        body_perm = _pooled_perm(body_key)
+        gap_perm = _pooled_perm(gap_key)
 
     out: dict[str, pd.DataFrame] = {}
     for sym in symbols:
