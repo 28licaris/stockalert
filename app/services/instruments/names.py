@@ -16,16 +16,19 @@ Public API:
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Iterable
 
 logger = logging.getLogger(__name__)
 
 _TABLE = "instrument_names"
-# Cap Polygon fetches per call so a large cold lookup can't burst the API.
-# Uncached-and-uncapped symbols simply come back empty this round and get
-# filled on a later call (or by a bulk backfill).
-_MAX_FETCH_PER_CALL = 50
+# On-demand misses are fetched CONCURRENTLY (bounded) so a page of uncached
+# symbols resolves in ~one Polygon round-trip of latency instead of N. The
+# whole ticker universe should be pre-warmed via backfill_all() so on-demand
+# fetches are rare (brand-new tickers only).
+_MAX_FETCH_PER_CALL = 200
+_FETCH_CONCURRENCY = 12
 
 
 def ensure_table() -> None:
@@ -138,10 +141,15 @@ def resolve_names(symbols: Iterable[str]) -> dict[str, dict]:
 
     missing = [s for s in syms if s not in known]
     fetched: dict[str, dict] = {}
-    for sym in missing[:_MAX_FETCH_PER_CALL]:
-        rec = _polygon_fetch(sym)
-        # Cache negatives too (empty description) so we don't re-hit Polygon.
-        fetched[sym] = rec or {"description": "", "exchange": "", "asset_type": ""}
+    to_fetch = missing[:_MAX_FETCH_PER_CALL]
+    if to_fetch:
+        # Concurrent fetch — bounded so we don't burst the API. Turns N
+        # sequential ~300ms round-trips into ~N/concurrency batches.
+        with ThreadPoolExecutor(max_workers=_FETCH_CONCURRENCY) as ex:
+            recs = list(ex.map(_polygon_fetch, to_fetch))
+        for sym, rec in zip(to_fetch, recs):
+            # Cache negatives too (empty description) so we don't re-hit Polygon.
+            fetched[sym] = rec or {"description": "", "exchange": "", "asset_type": ""}
     if len(missing) > _MAX_FETCH_PER_CALL:
         logger.info(
             "resolve_names: capped Polygon fetches at %d (%d symbols uncached this round)",
@@ -157,3 +165,31 @@ def resolve_names(symbols: Iterable[str]) -> dict[str, dict]:
     for s in syms:  # guarantee an entry for every requested symbol
         out.setdefault(s, {"description": "", "exchange": "", "asset_type": ""})
     return out
+
+
+def warm(symbols: Iterable[str]) -> int:
+    """Pre-resolve + cache names for `symbols` so later lookups are instant CH
+    hits. Reuses resolve_names (concurrent, CH-first). Returns the count that
+    ended up with a non-empty name. Chunked to the per-call fetch cap."""
+    syms = list(dict.fromkeys(s.strip().upper() for s in symbols if s and s.strip()))
+    resolved = 0
+    for i in range(0, len(syms), _MAX_FETCH_PER_CALL):
+        out = resolve_names(syms[i : i + _MAX_FETCH_PER_CALL])
+        resolved += sum(1 for v in out.values() if v.get("description"))
+    logger.info("instrument_names warm: %d/%d symbols have names", resolved, len(syms))
+    return resolved
+
+
+def warm_stream_universe() -> int:
+    """Warm names for the live streaming universe (the symbols shown on the
+    Stream page). Safe to call on startup / nightly."""
+    try:
+        from app.db.client import get_client
+
+        syms = [r[0] for r in get_client().query(
+            "SELECT DISTINCT symbol FROM stream_universe WHERE symbol NOT LIKE '/%'"
+        ).result_rows]
+    except Exception as exc:  # noqa: BLE001 — best effort
+        logger.warning("warm_stream_universe: could not read stream_universe: %s", exc)
+        return 0
+    return warm(syms)

@@ -300,6 +300,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001 — never break startup
         logger.warning("sector universe-sync scheduling failed: %s", e)
 
+    # Warm company names for the streaming universe so the Stream/Watchlist
+    # pages render names instantly (CH hits) instead of lazily fetching them
+    # per-symbol on first view. Best-effort + off-thread; never blocks startup.
+    async def _warm_names() -> None:
+        try:
+            from app.services.instruments.names import warm_stream_universe
+            n = await asyncio.to_thread(warm_stream_universe)
+            logger.info("✅ instrument names warmed (%d symbols)", n)
+        except Exception as e:  # noqa: BLE001 — never break startup
+            logger.warning("instrument-name warm failed: %s", e)
+
+    asyncio.create_task(_warm_names())
+
     await _safe_start("Watchlist service", lambda: watchlist_service.start())
     try:
         status = watchlist_service.status()
