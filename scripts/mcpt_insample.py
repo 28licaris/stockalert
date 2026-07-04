@@ -570,6 +570,153 @@ def _seasonality_tom(wide, before: int, after: int) -> pd.DataFrame:
     )
 
 
+# ── EXP-53 families (H-44..H-48) ─────────────────────────────────────
+
+_DIV_PARQUET = Path(__file__).resolve().parent.parent / "data" / "mcpt" / "dividends_ex_dates.parquet"
+_DIV_CACHE: dict[str, pd.DataFrame] = {}
+
+
+def _ex_date_events(close: pd.DataFrame) -> list[tuple[int, int]]:
+    """(bar_index_of_ex_day, column) for every cash-dividend ex-date of a
+    universe symbol inside the screen window. Ex-dates are pinned to the
+    first trading bar >= ex_date (they are exchange business days, so this
+    is almost always an exact match)."""
+    if "events" not in _DIV_CACHE:
+        _DIV_CACHE["events"] = pd.read_parquet(_DIV_PARQUET)
+    div = _DIV_CACHE["events"]
+    dates = np.array(close.index.date)
+    col_of = {s: j for j, s in enumerate(close.columns)}
+    sub = div[div["symbol"].isin(col_of)]
+    ex = pd.to_datetime(sub["ex_date"]).dt.date.to_numpy()
+    keep = (ex >= dates[0]) & (ex <= dates[-1])
+    idx = np.searchsorted(dates, ex[keep])
+    cols = sub["symbol"].to_numpy()[keep]
+    return [(int(i), col_of[s]) for i, s in zip(idx, cols)]
+
+
+def _dividend_runup(wide, lead: int) -> pd.DataFrame:
+    """H-44: long the `lead` trading days ending at the CUM-dividend close.
+    Signal days [ex-1-lead, ex-2] earn cc returns ending close(ex-1) — the
+    window holds no ex-day cash flow, so price-only PF is unbiased."""
+    close = wide["close"]
+    sig = np.zeros(close.shape)
+    for i, j in _ex_date_events(close):
+        sig[max(i - 1 - lead, 0):max(i - 1, 0), j] = 1.0
+    return pd.DataFrame(sig, index=close.index, columns=close.columns)
+
+
+def _dividend_ex_drift(wide, hold: int) -> pd.DataFrame:
+    """H-45: long `hold` days from the ex-day close (post-drop drift;
+    entry is after the dividend drop, so price-only returns are fair)."""
+    close = wide["close"]
+    sig = np.zeros(close.shape)
+    for i, j in _ex_date_events(close):
+        sig[i:i + hold, j] = 1.0
+    return pd.DataFrame(sig, index=close.index, columns=close.columns)
+
+
+_PCA_CACHE: dict[tuple, pd.DataFrame] = {}
+
+
+def _pca_residuals(close: pd.DataFrame, k: int, fit_win: int = 252, refit: int = 21) -> pd.DataFrame:
+    """Out-of-sample standardized PCA residuals: factors fit on the trailing
+    `fit_win` days (correlation PCA over fully-covered symbols), refit every
+    `refit` days; each OOS day's standardized cross-section is projected off
+    the top-k loadings. Cached per (close-identity, k): the optimizer calls
+    multiple z-thresholds per evaluation and both k's share one tape."""
+    key = (id(close), k, fit_win, refit)
+    if key in _PCA_CACHE:
+        return _PCA_CACHE[key]
+    for stale in [c for c in _PCA_CACHE if c[0] != id(close)]:
+        _PCA_CACHE.pop(stale)  # new permutation tape -> drop the old one
+
+    r = np.log(close).diff().to_numpy()
+    T, N = r.shape
+    resid = np.full((T, N), np.nan)
+    for t0 in range(fit_win, T, refit):
+        win = r[t0 - fit_win:t0]
+        valid = ~np.isnan(win).any(axis=0)
+        std = win[:, valid].std(axis=0, ddof=1)
+        ok = std > 0
+        cols = np.flatnonzero(valid)[ok]
+        if len(cols) < k + 1:
+            continue
+        mu, sd = win[:, cols].mean(axis=0), std[ok]
+        x_fit = (win[:, cols] - mu) / sd
+        _, _, vt = np.linalg.svd(x_fit, full_matrices=False)
+        v = vt[:k]  # (k, n_valid) loadings
+        block = r[t0:t0 + refit][:, cols]
+        x = (block - mu) / sd  # standardized with FIT-window stats (OOS-safe)
+        e = x - (x @ v.T) @ v
+        e[np.isnan(block)] = np.nan
+        resid[t0:t0 + refit, cols] = e
+    out = pd.DataFrame(resid, index=close.index, columns=close.columns)
+    _PCA_CACHE[key] = out
+    return out
+
+
+def _pca_residual_reversion(wide, n_factors: int, z_thr: float, hold: int = 10) -> pd.DataFrame:
+    """H-46: market-neutral reversion on PCA residuals. z = 21d cumulative
+    residual / (sigma_res * sqrt(21)); long z < -z_thr, short z > +z_thr,
+    fixed 10d hold, both legs always eligible."""
+    close = wide["close"]
+    resid = _pca_residuals(close, n_factors)
+    z = resid.rolling(21).sum() / (resid.rolling(252).std() * np.sqrt(21))
+    long_leg = (z < -z_thr).astype(float).rolling(hold, min_periods=1).max()
+    short_leg = (z > z_thr).astype(float).rolling(hold, min_periods=1).max()
+    return (long_leg - short_leg).fillna(0.0)
+
+
+def _calendar_mask(close: pd.DataFrame, dates, k: int) -> pd.DataFrame:
+    """Broadcast fomc_drift-style mask: long the k bars ending at each
+    event-day close (signal days [i-k, i-1] earn cc into close(i))."""
+    positions = {d: i for i, d in enumerate(close.index.date)}
+    mask = np.zeros(len(close), dtype=bool)
+    for d in dates:
+        i = positions.get(d)
+        if i is not None:
+            mask[max(i - k, 0):i] = True
+    return pd.DataFrame(
+        np.repeat(mask[:, None].astype(float), close.shape[1], axis=1),
+        index=close.index, columns=close.columns,
+    )
+
+
+def _macro_release_drift(wide, release: str, k: int) -> pd.DataFrame:
+    """H-47: long the k trading days ending at the release-day close
+    (CPI/NFP print at 08:30 ET -> the final cc return carries the print).
+    Scheduled dates from ALFRED (BLS releases)."""
+    csv = Path(__file__).resolve().parent / "data" / f"{release}_release_dates.csv"
+    dates = pd.to_datetime(pd.read_csv(csv, comment="#")["release_date"]).dt.date
+    return _calendar_mask(wide["close"], dates, k)
+
+
+def _opex_flows(wide, segment: str, side: float) -> pd.DataFrame:
+    """H-48: monthly option-expiration flow windows around the 3rd Friday
+    (delta-hedge unwind mechanics). into_opex = the 4 trading days ending
+    at the opex close; post_opex = the following 5. Both directions
+    registered (side = +/-1)."""
+    close = wide["close"]
+    idx = close.index
+    dates = np.array(idx.date)
+    mask = np.zeros(len(idx), dtype=bool)
+    for per in pd.period_range(idx[0], idx[-1], freq="M"):
+        first = per.to_timestamp()
+        # 3rd Friday: weekday 4; first Friday = first + (4 - weekday) % 7 days
+        third_fri = (first + pd.Timedelta(days=(4 - first.weekday()) % 7 + 14)).date()
+        i = int(np.searchsorted(dates, third_fri, side="right")) - 1
+        if i < 0:
+            continue
+        if segment == "into_opex":
+            mask[max(i - 4, 0):i] = True
+        else:  # post_opex: the 5 sessions after expiration
+            mask[i:i + 5] = True
+    return pd.DataFrame(
+        np.repeat(mask[:, None].astype(float) * side, close.shape[1], axis=1),
+        index=idx, columns=close.columns,
+    )
+
+
 FAMILIES = {
     "donchian": [({"lookback": lb}, _donchian) for lb in range(10, 105, 5)],
     "ma_cross": [
@@ -697,6 +844,21 @@ FAMILIES = {
     "asymmetric_exit_overlay": [
         ({"cycle": c, "trail": tr}, _asymmetric_exit_overlay)
         for c in (10, 21) for tr in (0.05, 0.10)
+    ],
+    # EXP-53: scheduled flows + market-neutral residuals (H-44..H-48).
+    "dividend_runup": [({"lead": ld}, _dividend_runup) for ld in (3, 5, 10)],
+    "dividend_ex_drift": [({"hold": h}, _dividend_ex_drift) for h in (3, 5, 10)],
+    "pca_residual_reversion": [
+        ({"n_factors": k, "z_thr": z}, _pca_residual_reversion)
+        for k in (1, 5) for z in (1.5, 2.0)
+    ],
+    "macro_release_drift": [
+        ({"release": r, "k": k}, _macro_release_drift)
+        for r in ("cpi", "nfp") for k in (1, 2, 3)
+    ],
+    "opex_flows": [
+        ({"segment": s, "side": sd}, _opex_flows)
+        for s in ("into_opex", "post_opex") for sd in (1.0, -1.0)
     ],
 }
 
