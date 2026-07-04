@@ -1733,3 +1733,40 @@ data or a pooled multi-instrument rendering with more events could
 re-adjudicate; any such re-test is a new registration). Remaining open
 daily-bars work: the Wave-3 battery (in flight).
 
+
+---
+
+## EXP-42 · 2026-07-03 · Wave-3: all six mechanisms dead — price/volume/breadth space is exhausted
+
+Six pre-registered families (H-17..H-22), 1000 perms each, 2006-2018,
+BH jointly: **0/6 survive.**
+
+| Family | real PF | p | q |
+|---|---|---|---|
+| survivor_conditioning (best: breadth_down) | 1.1336 | 0.0130 | 0.0779 |
+| breadth_timing (best: thrust/200) | 1.1979 | 0.2218 | 0.5155 |
+| market_relative_reversion | 1.0279 | 0.2577 | 0.5155 |
+| leadlag_spy | 1.0289 | 0.6154 | 0.9231 |
+| xsec_lowvol_max | 1.0425 | 0.9201 | 0.9231 (real BELOW null) |
+| volume_capitulation | 0.9610 | 0.9231 | 0.9231 (real below null) |
+
+Notes: survivor_conditioning's near-miss is diagnostic gold even in
+death — the reversion signal concentrates in BROAD-WEAKNESS regimes
+(breadth_down), consistent with its liquidity-provision mechanism and
+with why its portfolio expression can't escape crash exposure. Volume
+climax and lottery-aversion both scored WORSE than shuffled data.
+
+## EXP-41 addendum · H-15 unlocked — FOMC drift is the strongest signal ever measured here
+
+Fed calendar backfilled (167 scheduled announcements 2006-2026,
+`scripts/data/fomc_scheduled_meetings.csv`). Screen: **p = 0.0010 — 0/1000
+permutations matched.** Real pooled PF 1.5650 vs null 1.0642±0.0819,
+best k = 1: the single trading day before each announcement (~104 days
+in 13 years) — the Lucca-Moench pre-announcement drift, textbook form.
+Wave-2 five-member BH recomputed: **fomc_drift q = 0.0050 and
+seasonality_tom q = 0.0275 both survive.** Campaign pattern confirmed:
+flow/calendar mechanisms carry real structure; price-derived patterns
+do not. Next: noise gate + Tier-2 (calendar_fomc strategy, SPY
+rendering; the per-event effect size gives it a real chance where TOM's
+thin margin failed the small-sample test).
+
