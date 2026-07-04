@@ -204,3 +204,14 @@ passed here).
 | H-29 | `intraday_momentum` — first-hour(s) return sign predicts the last hour (MOC/rebalancing/gamma flows; Gao-Han-Li-Zhou 2018) | SPY QQQ IWM DIA + 9 sector SPDRs w/ full 2006-2018 coverage (13; XLRE/XLC excluded — 2015/2018 inceptions violate the session-aware kernel's alignment requirement; amended pre-run) | predictor {first 1, first 2 bars} × min |move| {0, 0.25%} (4) | **DEAD** p = 0.0759, q = 0.1139 |
 | H-30 | `fomc_hourly` — the PROMOTED drift's exit sharpened: hold announcement-day from open to just before the 2pm decision (Lucca-Moench accrual continues all morning) | SPY | exit bar {12:30, 13:30} + prior-close→13:30 variant (3). | **SURVIVOR p = 0.0010, q = 0.0030** (PF 2.7826, 0/1000; best prior_close→13:30) → Tier-2 (EXP-47) |
 | H-31 | `tom_last_hour` — the parked TOM effect concentrated into the close (contribution flows execute near the close) | same 13-name aligned universe | window locked at H-14 best (5/2) × {last 1, last 2 bars} (2) | **DEAD** p = 0.6474 |
+
+**EXP-47 Tier-2 registration** (2026-07-04, BEFORE implementation;
+single hypothesis — the screen already selected the rendering). H-32:
+`calendar_fomc_hourly` on SPY — entry decision at the prior day's
+second-to-last hourly bar (fill at the final bar's open ≈15:30), exit
+decision at the 12:30 bar's close (fill 13:30 — out before the 2pm
+decision). 95% of cash, zero commission + 5bps/side, hourly interval,
+untouched **2019-01-01 → 2026-06-12** (hourly lake end), 160-perm
+SESSION-AWARE null, Sharpe primary. A pass registers a SECOND paper run
+(`fomc_drift_hourly_spy`) beside the daily one — both live from the
+2026-07-29 meeting.
