@@ -271,3 +271,19 @@ COST-EFFICIENT rendering with clean walls:
   g×h response surface on record. **VERDICT: dev winner g=1.5%/h=1
   (dev Sharpe 0.88 net) → holdout p = 0.348, FAIL. Chapter CLOSED —
   the edge decayed post-2019; every rendering measured.**
+
+**EXP-51 registration** (2026-07-04, BEFORE implementation; BH across
+H-40/H-41). The user's discretionary swing playbook, encoded: money-flow
+continuation via (a) long bases resolving upward, (b) leaders resuming
+after pullbacks. Related-but-distinct from dead cousins
+(vol_compression = short ATR squeeze; high_52wk = proximity pullback;
+breakout_vol = any 20d high): the differentiators are BASE LENGTH /
+TIGHTNESS and LEADER-CONTEXT + RESUMPTION TRIGGER. Screens: 1000-name
+daily universe, 2006-2018, pooled PF, 1000 perms; 2019-2026 untouched.
+Laddered/scale-out exits (the user's risk expression — never tested on
+this platform) are reserved for the Tier-2 stage of any survivor.
+
+| ID | Family | Grid |
+|----|--------|------|
+| H-40 | `consolidation_breakout` — rolling base_len-day range ≤ tight × price, then close breaks the base high → fixed hold | base_len {30, 60} × tightness {8%, 12%} × hold {5, 10} (8) |
+| H-41 | `leader_pullback` — ret60 ≥ lead, pulled back ≥5% off the 20d high, entry when close reclaims the prior day's high (resumption) → fixed hold | lead {30%, 50%} × hold {5, 10} (4) |
