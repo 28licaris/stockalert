@@ -317,6 +317,31 @@ def _tom_last_hour(wide, last_bars: int) -> pd.DataFrame:
     )
 
 
+def _asymmetric_exit_overlay(wide, cycle: int, trail: float) -> pd.DataFrame:
+    """H-43: information-free entries (every cycle-th bar when flat), pure
+    trailing-stop exits (close < running-max x (1-trail), no target). Tests
+    whether cut-losses/let-winners-run is an edge BY ITSELF. Time-loop with
+    vectorized per-symbol state (path-dependent, cannot be rolled)."""
+    closes = wide["close"].to_numpy()
+    T, N = closes.shape
+    sig = np.zeros((T, N))
+    in_pos = np.zeros(N, dtype=bool)
+    run_max = np.full(N, np.nan)
+    for t in range(1, T):
+        px = closes[t]
+        valid = ~np.isnan(px)
+        exit_now = in_pos & valid & (px < run_max * (1.0 - trail))
+        in_pos[exit_now] = False
+        if t % cycle == 0:
+            enter = (~in_pos) & valid
+            in_pos[enter] = True
+            run_max[enter] = px[enter]
+        upd = in_pos & valid
+        run_max[upd] = np.maximum(run_max[upd], px[upd])
+        sig[t, in_pos] = 1.0
+    return pd.DataFrame(sig, index=wide["close"].index, columns=wide["close"].columns)
+
+
 def _early_run(wide, r_min: float, v_min: float, hold: int) -> pd.DataFrame:
     """H-42: catch the run YOUNG — fresh 20d high + young momentum (ret20)
     + a volume-regime shift (10d vs 60d avg = money flowing in) -> fixed hold."""
@@ -667,6 +692,11 @@ FAMILIES = {
     "early_run": [
         ({"r_min": r, "v_min": v, "hold": h}, _early_run)
         for r in (0.08, 0.15) for v in (1.0, 1.5) for h in (5, 10)
+    ],
+    # EXP-52: exit-asymmetry-as-edge test.
+    "asymmetric_exit_overlay": [
+        ({"cycle": c, "trail": tr}, _asymmetric_exit_overlay)
+        for c in (10, 21) for tr in (0.05, 0.10)
     ],
 }
 
