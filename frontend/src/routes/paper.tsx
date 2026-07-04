@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Bell, Download, Loader2, Radio } from "lucide-react";
 import { usePaperStatus, type PaperStatus } from "@/api/backtest";
 import { EquityTradeChart } from "@/components/charts/EquityTradeChart";
