@@ -32,6 +32,8 @@ CHAIN_RAW_TABLE_NAME = "schwab_chain_raw"
 CHAIN_CONTRACTS_TABLE_NAME = "schwab_chain_contracts"
 EXPIRATIONS_TABLE_NAME = "schwab_expirations"
 GAMMA_EXPOSURE_TABLE_NAME = "gamma_exposure_snapshots"
+THETA_GREEKS_EOD_TABLE_NAME = "thetadata_greeks_eod"
+THETA_OI_EOD_TABLE_NAME = "thetadata_oi_eod"
 
 
 def options_table_id(name: str) -> str:
@@ -179,6 +181,69 @@ GAMMA_EXPOSURE_SORT = SortOrder(
 )
 
 
+# ThetaData EOD history bronze (backfill source for historical GEX).
+# Two tables mirror the two provider endpoints (greeks/eod + open_interest)
+# and join at derive time on the contract key + eod_date. LEAN: first-order
+# greeks + vanna/charm (dealer-flow research inputs) + IV + NBBO essentials;
+# everything else is re-pullable from the provider.
+THETA_GREEKS_EOD_SCHEMA = Schema(
+    NestedField(1, "underlying_symbol", StringType(), required=True),
+    NestedField(2, "eod_date", DateType(), required=True),
+    NestedField(3, "expiration_date", DateType(), required=True),
+    NestedField(4, "strike", DoubleType(), required=True),
+    NestedField(5, "put_call", StringType(), required=True),
+    NestedField(6, "underlying_price", DoubleType(), required=False),
+    NestedField(7, "implied_vol", DoubleType(), required=False),
+    NestedField(8, "delta", DoubleType(), required=False),
+    NestedField(9, "gamma", DoubleType(), required=False),
+    NestedField(10, "theta", DoubleType(), required=False),
+    NestedField(11, "vega", DoubleType(), required=False),
+    NestedField(12, "vanna", DoubleType(), required=False),
+    NestedField(13, "charm", DoubleType(), required=False),
+    NestedField(14, "bid", DoubleType(), required=False),
+    NestedField(15, "ask", DoubleType(), required=False),
+    NestedField(16, "close", DoubleType(), required=False),
+    NestedField(17, "volume", LongType(), required=False),
+    NestedField(18, "ingestion_ts", TimestamptzType(), required=True),
+    NestedField(19, "ingestion_run_id", StringType(), required=True),
+)
+
+THETA_GREEKS_EOD_PARTITION = PartitionSpec(
+    PartitionField(source_id=1, field_id=1000, transform=BucketTransform(16), name="underlying_bucket"),
+    PartitionField(source_id=2, field_id=1001, transform=MonthTransform(), name="eod_month"),
+)
+
+THETA_GREEKS_EOD_SORT = SortOrder(
+    SortField(source_id=1, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+    SortField(source_id=2, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+    SortField(source_id=3, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+    SortField(source_id=4, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+)
+
+THETA_OI_EOD_SCHEMA = Schema(
+    NestedField(1, "underlying_symbol", StringType(), required=True),
+    NestedField(2, "eod_date", DateType(), required=True),
+    NestedField(3, "expiration_date", DateType(), required=True),
+    NestedField(4, "strike", DoubleType(), required=True),
+    NestedField(5, "put_call", StringType(), required=True),
+    NestedField(6, "open_interest", LongType(), required=True),
+    NestedField(7, "ingestion_ts", TimestamptzType(), required=True),
+    NestedField(8, "ingestion_run_id", StringType(), required=True),
+)
+
+THETA_OI_EOD_PARTITION = PartitionSpec(
+    PartitionField(source_id=1, field_id=1000, transform=BucketTransform(16), name="underlying_bucket"),
+    PartitionField(source_id=2, field_id=1001, transform=MonthTransform(), name="eod_month"),
+)
+
+THETA_OI_EOD_SORT = SortOrder(
+    SortField(source_id=1, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+    SortField(source_id=2, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+    SortField(source_id=3, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+    SortField(source_id=4, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+)
+
+
 def _ensure_namespace(catalog: Catalog) -> None:
     db = settings.iceberg_options_glue_database
     try:
@@ -263,6 +328,26 @@ def ensure_gamma_exposure(catalog: Catalog | None = None) -> Table:
     )
 
 
+def ensure_theta_greeks_eod(catalog: Catalog | None = None) -> Table:
+    return _ensure_table(
+        table_name=THETA_GREEKS_EOD_TABLE_NAME,
+        schema=THETA_GREEKS_EOD_SCHEMA,
+        partition_spec=THETA_GREEKS_EOD_PARTITION,
+        sort_order=THETA_GREEKS_EOD_SORT,
+        catalog=catalog,
+    )
+
+
+def ensure_theta_oi_eod(catalog: Catalog | None = None) -> Table:
+    return _ensure_table(
+        table_name=THETA_OI_EOD_TABLE_NAME,
+        schema=THETA_OI_EOD_SCHEMA,
+        partition_spec=THETA_OI_EOD_PARTITION,
+        sort_order=THETA_OI_EOD_SORT,
+        catalog=catalog,
+    )
+
+
 def ensure_all(catalog: Catalog | None = None) -> dict[str, Table]:
     catalog = catalog or get_catalog()
     return {
@@ -270,6 +355,8 @@ def ensure_all(catalog: Catalog | None = None) -> dict[str, Table]:
         CHAIN_CONTRACTS_TABLE_NAME: ensure_chain_contracts(catalog),
         EXPIRATIONS_TABLE_NAME: ensure_expirations(catalog),
         GAMMA_EXPOSURE_TABLE_NAME: ensure_gamma_exposure(catalog),
+        THETA_GREEKS_EOD_TABLE_NAME: ensure_theta_greeks_eod(catalog),
+        THETA_OI_EOD_TABLE_NAME: ensure_theta_oi_eod(catalog),
     }
 
 
@@ -278,6 +365,8 @@ _ENSURE_DISPATCH: dict[str, Callable[[Catalog | None], Table]] = {
     CHAIN_CONTRACTS_TABLE_NAME: ensure_chain_contracts,
     EXPIRATIONS_TABLE_NAME: ensure_expirations,
     GAMMA_EXPOSURE_TABLE_NAME: ensure_gamma_exposure,
+    THETA_GREEKS_EOD_TABLE_NAME: ensure_theta_greeks_eod,
+    THETA_OI_EOD_TABLE_NAME: ensure_theta_oi_eod,
 }
 
 
