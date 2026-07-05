@@ -388,3 +388,28 @@ no re-renderings.
 | ID | Family | Test |
 |----|--------|------|
 | H-44-holdout | `dividend_runup` lead=3 (locked) | one-shot MCPT, 2019-2026, 1000 perms | **FINAL: p=0.9291, real PF 1.0001 vs null 1.0402 — DEAD, chapter closed** |
+
+**EXP-55 registration** (2026-07-05, BEFORE any research contact with
+the ThetaData-derived GEX series; data-prep/cross-validation contact
+only). THE GEX WAVE — first genuinely new information source of the
+campaign: dealer positioning derived from 2016-2026 contract-level
+greeks x OI (options.thetadata_* bronze -> gamma_exposure_snapshots,
+methodology stockalert-thetadata-gex-v1+oi_lag1; OI report-lag
+convention makes same-day lookahead structurally impossible).
+Mechanism class: FORCED, REGENERATING flows (dealers must hedge, by
+contract, every day) — the property that separated FOMC from every
+decayed pattern. Windows: dev 2016-01-01 → 2022-12-31, holdout
+2023-01-01 → 2026-06-30 UNTOUCHED. Null: 1000 master-calendar bar
+permutations with the GEX feature series held FIXED to the real
+calendar (tests whether the real price-GEX alignment carries
+information beyond drift/tails). BH across H-49..H-52 jointly.
+Precondition gate (not a hypothesis): derived GEX must cross-validate
+against live Schwab-derived GEX on overlapping days (same flip sign,
+rank-correlated net GEX) before any screen fires.
+
+| ID | Family | Grid |
+|----|--------|------|
+| H-49 | `gex_regime_condition` — the foundational claim: prior-day net-GEX regime gates return structure. Long after a DOWN day only in POSITIVE regime (dealers dampen -> reversion), long after an UP day only in NEGATIVE regime (dealers amplify -> momentum) | regime def {sign of net GEX, 252d percentile >60/<40} × {reversion-in-positive, momentum-in-negative} (4) |
+| H-50 | `wall_levels` — prior-report dealer walls as support/resistance: long at close within d of the put wall (deepest negative strike GEX); short at close within d of the call wall (largest positive) | side {put_bounce long, call_fade short} × d {0.5%, 1%} × hold {1, 3 days} (8) |
+| H-51 | `vanna_iv_decay` — post-IV-spike dealer re-hedging: OI-weighted IV spikes (z over 20d) then declines day-over-day while aggregate vanna is elevated -> long | z {1.5, 2.0} × hold {3, 5} (4) |
+| H-52 | `fomc_gex_interaction` — the validated FOMC drift (k=2, SPY) conditioned on pre-meeting net-GEX regime | regime {positive-only, negative-only} (2) |
