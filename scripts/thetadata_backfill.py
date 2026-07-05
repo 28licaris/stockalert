@@ -39,6 +39,7 @@ import time
 # Large PyIceberg parquet writes fail with S3 BadDigest under CRC64NVME
 # multipart — must be set before any AWS client init (see memory/ISSUES).
 os.environ.setdefault("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -278,6 +279,10 @@ def main() -> int:
         ensure_theta_oi_eod,
     )
     tables = {"greeks": ensure_theta_greeks_eod(), "oi": ensure_theta_oi_eod()}
+    # Iceberg/Glue commits are optimistic — concurrent appends to the same
+    # table conflict ("concurrent update to table version N"). Fetching is
+    # the slow part and stays parallel; appends serialize per table.
+    locks = {ep: threading.Lock() for ep in ENDPOINTS}
     s3, bucket = _s3(), settings.stock_lake_bucket
     done = _completed_units(s3, bucket)
 
@@ -305,7 +310,9 @@ def main() -> int:
         if frames:
             arrow = to_arrow(pd.concat(frames, ignore_index=True), sym, run_id)
             rows = arrow.num_rows
-            tables[ep].append(arrow)
+            with locks[ep]:
+                tables[ep].refresh()
+                tables[ep].append(arrow)
         s3.put_object(Bucket=bucket, Key=_marker_key(ep, sym, label),
                       Body=json.dumps({"rows": rows, "run_id": run_id,
                                        "completed_at": datetime.now(timezone.utc).isoformat()}))
