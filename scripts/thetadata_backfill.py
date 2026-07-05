@@ -287,11 +287,18 @@ def main() -> int:
     def _one(ep: str, sym: str, month: tuple[str, str, str]) -> tuple[str, int]:
         label, mstart, mend = month
         path, to_arrow, _ = ENDPOINTS[ep]
-        df = _fetch_csv(path, {"symbol": sym, "expiration": "*",
-                               "start_date": mstart, "end_date": mend})
+        # expiration=* is served day-at-a-time (provider constraint) —
+        # fetch each weekday, append ONCE per unit so the marker stays atomic.
+        frames = []
+        for day in pd.bdate_range(mstart, mend):
+            d = str(day.date())
+            df = _fetch_csv(path, {"symbol": sym, "expiration": "*",
+                                   "start_date": d, "end_date": d})
+            if not df.empty:
+                frames.append(df)
         rows = 0
-        if not df.empty:
-            arrow = to_arrow(df, sym, run_id)
+        if frames:
+            arrow = to_arrow(pd.concat(frames, ignore_index=True), sym, run_id)
             rows = arrow.num_rows
             tables[ep].append(arrow)
         s3.put_object(Bucket=bucket, Key=_marker_key(ep, sym, label),
