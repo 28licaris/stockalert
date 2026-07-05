@@ -387,4 +387,4 @@ no re-renderings.
 
 | ID | Family | Test |
 |----|--------|------|
-| H-44-holdout | `dividend_runup` lead=3 (locked) | one-shot MCPT, 2019-2026, 1000 perms |
+| H-44-holdout | `dividend_runup` lead=3 (locked) | one-shot MCPT, 2019-2026, 1000 perms | **FINAL: p=0.9291, real PF 1.0001 vs null 1.0402 — DEAD, chapter closed** |

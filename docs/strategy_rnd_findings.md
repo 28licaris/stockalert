@@ -2098,3 +2098,16 @@ the H-46 first launch produced ZERO signals on the 806-name universe
 (union-calendar NaNs poisoned every strict 252d validity window) —
 caught because real PF 0.0 + every-perm-ties is a tell; fixed with
 NaN-tolerant windows before any conclusions were drawn.
+
+**EXP-54 H-44-holdout FINAL (one-shot, locked lead=3, 2019-2026):**
+real pooled PF **1.0001** — dead-flat breakeven gross — vs null
+1.0402±0.0278, **p=0.9291. DEAD, chapter closed** per the binding
+decision rule (no re-renderings). The 2006-2018 dividend run-up drift
+(raw p=0.025, noise-ROBUST) has fully decayed out of the modern tape —
+929/1000 information-free shuffles beat the real calendar. Same decay
+profile as gap-hold (EXP-49/50); consistent with post-publication
+arbitrage of Hartzmark-Solomon (2013). The campaign law survives in
+sharpened form: scheduled flows CAN decay too — what distinguishes the
+FOMC survivor is not just that its calendar is public but that its
+flow (institutional pre-announcement de-risking/re-risking) regenerates
+every meeting rather than being a fixed price pattern to front-run.
