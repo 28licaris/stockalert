@@ -361,3 +361,30 @@ enters at the ex-day close (post-drop).
 | H-46 | `pca_residual_reversion` — trailing-252d log-return PCA refit every 21d; residual z = 21d cum-residual / (σ_res·√21); enter long z < −z_thr / short z > +z_thr, fixed 10d hold, both legs always on (market-neutral) | n_factors {1, 5} × z_thr {1.5, 2.0} (4) |
 | H-47 | `macro_release_drift` — long the k trading days ending at the release-day close (CPI / NFP 08:30 ET prints; scheduled dates from BLS) | release {cpi, nfp} × k {1, 2, 3} (6) |
 | H-48 | `opex_flows` — monthly option-expiration flow windows: the 4 trading days ending at the 3rd Friday (into_opex) vs the following 5 (post_opex), both directions registered | segment {into_opex, post_opex} × side {long, short} (4) |
+
+**EXP-53 verdicts (2026-07-04, FINAL — BH across H-44..H-48):** 0/5
+survive at q≤0.05. H-44 dividend_runup **raw p=0.0250 / q=0.1249** —
+the first raw screen pass since FOMC (real PF 1.061 vs null
+1.029±0.015, best lead=3) but four dead siblings sink it at FDR
+(the xsec_momentum precedent). H-45 dividend_ex_drift p=0.2667 —
+DEAD. H-46 pca_residual_reversion p=0.4446 — DEAD (hedged residual
+reversion adds nothing beyond the factor structure the permutation
+already preserves). H-47 macro_release_drift p=0.7273 — DEAD
+(pre-print drift is Fed-specific; Lucca-Moench does not generalize
+to BLS releases). H-48 opex_flows p=0.8152 — DEAD.
+
+**EXP-54 registration** (2026-07-04, BEFORE any contact with the
+holdout window). H-44-holdout: ONE-SHOT confirmation of
+dividend_runup, config LOCKED at the dev winner (lead=3), on the
+untouched 2019-2026 window, same universe construction, 1000
+master-calendar permutations. Justification for a second look where
+xsec_momentum got none: (a) scheduled-flow mechanism — the only
+class that has produced survivors; (b) an independent untouched
+window exists; (c) the config is locked, so this is a single test,
+not a search. Decision rule, binding: p ≤ 0.05 → REAL (proceed to
+Tier-2 engine rendering with costs); p > 0.05 → DEAD, chapter closed,
+no re-renderings.
+
+| ID | Family | Test |
+|----|--------|------|
+| H-44-holdout | `dividend_runup` lead=3 (locked) | one-shot MCPT, 2019-2026, 1000 perms |

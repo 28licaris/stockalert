@@ -2069,3 +2069,32 @@ apply (dev/holdout wall + pre-registration ledger + BH — the reported
 Tier-2 p-values are one-shot OOS tests of locked configs); its
 concentration/split audit was the one item with teeth and is now a
 standing artifact.
+
+## EXP-53 — scheduled flows II + market-neutral residuals (2026-07-04)
+
+The post-playbook creative wave (H-44..H-48): dividend calendar from
+the lake's corp-actions (1.95M ex-dates), PCA residual stat-arb (the
+one ML idea that changes trade structure), BLS macro calendars
+(ALFRED), OPEX windows. Standard gauntlet, BH across the wave.
+
+| ID | Family | Real PF | Null | p | q | Verdict |
+|---|---|---|---|---|---|---|
+| H-44 | dividend_runup (lead 3/5/10) | 1.0610 | 1.0292±0.0147 | **0.0250** | 0.1249 | raw pass, FDR FAIL |
+| H-45 | dividend_ex_drift | 1.0394 | 1.0295±0.0156 | 0.2667 | 0.6668 | DEAD |
+| H-46 | pca_residual_reversion | 1.0075 | 1.0055±0.0123 | 0.4446 | 0.7409 | DEAD |
+| H-47 | macro_release_drift (CPI/NFP) | 1.1643 | 1.2918±0.1925 | 0.7273 | 0.8152 | DEAD |
+| H-48 | opex_flows | 1.0672 | 1.1343±0.0748 | 0.8152 | 0.8152 | DEAD |
+
+Findings: (1) **dividend_runup is the first raw screen pass since
+FOMC** — 3-day drift into the cum-dividend close, 24/1000 shuffled
+tapes matched; killed at FDR only by its dead siblings. EXP-54
+registers its one-shot 2019-2026 confirmation (locked lead=3, binding
+decision rule) — a scheduled-flow mechanism with an untouched window
+earns exactly one pre-registered second look. (2) CPI/NFP failing
+STRENGTHENS the FOMC thesis: pre-announcement drift is Fed-specific,
+matching Lucca-Moench. (3) PCA residuals: hedging out factors leaves
+nothing tradeable at daily resolution on this universe. (4) Ops note:
+the H-46 first launch produced ZERO signals on the 806-name universe
+(union-calendar NaNs poisoned every strict 252d validity window) —
+caught because real PF 0.0 + every-perm-ties is a tell; fixed with
+NaN-tolerant windows before any conclusions were drawn.
