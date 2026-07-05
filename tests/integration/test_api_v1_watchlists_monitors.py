@@ -24,6 +24,24 @@ from app.main_api import app
 
 pytestmark = pytest.mark.integration
 
+# Synthetic tickers this module writes to the real stream_universe.
+_TEST_SYMBOLS = ("FAKEAA", "FAKEBB", "FAKETEST")
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _purge_test_symbols():
+    """Hard-delete this module's synthetic symbols after it runs so it never
+    leaves is_active=0 tombstones polluting the universe (they surfaced as
+    blank-name rows on the Stream page)."""
+    yield
+    try:
+        from app.db.client import get_client
+
+        syms = ",".join(f"'{s}'" for s in _TEST_SYMBOLS)
+        get_client().command(f"ALTER TABLE stream_universe DELETE WHERE symbol IN ({syms})")
+    except Exception:  # noqa: BLE001 — best-effort cleanup; never fail on teardown
+        pass
+
 
 # ─────────────────────────────────────────────────────────────────────
 # OpenAPI publishes the new schemas
