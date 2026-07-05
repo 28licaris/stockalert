@@ -52,6 +52,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: "Elliott Wave", href: "/ewt",        icon: Waves,            flag: "page.ewt",         category: "Markets" },
   { label: "Watchlists",  href: "/watchlists",  icon: ListChecks,       flag: "page.watchlists",  category: "Markets" },
   { label: "Options",     href: "/options",     icon: GaugeCircle,      flag: "page.options",     category: "Markets" },
+  { label: "GEX",         href: "/gex",         icon: Gauge,            flag: "page.options",     category: "Markets" },
   { label: "Monitors",    href: "/monitors",    icon: Activity,         flag: "page.monitors",    category: "Markets" },
   { label: "Calendar",    href: "/calendar",    icon: CalendarDays,     flag: "page.calendar",    category: "Markets" },
   { label: "News",        href: "/news",        icon: Newspaper,        flag: "page.news",        category: "Markets" },

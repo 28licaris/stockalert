@@ -7,6 +7,7 @@ import { EwtGuidePage } from "./ewt-guide";
 import { WatchlistsPage } from "./watchlists";
 import { StreamPage } from "./stream";
 import { OptionsPage } from "./options";
+import { GexPage } from "./gex";
 import { ClickHousePage } from "./clickhouse";
 import { CalendarPage } from "./calendar";
 import { NewsPage } from "./news";
@@ -65,6 +66,7 @@ export const router = createBrowserRouter(
               ),
             },
             { path: "options", element: <OptionsPage /> },
+            { path: "gex", element: <GexPage /> },
             { path: "seed", element: <Navigate to="/stream" replace /> },
             {
               path: "clickhouse",
