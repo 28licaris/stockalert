@@ -726,6 +726,64 @@ def _opex_flows(wide, segment: str, side: float) -> pd.DataFrame:
     )
 
 
+# ── EXP-55 GEX families (H-49..H-52) ─────────────────────────────────
+
+_GEX_PARQUET = Path(__file__).resolve().parent.parent / "data" / "mcpt" / "gex_features.parquet"
+_GEX_FEATURES: dict[str, pd.DataFrame] = {}
+
+
+def _gex_features(symbol: str) -> pd.DataFrame:
+    """Daily GEX features for one symbol, indexed by date. NOTE: day-T rows
+    are fully known T+1 ~06:30 ET (OI report) — callers must lag by one day."""
+    if "df" not in _GEX_FEATURES:
+        _GEX_FEATURES["df"] = pd.read_parquet(_GEX_PARQUET)
+    df = _GEX_FEATURES["df"]
+    sub = df[df["symbol"] == symbol].set_index("date").sort_index()
+    if sub.empty:
+        raise RuntimeError(f"no GEX features for {symbol} — run export_gex_features.py")
+    return sub
+
+
+def _gex_series_for(close: pd.DataFrame, symbol: str, col: str) -> pd.Series:
+    """Feature series aligned to the bar index, LAGGED one day (knowability)."""
+    feats = _gex_features(symbol)
+    dates = pd.Series(close.index.date, index=close.index)
+    aligned = dates.map(feats[col])
+    return aligned.shift(1)  # GEX(t-1) is what a signal on day t may use
+
+
+def _gex_regime_condition(wide, regime: str, mode: str) -> pd.DataFrame:
+    """H-49: prior-day net-GEX regime gates return structure. reversion =
+    long after a down day ONLY in positive regime (dealers dampen);
+    momentum = long after an up day ONLY in negative regime (amplify).
+    Single-symbol family (SPY screen)."""
+    close = wide["close"]
+    symbol = close.columns[0]
+    net = _gex_series_for(close, symbol, "net_gex")
+    if regime == "sign":
+        positive, negative = net > 0, net < 0
+    else:  # trailing-252d percentile bands
+        pct = net.rolling(252, min_periods=126).rank(pct=True)
+        positive, negative = pct > 0.60, pct < 0.40
+    r = np.log(close[symbol]).diff()
+    if mode == "reversion":
+        sig = ((r < 0) & positive).astype(float)
+    else:
+        sig = ((r > 0) & negative).astype(float)
+    return sig.to_frame(symbol)
+
+
+def _fomc_gex(wide, regime: str) -> pd.DataFrame:
+    """H-52: the validated FOMC drift window (k=2) taken ONLY when the
+    pre-entry net-GEX regime matches (positive-only / negative-only)."""
+    close = wide["close"]
+    symbol = close.columns[0]
+    base = _fomc_drift(wide, k=2)[symbol]
+    net = _gex_series_for(close, symbol, "net_gex")
+    gate = (net > 0) if regime == "positive" else (net < 0)
+    return (base * gate.astype(float)).to_frame(symbol)
+
+
 FAMILIES = {
     "donchian": [({"lookback": lb}, _donchian) for lb in range(10, 105, 5)],
     "ma_cross": [
@@ -869,6 +927,12 @@ FAMILIES = {
         ({"segment": s, "side": sd}, _opex_flows)
         for s in ("into_opex", "post_opex") for sd in (1.0, -1.0)
     ],
+    # EXP-55 GEX wave (H-49..H-52); features lag one day (knowability).
+    "gex_regime_condition": [
+        ({"regime": rg, "mode": md}, _gex_regime_condition)
+        for rg in ("sign", "pctile") for md in ("reversion", "momentum")
+    ],
+    "fomc_gex": [({"regime": rg}, _fomc_gex) for rg in ("positive", "negative")],
 }
 
 # Per-family forward-return stream: "cc" = close(t) -> close(t+1) (default);
