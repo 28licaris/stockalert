@@ -2111,3 +2111,20 @@ sharpened form: scheduled flows CAN decay too — what distinguishes the
 FOMC survivor is not just that its calendar is public but that its
 flow (institutional pre-announcement de-risking/re-risking) regenerates
 every meeting rather than being a fixed price pattern to front-run.
+
+## EXP-55 (partial) — first GEX verdicts: the daily regime claim is INVERTED (2026-07-05)
+
+Instrument: 800,049 derived GEX rows (SPY 2017-2026, thetadata bronze,
+oi_lag1, one-day feature lag for knowability). Dev screens 2017-2022,
+1000 perms, GEX series held fixed under the null.
+
+**H-49 gex_regime_condition: p=0.9960 — DEAD AND INVERTED.** Real PF
+0.9608 vs null 1.2480±0.1398; the real price/GEX alignment underperforms
+99.6% of shuffled tapes and the grid's best config is below PF 1.0
+gross. The retail-canon mechanic (positive gamma -> revert, negative ->
+amplify) carries NO positive information at daily resolution on SPY —
+if anything the alignment is adverse. **H-52 fomc_gex: p=0.2627 — no
+interaction** (real PF 1.72, null 1.50±0.63, ~24 gated events = low
+power). Locked FOMC paper configs stay untouched. H-50 walls / H-51
+vanna screen on the full universe when the bronze completes; BH across
+H-49..H-52 then. Scope: does NOT test intraday/0DTE renderings.
