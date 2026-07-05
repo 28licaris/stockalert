@@ -399,7 +399,10 @@ convention makes same-day lookahead structurally impossible).
 Mechanism class: FORCED, REGENERATING flows (dealers must hedge, by
 contract, every day) — the property that separated FOMC from every
 decayed pattern. Windows: dev 2016-01-01 → 2022-12-31, holdout
-2023-01-01 → 2026-06-30 UNTOUCHED. Null: 1000 master-calendar bar
+2023-01-01 → 2026-06-30 UNTOUCHED. (Amendment 2026-07-05, pre-screen,
+data-availability only: provider greeks start 2017-01 for SPY — dev
+effectively begins at each symbol's first greeks date; windows
+otherwise unchanged.) Null: 1000 master-calendar bar
 permutations with the GEX feature series held FIXED to the real
 calendar (tests whether the real price-GEX alignment carries
 information beyond drift/tails). BH across H-49..H-52 jointly.
