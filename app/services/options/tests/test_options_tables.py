@@ -65,8 +65,10 @@ def test_ensure_all_creates_all_options_tables() -> None:
         "schwab_chain_contracts",
         "schwab_expirations",
         "gamma_exposure_snapshots",
+        "thetadata_greeks_eod",
+        "thetadata_oi_eod",
     }
-    assert catalog.create_table.call_count == 4
+    assert catalog.create_table.call_count == 6
 
 
 def test_ensure_options_table_dispatches_and_rejects_unknown() -> None:

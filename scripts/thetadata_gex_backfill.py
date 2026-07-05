@@ -121,6 +121,9 @@ def _derive_symbol_month(
             source_snapshot_id=f"thetadata:{symbol}:{eod.isoformat()}",
             methodology=f"{METHODOLOGY}+oi_lag{oi_lag}",
             ingestion_run_id=run_id,
+            # strike_expiry drill-down skipped: dominates rows/compute on
+            # dense chains and no registered hypothesis consumes it.
+            levels=frozenset({"total", "strike", "expiry"}),
         ))
     return rows
 

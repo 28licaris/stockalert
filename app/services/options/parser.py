@@ -104,8 +104,14 @@ def aggregate_gamma_exposure(
     source_snapshot_id: str | None = None,
     methodology: str = "stockalert-schwab-gex-v1",
     ingestion_run_id: str | None = None,
+    levels: frozenset[str] | None = None,
 ) -> list[GammaExposureSnapshot]:
-    """Aggregate contract GEX into total, strike, expiry, and strike-expiry rows."""
+    """Aggregate contract GEX into total, strike, expiry, and strike-expiry rows.
+
+    `levels` restricts which aggregation levels are computed (default: all
+    four). Bulk historical derivation skips `strike_expiry` — the drill-down
+    level dominates row count and compute on dense chains.
+    """
     usable: list[tuple[OptionContractSnapshot, float]] = []
     for contract in contracts:
         exposure = contract_gamma_exposure(contract)
@@ -114,59 +120,66 @@ def aggregate_gamma_exposure(
     if not usable:
         return []
 
+    def _want(level: str) -> bool:
+        return levels is None or level in levels
+
     rows: list[GammaExposureSnapshot] = []
-    rows.append(
-        _gamma_row(
-            usable,
-            aggregation_level="total",
-            level_key="total",
-            source_snapshot_id=source_snapshot_id,
-            methodology=methodology,
-            ingestion_run_id=ingestion_run_id,
-        )
-    )
-
-    for strike, group in _group_by(usable, lambda item: item[0].strike).items():
+    if _want("total"):
         rows.append(
             _gamma_row(
-                group,
-                aggregation_level="strike",
-                level_key=f"strike:{strike:g}",
-                strike=strike,
+                usable,
+                aggregation_level="total",
+                level_key="total",
                 source_snapshot_id=source_snapshot_id,
                 methodology=methodology,
                 ingestion_run_id=ingestion_run_id,
             )
         )
 
-    for expiration_date, group in _group_by(usable, lambda item: item[0].expiration_date).items():
-        rows.append(
-            _gamma_row(
-                group,
-                aggregation_level="expiry",
-                level_key=f"expiry:{expiration_date.isoformat()}",
-                expiration_date=expiration_date,
-                source_snapshot_id=source_snapshot_id,
-                methodology=methodology,
-                ingestion_run_id=ingestion_run_id,
+    if _want("strike"):
+        for strike, group in _group_by(usable, lambda item: item[0].strike).items():
+            rows.append(
+                _gamma_row(
+                    group,
+                    aggregation_level="strike",
+                    level_key=f"strike:{strike:g}",
+                    strike=strike,
+                    source_snapshot_id=source_snapshot_id,
+                    methodology=methodology,
+                    ingestion_run_id=ingestion_run_id,
+                )
             )
-        )
 
-    for (expiration_date, strike), group in _group_by(
-        usable, lambda item: (item[0].expiration_date, item[0].strike)
-    ).items():
-        rows.append(
-            _gamma_row(
-                group,
-                aggregation_level="strike_expiry",
-                level_key=f"strike_expiry:{expiration_date.isoformat()}:{strike:g}",
-                expiration_date=expiration_date,
-                strike=strike,
-                source_snapshot_id=source_snapshot_id,
-                methodology=methodology,
-                ingestion_run_id=ingestion_run_id,
+    if _want("expiry"):
+        for expiration_date, group in _group_by(usable, lambda item: item[0].expiration_date).items():
+            rows.append(
+                _gamma_row(
+                    group,
+                    aggregation_level="expiry",
+                    level_key=f"expiry:{expiration_date.isoformat()}",
+                    expiration_date=expiration_date,
+                    source_snapshot_id=source_snapshot_id,
+                    methodology=methodology,
+                    ingestion_run_id=ingestion_run_id,
+                )
             )
-        )
+
+    if _want("strike_expiry"):
+        for (expiration_date, strike), group in _group_by(
+            usable, lambda item: (item[0].expiration_date, item[0].strike)
+        ).items():
+            rows.append(
+                _gamma_row(
+                    group,
+                    aggregation_level="strike_expiry",
+                    level_key=f"strike_expiry:{expiration_date.isoformat()}:{strike:g}",
+                    expiration_date=expiration_date,
+                    strike=strike,
+                    source_snapshot_id=source_snapshot_id,
+                    methodology=methodology,
+                    ingestion_run_id=ingestion_run_id,
+                )
+            )
 
     return rows
 
