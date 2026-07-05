@@ -1,6 +1,6 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
-import { StatusPage } from "./status";
+import { HomeIndex } from "./home-index";
 import { RecentBarsPage, SymbolPage } from "./symbol";
 import { EwtPage } from "./ewt";
 import { EwtGuidePage } from "./ewt-guide";
@@ -39,14 +39,7 @@ export const router = createBrowserRouter(
           path: "/",
           element: <AppShell />,
           children: [
-            {
-              index: true,
-              element: (
-                <AdminOnly>
-                  <StatusPage />
-                </AdminOnly>
-              ),
-            },
+            { index: true, element: <HomeIndex /> },
             { path: "charts", element: <SymbolPage /> },
             { path: "charts/:ticker", element: <SymbolPage /> },
             { path: "charts/:ticker/bars", element: <RecentBarsPage /> },

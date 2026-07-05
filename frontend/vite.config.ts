@@ -17,7 +17,7 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
-    allowedHosts: [".ngrok-free.dev", ".ngrok-free.app", ".ngrok.io"],
+    allowedHosts: [".ngrok-free.dev", ".ngrok-free.app", ".ngrok.io", ".ts.net"],
     proxy: {
       "/api": { target: BACKEND_URL, changeOrigin: true },
       "/auth": { target: BACKEND_URL, changeOrigin: true },

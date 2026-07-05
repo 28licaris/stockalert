@@ -1469,3 +1469,24 @@ export function useRemoveMyWatchlistMember() {
     },
   });
 }
+
+// ── Strategy leaderboard (public track records for the dashboard) ─────
+
+export interface StrategyLeaderboardEntry {
+  name: string;
+  title: string;
+  paper_return: number | null;
+  paper_win_rate: number | null;
+  paper_trades: number | null;
+  backtest?: { sharpe_ratio: number | null; max_drawdown: number | null } | null;
+}
+
+export function useStrategyLeaderboard() {
+  return useQuery({
+    queryKey: ["strategy-leaderboard"],
+    queryFn: () =>
+      fetchJson<StrategyLeaderboardEntry[]>("/api/v1/strategies/leaderboard"),
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  });
+}
