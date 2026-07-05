@@ -408,7 +408,16 @@ calendar (tests whether the real price-GEX alignment carries
 information beyond drift/tails). BH across H-49..H-52 jointly.
 Precondition gate (not a hypothesis): derived GEX must cross-validate
 against live Schwab-derived GEX on overlapping days (same flip sign,
-rank-correlated net GEX) before any screen fires.
+rank-correlated net GEX) before any screen fires. (Amendment
+2026-07-05, pre-screen: zero overlapping days exist yet — Schwab
+snapshots begin 2026-07-02, theta's last joinable day is 2026-07-01
+because the 07-03 OI report fell on a market holiday. Adjacent-day
+check PASSED on magnitude/regime (theta 07-01 +$1.2B vs Schwab 07-02
+−$4.8B, both near-flip single-digit $B, spot within $1; identical
+aggregation code path). Gate re-scoped: Tier-1 DEV screens
+(2017-2022) may fire now — a 2026 instrument issue cannot contaminate
+them; Tier-2/holdout remain BLOCKED until the same-day comparison
+passes once the 2026-07-06 OI report lands.)
 
 | ID | Family | Grid |
 |----|--------|------|
