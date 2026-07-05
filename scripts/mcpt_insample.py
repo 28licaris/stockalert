@@ -1000,6 +1000,10 @@ def main(argv=None) -> int:
                          "noise: price-jitter fragility of the REAL optimum. "
                          "random_exit: entries kept, exits redrawn (edge locator).")
     ap.add_argument("--scale", type=float, default=0.25, help="noise jitter scale")
+    ap.add_argument("--lock-params", default=None,
+                    help="JSON dict: restrict the family grid to configs whose params "
+                         "include these key/values (one-shot holdout tests of a LOCKED "
+                         "config — no optimization on the test window)")
     ap.add_argument("--table", default="ohlcv_daily",
                     help="ClickHouse bar table (ohlcv_daily | ohlcv_hourly)")
     ap.add_argument("--session-aware", action="store_true",
@@ -1024,6 +1028,14 @@ def main(argv=None) -> int:
     else:
         frames = _load_frames(symbols, a.start, a.end, table=a.table,
                               align=a.session_aware)
+    if a.lock_params:
+        locked = json.loads(a.lock_params)
+        kept = [(p, fn) for p, fn in FAMILIES[a.family]
+                if all(p.get(k) == v for k, v in locked.items())]
+        if not kept:
+            raise SystemExit(f"--lock-params {locked} matches no {a.family} config")
+        FAMILIES[a.family] = kept
+        print(f"LOCKED {a.family} grid -> {[p for p, _ in kept]}", flush=True)
     real_params, real_pf = _optimize(a.family, frames)
     print(f"REAL  {a.family}: best={real_params} pooled_PF={real_pf:.4f}", flush=True)
 
