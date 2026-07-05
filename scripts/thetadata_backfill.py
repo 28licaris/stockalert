@@ -203,9 +203,12 @@ def _oi_frame(df: pd.DataFrame, symbol: str, run_id: str) -> pa.Table:
     return pa.Table.from_pandas(out, schema=OI_ARROW, preserve_index=False)
 
 
+# (path, frame-builder, arrow schema, day_at_a_time) — greeks/eod rejects
+# multi-day ranges with expiration=*; open_interest serves a whole month
+# in one request (verified 2026-07-05), so it fetches per-unit directly.
 ENDPOINTS = {
-    "greeks": ("/v3/option/history/greeks/eod", _greeks_frame, GREEKS_ARROW),
-    "oi": ("/v3/option/history/open_interest", _oi_frame, OI_ARROW),
+    "greeks": ("/v3/option/history/greeks/eod", _greeks_frame, GREEKS_ARROW, True),
+    "oi": ("/v3/option/history/open_interest", _oi_frame, OI_ARROW, False),
 }
 
 
@@ -296,14 +299,19 @@ def main() -> int:
 
     def _one(ep: str, sym: str, month: tuple[str, str, str]) -> tuple[str, int]:
         label, mstart, mend = month
-        path, to_arrow, _ = ENDPOINTS[ep]
-        # expiration=* is served day-at-a-time (provider constraint) —
-        # fetch each weekday, append ONCE per unit so the marker stays atomic.
+        path, to_arrow, _, day_at_a_time = ENDPOINTS[ep]
         frames = []
-        for day in pd.bdate_range(mstart, mend):
-            d = str(day.date())
+        if day_at_a_time:
+            # fetch each weekday, append ONCE per unit (atomic marker)
+            for day in pd.bdate_range(mstart, mend):
+                d = str(day.date())
+                df = _fetch_csv(path, {"symbol": sym, "expiration": "*",
+                                       "start_date": d, "end_date": d})
+                if not df.empty:
+                    frames.append(df)
+        else:
             df = _fetch_csv(path, {"symbol": sym, "expiration": "*",
-                                   "start_date": d, "end_date": d})
+                                   "start_date": mstart, "end_date": mend})
             if not df.empty:
                 frames.append(df)
         rows = 0
