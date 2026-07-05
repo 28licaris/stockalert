@@ -32,8 +32,13 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import sys
 import time
+
+# Large PyIceberg parquet writes fail with S3 BadDigest under CRC64NVME
+# multipart — must be set before any AWS client init (see memory/ISSUES).
+os.environ.setdefault("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
 from pathlib import Path

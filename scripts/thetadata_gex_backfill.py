@@ -21,8 +21,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
+
+os.environ.setdefault("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
 from datetime import date, datetime, time as dtime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
