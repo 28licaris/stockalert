@@ -752,6 +752,53 @@ def _gex_series_for(close: pd.DataFrame, symbol: str, col: str) -> pd.Series:
     return aligned.shift(1)  # GEX(t-1) is what a signal on day t may use
 
 
+def _gex_feature_matrix(close: pd.DataFrame, col: str) -> pd.DataFrame:
+    """Feature matrix aligned to the bar index across ALL columns, LAGGED
+    one day (knowability). Symbols without features contribute NaN."""
+    if "df" not in _GEX_FEATURES:
+        _GEX_FEATURES["df"] = pd.read_parquet(_GEX_PARQUET)
+    feats = _GEX_FEATURES["df"]
+    dates = pd.Series(close.index.date, index=close.index)
+    out = {}
+    for sym in close.columns:
+        sub = feats[feats["symbol"] == sym].set_index("date")[col]
+        out[sym] = dates.map(sub) if len(sub) else pd.Series(np.nan, index=close.index)
+    return pd.DataFrame(out).shift(1)
+
+
+def _wall_levels(wide, side: str, d: float, hold: int) -> pd.DataFrame:
+    """H-50: prior-report dealer walls as levels. put_bounce = long when the
+    close sits within d ABOVE the put wall (approaching dealer support);
+    call_fade = short when the close sits within d BELOW the call wall."""
+    close = wide["close"]
+    if side == "put_bounce":
+        wall = _gex_feature_matrix(close, "put_wall")
+        dist = close / wall - 1.0
+        trigger = ((dist >= 0) & (dist <= d)).astype(float)
+        sign = 1.0
+    else:  # call_fade
+        wall = _gex_feature_matrix(close, "call_wall")
+        dist = close / wall - 1.0
+        trigger = ((dist <= 0) & (dist >= -d)).astype(float)
+        sign = -1.0
+    return trigger.rolling(hold, min_periods=1).max().fillna(0.0) * sign
+
+
+def _vanna_iv_decay(wide, z: float, hold: int) -> pd.DataFrame:
+    """H-51: post-IV-spike dealer re-hedging. OI-weighted IV spiked (z over
+    its 20d window), IV now declining day-over-day, aggregate vanna
+    elevated (top tercile trailing 252d) -> long `hold` days."""
+    close = wide["close"]
+    iv = _gex_feature_matrix(close, "oiw_iv")
+    vanna = _gex_feature_matrix(close, "agg_vanna")
+    mu, sd = iv.rolling(20).mean(), iv.rolling(20).std()
+    spiked = ((iv - mu) / sd).rolling(3, min_periods=1).max() >= z
+    declining = iv < iv.shift(1)
+    elevated = vanna.rolling(252, min_periods=126).rank(pct=True) > 2 / 3
+    trigger = (spiked & declining & elevated).astype(float)
+    return trigger.rolling(hold, min_periods=1).max().fillna(0.0)
+
+
 def _gex_regime_condition(wide, regime: str, mode: str) -> pd.DataFrame:
     """H-49: prior-day net-GEX regime gates return structure. reversion =
     long after a down day ONLY in positive regime (dealers dampen);
@@ -933,6 +980,14 @@ FAMILIES = {
         for rg in ("sign", "pctile") for md in ("reversion", "momentum")
     ],
     "fomc_gex": [({"regime": rg}, _fomc_gex) for rg in ("positive", "negative")],
+    "wall_levels": [
+        ({"side": s, "d": d, "hold": h}, _wall_levels)
+        for s in ("put_bounce", "call_fade") for d in (0.005, 0.01) for h in (1, 3)
+    ],
+    "vanna_iv_decay": [
+        ({"z": z, "hold": h}, _vanna_iv_decay)
+        for z in (1.5, 2.0) for h in (3, 5)
+    ],
 }
 
 # Per-family forward-return stream: "cc" = close(t) -> close(t+1) (default);
