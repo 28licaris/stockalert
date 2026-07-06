@@ -2128,3 +2128,19 @@ interaction** (real PF 1.72, null 1.50±0.63, ~24 gated events = low
 power). Locked FOMC paper configs stay untouched. H-50 walls / H-51
 vanna screen on the full universe when the bronze completes; BH across
 H-49..H-52 then. Scope: does NOT test intraday/0DTE renderings.
+
+**EXP-55 instrument validation (2026-07-05, descriptive — not a
+registered hypothesis test):** the derived GEX series shows the
+textbook dealer-positioning volatility signature, strongly and
+monotonically. SPY 2017-2026 (n=2,364 days), next-day |return|
+conditioned on prior net GEX (knowability-lagged): negative-gamma days
+1.017% vs positive-gamma 0.484% — **2.1x**, with a clean monotone
+dose-response across GEX quintiles (1.02% -> 0.37%). Spearman −0.354;
+**partial Spearman −0.236 after controlling 21d trailing vol** — the
+measure carries vol information BEYOND vol clustering (not repackaged
+VIX). Conclusions: (1) the instrument measures real positioning —
+tomorrow's H-50/H-51 screens run on a validated series; (2) combined
+with H-49's inverted-return verdict, the honest reading of GEX is
+"forecasts VOLATILITY, not direction" — any future rendering should be
+a risk/sizing overlay (registrable as H-53: GEX-regime vol targeting),
+not a directional signal.
