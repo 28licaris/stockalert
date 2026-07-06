@@ -282,3 +282,12 @@ shared with the running app, not an isolated test DB). Rewrote
 the assertion as containment (`b in qqq_containers and a not in
 qqq_containers`), matching the resilient pattern already used by
 `test_list_all_active_symbols_filters_by_kind` above it.
+
+## gex-history-endpoint-slow (2026-07-06)
+`GET /api/v1/options/gex` (total-level, full 2017-2026 window) takes ~18s —
+PyIceberg lake scan per request. The GEX page's history panel eats this on
+first load (then react-query caches 5 min). Proper fix per platform
+pattern: hot-tier the derived GEX series in ClickHouse (like bars) and
+route reads through a gateway with a CH-first/lake-fallback selector. Do
+NOT cache-band-aid in the API layer. Matters once the GEX page gets real
+traffic; fine for research use now.
