@@ -54,6 +54,7 @@ from app.api import (
     routes_movers,
     routes_news,
     routes_options,
+    routes_research,
     routes_screener,
     routes_sector_rotation,
     routes_adjusted,
@@ -931,6 +932,7 @@ app.include_router(routes_lake.router, prefix=_V1, tags=["Lake"])
 app.include_router(routes_indicators.router, prefix=_V1, tags=["Indicators"])
 app.include_router(routes_backtest.router, prefix=_V1, tags=["Backtest"])
 app.include_router(routes_strategies.router, prefix=_V1, tags=["Strategies"])
+app.include_router(routes_research.router, prefix=_V1, tags=["Research"])
 app.include_router(routes_screener.router, prefix=_V1, tags=["Screener"])
 app.include_router(routes_sector_rotation.router, prefix=_V1, tags=["SectorRotation"])
 app.include_router(routes_corp_actions.router, prefix=_V1, tags=["CorpActions"])

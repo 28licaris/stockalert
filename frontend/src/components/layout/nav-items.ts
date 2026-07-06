@@ -59,6 +59,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: "Economic",    href: "/economic",    icon: TrendingUp,       flag: "page.economic",    category: "Markets" },
   { label: "Sectors",     href: "/sectors",     icon: Orbit,            flag: "page.sectors",     category: "Markets" },
 
+  { label: "Research",    href: "/research",    icon: Sparkles,         flag: "page.research",    category: "Strategies" },
   { label: "Screener",    href: "/screener",    icon: Sparkles,         flag: "page.screener",    category: "Strategies" },
   { label: "Backtest",    href: "/backtest",    icon: Beaker,           flag: "page.backtest",    category: "Strategies" },
   { label: "Strategy Library", href: "/library", icon: Sparkles,        flag: "page.library",     category: "Strategies" },
