@@ -1495,3 +1495,45 @@ export function useRemoveMyWatchlistMember() {
     },
   });
 }
+
+// ── Research rankings (premium screener) ─────────────────────────────
+
+export interface RankingRow {
+  symbol: string;
+  name: string;
+  price: number | null;
+  chg_1d_pct: number | null;
+  ret_pct: number | null;
+  dollar_vol: number | null;
+  up_streak: number;
+  down_streak: number;
+}
+export interface RankingsResponse {
+  as_of: string;
+  preset: string;
+  lookback_days: number;
+  count: number;
+  rows: RankingRow[];
+}
+
+export function useResearchRankings(params: {
+  preset: string;
+  lookback_days?: number;
+  top_n?: number;
+  streak_min?: number;
+}) {
+  const { preset, lookback_days = 60, top_n = 50, streak_min = 3 } = params;
+  return useQuery({
+    queryKey: ["research-rankings", preset, lookback_days, top_n, streak_min],
+    queryFn: () => {
+      const q = new URLSearchParams({
+        preset,
+        lookback_days: String(lookback_days),
+        top_n: String(top_n),
+        streak_min: String(streak_min),
+      });
+      return fetchJson<RankingsResponse>(`/api/v1/research/rankings?${q}`);
+    },
+    staleTime: 60_000,
+  });
+}
