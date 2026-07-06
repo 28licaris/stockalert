@@ -9,6 +9,7 @@ import {
   Database,
   FileBarChart,
   Gauge,
+  Home,
   GaugeCircle,
   LineChart,
   ListChecks,
@@ -45,9 +46,15 @@ export interface NavItem {
    *  `operator.access`. The backend enforces the same gate on the APIs;
    *  hiding the nav entry is convenience, not the security boundary. */
   adminOnly?: boolean;
+  /** Hidden FOR operators — a customer-only entry. Lets "/" show as the
+   *  customer "Home" (dashboard) while operators get "System Health" at the
+   *  same path. */
+  hideForOperator?: boolean;
 }
 
 export const NAV_ITEMS: readonly NavItem[] = [
+  { label: "Home",        href: "/",            icon: Home,             flag: "page.status",      category: "Overview", hideForOperator: true },
+
   { label: "Charts",      href: "/charts",      icon: CandlestickChart, flag: "page.symbol",      category: "Markets" },
   { label: "Elliott Wave", href: "/ewt",        icon: Waves,            flag: "page.ewt",         category: "Markets" },
   { label: "Watchlists",  href: "/watchlists",  icon: ListChecks,       flag: "page.watchlists",  category: "Markets" },

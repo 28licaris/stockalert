@@ -34,6 +34,8 @@ export const DEV_PRINCIPAL: Principal = {
   email: null,
   displayName: "Developer",
   roles: ["owner"],
+  // ["operator.access"] = admin dev view (System Health home + admin nav).
+  // Set to [] to preview the customer AI dashboard home.
   permissions: ["operator.access"],
   entitlements: [],
 };
