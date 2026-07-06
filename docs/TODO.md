@@ -102,3 +102,12 @@ intraday GEX-vs-price studies.
   historical sequence are penalized during selection, not just caught
   after. Only worth wiring if a family survives the EXP-39 battery and
   earns further parameter work. Source: buildalpha.com/monte-carlo-permutation.
+
+## Reporting — quantstats tearsheets (parked until the paper record has meat)
+Add `quantstats` (prefer the maintained `quantstats-lumi` fork, pinned) as a
+REPORTING-ONLY dependency: monthly HTML tearsheets for the FOMC paper
+strategies (rolling Sharpe, drawdown table, benchmark-relative) attached to
+the findings doc, and a cross-check on the sim engine's metric math. Engine
+metrics stay canonical; quantstats renders, never validates — it has no
+nulls/FDR and must not creep into the promotion gate. Trigger: first
+monthly paper-record review (~Aug 2026, after the 2026-07-29 FOMC trades).
