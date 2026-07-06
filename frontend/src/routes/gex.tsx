@@ -1,7 +1,11 @@
 import { useMemo, useState } from "react";
 import { RefreshCw, Search } from "lucide-react";
-import { useLatestOptionGex } from "@/api/queries";
+import { useLatestOptionGex, useOptionGexHistory, useSymbolBars } from "@/api/queries";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
+import {
+  GexHistoryChart,
+  type GexHistoryPoint,
+} from "@/components/options/GexHistoryChart";
 import {
   deriveGexLevels,
   fmtGex,
@@ -29,6 +33,25 @@ export function GexPage() {
   const strikeQ = useLatestOptionGex({ symbol, aggregationLevel: "strike", limit: 250 });
   const totalQ = useLatestOptionGex({ symbol, aggregationLevel: "total", limit: 1 });
   const expiryQ = useLatestOptionGex({ symbol, aggregationLevel: "expiry", limit: 12 });
+  const historyQ = useOptionGexHistory(symbol);
+  const barsQ = useSymbolBars(symbol, "1d", 2800);
+
+  const historyPoints = useMemo<GexHistoryPoint[]>(() => {
+    const rows = historyQ.data?.rows ?? [];
+    if (rows.length === 0) return [];
+    const gexByDay = new Map<string, number>();
+    for (const r of [...rows].sort((a, b) => a.snapshot_ts.localeCompare(b.snapshot_ts))) {
+      gexByDay.set(r.snapshot_ts.slice(0, 10),
+        r.net_gamma_exposure ?? r.gamma_exposure);
+    }
+    const closeByDay = new Map<string, number>();
+    for (const b of barsQ.data ?? []) {
+      closeByDay.set(b.ts.slice(0, 10), b.close);
+    }
+    return [...gexByDay.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, gex]) => ({ date, gex, close: closeByDay.get(date) ?? null }));
+  }, [historyQ.data, barsQ.data]);
 
   const strikeRows = strikeQ.data?.rows ?? [];
   const totalRow = (totalQ.data?.rows ?? [])[0];
@@ -204,6 +227,8 @@ export function GexPage() {
 
         <GexLadder levels={levels} />
       </div>
+
+      <GexHistoryChart points={historyPoints} />
     </div>
   );
 }

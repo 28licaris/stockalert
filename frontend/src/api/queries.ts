@@ -282,6 +282,8 @@ export const queryKeys = {
       aggregationLevel ?? "",
       limit,
     ] as const,
+  optionGexHistory: (symbol: string, start: string) =>
+    ["options", "gex", "history", symbol, start] as const,
   jobs: ["jobs"] as const,
   sectorRotation: (benchmark: string, tailWeeks: number) =>
     ["sectors", "rotation", benchmark, tailWeeks] as const,
@@ -616,6 +618,30 @@ export function useLatestOptionGex({
     refetchInterval: 30_000,
     refetchOnWindowFocus: true,
     staleTime: 10_000,
+  });
+}
+
+/** Total-level GEX rows across the full history window (regime view).
+ *  Daily cadence: dedupe to the last snapshot per day client-side. */
+export function useOptionGexHistory(symbol: string | undefined, start = "2016-01-01") {
+  const normalized = symbol?.trim().toUpperCase();
+  return useQuery({
+    queryKey: queryKeys.optionGexHistory(normalized ?? "", start),
+    queryFn: async (): Promise<LatestGammaExposureResponse> => {
+      if (!normalized) throw new Error("symbol required");
+      const params = new URLSearchParams({
+        symbol: normalized,
+        start: `${start}T00:00:00Z`,
+        end: new Date(Date.now() + 86_400_000).toISOString(),
+        aggregation_level: "total",
+        limit: "50000",
+      });
+      return fetchJson<LatestGammaExposureResponse>(
+        `/api/v1/options/gex?${params.toString()}`,
+      );
+    },
+    enabled: Boolean(normalized),
+    staleTime: 5 * 60_000,
   });
 }
 
