@@ -2144,3 +2144,19 @@ with H-49's inverted-return verdict, the honest reading of GEX is
 "forecasts VOLATILITY, not direction" — any future rendering should be
 a risk/sizing overlay (registrable as H-53: GEX-regime vol targeting),
 not a directional signal.
+
+**EXP-55 same-day cross-validation (2026-07-06, gate ADJUDICATED —
+PASS with caveat):** theta-derived GEX for 2026-07-02 (in-memory: bronze
+greeks x this morning's OPRA OI report) vs the live Schwab snapshot of
+the same day. Ladder SHAPE agrees: strike-level rank corr 0.637 full /
+0.701 restricted-to-shared-coverage (n=58), put wall 740 vs 745, call
+wall 750 vs 755 (one strike apart), full-chain totals same sign. Signed
+TOTALS near zero disagree (+0.37B vs -4.80B restricted): Schwab chains
+carry prior-close OI while the OPRA report is one day newer, and the
+two vendors' gammas differ — net GEX is a small residual of large
+canceling sums, so near the flip its SIGN is source-dependent.
+Consequences, binding on later renderings: (1) gate PASSED — levels and
+shape are real, Tier-2/holdout unblocked; (2) any regime definition
+must use robust bands (e.g. trailing-percentile, already in the H-49
+grid and the H-53 design) rather than the raw zero-cross; (3) wall
+locations are reliable to ~one strike.
