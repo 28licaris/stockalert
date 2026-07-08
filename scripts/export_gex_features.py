@@ -54,7 +54,10 @@ def main() -> int:
             "America/New_York").dt.date
         total = df[df["aggregation_level"] == "total"]
         strikes = df[df["aggregation_level"] == "strike"]
-        by_day = total.set_index("date")[["gamma_exposure", "underlying_price"]]
+        # dedupe: a crash between append and marker can leave one month
+        # double-derived — keep the newest row per day
+        total = total.sort_values("snapshot_ts").groupby("date").last()
+        by_day = total[["gamma_exposure", "underlying_price"]]
         by_day.columns = ["net_gex", "spot"]
         walls = strikes.groupby("date").apply(
             lambda g: pd.Series({

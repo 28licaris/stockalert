@@ -762,6 +762,7 @@ def _gex_feature_matrix(close: pd.DataFrame, col: str) -> pd.DataFrame:
     out = {}
     for sym in close.columns:
         sub = feats[feats["symbol"] == sym].set_index("date")[col]
+        sub = sub[~sub.index.duplicated(keep="last")]
         out[sym] = dates.map(sub) if len(sub) else pd.Series(np.nan, index=close.index)
     return pd.DataFrame(out).shift(1)
 
