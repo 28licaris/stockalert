@@ -800,6 +800,23 @@ def _vanna_iv_decay(wide, z: float, hold: int) -> pd.DataFrame:
     return trigger.rolling(hold, min_periods=1).max().fillna(0.0)
 
 
+def _gated_panic_reversion(wide, z: float, confirm: int) -> pd.DataFrame:
+    """H-54 (EXP-56 flagship): the validated oversold signal (RSI(4)<10
+    enter / RSI>50 adaptive exit — EXP-39's only survivor) taken ONLY when
+    the symbol's own options context confirms the panic is exhausting:
+    OI-weighted IV spiked (z over its 20d window, within the last 5 days)
+    AND has declined day-over-day for `confirm` days. IV features lag one
+    day (knowability)."""
+    close = wide["close"]
+    rsi = _wilder_rsi_wide(close, 4)
+    iv = _gex_feature_matrix(close, "oiw_iv")
+    mu, sd = iv.rolling(20).mean(), iv.rolling(20).std()
+    spiked_recently = (((iv - mu) / sd) >= z).rolling(5, min_periods=1).max() > 0
+    declining = (iv < iv.shift(1)).rolling(confirm).sum() >= confirm
+    enter = (rsi < 10) & spiked_recently & declining
+    return _state(close, enter, rsi > 50)
+
+
 def _gex_regime_condition(wide, regime: str, mode: str) -> pd.DataFrame:
     """H-49: prior-day net-GEX regime gates return structure. reversion =
     long after a down day ONLY in positive regime (dealers dampen);
@@ -988,6 +1005,11 @@ FAMILIES = {
     "vanna_iv_decay": [
         ({"z": z, "hold": h}, _vanna_iv_decay)
         for z in (1.5, 2.0) for h in (3, 5)
+    ],
+    # EXP-56: combined-dataset wave (H-54 flagship).
+    "gated_panic_reversion": [
+        ({"z": z, "confirm": c}, _gated_panic_reversion)
+        for z in (1.5, 2.0) for c in (1, 2)
     ],
 }
 
