@@ -2160,3 +2160,29 @@ shape are real, Tier-2/holdout unblocked; (2) any regime definition
 must use robust bands (e.g. trailing-percentile, already in the H-49
 grid and the H-53 design) rather than the raw zero-cross; (3) wall
 locations are reliable to ~one strike.
+
+## EXP-55 FINAL — the GEX wave: 0/4 at FDR; directional GEX is dead, the vol instrument stands (2026-07-10)
+
+Full-universe screens (40 names, dev 2016/17-2022, 1000 master-calendar
+perms, GEX features held fixed, one-day knowability lag), BH across the
+wave:
+
+| ID | Family | Real PF | Null | p | q | Verdict |
+|---|---|---|---|---|---|---|
+| H-49 | gex_regime_condition | 0.9608 | 1.2480±0.1398 | 0.9960 | 0.9960 | DEAD — INVERTED |
+| H-50 | wall_levels (put bounce / call fade) | 1.1810 | 1.3074±0.2277 | 0.6913 | 0.9217 | DEAD (real below null mean; 11-name partial run agreed, p=0.841) |
+| H-51 | vanna_iv_decay | 1.0761 | 1.0627±0.0658 | 0.4076 | 0.8152 | DEAD |
+| H-52 | fomc_gex interaction | 1.7244 | 1.4987±0.6261 | 0.2627 | 0.8152 | DEAD (no interaction; FOMC paper configs untouched) |
+
+Chapter verdict: every DIRECTIONAL rendering of dealer positioning —
+regime-gated entries, wall levels as support/resistance, post-IV-spike
+vanna flows — is indistinguishable from or worse than random timing at
+daily resolution, on a validated instrument (same-day gate passed,
+walls reliable to one strike). What survives the chapter is the
+INSTRUMENT finding: GEX forecasts next-day VOLATILITY (2.1x monotone,
+partial rho -0.236 beyond vol clustering, 80/20-persistent regimes) —
+i.e., a risk/sizing input, not a signal. This mirrors the equities
+campaign law at a higher level: the market sells the directional story
+(retail GEX dashboards) while the real information is in the second
+moment. Scope: intraday/0DTE renderings untested (would need the
+streaming tier). Ensembles: data/mcpt/exp55_t1_*.json.
