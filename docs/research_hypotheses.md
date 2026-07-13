@@ -425,3 +425,25 @@ passes once the 2026-07-06 OI report lands.)
 | H-50 | `wall_levels` — prior-report dealer walls as support/resistance: long at close within d of the put wall (deepest negative strike GEX); short at close within d of the call wall (largest positive) | side {put_bounce long, call_fade short} × d {0.5%, 1%} × hold {1, 3 days} (8) |
 | H-51 | `vanna_iv_decay` — post-IV-spike dealer re-hedging: OI-weighted IV spikes (z over 20d) then declines day-over-day while aggregate vanna is elevated -> long | z {1.5, 2.0} × hold {3, 5} (4) |
 | H-52 | `fomc_gex_interaction` — the validated FOMC drift (k=2, SPY) conditioned on pre-meeting net-GEX regime | regime {positive-only, negative-only} (2) |
+
+**EXP-55 verdicts (2026-07-10, FINAL — BH across H-49..H-52): 0/4.**
+H-49 p=0.9960 (INVERTED), H-50 p=0.6913 (real below null mean; 11-name
+partial run agreed), H-51 p=0.4076, H-52 p=0.2627 (no interaction —
+FOMC paper configs untouched). Directional GEX is DEAD at daily
+resolution on a validated instrument. The chapter's survivor is the
+instrument itself: GEX forecasts next-day VOLATILITY (2.1x monotone,
+partial ρ −0.236 beyond vol clustering, 80/20-persistent regimes).
+
+**EXP-56 registration** (2026-07-10, BEFORE implementation). The
+combined-dataset wave: equities signals × options-derived state, built
+ONLY from independently-validated ingredients (meanrev_rsi signal
+p=0.004; GEX vol forecast; FOMC drift). Per the same-day-validation
+caveat, all regime definitions use trailing-percentile bands, never the
+raw zero-cross. Windows: dev 2016/17-2022, holdout 2023-2026 untouched.
+BH across the wave.
+
+| ID | Family | Grid |
+|----|--------|------|
+| H-53 | `gex_vol_target` (Tier-2-style, SPY) — the validated-instrument rendering: hold SPY continuously, exposure scaled by the prior-day GEX vol regime (percentile bands): full in top band, reduced in bottom band. Metric: Sharpe vs 200-perm walk-forward null (bars permute, GEX fixed) | bottom-band exposure {0.0, 0.5} × band split {40/60, 33/67} (4) |
+| H-54 | `gated_panic_reversion` (Tier-1 screen, 40-name universe) — the flagship: RSI(4)<10 oversold entry (the validated signal) taken ONLY when the symbol's OI-weighted IV has spiked and is declining day-over-day (panic exhausting), exit RSI>50 (the validated adaptive exit) | IV-spike z {1.5, 2.0} × decline-confirm {1, 2 days} (4) |
+| H-55 | `gex_sized_reversion` — H-54's best config re-screened with signal magnitude scaled by the symbol's GEX vol band (position-weight proxy in pooled PF: half-weight bottom band) | contingent on H-54 raw pass; single config (1) |
