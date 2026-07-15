@@ -447,3 +447,22 @@ BH across the wave.
 | H-53 | `gex_vol_target` (Tier-2-style, SPY) — the validated-instrument rendering: hold SPY continuously, exposure scaled by the prior-day GEX vol regime (percentile bands): full in top band, reduced in bottom band. Metric: Sharpe vs 200-perm walk-forward null (bars permute, GEX fixed) | bottom-band exposure {0.0, 0.5} × band split {40/60, 33/67} (4) |
 | H-54 | `gated_panic_reversion` (Tier-1 screen, 40-name universe) — the flagship: RSI(4)<10 oversold entry (the validated signal) taken ONLY when the symbol's OI-weighted IV has spiked and is declining day-over-day (panic exhausting), exit RSI>50 (the validated adaptive exit) | IV-spike z {1.5, 2.0} × decline-confirm {1, 2 days} (4) |
 | H-55 | `gex_sized_reversion` — H-54's best config re-screened with signal magnitude scaled by the symbol's GEX vol band (position-weight proxy in pooled PF: half-weight bottom band) | contingent on H-54 raw pass; single config (1) |
+
+**EXP-56 verdicts (2026-07-10):** H-54 gated_panic_reversion **p=0.2937
+— DEAD** (real PF 1.2512 vs null 1.1730±0.2187; the IV gate concentrates
+PF but shrinks n on a wide-null universe); H-55 contingent — not run.
+**H-53 gex_vol_target: raw p=0.0490** (best cfg: FLAT in bottom
+net-GEX tercile, else fully long; sized Sharpe 0.831 vs buy-and-hold
+0.439, null best-of-grid 0.492±0.169) — **BH q=0.098, fails FDR** via
+H-54's corpse.
+
+**H-53-holdout registration** (2026-07-10, BEFORE contact — the
+dividend_runup/EXP-54 pattern): ONE-SHOT confirmation on untouched
+2023-01-01 → 2026-06-30, config LOCKED (bottom_exp=0.0, tercile bands,
+252d trailing percentile, 1-day lag), 1000 perms, metric = sized
+Sharpe vs null best-of-... no: vs null of the SAME single locked
+config (no grid on holdout). Binding rule: p ≤ 0.05 → REAL (proceed
+to Tier-2 engine rendering with costs → paper); p > 0.05 → DEAD,
+chapter closed. Skeptic's note recorded pre-test: dev contains
+2018/2020/2022 crashes; the holdout is grind-regime — if the overlay
+is only hindsight crash insurance, it should fail here.
