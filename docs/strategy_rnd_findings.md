@@ -2186,3 +2186,27 @@ campaign law at a higher level: the market sells the directional story
 (retail GEX dashboards) while the real information is in the second
 moment. Scope: intraday/0DTE renderings untested (would need the
 streaming tier). Ensembles: data/mcpt/exp55_t1_*.json.
+
+## EXP-56 FINAL — combined-dataset wave: 0/2; the GEX chapter closes (2026-07-10)
+
+H-54 gated_panic_reversion p=0.2937 (IV gate concentrates PF 1.10->1.25
+but shrinks n into a wide null; H-55 contingent, not run). H-53
+gex_vol_target: dev raw p=0.0490 (sized Sharpe 0.831 vs B&H 0.439 —
+double) but BH q=0.098; the pre-registered ONE-SHOT holdout (locked
+config, 2023-2026, skeptic's note recorded pre-test) came back
+**p=0.2907 with sized Sharpe 1.211 vs B&H 1.321 — the overlay HURT in
+the grind regime. DEAD per the binding rule; the dev result was
+hindsight crash insurance** (dev contained 2018/2020/2022; the vol
+forecast is real but the vol it forecasts was not, out of sample,
+return-relevant).
+
+GEX CHAPTER CLOSED (EXP-55 + EXP-56, 8 hypotheses + 1 holdout):
+directional dead at every rendering; sizing dead at its best rendering;
+what stands is the measurement result (GEX forecasts next-day vol,
+2.1x monotone, incremental to vol clustering) and the infrastructure
+(295M-row options lake, derived GEX 40 names 2016-2026, validated
+instrument, dashboard). Untested scope, honestly recorded: intraday /
+0DTE renderings (streaming tier) and options-as-instruments (selling
+vol in high-GEX regimes — requires options P&L machinery we don't
+have). The campaign's two live edges remain FOMC daily + hourly, paper,
+first trades 2026-07-27..29.
