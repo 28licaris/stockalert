@@ -64,6 +64,36 @@ export function GexPage() {
   );
 
   const levels = useMemo(() => deriveGexLevels(strikeRows), [strikeRows]);
+
+  /** Entry/execution context: current trailing-252d GEX percentile band and
+   *  that band's MEASURED avg next-day |move| for this symbol — computed
+   *  from the fetched history, not hardcoded. Context, not a signal. */
+  const entryContext = useMemo(() => {
+    const pts = historyPoints.filter((p) => p.close != null);
+    if (pts.length < 300) return null;
+    const rets: { gex: number; nextAbs: number }[] = [];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i].close as number;
+      const b = pts[i + 1].close as number;
+      rets.push({ gex: pts[i].gex, nextAbs: Math.abs(Math.log(b / a)) });
+    }
+    const window = pts.slice(-252).map((p) => p.gex);
+    const latest = pts[pts.length - 1].gex;
+    const pct = window.filter((g) => g <= latest).length / window.length;
+    const band = pct < 1 / 3 ? 0 : pct < 2 / 3 ? 1 : 2;
+    const sorted = [...rets].sort((a, b) => a.gex - b.gex);
+    const third = Math.floor(sorted.length / 3);
+    const bands = [sorted.slice(0, third), sorted.slice(third, 2 * third), sorted.slice(2 * third)];
+    const avg = (xs: { nextAbs: number }[]) =>
+      xs.reduce((s, x) => s + x.nextAbs, 0) / Math.max(xs.length, 1);
+    return {
+      band,
+      pct,
+      expectedMove: avg(bands[band]) * 100,
+      calmMove: avg(bands[2]) * 100,
+      wildMove: avg(bands[0]) * 100,
+    };
+  }, [historyPoints]);
   const netGex = totalRow ? (totalRow.net_gamma_exposure ?? totalRow.gamma_exposure) : null;
   const positive = (netGex ?? 0) >= 0;
   const spotAboveFlip =
@@ -170,6 +200,46 @@ export function GexPage() {
           </div>
         </HeaderCard>
       </div>
+
+      {entryContext && (
+        <div className={cn(
+          "rounded-lg border px-4 py-3",
+          entryContext.band === 0
+            ? "border-rose-500/40 bg-rose-500/5"
+            : entryContext.band === 2
+              ? "border-emerald-500/40 bg-emerald-500/5"
+              : "border-border bg-card",
+        )}>
+          <div className="mb-1 flex items-baseline justify-between">
+            <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
+              Entry / execution context
+            </span>
+            <span className="text-[10px] text-muted-foreground/70">
+              context only — GEX direction &amp; levels tested NOT predictive (EXP-55)
+            </span>
+          </div>
+          <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">
+            <span>
+              Vol regime:{" "}
+              <span className={cn("font-medium", entryContext.band === 0
+                ? "text-rose-300" : entryContext.band === 2 ? "text-emerald-300" : "")}>
+                {["WIDE (bottom-tercile GEX)", "NORMAL (mid-tercile GEX)", "CALM (top-tercile GEX)"][entryContext.band]}
+              </span>
+            </span>
+            <span className="font-mono text-xs text-muted-foreground">
+              typical next-day move in this regime: ±{entryContext.expectedMove.toFixed(2)}%
+              {" "}(calm {entryContext.calmMove.toFixed(2)}% · wide {entryContext.wildMove.toFixed(2)}%)
+            </span>
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            {entryContext.band === 0
+              ? "Buying today? Expect swings — stagger limit orders below market, size the first tranche smaller, set stops wider than usual so noise doesn't shake you out."
+              : entryContext.band === 2
+                ? "Quiet tape expected — market/tight-limit orders are fine; dips are shallower, so waiting for a big pullback tends to just miss fills."
+                : "Ordinary conditions — standard order handling."}
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
         <div className="space-y-3">
