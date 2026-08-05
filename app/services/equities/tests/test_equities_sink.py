@@ -342,6 +342,7 @@ def test_concurrent_commit_is_retried_once():
 
     table = _make_table_mock()
     table.append.side_effect = [CommitFailedException("branch main has changed"), None]
+    # backoff is real time; keep the test fast
     sink = EquitiesIcebergSink(
         table=table, name="t", arrow_schema=_POLYGON_RAW_ARROW,
     )
@@ -354,6 +355,30 @@ def test_concurrent_commit_is_retried_once():
     assert result.status == "ok"
     assert result.bars_written == 2
     assert table.append.call_count == 2
+
+
+def test_transient_conflicts_retry_until_success():
+    """Several writers share these tables; losing a couple of commit races
+    in a row must still land the rows, not error."""
+    from pyiceberg.exceptions import CommitFailedException
+
+    table = _make_table_mock()
+    table.append.side_effect = [
+        CommitFailedException("Glue detected concurrent update to table version 1453"),
+        CommitFailedException("Glue detected concurrent update to table version 1454"),
+        None,
+    ]
+    sink = EquitiesIcebergSink(
+        table=table, name="t", arrow_schema=_POLYGON_RAW_ARROW,
+    )
+
+    result = asyncio.run(
+        sink.write(_canonical_frame(rows=1), file_date=date(2024, 1, 2),
+                   kind="minute", provider="polygon")
+    )
+
+    assert result.status == "ok"
+    assert table.append.call_count == 3
 
 
 def test_persistent_commit_conflict_still_errors():

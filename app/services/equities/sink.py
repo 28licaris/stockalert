@@ -40,6 +40,7 @@ Data-quality boundary (same as v1): rows missing `symbol` or
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
@@ -59,6 +60,12 @@ from app.services.iceberg_catalog import get_catalog
 from app.services.ingest.sinks import Kind, SinkResult
 
 logger = logging.getLogger(__name__)
+
+# Commit-conflict retry: these tables have several concurrent writers
+# (live stream, nightly refresh, manual backfills), so losing a commit
+# race is normal traffic. Exponential backoff, then surface the error.
+_COMMIT_ATTEMPTS = 4
+_COMMIT_BACKOFF_SECONDS = 0.5
 
 
 # 12 canonical OHLCV columns — `equities.polygon_raw` shape. Matches
@@ -339,15 +346,24 @@ class EquitiesIcebergSink:
                     "equities_iceberg_sink[%s]: pre-append refresh failed for %s: %s",
                     self._name, file_date, refresh_exc,
                 )
-            try:
-                self._table.append(prepared.arrow)
-            except CommitFailedException:
-                logger.warning(
-                    "equities_iceberg_sink[%s]: concurrent commit on %s, retrying once",
-                    self._name, file_date,
-                )
-                self._table.refresh()
-                self._table.append(prepared.arrow)
+            # Several writers share these tables (live stream, nightly jobs,
+            # manual backfills), so a conflict is expected traffic, not an
+            # anomaly. Retry with backoff; a persistent conflict still errors.
+            for attempt in range(_COMMIT_ATTEMPTS):
+                try:
+                    self._table.append(prepared.arrow)
+                    break
+                except CommitFailedException:
+                    if attempt == _COMMIT_ATTEMPTS - 1:
+                        raise
+                    delay = _COMMIT_BACKOFF_SECONDS * (2 ** attempt)
+                    logger.warning(
+                        "equities_iceberg_sink[%s]: concurrent commit on %s "
+                        "(attempt %d/%d), retrying in %.1fs",
+                        self._name, file_date, attempt + 1, _COMMIT_ATTEMPTS, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    self._table.refresh()
         except Exception as e:
             logger.exception(
                 "equities_iceberg_sink[%s]: append failed for %s: %s",
