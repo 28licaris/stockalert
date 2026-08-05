@@ -88,10 +88,20 @@ def _derive_symbol_month(
     else:
         oi = oi.assign(position_date=oi["eod_date"])
 
+    # BRONZE APPENDS, SILVER DEDUPS (platform convention): re-pulling a
+    # month that was partially fetched leaves duplicate contract-days in
+    # bronze. Left un-deduped they DOUBLE-COUNT gamma x OI in every
+    # aggregate, so collapse to the latest ingestion per contract-day on
+    # BOTH sides before joining.
+    ckey = ["eod_date", "expiration_date", "strike", "put_call"]
+    g = (g.sort_values("ingestion_ts").drop_duplicates(ckey, keep="last")
+         if "ingestion_ts" in g.columns else g.drop_duplicates(ckey, keep="last"))
     key = ["position_date", "expiration_date", "strike", "put_call"]
-    oi_small = oi[key + ["open_interest"]].rename(columns={"position_date": "eod_date"})
-    merged = g.merge(oi_small, on=["eod_date", "expiration_date", "strike", "put_call"],
-                     how="inner")
+    oi_small = oi[key + ["open_interest"] + (["ingestion_ts"] if "ingestion_ts" in oi.columns else [])]
+    oi_small = oi_small.rename(columns={"position_date": "eod_date"})
+    oi_small = (oi_small.sort_values("ingestion_ts").drop_duplicates(ckey, keep="last")
+                if "ingestion_ts" in oi_small.columns else oi_small.drop_duplicates(ckey, keep="last"))
+    merged = g.merge(oi_small[ckey + ["open_interest"]], on=ckey, how="inner")
     if merged.empty:
         return []
 
