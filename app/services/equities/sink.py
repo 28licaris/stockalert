@@ -48,6 +48,7 @@ from typing import Optional
 
 import pandas as pd
 import pyarrow as pa
+from pyiceberg.exceptions import CommitFailedException
 from pyiceberg.table import Table
 
 from app.services.equities.tables import (
@@ -321,7 +322,32 @@ class EquitiesIcebergSink:
             )
 
         try:
-            self._table.append(prepared.arrow)
+            # Iceberg commits are optimistic against the metadata this handle
+            # was opened with. ANY intervening commit — a prior write in this
+            # same process, the live stream, a nightly job — invalidates it
+            # ("branch main has changed"), so a long-running writer would
+            # silently succeed once and then fail forever. Refresh before
+            # each append and retry once on a genuine concurrent commit.
+            # best-effort: a transient refresh failure must not fail an
+            # otherwise-good write (see test_write_returns_ok_even_if_
+            # snapshot_refresh_fails) — the append below still tries, and
+            # the retry path covers a genuinely stale handle.
+            try:
+                self._table.refresh()
+            except Exception as refresh_exc:  # noqa: BLE001 — non-fatal
+                logger.warning(
+                    "equities_iceberg_sink[%s]: pre-append refresh failed for %s: %s",
+                    self._name, file_date, refresh_exc,
+                )
+            try:
+                self._table.append(prepared.arrow)
+            except CommitFailedException:
+                logger.warning(
+                    "equities_iceberg_sink[%s]: concurrent commit on %s, retrying once",
+                    self._name, file_date,
+                )
+                self._table.refresh()
+                self._table.append(prepared.arrow)
         except Exception as e:
             logger.exception(
                 "equities_iceberg_sink[%s]: append failed for %s: %s",

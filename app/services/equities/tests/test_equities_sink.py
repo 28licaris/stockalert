@@ -309,3 +309,69 @@ def test_write_returns_ok_even_if_snapshot_refresh_fails():
     assert result.status == "ok"
     assert result.bars_written == 1
     assert result.metadata.get("snapshot_id_after") is None
+
+
+def test_repeated_writes_refresh_the_handle():
+    """Regression (2026-08-05): the sink cached its table handle and never
+    refreshed before appending, so a multi-day backfill committed the FIRST
+    day and then failed every later one with CommitFailedException
+    ("branch main has changed"). Real impact: the Schwab gap backfill
+    landed 1 of 12 days. Every write must refresh first."""
+    table = _make_table_mock()
+    sink = EquitiesIcebergSink(
+        table=table, name="t", arrow_schema=_POLYGON_RAW_ARROW,
+    )
+
+    for day in (1, 2, 3):
+        result = asyncio.run(
+            sink.write(_canonical_frame(rows=1), file_date=date(2024, 1, day),
+                       kind="minute", provider="polygon")
+        )
+        assert result.status == "ok", f"day {day} failed: {result.error}"
+
+    assert table.append.call_count == 3
+    # one pre-append refresh per write (plus the post-append snapshot reads)
+    assert table.refresh.call_count >= 3
+
+
+def test_concurrent_commit_is_retried_once():
+    """A genuine concurrent commit (another writer landed between refresh
+    and append) must be retried after re-refreshing, not surfaced as an
+    error — the live stream and nightly jobs write the same tables."""
+    from pyiceberg.exceptions import CommitFailedException
+
+    table = _make_table_mock()
+    table.append.side_effect = [CommitFailedException("branch main has changed"), None]
+    sink = EquitiesIcebergSink(
+        table=table, name="t", arrow_schema=_POLYGON_RAW_ARROW,
+    )
+
+    result = asyncio.run(
+        sink.write(_canonical_frame(rows=2), file_date=date(2024, 1, 2),
+                   kind="minute", provider="polygon")
+    )
+
+    assert result.status == "ok"
+    assert result.bars_written == 2
+    assert table.append.call_count == 2
+
+
+def test_persistent_commit_conflict_still_errors():
+    """No silent failure: if the retry also conflicts, the write reports
+    an error rather than pretending the rows landed."""
+    from pyiceberg.exceptions import CommitFailedException
+
+    table = _make_table_mock()
+    table.append.side_effect = CommitFailedException("branch main has changed")
+    sink = EquitiesIcebergSink(
+        table=table, name="t", arrow_schema=_POLYGON_RAW_ARROW,
+    )
+
+    result = asyncio.run(
+        sink.write(_canonical_frame(rows=2), file_date=date(2024, 1, 2),
+                   kind="minute", provider="polygon")
+    )
+
+    assert result.status == "error"
+    assert "branch main has changed" in (result.error or "")
+    assert result.bars_written == 0
