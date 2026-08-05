@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import APIRouter
@@ -146,6 +147,58 @@ async def _check_iceberg() -> ServiceHealth:
     return await asyncio.to_thread(_probe)
 
 
+SCHWAB_TOKEN_WARN_DAYS = 5.0
+SCHWAB_TOKEN_ERROR_DAYS = 6.5
+
+
+def _schwab_token_age_days() -> Optional[float]:
+    """Age of the Schwab refresh token in days.
+
+    Works for BOTH sources. File-supplied tokens age from the file's mtime
+    (the OAuth script rewrites it on re-auth). Env-supplied tokens (the
+    common case here — SCHWAB_REFRESH_TOKEN in .env) have no mtime, so we
+    keep a tiny first-seen ledger keyed by the token's hash: a new token
+    value stamps a new first-seen time, and age counts from there. The
+    ledger stores only a hash, never the token.
+    """
+    import hashlib
+    import json
+    import os
+    from datetime import datetime, timezone
+
+    from app.config import settings
+
+    now = datetime.now(timezone.utc)
+    env_token = (settings.schwab_refresh_token or "").strip()
+    if not env_token:
+        path = settings.schwab_refresh_token_file
+        if not path or not os.path.isfile(path):
+            return None
+        mtime = datetime.fromtimestamp(os.path.getmtime(path), tz=timezone.utc)
+        return (now - mtime).total_seconds() / 86400.0
+
+    digest = hashlib.sha256(env_token.encode()).hexdigest()[:16]
+    ledger = Path(settings.schwab_refresh_token_file or "data/.schwab_refresh_token").parent
+    ledger = ledger / ".schwab_token_seen.json"
+    try:
+        state = json.loads(ledger.read_text()) if ledger.is_file() else {}
+    except (OSError, ValueError):
+        state = {}
+    if state.get("hash") != digest:
+        state = {"hash": digest, "first_seen": now.isoformat()}
+        try:
+            ledger.parent.mkdir(parents=True, exist_ok=True)
+            ledger.write_text(json.dumps(state))
+        except OSError as exc:  # non-fatal: age just stays unknown
+            logger.warning("schwab token ledger unwritable (%s): %s", ledger, exc)
+            return None
+    try:
+        first_seen = datetime.fromisoformat(state["first_seen"])
+    except (KeyError, ValueError):
+        return None
+    return (now - first_seen).total_seconds() / 86400.0
+
+
 async def _check_schwab() -> ServiceHealth:
     """Schwab is healthy if credentials are configured (we don't burn an OAuth round-trip on every status poll)."""
     from app.config import settings
@@ -163,9 +216,32 @@ async def _check_schwab() -> ServiceHealth:
             state="warn",
             detail="client configured; refresh token missing",
         )
-    return ServiceHealth(
-        name="Schwab", state="ok", detail="client + refresh token present"
-    )
+
+    # Token AGE is the thing that actually breaks: Schwab refresh tokens
+    # live ~7 days, and an expired one looks identical to a valid one from
+    # here (present, non-empty). Two silent expiries (2026-07-03, 07-20)
+    # froze the intraday tier for days and cost the hourly FOMC paper
+    # strategy its first live meeting. Age it from the token file's mtime,
+    # which the OAuth script rewrites on every re-auth.
+    age_days = _schwab_token_age_days()
+    if age_days is None:
+        return ServiceHealth(
+            name="Schwab",
+            state="ok",
+            detail="client + refresh token present (age unknown: token from env, not file)",
+        )
+    detail = f"refresh token {age_days:.1f}d old (~7d life)"
+    if age_days >= SCHWAB_TOKEN_ERROR_DAYS:
+        return ServiceHealth(
+            name="Schwab", state="error",
+            detail=f"{detail} — LIKELY EXPIRED, re-run scripts/schwab_get_refresh_token.py",
+        )
+    if age_days >= SCHWAB_TOKEN_WARN_DAYS:
+        return ServiceHealth(
+            name="Schwab", state="warn",
+            detail=f"{detail} — re-auth due, run scripts/schwab_get_refresh_token.py",
+        )
+    return ServiceHealth(name="Schwab", state="ok", detail=detail)
 
 
 async def _check_polygon() -> ServiceHealth:

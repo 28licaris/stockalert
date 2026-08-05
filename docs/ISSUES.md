@@ -291,3 +291,21 @@ pattern: hot-tier the derived GEX series in ClickHouse (like bars) and
 route reads through a gateway with a CH-first/lake-fallback selector. Do
 NOT cache-band-aid in the API layer. Matters once the GEX page gets real
 traffic; fine for research use now.
+
+## schwab-refresh-token-silent-expiry (2026-08-04, MITIGATED)
+Schwab refresh tokens live ~7 days. Twice (2026-07-03, 2026-07-20) one
+expired unnoticed: the health check only asserted the token was PRESENT,
+so the Status page stayed green while the intraday tier froze. The
+2026-07-20 expiry cost `fomc_drift_hourly_spy` its first live FOMC
+meeting (paper run stalled at computed_through 2026-07-20; the daily
+strategy was unaffected because ohlcv_daily comes from Polygon REST, not
+the Schwab stream).
+Mitigation: `_check_schwab` now reports token AGE — warn ≥5d, error
+≥6.5d — for both token sources (file mtime; env tokens via a
+hash-keyed first-seen ledger at data/.schwab_token_seen.json, which
+stores a hash, never the token). Tests: tests/test_schwab_token_age_health.py.
+LIMITATION (by construction): for an env token first seen NOW, the
+ledger clock starts now — a token that is ALREADY expired reads "0.0d,
+ok" until the next re-auth stamps a true start. The complementary signal
+is data freshness (stale intraday bars during market hours); wiring a
+freshness alarm into the same health surface is the remaining gap.
