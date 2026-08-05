@@ -41,8 +41,9 @@ import time
 os.environ.setdefault("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -212,6 +213,22 @@ ENDPOINTS = {
 }
 
 
+_EOD_READY_HOUR_ET = 18  # report generated 17:15 ET; allow a margin
+
+
+def _last_complete_eod() -> date:
+    """Last date whose EOD report the provider has certainly generated."""
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    d = now_et.date()
+    if now_et.hour < _EOD_READY_HOUR_ET:
+        d -= timedelta(days=1)
+    return d
+
+
+def _current_month() -> str:
+    return str(pd.Period(datetime.now(ZoneInfo("America/New_York")).date(), freq="M"))
+
+
 def _months(start: str, end: str) -> list[tuple[str, str, str]]:
     """[(label, start_date, end_date)] month windows, inclusive."""
     return [(str(p), str(p.start_time.date()), str(p.end_time.date()))
@@ -300,6 +317,14 @@ def main() -> int:
     def _one(ep: str, sym: str, month: tuple[str, str, str]) -> tuple[str, int]:
         label, mstart, mend = month
         path, to_arrow, _, day_at_a_time = ENDPOINTS[ep]
+        # The provider generates its EOD report at 17:15 ET; current-day
+        # history is rejected outright ("Cannot fetch current-day data
+        # without specifying an expiration"). Never request past the last
+        # completed EOD — otherwise one un-generated day fails the whole
+        # month unit.
+        mend = min(mend, _last_complete_eod().isoformat())
+        if mend < mstart:
+            return label, 0
         frames = []
         if day_at_a_time:
             # fetch each weekday, append ONCE per unit (atomic marker)
@@ -321,9 +346,13 @@ def main() -> int:
             with locks[ep]:
                 tables[ep].refresh()
                 tables[ep].append(arrow)
-        s3.put_object(Bucket=bucket, Key=_marker_key(ep, sym, label),
-                      Body=json.dumps({"rows": rows, "run_id": run_id,
-                                       "completed_at": datetime.now(timezone.utc).isoformat()}))
+        # A month still in progress is NOT complete — marking it would pin
+        # it forever at today's partial data. Leave it unmarked so the next
+        # run re-pulls it (bronze appends; the derivation dedups).
+        if label != _current_month():
+            s3.put_object(Bucket=bucket, Key=_marker_key(ep, sym, label),
+                          Body=json.dumps({"rows": rows, "run_id": run_id,
+                                           "completed_at": datetime.now(timezone.utc).isoformat()}))
         return label, rows
 
     t0 = time.time()
