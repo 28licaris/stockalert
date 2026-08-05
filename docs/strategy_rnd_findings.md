@@ -2210,3 +2210,28 @@ instrument, dashboard). Untested scope, honestly recorded: intraday /
 vol in high-GEX regimes — requires options P&L machinery we don't
 have). The campaign's two live edges remain FOMC daily + hourly, paper,
 first trades 2026-07-27..29.
+
+## FORWARD RECORD — first live FOMC meeting (2026-07-29 announcement)
+
+**fomc_drift_spy (daily): TRADED, LOST.** Entry 2026-07-27 14:30Z @
+$745.28 (127.85 sh), exit 2026-07-29 14:30Z @ $739.60 → **−$726.52,
+−0.73%**; balance $99,273.48. Forward n=1, win rate 0/1. Expected: the
+Tier-2 validation ran a 62% win rate, so ~2-in-5 meetings lose. One
+trade carries no information about the edge — recorded because the
+forward record starts honestly or not at all.
+
+**fomc_drift_hourly_spy: DID NOT TRADE — data gap, not a decision.**
+The run stalled at computed_through 2026-07-20T23:00 because the
+Schwab refresh token expired ~2026-07-20 and the intraday tier froze
+(the daily arm survived on ohlcv_daily via Polygon REST). The hourly
+strategy never evaluated the 07-29 meeting.
+
+**Consequence for the head-to-head (binding):** the daily-vs-hourly
+forward comparison registered at promotion is now **missing its first
+paired observation** and cannot be reconstructed — replaying the
+strategy over backfilled bars would be a backtest, not a forward
+record, and mixing the two would corrupt exactly the property that
+makes forward evidence worth having. The comparison resumes from the
+2026-09-16 meeting with n=1 daily / n=0 hourly on the books. Ops
+mitigation: token-age health check (see ISSUES
+schwab-refresh-token-silent-expiry).
