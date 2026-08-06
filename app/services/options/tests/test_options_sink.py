@@ -118,3 +118,42 @@ def test_options_sink_returns_error_when_append_fails() -> None:
     assert result.status == "error"
     assert "upsert exploded" in (result.error or "")
     assert result.metadata["rows_prepared"] == {"raw": 1}
+
+
+def test_write_does_not_block_the_event_loop() -> None:
+    """Regression (2026-08-06): the Iceberg upserts are synchronous S3+Glue
+    round-trips. Called inline in this coroutine they stalled the event
+    loop for the whole 40-symbol snapshot sweep, so any HTTP request that
+    landed during a sweep hung — the GEX page rendered completely empty.
+    A concurrent task must keep running while the sink writes."""
+    import asyncio
+    import time
+
+    sink, tables = _sink()
+
+    def _slow_upsert(*_a, **_kw):
+        time.sleep(0.20)  # stands in for the blocking S3/Glue call
+        return MagicMock(rows_upserted=1, rows_inserted=1, rows_updated=0)
+
+    for t in tables.values():
+        t.upsert.side_effect = _slow_upsert
+
+    async def _scenario() -> int:
+        ticks = 0
+
+        async def _heartbeat() -> None:
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.02)
+                ticks += 1
+
+        beat = asyncio.create_task(_heartbeat())
+        result = await sink.write_parse_result(_parse())
+        beat.cancel()
+        assert result.status == "ok"
+        return ticks
+
+    ticks = asyncio.run(_scenario())
+    # 4 tables x 0.20s of blocking work: if it ran on the loop the
+    # heartbeat would be starved (~0 ticks).
+    assert ticks > 5, f"event loop was blocked during the write (ticks={ticks})"

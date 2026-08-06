@@ -1,6 +1,7 @@
 """ClickHouse hot-tier sink for latest options snapshots."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -124,7 +125,7 @@ class OptionsClickHouseSink:
                 metadata={"reason": "no_hot_rows"},
             )
 
-        try:
+        def _insert_all() -> None:
             client = self._client or get_client()
             if contract_rows:
                 client.insert(
@@ -134,6 +135,12 @@ class OptionsClickHouseSink:
                 )
             if gex_rows:
                 client.insert(GEX_TABLE, gex_rows, column_names=GEX_COLUMNS)
+
+        try:
+            # clickhouse-connect is a blocking HTTP client; called inline in
+            # this coroutine it stalls the event loop for every concurrent
+            # request (see options-snapshot-blocks-event-loop in ISSUES).
+            await asyncio.to_thread(_insert_all)
         except Exception as e:
             log.exception("options_clickhouse_hot: insert failed: %s", e)
             return SinkResult(

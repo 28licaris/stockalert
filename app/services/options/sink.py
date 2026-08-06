@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
@@ -183,8 +184,12 @@ class OptionsIcebergSink:
             return SinkResult(sink=self.name, status="error", bars_written=0, error=str(e))
 
         appended: dict[str, int] = {}
-        try:
-            appended["raw"] = _upsert_if_rows(self._tables.raw, raw, "options.schwab_chain_raw")
+        def _write_all() -> None:
+            # Record each table as it lands so a mid-way failure still
+            # reports partial progress in the error metadata.
+            appended["raw"] = _upsert_if_rows(
+                self._tables.raw, raw, "options.schwab_chain_raw"
+            )
             appended["contracts"] = _upsert_if_rows(
                 self._tables.contracts, contracts, "options.schwab_chain_contracts"
             )
@@ -194,6 +199,14 @@ class OptionsIcebergSink:
             appended["gamma"] = _upsert_if_rows(
                 self._tables.gamma, gamma, "options.gamma_exposure_snapshots"
             )
+
+        try:
+            # These are SYNCHRONOUS S3 + Glue round-trips. Called inline in
+            # this coroutine they blocked the event loop for the whole
+            # snapshot sweep (40 symbols x 4 tables), freezing every HTTP
+            # request — the GEX page rendered empty for anyone who loaded it
+            # during a sweep. Must run off-loop.
+            await asyncio.to_thread(_write_all)
         except Exception as e:
             log.exception("options_iceberg: append failed: %s", e)
             return SinkResult(
