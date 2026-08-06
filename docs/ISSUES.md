@@ -309,3 +309,42 @@ ledger clock starts now — a token that is ALREADY expired reads "0.0d,
 ok" until the next re-auth stamps a true start. The complementary signal
 is data freshness (stale intraday bars during market hours); wiring a
 freshness alarm into the same health surface is the remaining gap.
+
+## equities-sink-stale-table-handle (2026-08-05, FIXED)
+`EquitiesIcebergSink` cached its PyIceberg table handle and never
+refreshed before `append`. Iceberg commits are optimistic against the
+metadata the handle was opened with, so ANY intervening commit — the
+sink's own previous write, the live stream, a nightly job — left it
+stale and every later append died with "branch main has changed".
+Symptom: a 12-day Schwab gap backfill landed **1 day** (the first) and
+reported errors for the rest; a long-running writer degrades to
+"first write wins" silently. Fix: best-effort refresh before each
+append (a transient refresh error must NOT fail an otherwise-good
+write — pre-existing contract) + up to 4 attempts with exponential
+backoff on `CommitFailedException`, then surface the error. Tests:
+`test_repeated_writes_refresh_the_handle`,
+`test_transient_conflicts_retry_until_success`,
+`test_persistent_commit_conflict_still_errors`.
+
+## thetadata-history-rejects-current-day (2026-08-06, HANDLED)
+The v3 history endpoints refuse the CURRENT calendar day when
+`expiration=*`: "Cannot fetch current-day data without specifying an
+expiration". It is a hard rule about *today*, not about whether the
+17:15 ET EOD report exists — a time-of-day margin does not help (tried;
+36 units still failed). `thetadata_backfill.py` now caps every fetch
+window at **yesterday ET**, and leaves the current month UNMARKED so a
+later run picks up its remaining days (bronze appends; the GEX
+derivation dedups per contract-day). Today's chain is reachable only via
+the `/snapshot` endpoints. This makes the backfill safe to schedule
+nightly.
+
+## ch-reconcile-inserts-duplicate-keys (2026-08-06, BENIGN)
+`reconcile_ch_from_schwab(lookback_days=N)` re-pushes the whole window,
+so days already in ClickHouse are inserted again (Aug-4 went 113k →
+227k rows). `stocks.ohlcv_1m` is `ReplacingMergeTree(version)` ordered
+by (symbol, timestamp), so the duplicates are same-key and collapse on
+merge — verified 226,906 raw rows vs 113,453 unique keys, and
+`OPTIMIZE TABLE ohlcv_1m PARTITION <YYYYMM> FINAL` restored the exact
+count. Not corruption, but readers that do NOT use FINAL will
+double-count between merges: prefer a narrow `lookback_days`, and
+OPTIMIZE the touched partition after a wide reconcile.
