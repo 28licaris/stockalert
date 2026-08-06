@@ -213,16 +213,16 @@ ENDPOINTS = {
 }
 
 
-_EOD_READY_HOUR_ET = 18  # report generated 17:15 ET; allow a margin
-
-
 def _last_complete_eod() -> date:
-    """Last date whose EOD report the provider has certainly generated."""
-    now_et = datetime.now(ZoneInfo("America/New_York"))
-    d = now_et.date()
-    if now_et.hour < _EOD_READY_HOUR_ET:
-        d -= timedelta(days=1)
-    return d
+    """Latest date the history endpoints will serve with `expiration=*`.
+
+    The provider refuses the CURRENT calendar day outright ("Cannot fetch
+    current-day data without specifying an expiration") — this is a hard
+    rule about today, not about whether the 17:15 ET report has been
+    generated, so no time-of-day margin helps. Today's chain is reachable
+    only via the /snapshot endpoints; history picks it up tomorrow.
+    """
+    return datetime.now(ZoneInfo("America/New_York")).date() - timedelta(days=1)
 
 
 def _current_month() -> str:
