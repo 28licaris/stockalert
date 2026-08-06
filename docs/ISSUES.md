@@ -375,3 +375,30 @@ Coverage gap that let this ship: every pre-existing test stubbed
 event-loop heartbeat assertion (verified to fail without the fix).
 Workaround while diagnosing: `LIVE_LAKE_WRITER_ENABLED=false` (the hot
 tier is unaffected — ClickHouse is what the UI reads).
+
+## instrument-names-transient-failures-cached-as-negatives (2026-08-06, FIXED)
+`_polygon_fetch` returned `None` on ANY failure — rate limit, 5xx,
+timeout — and the warm path cached `None` as `{"description": ""}`. The
+docstring's "cache every result including negatives, so a symbol hits
+Polygon at most once" then made that permanent. Polygon's free tier
+allows ~5 req/min while the warmer fetches 12-way concurrent, so a bulk
+warm reliably 429s: **552 rows were cached blank**, including AMZN, AMD,
+ABBV — leaving 324 stream/watchlist rows showing a bare ticker forever.
+Verified Polygon resolved all of them fine on demand.
+Fixes:
+1. `_NameFetchUnavailable` distinguishes "provider can't answer now"
+   (never cached, retried next warm) from a genuine 200-with-no-match
+   (cached as a negative, as intended).
+2. `bulk_refresh_from_reference()` — per-symbol lookups are the wrong
+   shape for this provider. The reference endpoint paginates 1,000
+   tickers/request, so the whole listed universe (13,731 names) costs
+   ~14 requests instead of ~13,000, paced to stay under the limit.
+Two traps inside the bulk crawl, both caught by checking row counts
+rather than trusting the "written" log line:
+   - `next_url` does NOT carry `limit`; without re-sending it the API
+     silently drops to 100 rows/page.
+   - passing `params=` to httpx REPLACES a URL's query string, dropping
+     the pagination cursor — every "next" page silently re-fetched page
+     1. Merge onto the URL (`httpx.URL(...).copy_merge_params`) instead.
+Recovery: `DELETE FROM instrument_names WHERE name=''` then
+`bulk_refresh_from_reference()`. Stream universe: 224/224 named.

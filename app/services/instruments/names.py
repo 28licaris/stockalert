@@ -22,6 +22,14 @@ from typing import Iterable
 
 logger = logging.getLogger(__name__)
 
+class _NameFetchUnavailable(Exception):
+    """Provider could not answer right now (rate limit, 5xx, network).
+
+    Distinct from "this ticker genuinely has no name": only the latter may
+    be cached as a negative, or a transient blip becomes permanent.
+    """
+
+
 _TABLE = "instrument_names"
 # On-demand misses are fetched CONCURRENTLY (bounded) so a page of uncached
 # symbols resolves in ~one Polygon round-trip of latency instead of N. The
@@ -109,19 +117,26 @@ def _polygon_fetch(symbol: str) -> dict | None:
             timeout=10.0,
         )
         if r.status_code != 200:
-            return None
+            # TRANSIENT (rate limit, 5xx, auth blip) — NOT an answer. Raise so
+            # the caller declines to cache a negative. Caching these is what
+            # left 552 symbols (AMZN, AMD, ABBV…) permanently blank: one 429
+            # during a bulk warm became "this ticker has no name, forever".
+            raise _NameFetchUnavailable(f"HTTP {r.status_code}")
         results = r.json().get("results") or []
         it = results[0] if isinstance(results, list) and results else results
         if not isinstance(it, dict):
+            # 200 with no match = a genuine not-found; safe to cache negative.
             return None
         return {
             "description": it.get("name") or "",
             "exchange": it.get("primary_exchange") or "",
             "asset_type": it.get("type") or "",
         }
+    except _NameFetchUnavailable:
+        raise
     except Exception as exc:  # noqa: BLE001 — names are best-effort
         logger.warning("polygon name fetch failed for %s: %s", symbol, exc)
-        return None
+        raise _NameFetchUnavailable(str(exc)) from exc
 
 
 def resolve_names(symbols: Iterable[str]) -> dict[str, dict]:
@@ -166,15 +181,37 @@ def warm(symbols: Iterable[str], *, refresh: bool = False) -> int:
 
     to_fetch = [s for s in syms if s not in cached]
     fetched: dict[str, dict] = {}
+    unavailable = 0
     if to_fetch:
+        def _safe(sym: str):
+            """(record, was_available). Unavailable != not-found."""
+            try:
+                return _polygon_fetch(sym), True
+            except _NameFetchUnavailable as exc:
+                logger.warning(
+                    "instrument_names: %s unavailable (%s) — leaving uncached "
+                    "so a later warm retries", sym, exc,
+                )
+                return None, False
+
         with ThreadPoolExecutor(max_workers=_FETCH_CONCURRENCY) as ex:
-            recs = list(ex.map(_polygon_fetch, to_fetch))
-        for sym, rec in zip(to_fetch, recs):
+            recs = list(ex.map(_safe, to_fetch))
+        for sym, (rec, available) in zip(to_fetch, recs):
+            if not available:
+                unavailable += 1
+                continue  # do NOT cache — retried on the next warm
             fetched[sym] = rec or {"description": "", "exchange": "", "asset_type": ""}
-        try:
-            _ch_put({s: {**r, "source": "polygon"} for s, r in fetched.items()})
-        except Exception as exc:  # noqa: BLE001 — cache write best-effort
-            logger.warning("instrument_names warm CH write failed: %s", exc)
+        if fetched:
+            try:
+                _ch_put({s: {**r, "source": "polygon"} for s, r in fetched.items()})
+            except Exception as exc:  # noqa: BLE001 — cache write best-effort
+                logger.warning("instrument_names warm CH write failed: %s", exc)
+        if unavailable:
+            logger.warning(
+                "instrument_names warm: %d/%d symbols unavailable from the "
+                "provider (likely rate limit) — they stay uncached and will "
+                "retry", unavailable, len(to_fetch),
+            )
 
     named = sum(1 for v in {**cached, **fetched}.values() if v.get("description"))
     logger.info(
@@ -198,6 +235,87 @@ def _stream_universe_symbols() -> list[str]:
     except Exception as exc:  # noqa: BLE001 — best effort
         logger.warning("instrument_names: could not read stream_universe: %s", exc)
         return []
+
+
+def bulk_refresh_from_reference(
+    *, page_limit: int = 1000, max_pages: int = 30, pause_seconds: float = 13.0
+) -> int:
+    """Fill names for the WHOLE listed universe in a handful of requests.
+
+    Per-symbol lookups are the wrong shape for this provider: Polygon's free
+    tier allows ~5 requests/minute, so warming 219 symbols one-at-a-time
+    guarantees 429s (that is what poisoned 552 rows with blank names). The
+    reference endpoint paginates 1,000 tickers per request, so the entire US
+    stock+ETF universe costs ~10 requests instead of ~10,000.
+
+    Returns the number of names written. Paced by `pause_seconds` between
+    pages to stay inside the rate limit; safe to re-run (upsert by symbol).
+    """
+    import time
+
+    import httpx
+
+    from app.config import settings
+
+    key = (settings.polygon_api_key or "").strip()
+    if not key:
+        logger.warning("instrument_names bulk refresh: no Polygon key configured")
+        return 0
+
+    url = "https://api.polygon.io/v3/reference/tickers"
+    params: dict | None = {
+        "market": "stocks", "active": "true", "limit": page_limit, "apiKey": key,
+    }
+    written = 0
+    for page in range(1, max_pages + 1):
+        try:
+            r = httpx.get(url, params=params, timeout=30.0)
+        except Exception as exc:  # noqa: BLE001 — boundary
+            logger.warning("instrument_names bulk refresh: page %d failed: %s", page, exc)
+            break
+        if r.status_code != 200:
+            logger.warning(
+                "instrument_names bulk refresh: page %d HTTP %d — stopping "
+                "(names already written are kept)", page, r.status_code,
+            )
+            break
+        body = r.json()
+        results = body.get("results") or []
+        batch = {
+            it["ticker"].upper(): {
+                "description": it.get("name") or "",
+                "exchange": it.get("primary_exchange") or "",
+                "asset_type": it.get("type") or "",
+                "source": "polygon-bulk",
+            }
+            for it in results
+            if isinstance(it, dict) and it.get("ticker") and it.get("name")
+        }
+        if batch:
+            try:
+                _ch_put(batch)
+                written += len(batch)
+            except Exception as exc:  # noqa: BLE001 — keep paging
+                logger.warning("instrument_names bulk refresh: CH write failed: %s", exc)
+        logger.info(
+            "instrument_names bulk refresh: page %d wrote %d (total %d)",
+            page, len(batch), written,
+        )
+        next_url = body.get("next_url")
+        if not next_url:
+            break
+        # next_url already carries the cursor in its query string. Passing
+        # `params=` would REPLACE that query string and drop the cursor —
+        # every "next" page would silently re-fetch page 1 forever. Merge
+        # the auth + page size onto the URL instead.
+        url = str(
+            httpx.URL(next_url).copy_merge_params(
+                {"apiKey": key, "limit": page_limit}
+            )
+        )
+        params = None
+        time.sleep(pause_seconds)  # stay inside the provider's rate limit
+    return written
 
 
 def warm_stream_universe() -> int:

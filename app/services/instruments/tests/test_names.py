@@ -8,6 +8,8 @@ Architecture under test:
 """
 from __future__ import annotations
 
+import pytest
+
 import app.services.instruments.names as names
 
 
@@ -81,3 +83,53 @@ def test_warm_refresh_refetches_cached(monkeypatch):
 
     names.warm(["AAPL"], refresh=True)
     assert put["AAPL"]["description"] == "Apple Inc."  # re-fetched despite being cached
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Transient-vs-not-found (2026-08-06). A 429 during a bulk warm was being
+# cached as "this ticker has no name", permanently blanking 552 symbols
+# (AMZN, AMD, ABBV…) on the stream/watchlist pages.
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_non_200_raises_unavailable_and_is_not_cached(monkeypatch):
+    """Rate limits / 5xx must NOT become permanent negative cache entries."""
+    from unittest.mock import MagicMock
+    import app.services.instruments.names as names
+
+    from app.config import settings
+    monkeypatch.setattr(settings, "polygon_api_key", "k", raising=False)
+    monkeypatch.setattr(
+        "httpx.get", lambda *a, **k: MagicMock(status_code=429, json=lambda: {})
+    )
+    with pytest.raises(names._NameFetchUnavailable):
+        names._polygon_fetch("AMZN")
+
+    written: dict = {}
+    monkeypatch.setattr(names, "_ch_get", lambda syms: {})
+    monkeypatch.setattr(names, "_ch_put", lambda rows: written.update(rows))
+    named = names.warm(["AMZN"])
+
+    assert written == {}, "a transient failure must not be cached"
+    assert named == 0
+
+
+def test_200_with_no_match_is_cached_as_negative(monkeypatch):
+    """A genuine not-found SHOULD be cached so we stop re-asking."""
+    from unittest.mock import MagicMock
+    import app.services.instruments.names as names
+
+    from app.config import settings
+    monkeypatch.setattr(settings, "polygon_api_key", "k", raising=False)
+    monkeypatch.setattr(
+        "httpx.get",
+        lambda *a, **k: MagicMock(status_code=200, json=lambda: {"results": []}),
+    )
+    assert names._polygon_fetch("NOTATICKER") is None
+
+    written: dict = {}
+    monkeypatch.setattr(names, "_ch_get", lambda syms: {})
+    monkeypatch.setattr(names, "_ch_put", lambda rows: written.update(rows))
+    names.warm(["NOTATICKER"])
+
+    assert "NOTATICKER" in written and written["NOTATICKER"]["description"] == ""
