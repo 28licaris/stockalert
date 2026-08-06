@@ -288,3 +288,99 @@ class TestLifespanHelpers:
 
         # Cleanup
         asyncio.run(stop_live_lake_writer())
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Write path (2026-08-06). Until today EVERY test here stubbed _read_ch
+# to return [], so the write path had NO coverage — which is how two
+# production defects shipped: (1) the upsert fell back to copy-on-write
+# and took ~6 min per 400-row chunk on a 5-min cycle, (2) it ran inline
+# in the coroutine and froze the whole API. See ISSUES:
+# live-lake-writer-blocks-event-loop.
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _live_row(ts: datetime, symbol: str = "AAPL") -> dict:
+    return {
+        "symbol": symbol, "timestamp": ts, "open": 200.0, "high": 201.0,
+        "low": 199.0, "close": 200.5, "volume": 100000.0, "vwap": 200.25,
+        "trade_count": 1234, "source": "schwab-stream",
+    }
+
+
+class TestWritePath:
+    @pytest.mark.asyncio
+    async def test_appends_rows_and_does_not_upsert(self) -> None:
+        """Must APPEND (O(rows)), never upsert (copy-on-write, O(table))."""
+        w = LiveLakeWriter(cycle_minutes=5, lookback_minutes=15)
+        as_of = datetime(2026, 5, 17, 14, 30, tzinfo=timezone.utc)
+        rows = [_live_row(as_of - timedelta(minutes=3))]
+        table = MagicMock()
+
+        with patch.object(LiveLakeWriter, "_read_ch", return_value=rows), \
+             patch("app.services.equities.tables.ensure_equities_table",
+                   return_value=table), \
+             patch("app.services.iceberg_catalog.get_catalog", MagicMock()):
+            result = await w.run_cycle(as_of=as_of)
+
+        assert result.per_provider_rows_written["schwab"] == 1
+        assert table.append.call_count == 1
+        assert table.upsert.call_count == 0, "upsert is copy-on-write; must not be used"
+
+    @pytest.mark.asyncio
+    async def test_watermark_suppresses_overlap_duplicates(self) -> None:
+        """The 15-min read window overlaps the 5-min cycle on purpose. With
+        append-only writes, only bars newer than the last write may land."""
+        w = LiveLakeWriter(cycle_minutes=5, lookback_minutes=15)
+        t0 = datetime(2026, 5, 17, 14, 0, tzinfo=timezone.utc)
+        table = MagicMock()
+
+        # cycle 1 sees bars at t0 and t0+1; cycle 2 re-reads both (overlap)
+        # plus a new bar at t0+6 — only the new one may be appended.
+        reads = [
+            [_live_row(t0), _live_row(t0 + timedelta(minutes=1))],
+            [_live_row(t0), _live_row(t0 + timedelta(minutes=1)),
+             _live_row(t0 + timedelta(minutes=6))],
+        ]
+
+        with patch.object(LiveLakeWriter, "_read_ch", side_effect=reads), \
+             patch("app.services.equities.tables.ensure_equities_table",
+                   return_value=table), \
+             patch("app.services.iceberg_catalog.get_catalog", MagicMock()):
+            r1 = await w.run_cycle(as_of=t0 + timedelta(minutes=5))
+            r2 = await w.run_cycle(as_of=t0 + timedelta(minutes=10))
+
+        assert r1.per_provider_rows_written["schwab"] == 2
+        assert r2.per_provider_rows_written["schwab"] == 1, "overlap re-appended"
+        assert table.append.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_write_does_not_block_the_event_loop(self) -> None:
+        """A slow lake write must degrade to 'the lake lags', never
+        'the API is down' — the failure that took every page out."""
+        import asyncio
+        import time
+
+        w = LiveLakeWriter(cycle_minutes=5, lookback_minutes=15)
+        as_of = datetime(2026, 5, 17, 14, 30, tzinfo=timezone.utc)
+        rows = [_live_row(as_of - timedelta(minutes=3))]
+        table = MagicMock()
+        table.append.side_effect = lambda *_a, **_k: time.sleep(0.30)
+
+        ticks = 0
+
+        async def _heartbeat() -> None:
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.02)
+                ticks += 1
+
+        with patch.object(LiveLakeWriter, "_read_ch", return_value=rows), \
+             patch("app.services.equities.tables.ensure_equities_table",
+                   return_value=table), \
+             patch("app.services.iceberg_catalog.get_catalog", MagicMock()):
+            beat = asyncio.create_task(_heartbeat())
+            await w.run_cycle(as_of=as_of)
+            beat.cancel()
+
+        assert ticks > 5, f"event loop was blocked during the write (ticks={ticks})"

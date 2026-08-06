@@ -2,7 +2,7 @@
 Live-stream → v2 equities lake writer.
 
 Periodically reads recent CH `ohlcv_1m` rows from the live stream and
-upserts them into `equities.schwab_universe` (and future per-provider
+APPENDS them into `equities.schwab_universe` (and future per-provider
 equivalents). Closes the freshness gap between live ticks landing in
 CH (seconds) and the deep-history reader seeing them (~5-10 min via
 this writer).
@@ -20,7 +20,7 @@ pre-adjusted prices, so every row this writer produces carries
     2. live_lake_writer job runs every 5 minutes:
        - Reads CH ohlcv_1m for the last 15 minutes
        - Groups by provider
-       - upsert into equities.{schwab_universe | ...} per group
+       - append into equities.{schwab_universe | ...} per group
        - Records run in ingestion_runs
 
 **Provider tagging.** Live stream rows in CH carry `source = "{provider}-stream"`
@@ -30,10 +30,16 @@ Each provider's live stream uses a distinct tag → adding a new live
 provider is purely a config + tagging change; this writer needs no
 modification.
 
-**Idempotency.** Equities tables use identifier `(symbol, timestamp)`,
-so PyIceberg's `upsert` is naturally idempotent: re-running the cycle
-or running with an overlapping window is safe. Watermark in
-`ingestion_runs` lets the cycle resume cleanly after crashes.
+**Idempotency (revised 2026-08-06).** This writer used PyIceberg
+`upsert` on identifier `(symbol, timestamp)`. PyIceberg has no
+merge-on-read, so each upsert fell back to copy-on-write and rewrote
+data files across the whole table — ~6 minutes per 400-row chunk on a
+5-minute cycle, which also blocked the event loop and took the API
+down (see ISSUES: live-lake-writer-blocks-event-loop). It now
+**appends**, per the bronze contract (bronze appends, silver dedups),
+and suppresses the intentional read-window overlap with a per-provider
+in-memory watermark. A restart may re-append at most one window;
+bronze read-time dedup absorbs it.
 
 **Small-file mitigation.** A 5-min cycle × ~100 symbols × ~5 bars/cycle
 produces ~500 rows per write (≈30 KB Iceberg file). Daily compaction
@@ -159,6 +165,12 @@ class LiveLakeWriter:
         self._lookback_minutes = lookback_minutes
         self._provider_config = provider_config or _PROVIDER_CONFIG
         self._stopped = asyncio.Event()
+        # Highest bar timestamp already appended, per provider. The read
+        # window overlaps the cycle on purpose (crash resilience); with
+        # append-only writes this is what stops the overlap duplicating
+        # rows. Process-local by design: after a restart the first cycle
+        # may re-append up to one window, which bronze tolerates.
+        self._last_written_ts: dict[str, datetime] = {}
 
     @classmethod
     def from_settings(cls) -> "LiveLakeWriter":
@@ -196,21 +208,42 @@ class LiveLakeWriter:
 
         for provider_name, cfg in self._provider_config.items():
             try:
-                rows = self._read_ch(cfg.live_source_tag, window_start, window_end)
+                # Every call below is BLOCKING (ClickHouse HTTP, then S3 +
+                # Glue). Run off the event loop: a slow lake write must
+                # degrade to "the lake lags", never "the API is down".
+                rows = await asyncio.to_thread(
+                    self._read_ch, cfg.live_source_tag, window_start, window_end
+                )
+                # The read window (15 min) deliberately overlaps the cycle
+                # (5 min) for crash resilience. Append-only writes make that
+                # overlap duplicate rows, so drop anything at or before the
+                # last timestamp we already wrote for this provider.
+                watermark = self._last_written_ts.get(provider_name)
+                if watermark is not None:
+                    rows = [r for r in rows if _ensure_utc(r["timestamp"]) > watermark]
                 if not rows:
                     result.per_provider_rows_written[provider_name] = 0
                     logger.info(
-                        "live_lake_writer: provider=%s no live rows in window %s..%s; skipping",
+                        "live_lake_writer: provider=%s no new live rows in window "
+                        "%s..%s (watermark=%s); skipping",
                         provider_name, window_start.isoformat(), window_end.isoformat(),
+                        watermark.isoformat() if watermark else "none",
                     )
                     continue
 
                 arrow = self._rows_to_arrow(rows, run_id=run_id)
-                self._upsert_equities(cfg.equities_table_name, arrow)
+                await asyncio.to_thread(
+                    self._append_equities, cfg.equities_table_name, arrow
+                )
+                self._last_written_ts[provider_name] = max(
+                    _ensure_utc(r["timestamp"]) for r in rows
+                )
                 result.per_provider_rows_written[provider_name] = arrow.num_rows
                 logger.info(
-                    "live_lake_writer: provider=%s upserted %d rows into equities.%s",
+                    "live_lake_writer: provider=%s appended %d rows into equities.%s "
+                    "(watermark -> %s)",
                     provider_name, arrow.num_rows, cfg.equities_table_name,
+                    self._last_written_ts[provider_name].isoformat(),
                 )
             except Exception as e:
                 logger.exception(
@@ -344,31 +377,34 @@ class LiveLakeWriter:
         return pa.Table.from_pydict(arrays, schema=_EQUITIES_SCHWAB_ARROW)
 
     @staticmethod
-    def _upsert_equities(table_short_name: str, arrow: pa.Table) -> None:
-        """Upsert into equities.{table_short_name} via PyIceberg.
+    def _append_equities(table_short_name: str, arrow: pa.Table) -> None:
+        """Append into equities.{table_short_name} via PyIceberg.
 
-        Identifier `(symbol, timestamp)` drives the join. When matched,
-        Iceberg updates non-key columns (handles late-arriving correction
-        bars). When not matched, inserts.
+        **Was an upsert until 2026-08-06.** PyIceberg logs "Merge on read
+        is not yet supported, falling back to copy-on-write", so every
+        upsert — even a 400-row one — rewrote data files across this
+        multi-million-row, bucket(16)-partitioned table: ~6 MINUTES per
+        chunk, on a writer that fires every 5 minutes. It could never
+        keep up, and (before the to_thread fix) it took the whole API
+        down with it.
 
-        Routed through `chunked_upsert` to dodge PyIceberg's multi-column
-        predicate-tree SIGBUS. The live-lake writer typically upserts
-        far fewer than 400 rows per cycle (one cycle ≤15 min ≈ 15 bars
-        per symbol × universe ≤ ~3,000 rows), but on a recovery cycle
-        catching a long backlog the chunking matters.
+        Append is O(rows written) instead of O(table), which is the
+        platform's bronze contract: **bronze appends, silver dedups**
+        (docs/standards, `feedback_bronze_idempotency_model`). Duplicate
+        suppression moves to the caller's per-provider watermark; any
+        residual overlap (first cycle after a restart) is collapsed by
+        the read-time dedup that already exists for bronze tables.
         """
         from app.services.equities.tables import ensure_equities_table
         from app.services.iceberg_catalog import get_catalog
-        from app.services.iceberg_safe_upsert import chunked_upsert
 
         catalog = get_catalog()
         # Idempotent on every cycle: cheap on warm paths (one Glue GetTable),
         # the only thing that prevents NoSuchTableError on cold-start (fresh
         # deploy, recovered process, new universe table).
         table = ensure_equities_table(table_short_name, catalog)
-        chunked_upsert(
-            table, arrow, log_label=f"equities.{table_short_name}",
-        )
+        table.refresh()  # other writers commit to this table too
+        table.append(arrow)
 
     # ─────────────────────────────────────────────────────────────────
     # Audit

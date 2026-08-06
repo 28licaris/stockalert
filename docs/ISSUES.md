@@ -348,3 +348,30 @@ merge — verified 226,906 raw rows vs 113,453 unique keys, and
 count. Not corruption, but readers that do NOT use FINAL will
 double-count between merges: prefer a narrow `lookback_days`, and
 OPTIMIZE the touched partition after a wide reconcile.
+
+## live-lake-writer-blocks-event-loop (2026-08-06, FIXED)
+`LiveLakeWriter.run_cycle` is `async def` but called blocking ClickHouse
+reads and a PyIceberg **upsert** inline in the coroutine. Two compounding
+defects:
+1. PyIceberg has no merge-on-read ("falling back to copy-on-write"), so
+   each upsert rewrote data files across the multi-million-row,
+   bucket(16)-partitioned `equities.schwab_universe` — measured **~6
+   minutes per 400-row chunk**, on a writer that fires every 5 minutes.
+   It could never keep up.
+2. Being inline, that work sat on the event loop. Observed 2026-08-06
+   after restoring ~2 weeks of stream data: 7 queued chunks ≈ 40+ min
+   during which EVERY endpoint hung (sectors, charts, company names,
+   GEX). Looked like "the GEX page is broken"; was actually total API
+   starvation.
+Fix: read + write via `asyncio.to_thread`, and **append instead of
+upsert** (bronze appends, silver dedups). The intentional 15-min read
+window over a 5-min cycle no longer duplicates rows because an in-memory
+per-provider watermark drops bars at/below the last written timestamp; a
+restart may re-append at most one window, which bronze read-time dedup
+absorbs.
+Coverage gap that let this ship: every pre-existing test stubbed
+`_read_ch` to return `[]`, so the write path had NO tests. Added
+`TestWritePath` — appends-not-upserts, watermark suppression, and an
+event-loop heartbeat assertion (verified to fail without the fix).
+Workaround while diagnosing: `LIVE_LAKE_WRITER_ENABLED=false` (the hot
+tier is unaffected — ClickHouse is what the UI reads).
