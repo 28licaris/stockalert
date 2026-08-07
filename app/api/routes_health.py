@@ -72,6 +72,37 @@ class StreamSummary(BaseModel):
     universe_count: int = 0
 
 
+class FreshnessRowModel(BaseModel):
+    """One data source's freshness — 'is data still arriving?'"""
+
+    key: str
+    label: str
+    group: str = Field(..., description="Market data | Options | Platform.")
+    state: Literal["ok", "warn", "error", "idle", "unknown"] = Field(
+        ...,
+        description=(
+            "ok=fresh, warn=late, error=badly late DURING its expected "
+            "window, idle=stale but outside its window (normal), "
+            "unknown=probe failed."
+        ),
+    )
+    last_data_at: Optional[str] = Field(None, description="UTC ISO of newest data.")
+    age_seconds: Optional[float] = None
+    cadence_seconds: float = Field(..., description="How often data is expected.")
+    expected_fresh: bool = Field(
+        ..., description="Is this source expected to be producing data right now?"
+    )
+    detail: str = ""
+
+
+class HealthFreshnessResponse(BaseModel):
+    """Freshness of every monitored data source, worst-first."""
+
+    server_time: str
+    rows: list[FreshnessRowModel]
+    worst_state: Literal["ok", "warn", "error", "idle", "unknown"]
+
+
 class HealthServicesResponse(BaseModel):
     """Composite health snapshot for the cockpit Status page."""
 
@@ -338,4 +369,55 @@ async def health_services() -> HealthServicesResponse:
         backfill=backfill,
         monitors=monitors,
         stream=stream,
+    )
+
+
+# Per-probe ceiling. A probe that hangs must never hold the response:
+# on 2026-08-06 blocking lake work inside a coroutine froze every
+# endpoint for 40+ minutes, so this surface is built to fail fast and
+# degrade to "unknown" rather than wait.
+_FRESHNESS_PROBE_TIMEOUT_S = 5.0
+_STATE_RANK = {"error": 0, "warn": 1, "unknown": 2, "idle": 3, "ok": 4}
+
+
+@router.get(
+    "/health/freshness",
+    response_model=HealthFreshnessResponse,
+    summary="Is data still arriving? (distinct from 'can I connect?')",
+)
+async def health_freshness() -> HealthFreshnessResponse:
+    from datetime import datetime, timezone
+
+    from app.services.health.freshness import SOURCES, FreshnessRow, classify
+
+    async def _one(src) -> FreshnessRow:
+        try:
+            last = await asyncio.wait_for(
+                asyncio.to_thread(src.probe), timeout=_FRESHNESS_PROBE_TIMEOUT_S
+            )
+        except asyncio.TimeoutError:
+            logger.warning("freshness probe %s timed out", src.key)
+            return FreshnessRow(
+                key=src.key, label=src.label, group=src.group, state="unknown",
+                last_data_at=None, age_seconds=None,
+                cadence_seconds=src.cadence_seconds, expected_fresh=False,
+                detail=f"probe timed out after {_FRESHNESS_PROBE_TIMEOUT_S:.0f}s",
+            )
+        except Exception as exc:  # noqa: BLE001 — one bad probe ≠ an outage
+            logger.warning("freshness probe %s failed: %s", src.key, exc)
+            return FreshnessRow(
+                key=src.key, label=src.label, group=src.group, state="unknown",
+                last_data_at=None, age_seconds=None,
+                cadence_seconds=src.cadence_seconds, expected_fresh=False,
+                detail=f"probe failed: {type(exc).__name__}",
+            )
+        return classify(src, last)
+
+    rows = await asyncio.gather(*(_one(s) for s in SOURCES))
+    ordered = sorted(rows, key=lambda r: (_STATE_RANK.get(r.state, 9), r.label))
+    worst = ordered[0].state if ordered else "ok"
+    return HealthFreshnessResponse(
+        server_time=datetime.now(timezone.utc).isoformat(),
+        rows=[FreshnessRowModel(**vars(r)) for r in ordered],
+        worst_state=worst,
     )

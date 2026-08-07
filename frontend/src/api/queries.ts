@@ -225,6 +225,7 @@ export interface HealthServicesResponse {
 
 export const queryKeys = {
   healthServices: ["health", "services"] as const,
+  healthFreshness: ["health", "freshness"] as const,
   marketBanner: (symbols: string | undefined) =>
     ["market", "banner", symbols ?? "default"] as const,
   calendar: (assetClass: string, start: string, end: string) =>
@@ -384,6 +385,38 @@ async function fetchJson<T>(url: string): Promise<T> {
     throw new ApiError(envelope, res.status);
   }
   return (await res.json()) as T;
+}
+
+export type FreshnessState = "ok" | "warn" | "error" | "idle" | "unknown";
+
+export interface FreshnessRow {
+  key: string;
+  label: string;
+  group: string;
+  state: FreshnessState;
+  last_data_at: string | null;
+  age_seconds: number | null;
+  cadence_seconds: number;
+  expected_fresh: boolean;
+  detail: string;
+}
+
+export interface HealthFreshnessResponse {
+  server_time: string;
+  rows: FreshnessRow[];
+  worst_state: FreshnessState;
+}
+
+/** "Is data still arriving?" — distinct from /health/services'
+ *  "can I connect?". Rows arrive worst-first from the API. */
+export function useHealthFreshness() {
+  return useQuery({
+    queryKey: queryKeys.healthFreshness,
+    queryFn: () => fetchJson<HealthFreshnessResponse>("/api/v1/health/freshness"),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+    staleTime: 15_000,
+  });
 }
 
 export function useHealthServices() {

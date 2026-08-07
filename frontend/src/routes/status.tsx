@@ -13,6 +13,7 @@ import {
 import { LogoMark } from "@/components/brand/LogoMark";
 import { Button } from "@/components/ui/button";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
+import { DataFreshnessPanel } from "@/components/health/DataFreshnessPanel";
 import {
   useHealthServices,
   useJobRuns,
@@ -124,6 +125,11 @@ export function StatusPage() {
           <ServiceCard key={svc.name} svc={svc} />
         ))}
       </section>
+
+      {/* Connectivity (above) answers "can I connect?"; this answers
+          "is data still arriving?" — the question that went unanswered
+          while a feed sat dead for 15 days. */}
+      <DataFreshnessPanel />
 
       <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <SummaryCard
