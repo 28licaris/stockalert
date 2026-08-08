@@ -376,7 +376,13 @@ async def health_services() -> HealthServicesResponse:
 # on 2026-08-06 blocking lake work inside a coroutine froze every
 # endpoint for 40+ minutes, so this surface is built to fail fast and
 # degrade to "unknown" rather than wait.
-_FRESHNESS_PROBE_TIMEOUT_S = 5.0
+#
+# 12s, not 5s: the Iceberg probes need a Glue client on the FIRST call
+# of a fresh process (~6-8s cold, ~1.5s warm), and a 5s ceiling made the
+# lake rows read "probe timed out" on every restart — an unknown row
+# where real data exists is its own kind of lie. Still bounded, still
+# well under any sane page-load budget.
+_FRESHNESS_PROBE_TIMEOUT_S = 12.0
 _STATE_RANK = {"error": 0, "warn": 1, "unknown": 2, "idle": 3, "ok": 4}
 
 
