@@ -402,3 +402,33 @@ rather than trusting the "written" log line:
      1. Merge onto the URL (`httpx.URL(...).copy_merge_params`) instead.
 Recovery: `DELETE FROM instrument_names WHERE name=''` then
 `bulk_refresh_from_reference()`. Stream universe: 224/224 named.
+
+**RECURRED 2026-08-07 and 2026-08-08 — the 08-06 fix was necessary but
+NOT sufficient.** The nightly job (`refresh_names`, 08:00 UTC) still
+called `warm(syms, refresh=True)` — 224-way concurrent per-symbol
+lookups, unchanged. Under SUSTAINED load (not a one-shot burst — this
+is why an ad hoc 12-symbol test didn't reproduce it), Polygon was
+observed returning **HTTP 200 with an empty `results` list** for the
+large majority of requests instead of 429. That is indistinguishable
+from a genuine not-found in the 08-06 fix, so `_NameFetchUnavailable`
+never fired and every one was cached as a confirmed negative —
+**wiping 216/219 names on 08-07's run and 209/224 on 08-08's**,
+including names the 08-06 fix had just repaired.
+Fix (belt AND suspenders, not either/or):
+1. **Invariant in `warm()`**: a "not found" answer may never downgrade
+   a symbol that already has a non-empty cached name — only an actual
+   resolved name may overwrite one. Closes this failure mode regardless
+   of which HTTP status the provider decides to use for throttling.
+2. **`refresh_names()` now calls `bulk_refresh_from_reference()`
+   first** (paced, ~14 requests, complete) and only runs the per-symbol
+   `warm()` on whatever the bulk crawl didn't cover — low volume, so it
+   can't reproduce a 224-way hammer.
+Lesson: a fix scoped to "the status codes I could reproduce in an ad
+hoc test" wasn't scoped to "the failure mode." The recurrence is the
+signal that the invariant belongs at the data-write layer (never erase
+a known-good answer), not the fetch layer (guess which HTTP statuses
+mean "not found" this week). Tests:
+`test_refresh_true_never_downgrades_a_known_name_to_blank`,
+`test_refresh_true_still_accepts_a_real_update`,
+`test_refresh_names_uses_the_bulk_crawl_not_the_per_symbol_hammer`.
+Re-repaired 2026-08-08: stream universe 224/224 named again.

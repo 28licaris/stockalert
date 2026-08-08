@@ -182,6 +182,7 @@ def warm(symbols: Iterable[str], *, refresh: bool = False) -> int:
     to_fetch = [s for s in syms if s not in cached]
     fetched: dict[str, dict] = {}
     unavailable = 0
+    downgrades_blocked = 0
     if to_fetch:
         def _safe(sym: str):
             """(record, was_available). Unavailable != not-found."""
@@ -196,11 +197,35 @@ def warm(symbols: Iterable[str], *, refresh: bool = False) -> int:
 
         with ThreadPoolExecutor(max_workers=_FETCH_CONCURRENCY) as ex:
             recs = list(ex.map(_safe, to_fetch))
+
+        # SAFETY INVARIANT (2026-08-08 incident): a "not found" answer must
+        # NEVER erase a name we already trust. On refresh=True sweeps, under
+        # sustained concurrent load Polygon has been observed returning
+        # HTTP 200 with an EMPTY results list for the large majority of
+        # requests — not a 429, so `_NameFetchUnavailable` never fires — and
+        # that was silently cached as "confirmed not found", wiping out
+        # 209/224 and then 216/219 previously-correct names on two
+        # consecutive nightly runs. A single per-request "no match" is not
+        # trustworthy enough to downgrade an existing answer; only an
+        # explicit resolved name may overwrite one. `cached` already holds
+        # prior state when refresh=False; refresh=True zeroed it out to
+        # force re-fetching, so re-read prior state here for the guard only.
+        prior = cached if not refresh else _ch_get(to_fetch)
         for sym, (rec, available) in zip(to_fetch, recs):
             if not available:
                 unavailable += 1
                 continue  # do NOT cache — retried on the next warm
+            desc = (rec or {}).get("description") if rec else ""
+            if not desc and prior.get(sym, {}).get("description"):
+                downgrades_blocked += 1
+                continue  # provider said "not found"; we already know better
             fetched[sym] = rec or {"description": "", "exchange": "", "asset_type": ""}
+        if downgrades_blocked:
+            logger.warning(
+                "instrument_names warm: blocked %d downgrade(s) of a known "
+                "name to blank (provider returned no match on a refresh)",
+                downgrades_blocked,
+            )
         if fetched:
             try:
                 _ch_put({s: {**r, "source": "polygon"} for s, r in fetched.items()})
@@ -325,12 +350,33 @@ def warm_stream_universe() -> int:
 
 
 def refresh_names() -> dict:
-    """Nightly job body — RE-FETCH names for the streaming universe from
-    Polygon (catches renames + fills gaps). The only scheduled provider call.
-    Returns a small summary for the job audit."""
+    """Nightly job body — the only scheduled provider call.
+
+    Was `warm(syms, refresh=True)`: per-symbol Polygon lookups, 224-way
+    concurrent, every night. On 2026-08-07 and 2026-08-08 that wiped out
+    216/219 and then 209/224 previously-correct names in a single run —
+    under sustained load Polygon returned HTTP 200 with an empty result
+    for most requests (not a 429), which read as "confirmed not found"
+    and got cached as such. `warm()` now refuses to let that downgrade a
+    known name (belt-and-suspenders), but the real fix is to stop
+    hammering a per-symbol endpoint at this volume: `bulk_refresh_from_
+    reference()` gets the same "catch renames, fill gaps" outcome for the
+    whole US listed universe in ~14 paced requests instead of ~224
+    concurrent ones.
+
+    A small per-symbol `warm()` pass follows for anything the bulk crawl
+    didn't cover (e.g. a brand-new listing not yet in Polygon's reference
+    dump) — low volume, so it doesn't reproduce the failure mode.
+    """
+    written = bulk_refresh_from_reference()
     syms = _stream_universe_symbols()
-    named = warm(syms, refresh=True)
-    return {"symbols": len(syms), "named": named}
+    known = _ch_get(syms)
+    still_missing = [s for s in syms if not known.get(s, {}).get("description")]
+    named = warm(still_missing) if still_missing else 0
+    return {
+        "bulk_written": written, "symbols": len(syms),
+        "still_missing_after_bulk": len(still_missing), "named_by_fallback": named,
+    }
 
 
 def _seconds_until_next_run(hour_utc: int, *, now: datetime | None = None) -> float:
