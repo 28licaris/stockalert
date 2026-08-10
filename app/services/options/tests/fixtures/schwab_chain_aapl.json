@@ -10,10 +10,6 @@
           "putCall": "CALL",
           "symbol": "AAPL  260717C00210000",
           "description": "AAPL Jul 17 2026 210 Call",
-          "bidPrice": 8.4,
-          "askPrice": 8.55,
-          "lastPrice": 8.48,
-          "markPrice": 8.48,
           "bidSize": 12,
           "askSize": 18,
           "lastSize": 3,
@@ -39,17 +35,17 @@
           "daysToExpiration": 20,
           "expirationType": "W",
           "multiplier": 100.0,
-          "settlementType": "P"
+          "settlementType": "P",
+          "bid": 8.4,
+          "ask": 8.55,
+          "last": 8.48,
+          "mark": 8.48
         }
       ],
       "215.0": [
         {
           "putCall": "CALL",
           "symbol": "AAPL  260717C00215000",
-          "bidPrice": 5.9,
-          "askPrice": 6.05,
-          "lastPrice": 6.0,
-          "markPrice": 5.98,
           "bidSize": 22,
           "askSize": 25,
           "lastSize": 1,
@@ -75,7 +71,11 @@
           "daysToExpiration": 20,
           "expirationType": "W",
           "multiplier": 100.0,
-          "settlementType": "P"
+          "settlementType": "P",
+          "bid": 5.9,
+          "ask": 6.05,
+          "last": 6.0,
+          "mark": 5.98
         }
       ]
     }
@@ -87,10 +87,6 @@
           "putCall": "PUT",
           "symbol": "AAPL  260717P00210000",
           "description": "AAPL Jul 17 2026 210 Put",
-          "bidPrice": 7.8,
-          "askPrice": 7.95,
-          "lastPrice": 7.9,
-          "markPrice": 7.88,
           "bidSize": 16,
           "askSize": 20,
           "lastSize": 2,
@@ -116,7 +112,11 @@
           "daysToExpiration": 20,
           "expirationType": "W",
           "multiplier": 100.0,
-          "settlementType": "P"
+          "settlementType": "P",
+          "bid": 7.8,
+          "ask": 7.95,
+          "last": 7.9,
+          "mark": 7.88
         }
       ]
     }

@@ -247,10 +247,16 @@ def _contract_from_raw(
         strike=_number(raw.get("strikePrice"), fallback_strike) or 0.0,
         underlying_price=underlying_price,
         days_to_expiration=_integer(raw.get("daysToExpiration"), fallback_days_to_expiration),
-        bid=_number(raw.get("bidPrice")),
-        ask=_number(raw.get("askPrice")),
-        last=_number(raw.get("lastPrice")),
-        mark=_number(raw.get("markPrice")),
+        # Schwab's /chains contracts carry `bid` / `ask` / `last` / `mark`. The
+        # `*Price` spellings are TD Ameritrade's legacy schema and never appear
+        # in a Schwab payload — reading only those silently NULLed every option
+        # quote we ever ingested (verified against stored `schwab_chain_raw`).
+        # Both spellings are accepted, real name first, matching the alias
+        # pattern in `readers/quote_service.py`.
+        bid=_number(raw.get("bid"), raw.get("bidPrice")),
+        ask=_number(raw.get("ask"), raw.get("askPrice")),
+        last=_number(raw.get("last"), raw.get("lastPrice")),
+        mark=_number(raw.get("mark"), raw.get("markPrice")),
         bid_size=_integer(raw.get("bidSize")),
         ask_size=_integer(raw.get("askSize")),
         last_size=_integer(raw.get("lastSize")),

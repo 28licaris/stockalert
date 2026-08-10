@@ -140,3 +140,47 @@ def test_aggregate_gamma_exposure_outputs_replayable_levels() -> None:
     assert total.net_gamma_exposure == pytest.approx(total.gamma_exposure)
     assert strike_210.contract_count == 2
     assert strike_210.level_key == "strike:210"
+
+
+def test_parses_schwab_quote_fields_and_tolerates_the_legacy_tda_spelling() -> None:
+    """Regression: every option quote was silently NULL from first ingest.
+
+    The parser read `bidPrice`/`askPrice`/`lastPrice`/`markPrice` — TD
+    Ameritrade's legacy schema. Schwab's `/chains` sends `bid`/`ask`/`last`/
+    `mark`, so `_number` returned None for all four on every contract, forever.
+    It went unnoticed because the fixture was written with the same wrong names,
+    so the test agreed with the bug. Verified against stored `schwab_chain_raw`.
+
+    Both spellings are accepted now; this pins each one independently so the
+    real-name path cannot silently rot back to the fallback.
+    """
+    def chain(contract: dict) -> dict:
+        return {
+            "symbol": "AAPL",
+            "underlyingPrice": 100.0,
+            "callExpDateMap": {"2026-09-18:30": {"100.0": [
+                {"symbol": "AAPL  260918C00100000", "putCall": "CALL",
+                 "strikePrice": 100.0, "expirationDate": "2026-09-18T00:00:00.000+00:00",
+                 "daysToExpiration": 30, "volatility": 22.5, **contract},
+            ]}},
+        }
+
+    ts = datetime(2026, 8, 9, 15, 30, tzinfo=timezone.utc)
+
+    # Schwab's real spelling — the one that matters in production.
+    live = parse_schwab_option_chain(
+        chain({"bid": 4.10, "ask": 4.30, "last": 4.20, "mark": 4.20}), snapshot_ts=ts
+    ).contracts[0]
+    assert (live.bid, live.ask, live.last, live.mark) == (4.10, 4.30, 4.20, 4.20)
+
+    # Legacy TDA spelling still parses, so an older captured payload replays.
+    legacy = parse_schwab_option_chain(
+        chain({"bidPrice": 1.10, "askPrice": 1.30, "lastPrice": 1.20, "markPrice": 1.25}),
+        snapshot_ts=ts,
+    ).contracts[0]
+    assert (legacy.bid, legacy.ask, legacy.last, legacy.mark) == (1.10, 1.30, 1.20, 1.25)
+
+    # A contract with neither spelling must yield None, not 0.0 — a zero bid is
+    # a tradeable fact and must never be manufactured from missing data.
+    absent = parse_schwab_option_chain(chain({}), snapshot_ts=ts).contracts[0]
+    assert absent.bid is None and absent.ask is None and absent.mark is None
