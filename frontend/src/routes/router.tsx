@@ -8,6 +8,7 @@ import { WatchlistsPage } from "./watchlists";
 import { StreamPage } from "./stream";
 import { OptionsPage } from "./options";
 import { GexPage } from "./gex";
+import { PplPage } from "./ppl";
 import { ClickHousePage } from "./clickhouse";
 import { CalendarPage } from "./calendar";
 import { NewsPage } from "./news";
@@ -67,6 +68,25 @@ export const router = createBrowserRouter(
             },
             { path: "options", element: <OptionsPage /> },
             { path: "gex", element: <GexPage /> },
+            // Operator-gated until PIT calibration lands (spec D2/P3). The API
+            // carries the same gate — this just avoids landing non-operators on
+            // a page whose data they can't load.
+            {
+              path: "ppl",
+              element: (
+                <AdminOnly>
+                  <PplPage />
+                </AdminOnly>
+              ),
+            },
+            {
+              path: "ppl/:ticker",
+              element: (
+                <AdminOnly>
+                  <PplPage />
+                </AdminOnly>
+              ),
+            },
             { path: "seed", element: <Navigate to="/stream" replace /> },
             {
               path: "clickhouse",

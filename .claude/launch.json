@@ -2,11 +2,25 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "api",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "STREAM_PROVIDER= POLYGON_NIGHTLY_ENABLED=false SCHWAB_NIGHTLY_ENABLED=false FUTURES_NIGHTLY_ENABLED=false FUTURES_POLYGON_NIGHTLY_ENABLED=false OPTIONS_SNAPSHOT_ENABLED=false poetry run uvicorn app.main_api:app --reload --port 8001"
+      ],
+      "port": 8001,
+      "comment": "Read-only preview API. Stream and ALL writers are OFF so this instance never competes with the primary server. OPTIONS_SNAPSHOT_ENABLED=false specifically matters: the primary on :8000 owns the options snapshot loop, and two writers racing the same ClickHouse table would have the last write win by snapshot_ts regardless of which one has the correct parser."
+    },
+    {
       "name": "cockpit",
       "runtimeExecutable": "bash",
-      "runtimeArgs": ["-c", "STOCKALERT_BACKEND_URL=http://localhost:8001 npm run dev"],
+      "runtimeArgs": [
+        "-c",
+        "STOCKALERT_BACKEND_URL=http://localhost:8001 npm run dev -- --port 5174 --strictPort"
+      ],
       "cwd": "frontend",
-      "port": 5173
+      "port": 5174,
+      "comment": "5174, not vite's default 5173: this repo is worked in several git worktrees at once and 5173 is usually already taken by another one. strictPort makes a clash fail loudly instead of silently landing on a port nothing is pointed at."
     }
   ]
 }

@@ -1528,3 +1528,159 @@ export function useRemoveMyWatchlistMember() {
     },
   });
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Posterior Predictive Levels (PPL)
+// ─────────────────────────────────────────────────────────────────────
+
+export type PplInterval = "30m" | "1h" | "4h" | "1d";
+export type PplLevelSide = "up" | "down";
+export type PplDriftMode = "zero" | "unconditional" | "state";
+export type PplLevelRank = "inner" | "outer";
+/** "gjr_fhs" is the model; "ewma_t" is the null it replaced. */
+export type PplVolModelKind = "gjr_fhs" | "ewma_t";
+
+export interface PplLevel {
+  price: number;
+  /** null for density-mode modes. */
+  quantile: number | null;
+  /** Position in the FORECAST distribution, not relative to spot. */
+  side: PplLevelSide;
+  rank: PplLevelRank;
+  pct_from_spot: number;
+  suppressed: boolean;
+  suppressed_reason: string | null;
+}
+
+export interface PplState {
+  code: number;
+  label: string;
+  psar_side: "above" | "below";
+  psar_value: number;
+  tsi_value: number;
+  tsi_signal_value: number;
+  macd_hist: number;
+  observations: number;
+  pooled: boolean;
+}
+
+/** The fitted volatility dynamics behind one fan.
+ *
+ * The GJR-GARCH fields are null under `ewma_t`, which has no such parameters —
+ * that is the substantive difference between the two models, not missing data.
+ */
+export interface PplVolModel {
+  kind: PplVolModelKind;
+  /** Conditional sd for the FIRST forecast bar, deseasonalized. */
+  sigma_next: number;
+  omega: number | null;
+  alpha: number | null;
+  /** The leverage term. > 0 means down moves raise variance more. */
+  gamma: number | null;
+  beta: number | null;
+  /** alpha + gamma/2 + beta. < 1 is what makes variance mean-revert. */
+  persistence: number | null;
+  long_run_sigma: number | null;
+  half_life_bars: number | null;
+  /** (alpha+gamma)/alpha. UNSTABLE as alpha→0 (the norm for index ETFs) —
+   *  read as sign-and-magnitude. Prefer vol_response_asymmetry for display. */
+  leverage_ratio: number | null;
+  /** (alpha+gamma)/(2*alpha+gamma) — share of news impact from down moves.
+   *  Bounded [0,1]; 0.5 is symmetry; below 0.5 means up moves drive vol more. */
+  vol_response_asymmetry: number | null;
+  /** var(H)/(H*var(1)). 1.0 is naive sqrt-of-time scaling. */
+  variance_ratio: number | null;
+  pool_size: number | null;
+  pool_skew: number | null;
+  pool_excess_kurtosis: number | null;
+  /** Lag-1 autocorrelation of |r| before the GARCH filter... */
+  raw_abs_autocorr: number | null;
+  /** ...and after. Collapsing toward 0 is what licenses the iid bootstrap. */
+  residual_abs_autocorr: number | null;
+}
+
+export interface PplCalibration {
+  window_start: string;
+  window_end: string;
+  n_effective: number;
+  coverage: Record<string, number>;
+  ks_stat: number | null;
+  ks_p: number | null;
+  computed_at: string | null;
+}
+
+export interface PplSnapshot {
+  symbol: string;
+  interval: string;
+  as_of: string;
+  spot: number;
+  horizon_bars: number;
+  horizon_end: string;
+  levels: PplLevel[];
+  paths: number[][];
+  terminal_quantiles: Record<string, number>;
+  sigma_horizon: number;
+  min_move: number;
+  drift_mode: PplDriftMode;
+  /** The drift ACTUALLY applied — 0 in zero mode. */
+  drift_per_bar: number;
+  /** What the state model estimated, whatever the mode. */
+  state_drift_per_bar: number;
+  /** The symbol's own baseline drift, whatever the mode. */
+  unconditional_drift_per_bar: number;
+  vol: PplVolModel;
+  /** Under gjr_fhs this DESCRIBES the bootstrap pool's tails — nothing is
+   *  drawn from a Student-t. Under ewma_t it is the sampling parameter. */
+  nu: number;
+  bars_per_session: number;
+  state: PplState;
+  n_fit_bars: number;
+  stale: boolean;
+  stale_age_bars: number | null;
+  /** False = the check did NOT run. Never read as "the feed is fine". */
+  staleness_checked: boolean;
+  calibration: PplCalibration | null;
+  model_version: string;
+  seed: number;
+}
+
+export interface PplParams {
+  symbol: string;
+  interval: PplInterval;
+  horizonBars: number;
+  nPaths: number;
+  nRenderPaths: number;
+  driftMode: PplDriftMode;
+}
+
+export function usePosteriorPredictiveLevels({
+  symbol,
+  interval,
+  horizonBars,
+  nPaths,
+  nRenderPaths,
+  driftMode,
+}: PplParams) {
+  const normalized = symbol?.trim().toUpperCase();
+  return useQuery({
+    queryKey: ["ppl", normalized ?? "", interval, horizonBars, nPaths, nRenderPaths, driftMode] as const,
+    queryFn: async (): Promise<PplSnapshot> => {
+      if (!normalized) throw new Error("symbol required");
+      const params = new URLSearchParams({
+        interval,
+        horizon_bars: String(horizonBars),
+        n_paths: String(nPaths),
+        n_render_paths: String(nRenderPaths),
+        drift_mode: driftMode,
+      });
+      return fetchJson<PplSnapshot>(
+        `/api/v1/ppl/${encodeURIComponent(normalized)}?${params.toString()}`,
+      );
+    },
+    enabled: Boolean(normalized),
+    // The fan is deterministic per anchor bar, so refetching mid-bar returns
+    // an identical payload. Only a new bar changes it.
+    staleTime: 60_000,
+    retry: false,
+  });
+}
