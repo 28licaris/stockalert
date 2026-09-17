@@ -47,7 +47,8 @@ number that looks meaningful and is not.
 | D5 | **Hard liquidity and sanity filters, and the row is dropped — never patched — when they fail.** | 1.1% of contracts carry Schwab's `-999` "no value" sentinel and 3.5% read above 300%. A screen that silently substitutes a fallback for those is worse than one with fewer rows. |
 | D6 | **Computed by a scheduled job into ClickHouse; the page reads the table.** | A GARCH fit per symbol is ~0.2s; 40 symbols is ~8s. That is fine for a job and unacceptable for a page load. Matches the existing job/`ingestion_runs` pattern. |
 | D7 | **Every row carries a data-quality block, and the page shows it.** | Contracts used, median relative spread, snapshot age. A ranking built on two stale wide-spread quotes must *look* different from one built on forty tight ones. |
-| D8 | **No per-symbol historical baseline in v1.** | It is the right way to read this number (§6) and we do not have the history for it yet — the options lake is ~6 weeks old and ClickHouse holds only the latest snapshot. Stated as a limitation on the page rather than approximated. |
+| D8 | ~~**No per-symbol historical baseline in v1.**~~ **SUPERSEDED 2026-08-12 — see D9.** | Original reasoning: the Schwab options lake is ~6 weeks old and ClickHouse holds only the latest snapshot. That was true of *Schwab* and irrelevant, because a second source was already backfilled. |
+| D9 | **The historical baseline comes from ThetaData, not from accumulating Schwab snapshots.** | `options.thetadata_greeks_eod` already held end-of-day greeks with implied volatility back to **2016-01**, for all 40 underlyings — the backfill had completed (10,160 S3 markers) before this spec was written. Reduced once to `options_atm_iv_daily` (208.7M rows → 87,068), it makes the per-symbol percentile available **now** rather than in six months. The two sources then split by what each is good at: ThetaData is the yardstick, Schwab is today's reading. Units differ — ThetaData sends decimals, Schwab percent — and everything downstream is percent. |
 
 ---
 
@@ -179,19 +180,24 @@ volatility *persistently*. `ratio = 1.2` is therefore not evidence of
 mispricing — it may be exactly this symbol's resting level.
 
 The right reading is **relative to the symbol's own history**: "SPY's 30-day
-premium is at its 95th percentile of the last two years." v1 cannot say that,
-because the options history is ~6 weeks old and ClickHouse retains only the
-latest snapshot (D8).
+premium is at its 95th percentile of the last ten years."
 
-So v1 supports two honest uses:
+**Half of what that needs now exists** (D9). `options_atm_iv_daily` holds one
+at-the-money implied volatility per symbol per session back to 2016-01, reduced
+from the ThetaData archive and validated against known volatility events.
 
-1. **Cross-sectional** — which symbols are expensive *relative to each other*
-   today, adjusted for how much each one actually moves. That is valid now.
-2. **Accumulating the history** that makes the time-series reading possible.
-   Shipping starts the clock.
+The missing half is a **historical forecast**, so the *ratio* can be
+percentiled rather than implied volatility alone. Design, from the handoff:
+refit GJR-GARCH parameters monthly and roll the conditional variance daily off
+realized returns — ~5,080 fits rather than ~87,000, and closer to how the model
+actually runs.
 
-The page must say this. A ranked list implies "the top one is the opportunity",
-and without the historical baseline that inference is not yet supported.
+Until that lands, the screen supports one honest use: **cross-sectional** —
+which symbols are expensive *relative to each other* today, adjusted for how
+much each actually moves.
+
+The page must say so. A ranked list implies "the top one is the opportunity",
+and that inference needs the historical comparison.
 
 ---
 

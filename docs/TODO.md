@@ -111,3 +111,27 @@ the findings doc, and a cross-check on the sim engine's metric math. Engine
 metrics stay canonical; quantstats renders, never validates — it has no
 nulls/FDR and must not creep into the promotion gate. Trigger: first
 monthly paper-record review (~Aug 2026, after the 2026-07-29 FOMC trades).
+
+## Vol Premium — remaining build (in flight, `feat/bayesian-alert-system`)
+Full status and cold-start notes:
+[`handoff_ppl_vol_premium.md`](handoff_ppl_vol_premium.md).
+
+- **Historical premium percentile.** `options_atm_iv_daily` already holds the
+  implied-vol half (208.7M ThetaData rows reduced to 87,068 daily readings,
+  2016-01 onward, validated against 2018/2020/2022). Missing is the *forecast*
+  half, so the RATIO can be percentiled rather than implied vol alone. Design
+  settled: refit GJR-GARCH parameters monthly, roll the conditional variance
+  daily off realized returns (~5,080 fits, ~17 min — versus ~87,000 fits and
+  ~5 hours if refit per day). `ppl.garch.variance_ratio_from` exists for
+  exactly this. Still to write: `vol_premium/history.py`, a build script, a
+  `vol_premium_history` table.
+- **API + page.** `routes_vol_premium.py` + `vol-premium.tsx`, per spec §5.
+  Needs a scheduled job first — a GARCH fit per symbol is ~0.2s, so 40 symbols
+  is ~8s: fine for a job, unacceptable on a page load.
+- **Backtest the premium.** Ten years of history makes it possible now. MCPT,
+  pre-registered in `research_hypotheses.md`, before any return claim.
+- **Reparse the lake's canonical option quotes.** Deprioritized: ThetaData
+  covers history better and the rebuild is slow. Raw payloads are intact so it
+  stays recoverable. NOTE: do it as a full-table rebuild, never an upsert —
+  PyIceberg falls back to copy-on-write and rewrites every matching file
+  (>10 min for a single symbol).

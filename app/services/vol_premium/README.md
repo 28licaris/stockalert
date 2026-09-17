@@ -100,17 +100,32 @@ expectation that does not. `ratio = 1.2` is not evidence of mispricing — it ma
 be exactly that symbol's resting level.
 
 The correct reading is against the symbol's *own* history ("SPY's premium is at
-its 95th percentile of two years"). **v1 cannot do that** — the options lake is
-~6 weeks old and ClickHouse keeps only the latest snapshot.
+its 95th percentile of ten years").
 
-So v1 supports exactly two honest uses:
+**The baseline for that now exists.** [`baseline.py`](baseline.py) reduces the
+ThetaData end-of-day chain archive to `options_atm_iv_daily` in ClickHouse —
+208,658,159 raw contract rows collapsed to 87,068 daily at-the-money readings,
+40 symbols, 2016-01-04 onward. It is validated, not merely loaded: SPY's series
+reproduces 2017's calm, 2018's Volmageddon, COVID's 77% peak and 2022's
+sustained repricing.
 
-1. **Cross-sectional** — which symbols are expensive relative to each other
-   today, adjusted for how much each actually moves. Valid now.
-2. **Accumulating** the history that makes the time-series reading possible.
+The two sources divide by what each is good at:
 
-The page must say this. A ranked list implies "the top row is the opportunity",
-and without a historical baseline that inference is not yet supported.
+| | Role |
+|---|---|
+| **ThetaData** | the yardstick — ten years of end-of-day implied vol per symbol |
+| **Schwab** | today's reading, refreshed intraday |
+
+**What is still missing is the other half of the ratio.** The baseline gives
+historical *implied* volatility; percentiling the *premium* needs a historical
+*forecast* too, which does not exist yet. So the screen today still reports a
+cross-sectional ranking only.
+
+Until that lands, the page must say so. A ranked list implies "the top row is
+the opportunity", and that inference needs the historical comparison.
+
+See [`docs/handoff_ppl_vol_premium.md`](../../../docs/handoff_ppl_vol_premium.md)
+for the remaining design — parameters refit monthly, variance rolled daily.
 
 ## Failure handling
 

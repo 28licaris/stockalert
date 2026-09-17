@@ -199,37 +199,57 @@ class GjrGarchFit:
         return (self.alpha + self.gamma) / denom
 
     def variance_ratio(self, horizon: int) -> float:
-        """`var(H) / (H * var(1))` under this model, ignoring the pool.
+        """`var(H) / (H * var(1))` from THIS fit's one-step-ahead variance.
 
-        The number EWMA gets structurally wrong. The k-step-ahead variance
-        forecast decays geometrically toward the long-run level,
-
-            E[sigma^2_{t+k}] = lr + p^k * (sigma^2_next - lr)
-
-        and the H-step variance is their sum, which has a closed form:
-
-            var(H) = H*lr + (sigma^2_next - lr) * (1 - p^H) / (1 - p)
-
-        So the ratio comes in **below 1** when today's variance sits above its
-        long-run level and **above 1** when below. EWMA is pinned at exactly 1.0
-        in both directions — that is the defect, stated as one number.
-
-        Note the ratio approaches its limit as O(1/H), not geometrically: the
-        transient is a fixed quantity spread over a growing average.
+        Thin wrapper over `variance_ratio_from` so a caller that has rolled the
+        variance forward independently — the historical backfill does exactly
+        this, refitting parameters monthly and updating sigma daily — can reuse
+        the same arithmetic instead of reimplementing it.
         """
-        if horizon < 1:
-            raise ValueError(f"horizon must be >= 1, got {horizon}")
+        return variance_ratio_from(
+            self.sigma_next**2, self.persistence, self.long_run_variance, horizon
+        )
 
-        p, lr = self.persistence, self.long_run_variance
-        v0 = self.sigma_next**2
+def variance_ratio_from(
+    current_variance: float,
+    persistence: float,
+    long_run_variance: float,
+    horizon: int,
+) -> float:
+    """`var(H) / (H * var(1))` from an arbitrary current variance.
 
-        # p is constrained below MAX_PERSISTENCE at fit time, so 1-p is bounded
-        # away from zero; the guard is for hand-built fits in tests.
-        gap = 1.0 - p
-        decay = horizon if gap < 1e-12 else (1.0 - p**horizon) / gap
+    The number EWMA gets structurally wrong. The k-step-ahead variance forecast
+    decays geometrically toward the long-run level,
 
-        total = horizon * lr + (v0 - lr) * decay
-        return float(total / (horizon * v0))
+        E[sigma^2_{t+k}] = lr + p^k * (v0 - lr)
+
+    and the H-step variance is their sum, which has a closed form:
+
+        var(H) = H*lr + (v0 - lr) * (1 - p^H) / (1 - p)
+
+    So the ratio comes in **below 1** when today's variance sits above its
+    long-run level and **above 1** when below. EWMA is pinned at exactly 1.0 in
+    both directions — that is the defect, stated as one number.
+
+    Free-standing rather than a method because the historical backfill rolls
+    the variance forward itself (refitting parameters monthly, updating sigma
+    daily from realized returns) and must not have to reimplement this.
+
+    Note the ratio approaches its limit as O(1/H), not geometrically: the
+    transient is a fixed quantity spread over a growing average.
+    """
+    if horizon < 1:
+        raise ValueError(f"horizon must be >= 1, got {horizon}")
+    if current_variance <= 0:
+        raise ValueError(f"current_variance must be positive, got {current_variance}")
+
+    # p is constrained below MAX_PERSISTENCE at fit time, so 1-p is bounded away
+    # from zero; the guard is for hand-built params in tests.
+    gap = 1.0 - persistence
+    decay = horizon if gap < 1e-12 else (1.0 - persistence**horizon) / gap
+
+    total = horizon * long_run_variance + (current_variance - long_run_variance) * decay
+    return float(total / (horizon * current_variance))
 
 
 def fit_gjr_garch(returns: np.ndarray) -> GjrGarchFit:
