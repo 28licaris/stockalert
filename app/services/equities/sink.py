@@ -257,6 +257,29 @@ class EquitiesIcebergSink:
         )
 
     @classmethod
+    def for_schwab_daily_raw(cls) -> "EquitiesIcebergSink":
+        """Daily bars from Schwab REST pricehistory.
+
+        Separate from `for_schwab_universe` because that sink accepts
+        `(schwab, minute)` only — the lake keeps one table per granularity
+        (cf. polygon_raw vs polygon_daily_raw), and there is no `kind`
+        column to disambiguate if they were merged.
+        """
+        from app.services.equities.tables import ensure_schwab_daily_raw
+        catalog = get_catalog()
+        table = ensure_schwab_daily_raw(catalog)
+        return cls(
+            table=table,
+            name="equities_schwab_daily_raw",
+            arrow_schema=_SCHWAB_UNIVERSE_ARROW,
+            accepted_providers={
+                ("schwab", "day"),
+                ("schwab-rest", "day"),
+            },
+            static_adj_factor=1.0,
+        )
+
+    @classmethod
     def for_schwab_universe(cls) -> "EquitiesIcebergSink":
         catalog = get_catalog()
         table = ensure_schwab_universe(catalog)

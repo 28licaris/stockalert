@@ -207,6 +207,59 @@ SCHWAB_UNIVERSE_SORT = SortOrder(
 
 
 # ─────────────────────────────────────────────────────────────────────
+# equities.schwab_daily_raw — Schwab REST pricehistory, DAILY bars
+# ─────────────────────────────────────────────────────────────────────
+#
+# Added 2026-11-03, when the Polygon subscription lapsed and `ohlcv_daily`
+# lost its source. Schwab became the only live provider, and the Schwab
+# minute table cannot hold these: `EquitiesIcebergSink.for_schwab_universe`
+# accepts `(schwab, minute)` only, and mixing granularities in one table
+# with no `kind` column would corrupt every per-symbol read. The lake
+# already separates granularity this way — `polygon_raw` (minute) vs
+# `polygon_daily_raw` (day) — so daily Schwab bars get their own table for
+# the same reason.
+#
+# Same shape as SCHWAB_UNIVERSE_SCHEMA, `adj_factor` included and always
+# 1.0: Schwab returns split-adjusted prices and does not expose pre-split
+# values, so the column exists for UNION parity rather than to carry
+# information.
+#
+# Month partitioning only, no symbol bucketing — this is the active
+# universe (hundreds of symbols) at one row per symbol-day, so a year is
+# ~100k rows. Bucketing would only fan each write across N tiny files.
+SCHWAB_DAILY_RAW_SCHEMA = Schema(
+    NestedField(1, "symbol", StringType(), required=True),
+    NestedField(2, "timestamp", TimestamptzType(), required=True),
+    NestedField(3, "open", DoubleType(), required=False),
+    NestedField(4, "high", DoubleType(), required=False),
+    NestedField(5, "low", DoubleType(), required=False),
+    NestedField(6, "close", DoubleType(), required=False),
+    NestedField(7, "volume", DoubleType(), required=False),
+    NestedField(8, "vwap", DoubleType(), required=False),
+    NestedField(9, "trade_count", LongType(), required=False),
+    NestedField(10, "source", StringType(), required=False),
+    NestedField(11, "ingestion_ts", TimestamptzType(), required=False),
+    NestedField(12, "ingestion_run_id", StringType(), required=False),
+    NestedField(13, "adj_factor", DoubleType(), required=True),
+    identifier_field_ids=[1, 2],
+)
+
+SCHWAB_DAILY_RAW_PARTITION = PartitionSpec(
+    PartitionField(
+        source_id=2,
+        field_id=1001,
+        transform=MonthTransform(),
+        name="ts_month",
+    ),
+)
+
+SCHWAB_DAILY_RAW_SORT = SortOrder(
+    SortField(source_id=1, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+    SortField(source_id=2, transform=IdentityTransform(), direction=SortDirection.ASC, null_order=NullOrder.NULLS_LAST),
+)
+
+
+# ─────────────────────────────────────────────────────────────────────
 # equities.market_corp_actions — Polygon REST corp-actions
 # ─────────────────────────────────────────────────────────────────────
 #

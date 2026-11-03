@@ -37,6 +37,9 @@ from app.services.equities.schemas import (
     POLYGON_RAW_PARTITION,
     POLYGON_RAW_SCHEMA,
     POLYGON_RAW_SORT,
+    SCHWAB_DAILY_RAW_PARTITION,
+    SCHWAB_DAILY_RAW_SCHEMA,
+    SCHWAB_DAILY_RAW_SORT,
     SCHWAB_UNIVERSE_PARTITION,
     SCHWAB_UNIVERSE_SCHEMA,
     SCHWAB_UNIVERSE_SORT,
@@ -157,6 +160,34 @@ def ensure_polygon_daily_raw(catalog: Catalog | None = None) -> Table:
         location=location,
         partition_spec=POLYGON_DAILY_RAW_PARTITION,
         sort_order=POLYGON_DAILY_RAW_SORT,
+        properties=_BASE_PROPERTIES,
+    )
+
+
+def ensure_schwab_daily_raw(catalog: Catalog | None = None) -> Table:
+    """Create `equities.schwab_daily_raw` if absent; return the table.
+
+    Daily Schwab bars live apart from the minute table for the same reason
+    polygon_raw and polygon_daily_raw are separate: there is no granularity
+    column, so one table per kind is what keeps per-symbol reads honest.
+    """
+    catalog = catalog or get_catalog()
+    _ensure_namespace(catalog)
+
+    table_id = equities_table_id("schwab_daily_raw")
+    try:
+        return catalog.load_table(table_id)
+    except NoSuchTableError:
+        pass
+
+    location = _equities_table_location("schwab_daily_raw")
+    log.info("Creating Iceberg table %s at %s", table_id, location)
+    return catalog.create_table(
+        identifier=table_id,
+        schema=SCHWAB_DAILY_RAW_SCHEMA,
+        location=location,
+        partition_spec=SCHWAB_DAILY_RAW_PARTITION,
+        sort_order=SCHWAB_DAILY_RAW_SORT,
         properties=_BASE_PROPERTIES,
     )
 

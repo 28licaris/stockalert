@@ -26,9 +26,18 @@ adjustment step here. (Consequence worth remembering: a future split will not
 retroactively re-adjust rows already written, the way the Polygon path does by
 re-dividing history. See the caveat in the handoff doc.)
 
+Writes the **lake first, ClickHouse second** — `equities.schwab_daily_raw` is
+ground truth and CH is the serving cache, so CH must never hold a bar the lake
+does not. Daily Schwab bars get their own lake table rather than joining
+`schwab_universe`, which accepts `(schwab, minute)` only; the lake separates
+granularity by table (cf. polygon_raw vs polygon_daily_raw) because there is no
+`kind` column to disambiguate them.
+
 `ohlcv_daily` is ReplacingMergeTree(version) ORDER BY (symbol, timestamp), so
 re-running is idempotent — a repeated (symbol, day) collapses to the highest
-version rather than duplicating.
+version rather than duplicating. Lake appends are not deduped by Iceberg, so a
+re-run of the same window double-appends there; use --skip-lake when
+re-running purely to repair CH.
 
     poetry run python scripts/schwab_daily_refresh.py --dry-run
     poetry run python scripts/schwab_daily_refresh.py
@@ -109,7 +118,8 @@ async def _fetch(p: SchwabProvider, sym: str, start: date, end: date):
     return out, ("ok" if out else "out_of_range")
 
 
-async def run(symbols, start: date, end: date, dry_run: bool, sleep_s: float) -> int:
+async def run(symbols, start: date, end: date, dry_run: bool, sleep_s: float,
+              *, skip_lake: bool = False) -> int:
     from app.db.client import get_client
 
     client = get_client()
@@ -159,17 +169,76 @@ async def run(symbols, start: date, end: date, dry_run: bool, sleep_s: float) ->
         print("\n  nothing to insert")
         return 1
 
+    if not skip_lake:
+        rc = await _write_lake(batch, version)
+        if rc != 0:
+            # Lake is ground truth. If it did not take, do NOT load CH — a CH
+            # row with no lake row behind it is exactly the drift this ordering
+            # exists to prevent.
+            print("  lake write failed — refusing to load ClickHouse")
+            return rc
+
     before = client.query(f"SELECT count(), max(timestamp) FROM {TABLE} FINAL").result_rows[0]
     client.insert(TABLE, batch, column_names=COLS)
     after = client.query(f"SELECT count(), max(timestamp) FROM {TABLE} FINAL").result_rows[0]
     print(f"\n  inserted {len(batch):,} rows")
     print(f"  {TABLE}: {before[0]:,} → {after[0]:,} rows · newest {before[1]} → {after[1]}")
 
-    # A write that did not move the read is a failure, however cleanly it returned.
-    if after[1] <= before[1] and after[0] <= before[0]:
-        print("  FAILED — table did not advance after insert")
+    # Verify the read side actually reflects the write. Row COUNT is the wrong
+    # test: ohlcv_daily is ReplacingMergeTree, so an idempotent re-run of an
+    # already-loaded window legitimately leaves the count unchanged. What must
+    # hold is that every (symbol, day) we just sent is now present.
+    want_max = max(r[1] for r in batch)
+    got = client.query(
+        f"SELECT count() FROM {TABLE} FINAL WHERE timestamp = {{ts:DateTime64(3)}}",
+        parameters={"ts": want_max},
+    ).result_rows[0][0]
+    if got == 0:
+        print(f"  FAILED — nothing readable at {want_max} after insert")
         return 1
+    if after[0] < before[0]:
+        print(f"  FAILED — row count went DOWN ({before[0]:,} -> {after[0]:,})")
+        return 1
+    print(f"  verified: {got:,} row(s) readable at {want_max}")
     return 0 if not buckets["error"] else 1
+
+
+
+async def _write_lake(batch: list[list], version: int) -> int:
+    """Append the fetched bars to `equities.schwab_daily_raw`, one day at a time.
+
+    One append per trading day matches the partitioning (month) and the
+    existing nightly writers, and keeps a failure scoped to a single day
+    rather than the whole run.
+    """
+    import pandas as pd
+
+    from app.services.equities.sink import EquitiesIcebergSink
+
+    sink = EquitiesIcebergSink.for_schwab_daily_raw()
+    # The sink requires the full canonical OHLCV shape. Schwab's daily
+    # pricehistory carries no vwap or trade count, so those are NULL rather
+    # than zero — a fabricated 0.0 would read as a real value downstream.
+    df = pd.DataFrame(
+        [{"symbol": r[0], "timestamp": r[1], "open": r[2], "high": r[3],
+          "low": r[4], "close": r[5], "volume": r[6],
+          "vwap": None, "trade_count": None, "source": "schwab-rest"}
+         for r in batch]
+    )
+    written = failed = 0
+    for day, chunk in df.groupby(df["timestamp"].dt.date):
+        res = await sink.write(chunk, file_date=day, kind="day", provider="schwab-rest")
+        if res.status in ("ok", "written", "success"):
+            written += res.bars_written or len(chunk)
+        elif res.status == "skipped":
+            print(f"  lake {day}: SKIPPED — {res.metadata}")
+            failed += 1
+        else:
+            print(f"  lake {day}: {res.status} — {res.metadata}")
+            failed += 1
+    print(f"  lake: {written:,} rows appended to equities.schwab_daily_raw"
+          + (f" · {failed} day(s) FAILED" if failed else ""))
+    return 1 if failed else 0
 
 
 def main(argv=None) -> int:
@@ -178,6 +247,9 @@ def main(argv=None) -> int:
     ap.add_argument("--start", default="", help="ET date YYYY-MM-DD; default = day after CH max")
     ap.add_argument("--end", default="", help="ET date YYYY-MM-DD; default = yesterday ET")
     ap.add_argument("--sleep-seconds", type=float, default=0.05)
+    ap.add_argument("--skip-lake", action="store_true",
+                    help="CH only. Lake appends are not deduped, so use this when "
+                         "re-running a window purely to repair ClickHouse.")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
 
@@ -200,7 +272,8 @@ def main(argv=None) -> int:
         print(f"nothing to do — CH is already current through {start - timedelta(days=1)}")
         return 0
 
-    return asyncio.run(run(symbols, start, end, a.dry_run, a.sleep_seconds))
+    return asyncio.run(run(symbols, start, end, a.dry_run, a.sleep_seconds,
+                       skip_lake=a.skip_lake))
 
 
 if __name__ == "__main__":
