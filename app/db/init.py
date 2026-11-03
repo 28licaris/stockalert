@@ -340,6 +340,44 @@ def init_schema() -> None:
         """
     )
 
+    # vol_premium_history: the historical premium series — one row per symbol
+    # per session pairing that day's at-the-money implied vol with the
+    # volatility forecast for the SAME horizon.
+    #
+    # This is what makes "SNOW is at its 96th percentile" possible.
+    # options_atm_iv_daily alone gives only the implied half, and percentiling
+    # implied vol answers "is vol high?" — a different and much weaker question
+    # than "are options expensive relative to what this stock actually does?".
+    #
+    # Forecasts come from GJR-GARCH parameters refit monthly with the variance
+    # rolled daily off realized returns, never using the day being forecast
+    # (app/services/vol_premium/history.py). `fit_date` records which refit
+    # produced a row so any ratio can be traced back to its parameters.
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS vol_premium_history (
+            symbol             LowCardinality(String),
+            eod_date           Date,
+            days_to_expiration UInt16,
+            trading_days       UInt16,
+            implied_vol        Float64,
+            forecast_vol       Float64,
+            vrp_ratio          Float64,
+            vrp_points         Float64,
+            sigma_next         Float64,
+            variance_ratio     Float64,
+            persistence        Float64,
+            fit_date           Date,
+            source             LowCardinality(String) DEFAULT 'thetadata+garch',
+            ingestion_ts       DateTime64(3, 'UTC') DEFAULT now64(3),
+            version            UInt64 DEFAULT 0
+        )
+        ENGINE = ReplacingMergeTree(version)
+        ORDER BY (symbol, eod_date)
+        SETTINGS index_granularity = 8192
+        """
+    )
+
     # ---------- Journal (Phase 3) ----------
     # account_snapshots: timestamped balance snapshots from /accounts. One row
     # per (account_hash, snapshot_time). Useful for an equity curve later.

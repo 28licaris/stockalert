@@ -22,6 +22,7 @@ import numpy as np
 
 from app.services.ppl.garch import GarchFitError
 from app.services.vol_premium import forecast as fc
+from app.services.vol_premium.history import percentile_rank
 from app.services.vol_premium.iv import ChainQuote, atm_implied_vol
 from app.services.vol_premium.schemas import (
     MODEL_VERSION,
@@ -35,6 +36,7 @@ from app.services.vol_premium.schemas import (
 logger = logging.getLogger(__name__)
 
 ChainsFn = Callable[[Sequence[str]], dict[str, list[ChainQuote]]]
+HistoryFn = Callable[[Sequence[str]], dict[str, list[float]]]
 ClosesFn = Callable[[str, int], np.ndarray]
 UniverseFn = Callable[[], list[str]]
 
@@ -48,16 +50,21 @@ class VolPremiumService:
         chains_fn: ChainsFn,
         closes_fn: ClosesFn,
         universe_fn: Optional[UniverseFn] = None,
+        history_fn: Optional[HistoryFn] = None,
     ) -> None:
         self._chains_fn = chains_fn
         self._closes_fn = closes_fn
         self._universe_fn = universe_fn
+        # Optional: without it rows still build, just with no percentile. A
+        # missing baseline must degrade the reading, not break the screen.
+        self._history_fn = history_fn
 
     @classmethod
     def from_settings(cls) -> "VolPremiumService":
         from app.services.vol_premium.sources import (
             load_chains,
             load_closes,
+            load_premium_history,
             options_universe,
         )
 
@@ -65,6 +72,7 @@ class VolPremiumService:
             chains_fn=load_chains,
             closes_fn=load_closes,
             universe_fn=options_universe,
+            history_fn=load_premium_history,
         )
 
     # ── public ────────────────────────────────────────────────────────
@@ -75,7 +83,9 @@ class VolPremiumService:
         params = params or ScreenParams()
         symbol = symbol.upper().strip()
         chains = self._chains_fn([symbol])
-        return self._row(symbol, chains.get(symbol, []), params)
+        hist = self._history_fn([symbol]) if self._history_fn else {}
+        return self._row(symbol, chains.get(symbol, []), params,
+                         history=hist.get(symbol, []))
 
     def build_screen(
         self,
@@ -93,11 +103,13 @@ class VolPremiumService:
         symbols = [s.upper().strip() for s in symbols if s and s.strip()]
 
         chains = self._chains_fn(symbols)
+        hist = self._history_fn(symbols) if self._history_fn else {}
 
         rows: list[VolPremiumRow] = []
         skipped: list[SkippedSymbol] = []
         for sym in symbols:
-            res = self._row(sym, chains.get(sym, []), params)
+            res = self._row(sym, chains.get(sym, []), params,
+                            history=hist.get(sym, []))
             if res.ok and res.row is not None:
                 rows.append(res.row)
             else:
@@ -123,7 +135,8 @@ class VolPremiumService:
     # ── internals ─────────────────────────────────────────────────────
 
     def _row(
-        self, symbol: str, quotes: list[ChainQuote], params: ScreenParams
+        self, symbol: str, quotes: list[ChainQuote], params: ScreenParams,
+        *, history: Optional[Sequence[float]] = None,
     ) -> VolPremiumRowResult:
         if not quotes:
             return VolPremiumRowResult(
@@ -174,6 +187,9 @@ class VolPremiumService:
             return VolPremiumRowResult(status="no_forecast", reason=str(exc))
 
         ratio, points = fc.vol_premium(atm.implied_vol, vol)
+        # Where this ratio sits in the symbol's OWN history — the reading that
+        # makes a bare ratio actionable. None when no baseline exists.
+        pct = percentile_rank(ratio, history or [])
 
         return VolPremiumRowResult(
             status="ok",
@@ -188,6 +204,10 @@ class VolPremiumService:
                 forecast_vol=round(vol, 3),
                 vrp_ratio=round(ratio, 4),
                 vrp_points=round(points, 3),
+                premium_percentile=(
+                    None if pct is None else round(pct, 1)
+                ),
+                baseline_days=len(history or []),
                 contracts_used=atm.contracts_used,
                 calls=atm.calls,
                 puts=atm.puts,

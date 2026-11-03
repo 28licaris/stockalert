@@ -123,14 +123,17 @@ def main(argv=None) -> int:
         f"{screen.as_of:%Y-%m-%d %H:%M} UTC\n"
     )
     print(f"  {'SYM':<6}{'SPOT':>9}  {'EXP':>4}  {'IV':>7}  {'FCAST':>7}  "
-          f"{'RATIO':>7}  {'GAP':>7}  {'N':>3} {'SPRD':>6}  AGE")
-    print("  " + "─" * 74)
+          f"{'RATIO':>7}  {'%ILE':>6}  {'GAP':>7}  {'N':>3} {'SPRD':>6}  AGE")
+    print("  " + "─" * 84)
 
     rows = screen.rows[: a.limit] if a.limit else screen.rows
     for r in rows:
+        # "—" not "50" when there is no baseline: no history and an
+        # unremarkable reading are opposite claims.
+        pct = f"{r.premium_percentile:5.0f}" if r.premium_percentile is not None else "    —"
         print(f"  {r.symbol:<6}{r.spot:9.2f}  {r.days_to_expiration:3}d  "
               f"{r.implied_vol:6.1f}%  {r.forecast_vol:6.1f}%  "
-              f"{r.vrp_ratio:6.2f}x  {r.vrp_points:+6.1f}  "
+              f"{r.vrp_ratio:6.2f}x  {pct}  {r.vrp_points:+6.1f}  "
               f"{r.contracts_used:3} {r.median_rel_spread*100:5.1f}%  "
               f"{r.snapshot_age_hours:.0f}h")
 
@@ -149,9 +152,25 @@ def main(argv=None) -> int:
             example = next(s for s in screen.skipped if s.status == st)
             print(f"                    e.g. {example.symbol}: {example.reason[:96]}")
 
-    print("\n  A positive premium is NORMAL — implied vol carries a risk premium that")
-    print("  a forecast does not. This ranks symbols against EACH OTHER today; it")
-    print("  cannot yet say whether a reading is unusual for that symbol (spec §6).")
+    withpct = [r for r in screen.rows if r.premium_percentile is not None]
+    if withpct:
+        print(f"\n  %ILE = where today's ratio sits in that symbol's OWN history "
+              f"({min(r.baseline_days for r in withpct):,}-"
+              f"{max(r.baseline_days for r in withpct):,} days).")
+        print("  A positive premium is NORMAL, so the ratio alone cannot say whether")
+        print("  today is unusual — the percentile is the reading that can.")
+        rich = [r for r in withpct if r.premium_percentile >= 90]
+        cheap = [r for r in withpct if r.premium_percentile <= 10]
+        if rich:
+            print(f"  >=90th (options rich vs own history): "
+                  f"{', '.join(f'{r.symbol} {r.premium_percentile:.0f}' for r in rich[:8])}")
+        if cheap:
+            print(f"  <=10th (options cheap vs own history): "
+                  f"{', '.join(f'{r.symbol} {r.premium_percentile:.0f}' for r in cheap[:8])}")
+    else:
+        print("\n  No baseline available — run scripts/build_vol_premium_history.py.")
+        print("  Without it this ranks symbols against each other only; a positive")
+        print("  premium is normal, so a bare ratio cannot say whether today is unusual.")
 
     if a.json:
         Path(a.json).write_text(screen.model_dump_json(indent=2))
