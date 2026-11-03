@@ -113,6 +113,40 @@ increase, etc.) and note what's blocking.
 
 ## Open
 
+### `options-snapshot-single-writer-only`
+
+- **Area:** data, infra, options
+- **Symptom:** with the options snapshot loop enabled on two servers at once,
+  **both** fail. Concurrent Iceberg appends to `options.schwab_chain_raw` /
+  `schwab_chain_contracts` hit optimistic concurrency —
+  `Requirement failed: branch main has changed: expected id X, found Y` — and
+  the losing writer aborts the whole symbol. Measured 2026-08-12: all 40
+  symbols errored on both sides with `rows_written=0`, so even the raw payload
+  archive (the recovery source for any parser defect) stopped being written.
+- **Why it matters:** two writers is strictly *worse* than one. One writer with
+  a bug still archives raw payloads, which are replayable. Two writers archive
+  nothing, and that data is gone.
+- **Workaround:** exactly one process may set `OPTIONS_SNAPSHOT_ENABLED=true`.
+  Disable it everywhere else before enabling it somewhere new.
+- **Real fix:** the options sink needs commit-conflict retry with backoff, the
+  way the equities sink already has. Until then this is an operational rule,
+  not a guardrail the code enforces.
+
+### `ppl-30m-interval-uncalibrated`
+
+- **Area:** research, cockpit
+- **Symptom:** `/ppl` defaults to the 30-minute interval, which is the one
+  interval with **no** PIT calibration behind it. 1h and 1d are calibrated and
+  pass; 30m has never been measured because the research table it needs
+  (`ohlcv_30m`) was never built — `scripts/build_ohlcv_30m.py` exists and has
+  never been run.
+- **Why it matters:** the page's calibration banner speaks about the *model*,
+  which is honest, but a reader could reasonably infer the default view is
+  covered. It is not.
+- **Fix:** run `scripts/build_ohlcv_30m.py`, then
+  `scripts/ppl_calibrate.py --interval 30m`. If 30m fails the gate, either fix
+  it or change the default to 1h.
+
 ### `cockpit-watchlists-page-no-default-selection`
 
 - **Area:** ui

@@ -61,6 +61,14 @@ app/services/        Domain modules (see standards/service_modules.md)
                      bars_gateway routes /-prefix symbols to futures tables
   live/              Live-tier orchestration (stream, watchlist)
   sim/               Backtest (see standards/trading_subsystem.md)
+  ppl/               Posterior predictive levels: GJR-GARCH(1,1) + filtered
+                     historical simulation → forward price fan + quantile
+                     levels. Gate is PIT calibration, not MCPT (it makes no
+                     directional claim). See docs/ppl_mathematics.md
+  vol_premium/       Ranks the options universe by implied vol vs the PPL
+                     forecast ("where are options expensive relative to how
+                     much the underlying actually moves"). ThetaData EOD
+                     history → options_atm_iv_daily is the baseline
   journal/  screener/  universe/  legacy/
 app/db/              ClickHouse client + schemas; PostgreSQL engine wiring
 app/providers/       base.py + alpaca/polygon/schwab

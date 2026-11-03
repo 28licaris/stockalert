@@ -307,6 +307,39 @@ def init_schema() -> None:
         """
     )
 
+    # options_atm_iv_daily: one at-the-money implied volatility per symbol per
+    # session, reduced from the ThetaData EOD chain history in the lake.
+    #
+    # This is the Vol Premium screen's *baseline*. The raw source runs to
+    # hundreds of millions of rows (SPY alone is ~14,600 contracts per session
+    # back to 2016), which cannot be queried live; reduced to one row per
+    # symbol-day it is ~100k rows and a percentile lookup is instant.
+    #
+    # `atm_iv` is stored in PERCENT to match the live Schwab path. ThetaData
+    # reports a decimal fraction, so the loader converts — comparing today's
+    # reading against a baseline in the other unit would be wrong by 100x.
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS options_atm_iv_daily (
+            symbol             LowCardinality(String),
+            eod_date           Date,
+            expiration_date    Date,
+            days_to_expiration UInt16,
+            atm_iv             Float64,
+            contracts          UInt16,
+            calls              UInt16,
+            puts               UInt16,
+            underlying_price   Float64,
+            source             LowCardinality(String) DEFAULT 'thetadata-eod',
+            ingestion_ts       DateTime64(3, 'UTC') DEFAULT now64(3),
+            version            UInt64 DEFAULT 0
+        )
+        ENGINE = ReplacingMergeTree(version)
+        ORDER BY (symbol, eod_date)
+        SETTINGS index_granularity = 8192
+        """
+    )
+
     # ---------- Journal (Phase 3) ----------
     # account_snapshots: timestamped balance snapshots from /accounts. One row
     # per (account_hash, snapshot_time). Useful for an equity curve later.

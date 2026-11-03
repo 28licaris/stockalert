@@ -54,6 +54,7 @@ from app.api import (
     routes_movers,
     routes_news,
     routes_options,
+    routes_ppl,
     routes_screener,
     routes_sector_rotation,
     routes_adjusted,
@@ -957,6 +958,14 @@ app.include_router(routes_billing.router, prefix=_V1, tags=["Billing"])
 app.include_router(routes_admin_auth.router, prefix=_V1, tags=["AdminAuth"])
 app.include_router(routes_auth.router, tags=["Auth"])
 app.include_router(routes_wave.router, prefix=_V1, tags=["Elliott Wave"])
+# Operator-gated until PIT calibration lands (spec D2/P3): an uncalibrated fan
+# chart looks authoritative and isn't. Drops the gate at P5.
+app.include_router(
+    routes_ppl.router,
+    prefix=_V1,
+    tags=["PPL"],
+    dependencies=[Depends(require_operator)],
+)
 
 try:
     from app.api import routes_signals

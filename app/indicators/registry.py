@@ -21,6 +21,7 @@ from app.indicators.bollinger import BollingerBands
 from app.indicators.ema import EMA
 from app.indicators.macd import MACD
 from app.indicators.pivots import PivotDetector
+from app.indicators.psar import PSAR
 from app.indicators.rsi import RSI
 from app.indicators.rsi_wilder import RSIWilder
 from app.indicators.sma import SMA
@@ -46,6 +47,7 @@ _INDICATOR_REGISTRY: dict[str, Callable[..., Indicator]] = {
     "stochastic": StochasticOscillator,
     # Trend strength
     "adx": ADX,
+    "psar": PSAR,
     # Volatility
     "atr": ATR,
     "bollinger": BollingerBands,
