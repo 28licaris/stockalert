@@ -74,79 +74,64 @@ increase, etc.) and note what's blocking.
 
 ## Open
 
-### `schwab-stream-symbol-cap-and-dead-universe-entries`
+### `schwab-stream-300-symbol-account-cap`
 
-- **Area:** provider:schwab, live, ingest, db
+- **Area:** provider:schwab, live, ingest
 - **Filed:** 2026-11-03
-- **Status:** open
-- **Symptom:** `/stream/status` reports `subscribed=440` while only ~293
-  symbols actually receive live ticks. SPY, TSLA, WMT and every XL* sector ETF
-  are among the ~131 that do not. Independently corroborated: `ohlcv_1m` holds
-  exactly **293** distinct symbols for Oct 2026 against **773** in
-  `ohlcv_daily`.
-- **This is TWO problems, not one** — established by probing REST per symbol:
+- **Status:** open — **confirmed, and NOT fixed by chunking**
+- **Symptom:** only **300** equity symbols ever receive live bars, however many
+  are subscribed. `/stream/status` reports all of them as subscribed.
+- **Confirmed by intervention, not inference.** Two separate theories were
+  tested and the second was wrong:
 
-  | Group | REST pricehistory | Diagnosis |
-  |---|---|---|
-  | SPY, TSLA, WMT, XLF, XLE, XLI | full history returned | **streaming cap** — REST is unaffected |
-  | AVB, BK, DFS, EA, EQR, K, MMC, SQ, WBD | `{"empty": true, "candles": []}` for ALL dates incl. 2024 | **dead universe entries** — Schwab has nothing, ever |
+  1. *Account entitlement cap near 290-300* — close, but imprecise.
+  2. *Per-request truncation of the SUBS key list* — **disproved.** PR #34
+     chunked subscriptions at 300 keys (first chunk `SUBS`, rest `ADD`) on the
+     theory that one oversized message was being truncated. The `ADD` chunk of
+     115 keys was accepted at protocol level and **delivered nothing**. The
+     ceiling did not move.
 
-  A cap cannot explain the second group, and trimming/chunking subscriptions
-  will not fix them. Confirmed successors trade fine: `SQ -> XYZ` (Block
-  renamed), `DFS -> COF` (acquired). The rest need checking for rename,
-  delisting, or account entitlement.
-- **Why it hid:** the subscribe is accepted at protocol level — Schwab logs no
-  rejection and no `REACHED_SYMBOL_LIMIT` — so the stream looks healthy while a
-  third of it delivers nothing. Cap appeared when the universe grew 224 -> 424,
-  suggesting a limit near 290-300 concurrent real-time symbols; **not yet
-  confirmed**, and an isolation test (subscribe only the missing 131) would
-  settle it.
-- **Mitigated for daily bars:** `scripts/schwab_daily_refresh.py` uses REST, so
-  it is immune to the cap and backfills the non-streaming names correctly.
-  `ohlcv_1m` for those symbols is still missing.
-- **Suggested fix:** (1) isolation test to confirm the cap; (2) chunk or
-  prioritize subscriptions, or trim the universe; (3) **surface real delivery
-  on the health panel** — `subscribed` is not `receiving`, and that gap is the
-  exact "looks healthy, isn't" failure the freshness panel exists to catch;
-  (4) drop or remap the 9 dead entries.
+  The arithmetic closes exactly, which is what settles it:
 
-### `codebuild-timeout-pinned-45min`
+  ```
+  before: 424 subscribed, 7 dead symbols inside the first 300 keys
+          300 accepted - 7 dead = 293 streaming      (observed 293)
+  after : 415 subscribed, dead removed
+          300 accepted - 0 dead = 300 streaming      (observed 300)
+  ```
 
-- **Area:** infra, research
-- **Filed:** 2026-07-03
-- **Status:** open
-- **Symptom:** every build of `sockalert-silver-full-backfill` gets
-  `timeoutInMinutes: 45` regardless of `--timeout-in-minutes-override 480`
-  and despite the project's configured timeout being 480/480
-  (build/queued). Killed both EXP-40 MCPT studies mid-null (BUILD phase
-  "Build has timed out" at exactly 45:00); reproduced on a build with NO
-  override. Also: 2XLARGE vCPUs run the engine ~3x slower than the local
-  M-series (real run 908s vs 267s).
-- **Root cause:** unknown — needs investigation (service quota? fleet
-  config? org policy?). The 45 is not in the project config we can read.
-- **Suggested fix:** investigate account-level CodeBuild quotas/policies;
-  until then MCPT studies run locally (5x engine makes it viable) or in
-  resumable 45-min chained builds — shards checkpoint per-permutation to
-  S3, so chaining loses nothing.
+  Removing the 7 dead entries freed exactly 7 slots. **The cap is a hard 300
+  concurrent symbols on CHART_EQUITY for this account** — a subscription-level
+  limit, not a message-size one. CHART_FUTURES is unaffected (16 roots stream
+  fine to `futures_ohlcv_1m`).
 
+- **What PR #34 did and did not do:** it did NOT fix this. It is still worth
+  keeping — it fixed a genuine latent bug (`subscribe_bars` sent `SUBS` with
+  only the delta while accumulating the full set, so any incremental subscribe
+  after login would have silently unsubscribed everything prior), and it is the
+  shape the code needs if the cap is ever raised. But 115 symbols still receive
+  no live bars.
+- **Real options**, none of them free:
+  1. **Trim to 300.** Prioritize the research core; accept that the rest are
+     daily-only. Simplest, works today.
+  2. **Rotate** subscriptions across the overflow. Adds gaps and complexity.
+  3. **Ask Schwab** whether the tier supports a higher cap or a second
+     streaming connection. Unknown; needs them.
+  4. **REST-poll the overflow.** `historical_df` is NOT subject to this cap
+     (proved: SPY/TSLA/XLF return full history via REST while silent on the
+     stream). `schwab_daily_refresh.py` already relies on that for daily bars;
+     the same path could fill intraday for the overflow at lower frequency.
+- **Related, and the deeper defect:** `subscribed` is not `receiving`, and
+  nothing compares them. That is why this hid for three months. The health
+  panel should surface delivered-vs-subscribed per service.
 
-### `rsi-indicator-not-wilder`
+### `schwab-dead-universe-entries` — RESOLVED 2026-11-03
 
-- **Area:** indicators, alerts
-- **Filed:** 2026-07-03
-- **Status:** open
-- **Symptom:** `app/indicators/rsi.py` claims Wilder's smoothing but uses
-  `ewm(span=period)` (alpha = 2/(n+1)); true Wilder is alpha = 1/n
-  (span = 2n-1). RSI(14) values differ from every standard charting
-  platform; the divergence grows at small periods (RSI(4): alpha 0.4 vs
-  0.25). Live RSI alerts/filters/UI therefore fire at nonstandard levels.
-- **Root cause:** span-vs-alpha confusion in the original implementation;
-  docstring asserts the equivalence incorrectly.
-- **Suggested fix:** decide whether to fix `rsi` in place (changes live
-  alert behavior — needs product signoff + re-baseline of anything tuned
-  to it) or keep the pair explicit: `rsi` (legacy EMA) vs `rsi_wilder`
-  (true Wilder, added 2026-07-03 for EXP-40 screen parity). Either way,
-  correct the docstring.
+Nine symbols returned `{"symbol": X, "empty": true, "candles": []}` from Schwab
+for **all** history including 2024 — AVB, BK, DFS, EA, EQR, K, MMC, SQ, WBD.
+Not a cap (a cap cannot explain a 2024 query), not transient. Confirmed
+renames: `SQ -> XYZ` (Block), `DFS -> COF` (acquired). Deactivated in
+`stream_universe` with the reason in `notes`; active universe 424 -> 415.
 
 ### `schwab-token-expiry-masked-by-live-stream`
 

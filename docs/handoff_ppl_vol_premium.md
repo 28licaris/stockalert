@@ -200,6 +200,18 @@ Two consequences worth carrying forward:
    `OPTIONS_SNAPSHOT_ENABLED` should be running whenever the market is, and
    every day it is not is a permanent hole.
 
+## Live streaming is capped at 300 symbols (confirmed 2026-11-03)
+
+Only **300** equity symbols receive live bars, no matter how many are
+subscribed, and `/stream/status` reports them all as subscribed. Chunking the
+subscription does **not** raise it — that was tested in PR #34 and the `ADD`
+chunk delivered nothing. It is a hard account-level ceiling on CHART_EQUITY.
+
+Consequence for anything built on `ohlcv_1m`: it covers 300 symbols, not the
+whole universe. `ohlcv_daily` covers 415 because the daily path uses REST,
+which is not subject to the cap. Do not resample 1m into daily expecting full
+coverage. Filed as `schwab-300-symbol-account-cap`.
+
 ## Gotchas a fresh session will trip on
 
 - **`AWS_PROFILE=stock-lake`** is required for every lake/S3 call. Without it,
