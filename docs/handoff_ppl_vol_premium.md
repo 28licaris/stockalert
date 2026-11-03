@@ -15,8 +15,8 @@ produced it.
 > | `/ppl` — model, calibration, page | **done**, operator-gated |
 > | ThetaData baseline (`options_atm_iv_daily`) | **done**, 87,068 rows verified present |
 > | Vol Premium — estimator, service, CLI | **done** |
-> | Vol Premium — historical percentile | **half built** (step 3) |
-> | Vol Premium — API + page | **not started** (step 4) |
+> | Vol Premium — historical percentile | **done** — `vol_premium_history`, 81,015 rows, 2016→2026 |
+> | Vol Premium — API + page | **not started** (step 4) — the only thing left before it is a product |
 >
 > It was merged unfinished on purpose: the parser fix was a live production bug
 > and could not wait, and the unfinished part **registers no route**, so it is
@@ -71,24 +71,31 @@ check that the extraction and the decimal→percent conversion are both right:
 
 ## What's left, in order
 
-### Step 3 — historical premium percentile (NOT STARTED)
+### Step 3 — historical premium percentile ✅ DONE (2026-11-03)
 
-**Goal:** percentile of the *premium* (IV ÷ forecast), not of implied vol alone.
-`options_atm_iv_daily` gives the IV half for every historical day; the forecast
-half does not exist yet.
+`vol_premium_history`: **81,015 rows · 40 symbols · 2016-01-04 → 2026-08-05**.
+Built by `scripts/build_vol_premium_history.py` from
+`app/services/vol_premium/history.py` — GJR-GARCH parameters refit **monthly**,
+conditional variance rolled **daily** off realized returns (~5,080 fits rather
+than ~87,000). No look-ahead, and tested: rewriting the future after a cut
+point must not move any past forecast.
 
-**Design already decided** (do not re-litigate):
+Wired through the service and CLI. The payoff, on the first real screen:
 
-- Refit GJR-GARCH parameters **monthly**, roll the conditional variance
-  **daily** off realized returns between refits. Naively refitting per day is
-  ~87,000 fits ≈ 5 hours; monthly is ~5,080 fits ≈ 17 minutes, and it is closer
-  to how the model is meant to run.
-- `garch.variance_ratio_from(current_variance, persistence, long_run_variance,
-  horizon)` already exists **specifically for this** — it is the closed form
-  detached from the fit object so a rolled-forward variance can use it.
+| | ratio | percentile | reading |
+|---|---|---|---|
+| XLI | 1.26× | 64th | normal for XLI |
+| UNH | 1.22× | 90th | genuinely unusual |
 
-**Still to write:** `app/services/vol_premium/history.py` (pure), a build
-script, a `vol_premium_history` ClickHouse table, and the run.
+Ranking on the ratio alone puts XLI above UNH; the percentile corrects it.
+
+**Recorded finding:** historical ratio comes out p05 0.66 / median 0.97 / p95
+1.39 — the median slightly *below* 1 where the variance risk premium would
+suggest above. That premium is quoted against subsequent *realized* vol; this
+is against a *forecast*, and a GARCH long-run level fit through 2018/2020/2022
+runs a little high in calm regimes. It does not affect the product: a constant
+denominator bias cancels out of a per-symbol percentile, which is the reason
+the percentile is the headline and the bare ratio is not.
 
 ### Step 4 — API + page (NOT STARTED)
 
