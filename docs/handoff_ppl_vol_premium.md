@@ -1,10 +1,29 @@
-# Handoff — PPL + Vol Premium (`feat/bayesian-alert-system`)
+# Handoff — PPL + Vol Premium
 
-Written 2026-08-13 as a clean stopping point. Everything below is committed;
-the working tree is clean. This is written to be resumable **cold**, by someone
-with no memory of the session that produced it.
+**Merged to main 2026-11-03** via PR #28 (`feat/bayesian-alert-system`).
+Written to be resumable **cold**, by someone with no memory of the session that
+produced it.
 
-## What this branch is for
+> ## Read this first: merged ≠ finished
+>
+> PPL is **complete**. The Vol Premium screen is **not** — it is a working
+> engine with no face on it.
+>
+> | | |
+> |---|---|
+> | Schwab quote-field fix | **done**, live in production |
+> | `/ppl` — model, calibration, page | **done**, operator-gated |
+> | ThetaData baseline (`options_atm_iv_daily`) | **done**, 87,068 rows verified present |
+> | Vol Premium — estimator, service, CLI | **done** |
+> | Vol Premium — historical percentile | **half built** (step 3) |
+> | Vol Premium — API + page | **not started** (step 4) |
+>
+> It was merged unfinished on purpose: the parser fix was a live production bug
+> and could not wait, and the unfinished part **registers no route**, so it is
+> inert in the running app rather than a half-exposed surface. The only way to
+> reach it today is `scripts/vol_premium_screen.py`.
+
+## What this work is for
 
 Two surfaces and one bug fix, in dependency order:
 
@@ -24,11 +43,11 @@ their 96th percentile of ten years"* is a reason to log in.
 
 ## Status
 
-### Done and committed
+### Done — in main as of PR #28
 
 | | Evidence |
 |---|---|
-| **Parser fix** (`3dcbd5d`) | Verified against stored raw payloads. Recovers quotes on 86–96% of contracts. Regression test pins both field spellings. |
+| **Parser fix** (`3dcbd5d`) | Verified against stored raw payloads. Recovers quotes on 86–96% of contracts. Regression test pins both field spellings. **Confirmed live 2026-11-03**: SPY writing real `bid 9.44 / ask 9.49 / mark 9.47`. |
 | **PPL / GJR-GARCH + FHS** (`79e7639`) | Passes its PIT calibration gate. At 1h the old model is rejected for 5 of 6 symbols, the new one for 1 of 6. At 1d: FAIL (p=0.000) → PASS (p=0.119). |
 | **Vol Premium screen** (`c025ca0`) | Runs end-to-end from CLI. Forecast validated against trailing realized vol: **median ratio 1.01×**. |
 | **ThetaData baseline** (this commit) | `options_atm_iv_daily`: **208,658,159 raw rows → 87,068 daily rows**, 40 symbols, 2016-01-04 → 2026-08-05. |
@@ -95,26 +114,67 @@ concurrency (`branch main has changed`) and **all 40 symbols failed on both
 sides with `rows_written=0`** — including the raw payload archive, which is the
 recovery source. Two writers is strictly worse than one.
 
-The fix in `3dcbd5d` only takes effect where the code runs. As of this writing
-`:8000` runs from the `hungry-joliot-f3a184` worktree with no `--reload`, so it
-keeps writing NULL quotes and overwrites any reparse within ~15 minutes.
+**Resolved in practice 2026-11-03**: `:8000` now runs from the primary checkout
+(`/Users/licaris/dev/stockalert`) on merged `main`, so it has the parser fix and
+is the single owner of the loop. Every worktree's `.claude/launch.json` ships
+with `OPTIONS_SNAPSHOT_ENABLED=false` for this reason.
 
-To hand the loop to this branch: set `OPTIONS_SNAPSHOT_ENABLED=false` on
-`:8000`, **then** flip it true in this worktree's `.claude/launch.json`.
+The rule still stands for anyone adding a second server: disable it everywhere
+else **first**, then enable it in one place.
 
-### 2. Merge shape
+Note the running process caches the Schwab token at startup, so after any
+re-authorization `:8000` must be restarted or it keeps presenting the dead one.
 
-Recommended: **cherry-pick `3dcbd5d` to main now, on its own.** It is four lines
-plus tests, sits at the base of the branch, and is the only thing standing
-between production and correct options data. Merge the rest once step 4 gives
-vol_premium a surface — merging it today adds a module the app cannot reach.
+### 2. ~~Merge shape~~ — RESOLVED 2026-11-03
+
+Merged whole via PR #28 rather than cherry-picking the fix alone. The deciding
+argument: the unfinished half registers no route, so it ships inert, and
+splitting would have left a long-lived branch to re-rebase for no safety gain.
+See the banner at the top for what "merged" does and does not mean here.
 
 ---
 
+## Why collection was dead for three months — the actual cause
+
+Earlier notes in this doc said collection "stopped on 2026-08-12". **That was
+wrong, and the correction is worth keeping** because the wrong diagnosis points
+at the wrong fix.
+
+The loop never stopped. It ran every 15 minutes and **failed every single
+time**, from mid-August until 2026-11-03:
+
+```
+Schwab token exchange failed: 400
+  {"error_description":"Refresh token is invalid, expired or revoked"}
+```
+
+The Schwab **refresh token had expired** (~7-day life). Restarting the server
+would not have fixed it; only re-authorization does.
+
+What made it hard to spot: the **live streamer kept working the whole time**,
+because its websocket authenticates once at connect and stays up. So
+`ohlcv_1m` looked perfectly healthy while every REST call — option chains
+included — was failing. *A healthy stream does not mean Schwab auth is healthy.*
+
+Two traps in the recovery, both hit in practice on 2026-11-03:
+
+1. **`SCHWAB_REFRESH_TOKEN` in `.env` overrides the token file.** Re-auth writes
+   `data/.schwab_refresh_token`, but a stale value pinned in `.env` silently
+   wins. Update or unset it.
+2. **Each worktree has its own `.env` and `data/`.** Re-authorizing in the
+   primary checkout does nothing for a worktree, which will keep failing with
+   the old token and look like the re-auth did not work. Copy
+   `data/.schwab_refresh_token` and the `.env` line across.
+
+Verified working again 2026-11-03: SPY 1,080 contracts, 1,682 rows, real
+quotes (`bid 9.44 / ask 9.49 / mark 9.47`, iv 17.35) — which also confirms the
+parser fix in production.
+
 ## Data sources — what survives, what is gone (verified 2026-11-03)
 
-The system stopped collecting on **2026-08-12**, and the ThetaData subscription
-has since lapsed. What that costs, measured rather than assumed:
+Collection produced nothing between 2026-08-12 and 2026-11-03 (see above), and
+the ThetaData subscription has since lapsed. What that costs, measured rather
+than assumed:
 
 | Source | State | Recoverable? |
 |---|---|---|

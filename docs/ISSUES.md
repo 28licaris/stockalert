@@ -113,6 +113,36 @@ increase, etc.) and note what's blocking.
 
 ## Open
 
+### `schwab-token-expiry-masked-by-live-stream`
+
+- **Area:** provider:schwab, ingest, options
+- **Filed:** 2026-11-03
+- **Status:** open (operational trap; recovery documented, no code fix yet)
+- **Symptom:** every Schwab REST call fails with
+  `{"error_description":"Refresh token is invalid, expired or revoked"}` while
+  the dashboards look healthy. Cost three months of option-chain collection
+  (2026-08-12 → 2026-11-03): the snapshot loop ran every 15 minutes and errored
+  every time, and nobody noticed.
+- **Why it hides:** the **live streamer keeps working**. Its websocket
+  authenticates once at connect and stays up, so `ohlcv_1m` keeps flowing and
+  every freshness check stays green while REST is completely dead. *A healthy
+  stream is not evidence that Schwab auth is healthy.*
+- **Two traps in the recovery**, both hit in practice:
+  1. `SCHWAB_REFRESH_TOKEN` in `.env` **overrides** `SCHWAB_REFRESH_TOKEN_FILE`.
+     Re-auth writes `data/.schwab_refresh_token` and the stale `.env` value
+     silently wins.
+  2. **Each worktree has its own `.env` and `data/`.** Re-authorizing in the
+     primary checkout does nothing for a worktree, which keeps failing with the
+     old token and looks like the re-auth failed.
+- **Recovery:** `python scripts/schwab_get_refresh_token.py` (interactive
+  browser OAuth), clear/update the `.env` override, copy the token to any
+  worktree that needs it, then **restart uvicorn** — the process caches the
+  token at startup.
+- **Suggested fix:** surface REST auth health separately from stream health on
+  the health page, and alert when a scheduled job's `last_status` has been
+  `error` for N consecutive runs. A job failing silently for three months is the
+  real defect; the token expiring is normal.
+
 ### `options-snapshot-single-writer-only`
 
 - **Area:** data, infra, options
