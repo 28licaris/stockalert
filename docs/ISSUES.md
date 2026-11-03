@@ -15,46 +15,7 @@ phase docs. This file is for the "things that are wrong" list.
    `dashboard-banner-flicker-on-reconnect`. Avoid dates and ticket
    numbers — IDs outlive both.
 2. **Pick one or more area tags** (see the taxonomy below).
-3. **Add a new section at the top of `## Open
-
-### `codebuild-timeout-pinned-45min`
-
-- **Area:** infra, research
-- **Filed:** 2026-07-03
-- **Status:** open
-- **Symptom:** every build of `sockalert-silver-full-backfill` gets
-  `timeoutInMinutes: 45` regardless of `--timeout-in-minutes-override 480`
-  and despite the project's configured timeout being 480/480
-  (build/queued). Killed both EXP-40 MCPT studies mid-null (BUILD phase
-  "Build has timed out" at exactly 45:00); reproduced on a build with NO
-  override. Also: 2XLARGE vCPUs run the engine ~3x slower than the local
-  M-series (real run 908s vs 267s).
-- **Root cause:** unknown — needs investigation (service quota? fleet
-  config? org policy?). The 45 is not in the project config we can read.
-- **Suggested fix:** investigate account-level CodeBuild quotas/policies;
-  until then MCPT studies run locally (5x engine makes it viable) or in
-  resumable 45-min chained builds — shards checkpoint per-permutation to
-  S3, so chaining loses nothing.
-
-
-### `rsi-indicator-not-wilder`
-
-- **Area:** indicators, alerts
-- **Filed:** 2026-07-03
-- **Status:** open
-- **Symptom:** `app/indicators/rsi.py` claims Wilder's smoothing but uses
-  `ewm(span=period)` (alpha = 2/(n+1)); true Wilder is alpha = 1/n
-  (span = 2n-1). RSI(14) values differ from every standard charting
-  platform; the divergence grows at small periods (RSI(4): alpha 0.4 vs
-  0.25). Live RSI alerts/filters/UI therefore fire at nonstandard levels.
-- **Root cause:** span-vs-alpha confusion in the original implementation;
-  docstring asserts the equivalence incorrectly.
-- **Suggested fix:** decide whether to fix `rsi` in place (changes live
-  alert behavior — needs product signoff + re-baseline of anything tuned
-  to it) or keep the pair explicit: `rsi` (legacy EMA) vs `rsi_wilder`
-  (true Wilder, added 2026-07-03 for EXP-40 screen parity). Either way,
-  correct the docstring.
-`** using the entry
+3. **Add a new section at the top of `## Open`** using the entry
    template. New items go on top; older items sink down.
 4. **Reference the ID in PRs / commits** that touch it
    (`fix(schwab-chart-fields-test-drift): align test fixtures`).
@@ -112,6 +73,80 @@ increase, etc.) and note what's blocking.
 ---
 
 ## Open
+
+### `schwab-stream-symbol-cap-and-dead-universe-entries`
+
+- **Area:** provider:schwab, live, ingest, db
+- **Filed:** 2026-11-03
+- **Status:** open
+- **Symptom:** `/stream/status` reports `subscribed=440` while only ~293
+  symbols actually receive live ticks. SPY, TSLA, WMT and every XL* sector ETF
+  are among the ~131 that do not. Independently corroborated: `ohlcv_1m` holds
+  exactly **293** distinct symbols for Oct 2026 against **773** in
+  `ohlcv_daily`.
+- **This is TWO problems, not one** — established by probing REST per symbol:
+
+  | Group | REST pricehistory | Diagnosis |
+  |---|---|---|
+  | SPY, TSLA, WMT, XLF, XLE, XLI | full history returned | **streaming cap** — REST is unaffected |
+  | AVB, BK, DFS, EA, EQR, K, MMC, SQ, WBD | `{"empty": true, "candles": []}` for ALL dates incl. 2024 | **dead universe entries** — Schwab has nothing, ever |
+
+  A cap cannot explain the second group, and trimming/chunking subscriptions
+  will not fix them. Confirmed successors trade fine: `SQ -> XYZ` (Block
+  renamed), `DFS -> COF` (acquired). The rest need checking for rename,
+  delisting, or account entitlement.
+- **Why it hid:** the subscribe is accepted at protocol level — Schwab logs no
+  rejection and no `REACHED_SYMBOL_LIMIT` — so the stream looks healthy while a
+  third of it delivers nothing. Cap appeared when the universe grew 224 -> 424,
+  suggesting a limit near 290-300 concurrent real-time symbols; **not yet
+  confirmed**, and an isolation test (subscribe only the missing 131) would
+  settle it.
+- **Mitigated for daily bars:** `scripts/schwab_daily_refresh.py` uses REST, so
+  it is immune to the cap and backfills the non-streaming names correctly.
+  `ohlcv_1m` for those symbols is still missing.
+- **Suggested fix:** (1) isolation test to confirm the cap; (2) chunk or
+  prioritize subscriptions, or trim the universe; (3) **surface real delivery
+  on the health panel** — `subscribed` is not `receiving`, and that gap is the
+  exact "looks healthy, isn't" failure the freshness panel exists to catch;
+  (4) drop or remap the 9 dead entries.
+
+### `codebuild-timeout-pinned-45min`
+
+- **Area:** infra, research
+- **Filed:** 2026-07-03
+- **Status:** open
+- **Symptom:** every build of `sockalert-silver-full-backfill` gets
+  `timeoutInMinutes: 45` regardless of `--timeout-in-minutes-override 480`
+  and despite the project's configured timeout being 480/480
+  (build/queued). Killed both EXP-40 MCPT studies mid-null (BUILD phase
+  "Build has timed out" at exactly 45:00); reproduced on a build with NO
+  override. Also: 2XLARGE vCPUs run the engine ~3x slower than the local
+  M-series (real run 908s vs 267s).
+- **Root cause:** unknown — needs investigation (service quota? fleet
+  config? org policy?). The 45 is not in the project config we can read.
+- **Suggested fix:** investigate account-level CodeBuild quotas/policies;
+  until then MCPT studies run locally (5x engine makes it viable) or in
+  resumable 45-min chained builds — shards checkpoint per-permutation to
+  S3, so chaining loses nothing.
+
+
+### `rsi-indicator-not-wilder`
+
+- **Area:** indicators, alerts
+- **Filed:** 2026-07-03
+- **Status:** open
+- **Symptom:** `app/indicators/rsi.py` claims Wilder's smoothing but uses
+  `ewm(span=period)` (alpha = 2/(n+1)); true Wilder is alpha = 1/n
+  (span = 2n-1). RSI(14) values differ from every standard charting
+  platform; the divergence grows at small periods (RSI(4): alpha 0.4 vs
+  0.25). Live RSI alerts/filters/UI therefore fire at nonstandard levels.
+- **Root cause:** span-vs-alpha confusion in the original implementation;
+  docstring asserts the equivalence incorrectly.
+- **Suggested fix:** decide whether to fix `rsi` in place (changes live
+  alert behavior — needs product signoff + re-baseline of anything tuned
+  to it) or keep the pair explicit: `rsi` (legacy EMA) vs `rsi_wilder`
+  (true Wilder, added 2026-07-03 for EXP-40 screen parity). Either way,
+  correct the docstring.
 
 ### `schwab-token-expiry-masked-by-live-stream`
 
