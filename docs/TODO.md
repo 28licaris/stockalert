@@ -136,24 +136,24 @@ Full status and cold-start notes:
   PyIceberg falls back to copy-on-write and rewrites every matching file
   (>10 min for a single symbol).
 
-## Restart-from-cold backfill (system idle since 2026-08-12)
-Collection stopped 2026-08-12; Polygon and ThetaData subscriptions have since
-lapsed, so Schwab is the only live source. Verified 2026-11-03 — details and
-the table of what survives in
-[`handoff_ppl_vol_premium.md`](handoff_ppl_vol_premium.md).
+## Backfill after the 2026-08→11 outage
+Nothing was collected 2026-08-12 → 2026-11-03: the options loop ran every 15
+minutes and failed every time on an **expired Schwab refresh token**, while the
+live streamer kept working (its websocket authenticates once at connect) and
+masked the problem. Re-authorized and verified writing again 2026-11-03.
+Polygon and ThetaData subscriptions have lapsed, so Schwab is now the only live
+source. Full detail: [`handoff_ppl_vol_premium.md`](handoff_ppl_vol_premium.md).
 
-- **Equity + futures bars.** Backfillable from Schwab REST:
+- **Equity + futures bars — STILL TO DO.** Three months stale (`ohlcv_daily`
+  newest was 2026-08-13). Backfill from Schwab REST:
   `schwab_history_backfill.py` and `futures_history_backfill.py` into the lake,
-  then `rebuild_ch_from_lake.py` to refill ClickHouse. Check Schwab auth first
-  — the refresh token has ~7-day life and will be long expired.
-- **Options chains have a PERMANENT hole**, 2026-08-12 → restart. `/chains`
+  then `rebuild_ch_from_lake.py` to refill ClickHouse.
+- **Options chains have a PERMANENT hole**, 2026-08-12 → 2026-11-03. `/chains`
   returns only the current chain, so un-snapshotted days cannot be recovered.
-  Nothing to do but restart collection; noted so nobody hunts for a backfill
-  that cannot exist.
-- **The ThetaData archive is safe** (2017-01-03 → 2026-08-05, in
-  `options.thetadata_greeks_eod`). `options_atm_iv_daily` rebuilds from it with
-  no subscription via `scripts/build_atm_iv_history.py`. Do this if the
-  ClickHouse table was lost — it was unverifiable on 2026-11-03 because local
-  ClickHouse was down.
-- **Re-verify the branch after any backfill**: `scripts/ppl_calibrate.py` and
+  Noted so nobody hunts for a backfill that cannot exist.
+- **ThetaData archive — verified safe, nothing to do.** 2017-01-03 → 2026-08-05
+  in `options.thetadata_greeks_eod`, and `options_atm_iv_daily` was confirmed
+  intact on 2026-11-03 (87,068 rows, 40 symbols). If it is ever lost it rebuilds
+  from the lake with **no subscription** via `scripts/build_atm_iv_history.py`.
+- **Re-verify after any backfill**: `scripts/ppl_calibrate.py` and
   `scripts/vol_premium_screen.py` both depend on fresh bars.
