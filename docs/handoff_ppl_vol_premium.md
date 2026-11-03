@@ -111,6 +111,28 @@ vol_premium a surface — merging it today adds a module the app cannot reach.
 
 ---
 
+## Data sources — what survives, what is gone (verified 2026-11-03)
+
+The system stopped collecting on **2026-08-12**, and the ThetaData subscription
+has since lapsed. What that costs, measured rather than assumed:
+
+| Source | State | Recoverable? |
+|---|---|---|
+| **ThetaData EOD options** | `options.thetadata_greeks_eod` holds **2017-01-03 → 2026-08-05**. SPY alone is 20.2M rows with implied vol 100% populated. | **Permanently ours.** The archive is in the lake, so `options_atm_iv_daily` can be rebuilt any time with **no subscription**. Only *new* data is lost. |
+| **Schwab option chains** | `options.schwab_chain_raw` holds 5,550 payloads over 20 days, **2026-06-29 → 2026-08-12**. Stops the day the loop was disabled. | Raw payloads replay fine. But the **2026-08-12 → present gap is permanently unfillable** — `/chains` returns only the *current* chain, so a day not snapshotted is gone. |
+| **Equity / futures bars** | Stale since the system stopped. | **Yes** — Schwab REST has history endpoints. `scripts/schwab_history_backfill.py`, `scripts/futures_history_backfill.py`, then `rebuild_ch_from_lake.py`. |
+| **Polygon** | Lapsed; minute lake frozen at 2026-06-12. | Not renewing. Daily bars come via REST grouped-daily. |
+
+Two consequences worth carrying forward:
+
+1. **The baseline is safe but its endpoint is frozen at 2026-08-05.** Nine and a
+   half years of history is plenty for a percentile; the hole is at the recent
+   end, which matters more for regime work than for ranking.
+2. **Option-chain history only accrues while something is running.** Unlike
+   bars, it cannot be backfilled. Whichever server owns
+   `OPTIONS_SNAPSHOT_ENABLED` should be running whenever the market is, and
+   every day it is not is a permanent hole.
+
 ## Gotchas a fresh session will trip on
 
 - **`AWS_PROFILE=stock-lake`** is required for every lake/S3 call. Without it,

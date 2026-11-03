@@ -135,3 +135,25 @@ Full status and cold-start notes:
   stays recoverable. NOTE: do it as a full-table rebuild, never an upsert —
   PyIceberg falls back to copy-on-write and rewrites every matching file
   (>10 min for a single symbol).
+
+## Restart-from-cold backfill (system idle since 2026-08-12)
+Collection stopped 2026-08-12; Polygon and ThetaData subscriptions have since
+lapsed, so Schwab is the only live source. Verified 2026-11-03 — details and
+the table of what survives in
+[`handoff_ppl_vol_premium.md`](handoff_ppl_vol_premium.md).
+
+- **Equity + futures bars.** Backfillable from Schwab REST:
+  `schwab_history_backfill.py` and `futures_history_backfill.py` into the lake,
+  then `rebuild_ch_from_lake.py` to refill ClickHouse. Check Schwab auth first
+  — the refresh token has ~7-day life and will be long expired.
+- **Options chains have a PERMANENT hole**, 2026-08-12 → restart. `/chains`
+  returns only the current chain, so un-snapshotted days cannot be recovered.
+  Nothing to do but restart collection; noted so nobody hunts for a backfill
+  that cannot exist.
+- **The ThetaData archive is safe** (2017-01-03 → 2026-08-05, in
+  `options.thetadata_greeks_eod`). `options_atm_iv_daily` rebuilds from it with
+  no subscription via `scripts/build_atm_iv_history.py`. Do this if the
+  ClickHouse table was lost — it was unverifiable on 2026-11-03 because local
+  ClickHouse was down.
+- **Re-verify the branch after any backfill**: `scripts/ppl_calibrate.py` and
+  `scripts/vol_premium_screen.py` both depend on fresh bars.
