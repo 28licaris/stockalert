@@ -109,6 +109,21 @@ CHART_EQUITY_FIELDS = "0,2,3,4,5,6,7"
 # protocol (0=key, 2-7 OHLCV+time). Verified against live /MNQ… contracts.
 CHART_FUTURES_FIELDS = CHART_EQUITY_FIELDS
 
+# Schwab delivers ticks for only the FIRST 300 keys of a chart subscription and
+# silently drops the rest — no rejection, no REACHED_SYMBOL_LIMIT, and
+# /stream/status still reports every key as subscribed.
+#
+# Measured 2026-11-03 on a 424-symbol universe: exactly 293 symbols received
+# bars, and the 131 that did not were precisely the 9 symbols Schwab has no
+# data for at all plus *every* symbol sorted at or after "S" — i.e. the tail
+# past index 300 of the comma-joined key list. A clean truncation, not an
+# entitlement cap.
+#
+# Subscriptions are therefore chunked. The first chunk uses SUBS (which
+# REPLACES the service's subscription) and every chunk after it uses ADD
+# (which appends) — sending SUBS more than once would wipe the earlier chunks.
+MAX_STREAM_KEYS_PER_REQUEST = 300
+
 _DEFAULT_SCHWAB_API_BASE = "https://api.schwabapi.com"
 
 
@@ -455,6 +470,37 @@ class SchwabProvider(DataProvider):
                 equity.append(s)
         return equity, futures
 
+    @staticmethod
+    def build_chart_subscribe_requests(
+        service: str,
+        keys: list[str],
+        fields: str,
+        *,
+        ids: dict | None = None,
+        first_request_id: int = 2,
+    ) -> list[dict]:
+        """Chunk `keys` into Schwab chart subscribe requests.
+
+        First chunk SUBS, the rest ADD. SUBS replaces a service's whole
+        subscription, so issuing it per chunk would leave only the last one
+        active — the failure this function exists to prevent, alongside the
+        300-key truncation itself (see MAX_STREAM_KEYS_PER_REQUEST).
+        """
+        out: list[dict] = []
+        for i in range(0, len(keys), MAX_STREAM_KEYS_PER_REQUEST):
+            chunk = keys[i : i + MAX_STREAM_KEYS_PER_REQUEST]
+            req = {
+                "requestid": str(first_request_id + len(out)),
+                "service": service,
+                "command": "SUBS" if i == 0 else "ADD",
+                "parameters": {"keys": ",".join(chunk), "fields": fields},
+            }
+            if ids:
+                req["SchwabClientCustomerId"] = ids["SchwabClientCustomerId"]
+                req["SchwabClientCorrelId"] = ids["SchwabClientCorrelId"]
+            out.append(req)
+        return out
+
     def _enqueue_streamer_cmd(self, cmd: dict) -> None:
         """
         Enqueue a streamer command (e.g., SUBS/UNSUBS) for the streamer thread.
@@ -596,26 +642,21 @@ class SchwabProvider(DataProvider):
                         eq_keys, fut_keys = self.partition_chart_stream_keys(tickers)
                         requests: list[dict] = []
                         if eq_keys:
-                            requests.append(
-                                {
-                                    "requestid": "2",
-                                    "service": SERVICE_CHART_EQUITY,
-                                    "command": "SUBS",
-                                    "SchwabClientCustomerId": ids["SchwabClientCustomerId"],
-                                    "SchwabClientCorrelId": ids["SchwabClientCorrelId"],
-                                    "parameters": {"keys": ",".join(eq_keys), "fields": CHART_EQUITY_FIELDS},
-                                }
-                            )
+                            requests.extend(self.build_chart_subscribe_requests(
+                                SERVICE_CHART_EQUITY, eq_keys, CHART_EQUITY_FIELDS,
+                                ids=ids, first_request_id=2,
+                            ))
                         if fut_keys:
-                            requests.append(
-                                {
-                                    "requestid": "3",
-                                    "service": SERVICE_CHART_FUTURES,
-                                    "command": "SUBS",
-                                    "SchwabClientCustomerId": ids["SchwabClientCustomerId"],
-                                    "SchwabClientCorrelId": ids["SchwabClientCorrelId"],
-                                    "parameters": {"keys": ",".join(fut_keys), "fields": CHART_FUTURES_FIELDS},
-                                }
+                            requests.extend(self.build_chart_subscribe_requests(
+                                SERVICE_CHART_FUTURES, fut_keys, CHART_FUTURES_FIELDS,
+                                ids=ids, first_request_id=100,
+                            ))
+                        if len(requests) > 2:
+                            logger.info(
+                                "Schwab streamer: %d symbols chunked into %d requests "
+                                "(cap %d keys/request)",
+                                len(eq_keys) + len(fut_keys), len(requests),
+                                MAX_STREAM_KEYS_PER_REQUEST,
                             )
                         if requests:
                             await self._streamer_send({"requests": requests})
@@ -701,23 +742,18 @@ class SchwabProvider(DataProvider):
         self.start_stream()
         # If streamer is already logged in, send SUBS immediately for the requested tickers.
         if self._streamer_ready.is_set():
-            eq_sub, fu_sub = self.partition_chart_stream_keys(new_tickers)
-            if eq_sub:
-                self._enqueue_streamer_cmd(
-                    {
-                        "service": SERVICE_CHART_EQUITY,
-                        "command": "SUBS",
-                        "parameters": {"keys": ",".join(eq_sub), "fields": CHART_EQUITY_FIELDS},
-                    }
-                )
-            if fu_sub:
-                self._enqueue_streamer_cmd(
-                    {
-                        "service": SERVICE_CHART_FUTURES,
-                        "command": "SUBS",
-                        "parameters": {"keys": ",".join(fu_sub), "fields": CHART_FUTURES_FIELDS},
-                    }
-                )
+            # Resend the FULL accumulated set, not just `new_tickers`. SUBS
+            # replaces a service's subscription, so sending only the delta
+            # would silently unsubscribe everything added before it.
+            eq_sub, fu_sub = self.partition_chart_stream_keys(self._subscribed_tickers)
+            for req in self.build_chart_subscribe_requests(
+                SERVICE_CHART_EQUITY, eq_sub, CHART_EQUITY_FIELDS, first_request_id=2
+            ):
+                self._enqueue_streamer_cmd(req)
+            for req in self.build_chart_subscribe_requests(
+                SERVICE_CHART_FUTURES, fu_sub, CHART_FUTURES_FIELDS, first_request_id=100
+            ):
+                self._enqueue_streamer_cmd(req)
 
     def unsubscribe_bars(self, tickers: list[str]) -> None:
         """Unsubscribe from bar updates for given tickers (correct chart service per symbol)."""
