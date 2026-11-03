@@ -92,6 +92,15 @@ class VolPremiumRow(BaseModel):
     # The sizing column: the gap in volatility points.
     vrp_points: float
 
+    # Where today's ratio sits in THIS symbol's own history, 0-100.
+    #
+    # The headline number. A positive premium is normal, so a bare ratio cannot
+    # say whether today is unusual; only the symbol's own distribution can.
+    # None means no baseline exists for this symbol — which is a different
+    # claim from "unremarkable" and must never be rendered as 50.
+    premium_percentile: Optional[float] = None
+    baseline_days: int = 0
+
     # ── quality, shown on the page (spec D7) ─────────────────────────
     contracts_used: int
     calls: int

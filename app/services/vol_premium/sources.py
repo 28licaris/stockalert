@@ -101,3 +101,36 @@ def load_closes(symbol: str, limit: int) -> np.ndarray:
         parameters={"s": symbol.upper().strip(), "n": int(limit)},
     ).result_rows
     return np.array([float(r[0]) for r in rows], dtype="float64")
+
+
+HISTORY_TABLE = "vol_premium_history"
+
+
+def load_premium_history(symbols: Sequence[str]) -> dict[str, list[float]]:
+    """Each symbol's historical `vrp_ratio` series, for the percentile.
+
+    One query for the whole universe rather than one per symbol. Returns an
+    empty list for a symbol with no history rather than omitting the key, so
+    the caller can tell "no baseline" from "not asked for".
+    """
+    if not symbols:
+        return {}
+
+    from app.db.client import get_client
+
+    out: dict[str, list[float]] = {s: [] for s in symbols}
+    try:
+        rows = get_client().query(
+            f"SELECT symbol, vrp_ratio FROM {HISTORY_TABLE} FINAL "
+            f"WHERE symbol IN {{syms:Array(String)}} AND isFinite(vrp_ratio)",
+            parameters={"syms": list(symbols)},
+        ).result_rows
+    except Exception as exc:
+        # The table may simply not be built yet. That is a missing baseline,
+        # not a broken screen — rows still render, without a percentile.
+        logger.warning("vol_premium: history unavailable (%s)", str(exc)[:120])
+        return out
+
+    for sym, ratio in rows:
+        out.setdefault(sym, []).append(float(ratio))
+    return out

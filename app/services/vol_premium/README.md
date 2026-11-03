@@ -92,6 +92,43 @@ Nothing is repaired or substituted. A row that fails is **excluded with a
 reason**, and the reasons are reported — a symbol quietly missing from a ranked
 table reads as "nothing interesting here" rather than "we could not tell".
 
+## The percentile, and why it beats the ratio
+
+`vol_premium_history` pairs each historical day's at-the-money implied vol with
+a forecast for the **same horizon**, giving a ratio per symbol-day. Today's
+ratio is then ranked against that symbol's own distribution.
+
+Measured over 2016-01 → 2026-08, 40 symbols, 81,015 rows:
+
+```
+historical vrp_ratio   p05 0.66   median 0.97   p95 1.39
+```
+
+**The median is below 1, which is worth not glossing over.** The variance risk
+premium is usually quoted as implied *above subsequent realized* volatility.
+This ratio is implied against a *forecast*, and a GARCH forecast whose long-run
+level is estimated over a window containing 2018/2020/2022 sits slightly high
+in calm regimes. A ~3% bias is consistent with the independent check that
+forecast ÷ trailing-63-day realized comes out at a median of 1.01×.
+
+**This is exactly why the percentile is the headline and the ratio is not.** A
+constant bias in the denominator shifts every ratio for a symbol by the same
+factor and therefore **cancels out of the percentile entirely**. The ranking
+against a symbol's own history is robust to it; the raw cross-sectional ratio
+is not.
+
+The difference shows up immediately in practice:
+
+| | ratio | percentile | reading |
+|---|---|---|---|
+| XLI | 1.26× | **64th** | normal for XLI |
+| UNH | 1.22× | **90th** | genuinely unusual |
+
+Ranking on the ratio puts XLI above UNH. The percentile corrects it.
+
+`premium_percentile` is `None` — never 50 — when a symbol has no baseline. "No
+history" and "unremarkable" are opposite claims and must not share a number.
+
 ## Reading the output — and the v1 limitation
 
 **A positive premium is normal.** Implied volatility is a risk-neutral price
