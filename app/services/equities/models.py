@@ -121,9 +121,10 @@ class CorpAction(BaseModel):
 class SilverBar(BaseModel):
     """One canonical 1-minute split-adjusted OHLCV bar.
 
-    Post-CV11/CV14: sourced from `equities.polygon_adjusted` (built by
-    the weekly Spark adjustment job) or `equities.schwab_universe`
-    (live + tip-fill). Both stores are pre-adjusted; consumers see one
+    Sourced from the Polygon tier (`equities.polygon_raw`, adjusted at
+    READ time by `equities/adjust.py` — there is no materialized
+    `polygon_adjusted` table) or `equities.schwab_universe` (live +
+    tip-fill, already adjusted by the provider). Consumers see one
     set of split-adjusted OHLCV columns — what chart, indicators,
     backtests, screener, and ML all need (continuous lines across
     split events, no fake gaps).

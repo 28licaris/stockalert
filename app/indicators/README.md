@@ -28,7 +28,7 @@ importing classes directly:
   [monitor_service.py](../services/live/monitor_service.py).
 - **The dashboard + MCP agents** call the `IndicatorReader` and
   HTTP/MCP indicator endpoints — see
-  [docs/indicator_exposure_design.md](../../docs/indicator_exposure_design.md).
+  [docs/trading/indicators.md](../../docs/trading/indicators.md).
 
 ## Multi-output indicators
 

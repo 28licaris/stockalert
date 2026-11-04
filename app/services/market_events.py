@@ -1,5 +1,5 @@
 """
-Market calendar events — free + production-robust (market_calendar_spec §12a).
+Market calendar events — free + production-robust (docs/data/market_calendar.md §12a).
 
 Three source kinds, all free, none doing live HTML scraping:
   - **computed**  — OPEX / quad-witching, a pure function off the session

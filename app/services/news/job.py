@@ -3,7 +3,7 @@ News ingest job — batch cadence: poll EDGAR, store relevant filings, then
 enrich a capped batch. `run_news_ingest_once` is the manual-trigger + per-cycle
 unit (audited); `run_news_ingest_loop` is the background interval loop wired in
 main_api. The service methods are sync (httpx/CH/SDK), so we offload them to a
-thread to keep the event loop free. See docs/news_alerts_spec.md.
+thread to keep the event loop free. See docs/product/news_alerts.md.
 """
 from __future__ import annotations
 

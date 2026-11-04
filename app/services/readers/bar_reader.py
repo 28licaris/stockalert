@@ -146,7 +146,7 @@ class BarReader:
         `ohlcv_1m` (split-adjusted, full-depth, live-streamed). `interval='1m'`
         is a pass-through; longer intervals roll up ClickHouse-side
         (`toStartOfInterval`, daily bucketed on the ET trading day). There are
-        no separate 5m / daily tables — see `docs/architecture_v2/02_schema.md`.
+        no separate 5m / daily tables — see `docs/architecture/lake_schema.md`.
 
         Naive datetimes treated as UTC. `end <= start` -> `[]`.
         """

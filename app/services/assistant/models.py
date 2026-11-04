@@ -5,7 +5,7 @@ turn. Today: Sonnet 4.6 by default; Opus 4.7 when the user opts in
 to extended thinking. The registry shape supports more providers but
 slice 2 only wires Anthropic.
 
-Per the locked decision in `docs/assistant_plan.md §18`:
+Per the locked decision recorded in `app/services/assistant/README.md`:
   - default = `claude-sonnet-4-6`
   - extended-thinking = `claude-opus-4-7`
 

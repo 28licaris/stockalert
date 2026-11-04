@@ -8,7 +8,7 @@ printed (you need the right-hand window to know it was an extreme). Every
 `Pivot` therefore carries `confirmed_at_index = index + k`, and downstream
 consumers must never use a pivot whose confirmation is in the future of the bar
 they are labeling. This is what makes wave counts free of look-ahead — see
-`docs/elliott_wave_ew1_ew2_spec.md` (D2) and the doctrine skill.
+`docs/trading/elliott_wave.md` and the doctrine skill.
 
 `PivotDetector` is registry-compatible (`Context.indicator("pivots", period=8)`)
 via `compute()`, which returns a `+1/-1/0` Series. Elliott-side consumers use

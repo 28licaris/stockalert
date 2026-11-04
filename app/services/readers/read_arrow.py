@@ -1,7 +1,7 @@
 """
 read_arrow — the fast, modular cold read path for adjusted OHLCV.
 
-Spec: docs/lake_read_layer_design.md §3.2. Engine chosen by the spike
+Spec: docs/data/lake_read_layer.md §3.2. Engine chosen by the spike
 in `scripts/spikes/` and the in-region benchmark (§6): **Polars over
 PyIceberg** — 14× faster than the Python baseline and the lowest peak
 memory of any engine tested, while reusing the PyIceberg planning layer

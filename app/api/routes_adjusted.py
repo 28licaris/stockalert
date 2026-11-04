@@ -143,7 +143,8 @@ def get_symbol_coverage(
     Returns per-store row counts and earliest/latest timestamps for:
       - `stocks.ohlcv_1m`           — ClickHouse hot cache (what's
         queryable now; live-stream fresh)
-      - `equities.polygon_adjusted` — deep adjusted history (weekly Spark)
+      - `equities.polygon_adjusted` — deep adjusted history. NOT a table:
+        a read-time adjustment over `equities.polygon_raw`
       - `equities.schwab_universe`  — recent universe window (nightly)
 
     Use this to answer:

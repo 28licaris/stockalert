@@ -1,7 +1,7 @@
 """
 Lake read-layer engine spike — DuckDB vs Polars vs PyIceberg+Python.
 
-Spec: docs/lake_read_layer_design.md (§3.2 "Columnar bulk path").
+Spec: docs/data/lake_read_layer.md (§3.2 "Columnar bulk path").
 
 Goal of this spike: decide which engine backs `read_arrow()` for the
 COLD read path — the lake-direct path used to (a) sync/one-time-load

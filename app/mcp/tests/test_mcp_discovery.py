@@ -302,8 +302,14 @@ def test_call_get_lake_freshness() -> None:
                 return date(2026, 5, 15)
             raise RuntimeError("schwab table missing")
 
+    # `_iceberg_table_freshness` must be stubbed too: it opens a real Glue
+    # catalog and reads Iceberg metadata, so without this the test makes live
+    # AWS calls (~7s, or 45-90s with a blank AWS_PROFILE) and only "passes"
+    # because each table degrades to None.
     with patch("app.services.readers.bronze_reader.BronzeReader.from_settings",
-               return_value=_StubReader()):
+               return_value=_StubReader()), \
+         patch("app.mcp.tools.system._iceberg_table_freshness",
+               return_value={}):
         body = _unwrap(asyncio.run(mcp.call_tool("get_lake_freshness", {})))
     assert body["tables"]["polygon_minute"] == "2026-05-15"
     # Schwab failed -> null, not exception

@@ -32,7 +32,7 @@ Schema notes:
     Gate 2). Schwab returns pre-adjusted prices, so the sink stamps
     `adj_factor = 1.0` on every row. The column exists for schema
     parity with `polygon_adjusted` so cross-provider UNION queries
-    (the ML use case in `docs/architecture_v2/02_schema.md`) don't
+    (the ML use case in `docs/architecture/lake_schema.md`) don't
     need column massaging.
 
 Data-quality boundary (same as v1): rows missing `symbol` or
@@ -71,7 +71,7 @@ _COMMIT_BACKOFF_SECONDS = 0.5
 # 12 canonical OHLCV columns — `equities.polygon_raw` shape. Matches
 # the v1 _BRONZE_MINUTE_ARROW exactly so the CV3 history-backfill can
 # stream rows out of the existing Polygon flat-files reader without
-# any column transformation (per docs/architecture_v2/02_schema.md).
+# any column transformation (per docs/architecture/lake_schema.md).
 _POLYGON_RAW_ARROW = pa.schema(
     [
         pa.field("symbol", pa.string(), nullable=False),
@@ -93,7 +93,7 @@ _POLYGON_RAW_ARROW = pa.schema(
 # Schwab's REST + WebSocket both return pre-adjusted prices; we can't
 # back out a real adj_factor from Schwab data, so 1.0 is the literal
 # truth at write time (Gate 2 decision in
-# docs/architecture_v2/08_decisions.md).
+# docs/architecture/lake_schema.md).
 _SCHWAB_UNIVERSE_ARROW = pa.schema(
     [
         pa.field("symbol", pa.string(), nullable=False),

@@ -13,7 +13,7 @@ extra `adj_factor` column (REQUIRED, Gate 2). Schwab returns
 pre-adjusted prices, so every row this writer produces carries
 `adj_factor = 1.0` literally.
 
-**Per [architecture_v2/](../../../docs/architecture_v2/README.md) — live tier (Path A):**
+**Per [architecture/](../../../docs/architecture/README.md) — live tier (Path A):**
 
     Path A — live streaming (T+0 → T+5min lake)
     1. Provider WebSocket → existing async batcher → ClickHouse ohlcv_1m
@@ -348,7 +348,7 @@ class LiveLakeWriter:
         Stamps `ingestion_ts` (now), `ingestion_run_id` (this cycle's
         UUID), and `adj_factor = 1.0` on every row. Schwab returns
         pre-adjusted prices so 1.0 is the literal truth (Gate 2 in
-        docs/architecture_v2/08_decisions.md).
+        docs/architecture/lake_schema.md).
         """
         ingestion_ts = datetime.now(timezone.utc)
         arrays = {

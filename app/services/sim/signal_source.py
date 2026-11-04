@@ -5,7 +5,7 @@ A SignalSource answers one question per bar: *given everything knowable up
 to and including this bar, is there a trade setup here?* It returns a
 `Signal` (entry / stop / target plan) or None. It does NOT manage positions,
 sizing, or exits — that's `AlertStrategy`'s job. This split is the modular
-axis of the R&D platform (see docs/strategy_rnd_platform_design.md):
+axis of the R&D platform (see docs/research/platform.md):
 
     new strategy idea  ==  new SignalSource   (same execution + sizing + exits)
 

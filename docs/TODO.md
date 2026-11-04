@@ -1,9 +1,8 @@
 # TODO — parked / deferred work
 
 Durable, version-controlled list of intentionally-deferred work (the
-counterpart to the ephemeral in-app task chips). Bugs/flaky tests live in
-[`ISSUES.md`](ISSUES.md); lake-read follow-ups in
-[`lake_read_followups_remaining.md`](lake_read_followups_remaining.md).
+counterpart to the ephemeral in-app task chips). Bugs and flaky tests live in
+[`ISSUES.md`](ISSUES.md).
 
 ## Billing
 - **Activate Stripe billing.** The service is built + mounted
@@ -14,7 +13,7 @@ counterpart to the ephemeral in-app task chips). Bugs/flaky tests live in
   verify the endpoints for an authed session. Code: `app/services/billing/`,
   `app/api/auth_dependencies.py::get_billing_service`.
 
-## News → Alerts + Economic hub (design: [`news_alerts_spec.md`](news_alerts_spec.md))
+## News → Alerts + Economic hub (design: [`product/news_alerts.md`](product/news_alerts.md))
 Shipped + **activated 2026-06-28** (`NEWS_INGEST_ENABLED=true`): EDGAR filings
 (relevance-filtered, AI-summarized) + FOMC (Fed RSS) + BLS (CPI/jobs/unemployment)
 + BEA (GDP/PCE) → CH `news_items` / `economic_data`, served to the News feed +
@@ -38,7 +37,7 @@ Deferred next steps:
 - **Ops:** BLS is keyless (25 req/day) — add a free `BLS_API_KEY` for 500/day if
   polling more often. `BEA_API_KEY` required for GDP/PCE (set in `.env`).
 
-## Market calendar — events (design: [`market_calendar_spec.md` §12a](market_calendar_spec.md))
+## Market calendar — events (design: [`data/market_calendar.md` §12a](data/market_calendar.md))
 Shipped (Phase 2a): computed OPEX/quad-witching + seeded FOMC on the calendar.
 Free + production-robust only (no runtime HTML scraping).
 - **2b — dividend/split ex-dates.** Sync corp-action ex-dates from the lake
@@ -64,7 +63,7 @@ Free + production-robust only (no runtime HTML scraping).
   fill the gap. Cold tier only — does not affect ClickHouse freshness (Schwab
   feeds the hot tier).
 
-## GEX / dealer-flow research (chapter opened 2026-07-02 — GEX-0 in strategy_rnd_findings.md)
+## GEX / dealer-flow research (chapter opened 2026-07-02 — GEX-0 in research/findings.md)
 Collection flywheel is LIVE: `OPTIONS_SNAPSHOT_ENABLED=true`, 40-name
 pre-registered universe, 15-min cadence, 30 strikes → `options.*` lake
 (first cycle verified: 34/40 underlyings, 23,777 GEX rows; per-symbol
@@ -113,8 +112,8 @@ nulls/FDR and must not creep into the promotion gate. Trigger: first
 monthly paper-record review (~Aug 2026, after the 2026-07-29 FOMC trades).
 
 ## Vol Premium — remaining build
-Full status and cold-start notes:
-[`handoff_ppl_vol_premium.md`](handoff_ppl_vol_premium.md). Merged to main
+Data state, validated baseline and known gaps:
+[`options_vol_premium_state.md`](trading/options_vol_premium_state.md). Merged to main
 2026-11-03 (PRs #28, #30-33).
 
 - ~~**Historical premium percentile.**~~ **DONE 2026-11-03.**
@@ -129,7 +128,7 @@ Full status and cold-start notes:
   to ClickHouse first (a GARCH fit per symbol is ~0.2s, so 40 symbols is ~8s:
   fine for a job, unacceptable on a page load).
 - **Backtest the premium.** Ten years of history makes it possible now. MCPT,
-  pre-registered in `research_hypotheses.md`, before any return claim.
+  pre-registered in `research/hypotheses.md`, before any return claim.
 - **Reparse the lake's canonical option quotes.** Deprioritized: ThetaData
   covers history better and the rebuild is slow. Raw payloads are intact so it
   stays recoverable. NOTE: do it as a full-table rebuild, never an upsert —
@@ -170,3 +169,50 @@ research nothing.
   must compare *delivered* against *subscribed*. The cap hid for three months
   because `/stream/status` reported 424 subscribed while 131 delivered nothing,
   and nothing anywhere compared the two numbers.
+
+## Identity / auth — optional enhancements
+Core flows are **production-ready** (signup, login, logout, session isolation,
+tenant scoping, audit trail). Local dev must use `scripts/dev/run_auth_api.sh`
+— see [`architecture/runbook.md`](operations/runbook.md#auth-enabled-local-development)
+for why a bare uvicorn breaks auth silently. Module:
+[`app/services/identity/README.md`](../app/services/identity/README.md).
+
+- **MFA enforcement** (~2-3h, high value). Wire TOTP and SMS OTP into the login
+  flow — the service stubs already exist in
+  `app/services/identity/mfa_service.py`. Extend the login endpoint in
+  `routes_customer_auth.py` to check a user's `mfa_required` flag and issue a
+  challenge, wire `verify_totp()` / `verify_sms_otp()`, enable MFA device
+  tracking in the Cognito user pool, and add the frontend code-entry dialog.
+  Required for compliance-driven customers.
+- **Provider credential management UI** (~3-4h, high value). Let users
+  link/unlink their own Schwab and Polygon credentials per account instead of
+  one hardcoded set in `.env`. `provider_session.py` has the foundation; needs
+  `/providers/connect` + `/providers/revoke` endpoints, a "Connected Accounts"
+  settings page, and a storage decision (AWS Secrets Manager vs encrypted DB
+  column — pick one).
+- **Link Stripe customer to Cognito user** (~1h). On signup, create the Stripe
+  customer and store `stripe_customer_id` on the `users` row, so billing events
+  tie to accounts. Prerequisite for the Billing activation above.
+- **Audit dashboard** (low priority). UI over the existing security-event trail
+  (login attempts, session creation, account changes) per account.
+
+## Futures lake — optional enhancements
+Production-ready for backtesting. Pipeline and nightly behaviour:
+[`architecture/README.md`](architecture/README.md#4-the-futures-pipeline-mirror--raw--continuous).
+
+- **Parse session-aggregates** (~1-2h, low priority). The mirror already
+  captures Polygon's `session_aggs_v1/` (daily bars) alongside
+  `minute_aggs_v1/`, but only the minute → raw → continuous path was built. Add
+  `scripts/polygon_futures_parse_session_daily.py` parallel to
+  `polygon_futures_parse_raw.py`. No new Polygon calls needed. Niche — Schwab
+  nightly already covers recent days.
+- **Move the nightly rebuild to CodeBuild** (~30 min + IAM approval). Roll-day
+  rebuilds (~1-2 min per root) currently run in the API event loop via
+  `asyncio.to_thread`. Blocked on an IAM grant:
+  `stockalert-codebuild-silver-role` needs `glue:CreateDatabase` +
+  `glue:PutTable` on the `futures` namespace (it has equities only).
+  `scripts/codebuild/buildspec_futures_parse_raw.yml` is the template.
+- **Archive the flat-file mirror** (~15 min, cost only). The 88 GB
+  `polygon_flatfiles_mirror/` plus trades files are write-once and read-never
+  after parsing. An S3 lifecycle policy (Intelligent-Tiering at 30d, Glacier at
+  90d) saves ~$2-3/month with no correctness impact.

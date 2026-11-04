@@ -2,7 +2,7 @@
 
 Owns the architecture-v2 equities Iceberg schemas, table creation, writes,
 coverage/gap queries, and lake-to-ClickHouse fill behavior. The canonical lake
-design is [`../../../docs/architecture_v2/`](../../../docs/architecture_v2/).
+design is [`../../../docs/architecture/`](../../../docs/architecture/).
 
 | Area | Files |
 |---|---|

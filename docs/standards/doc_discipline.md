@@ -23,9 +23,9 @@ than they paid back.
 
    | Change                                | Update                                |
    |---------------------------------------|---------------------------------------|
-   | New service / contract change         | [`CLAUDE.md`](../../CLAUDE.md) layer-map (canonical post-v2 cutover; `ARCHITECTURE.md` is a redirect stub) |
-   | Storage / ingestion change            | [`architecture_v2/`](../architecture_v2/README.md) |
-   | AI-trading change                     | [`trading-ai-build-plan.md`](../trading-ai-build-plan.md) |
+   | New service / contract change         | [`CLAUDE.md`](../../CLAUDE.md) layer-map + that module's `README.md` |
+   | Storage / ingestion change            | [`architecture/`](../architecture/README.md) |
+   | AI-trading change                     | [`trading/roadmap.md`](../trading/roadmap.md) |
    | Standards rule change                 | [`standards/`](README.md) (doc + index entry) |
    | Phase / gate / decision log           | **Commit message**, not BUILD_JOURNAL |
 

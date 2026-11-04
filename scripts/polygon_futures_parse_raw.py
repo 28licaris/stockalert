@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Parse the futures flat-file mirror → futures.polygon_raw (Iceberg).
 
-Phase 2 of the futures lake build (see docs/futures_flatfile_mirror.md). Reads
+Phase 2 of the futures lake build (see docs/data/futures_flatfile_mirror.md). Reads
 the gzipped CSV minute-aggregate files from OUR mirror
 (`s3://<lake>/polygon_flatfiles_mirror/{exchange}/minute_aggs_v1/...`) — NOT
 Polygon — and appends per-CONTRACT outright bars (ESH4, CLM4, …) to

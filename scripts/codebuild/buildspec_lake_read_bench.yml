@@ -5,7 +5,7 @@
 # bucket's region, not a laptop over the WAN. Read-only: scans the
 # equities Iceberg lake (Glue + S3), writes nothing to the lake.
 #
-# Spec: docs/lake_read_layer_design.md §6 q1 (engine choice).
+# Spec: docs/data/lake_read_layer.md §6 q1 (engine choice).
 #
 # Use (admin profile; branch must be pushed to origin first):
 #   AWS_PROFILE=stockalert-admin aws codebuild start-build \

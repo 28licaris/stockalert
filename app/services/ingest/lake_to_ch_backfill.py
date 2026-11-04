@@ -6,7 +6,7 @@ add-symbol / nightly flow (the recent ~48d tip is handled separately by
 Reads adjusted 1-minute bars via `AdjustedOhlcvReader.get_bars`, which
 computes split adjustment at READ time from `equities.polygon_raw` +
 `equities.market_splits` (the materialized `polygon_adjusted` table was
-retired — see docs/adjusted_lean_storage_spec.md), and bulk-inserts into
+retired — see docs/data/adjusted_storage.md), and bulk-inserts into
 ClickHouse `ohlcv_1m`.
 
 Per the v2 consumer contract:
@@ -196,9 +196,11 @@ class LakeToChBackfill:
                 "volume": bar.volume,
                 "vwap": bar.vwap or 0.0,
                 "trade_count": bar.trade_count or 0,
-                # Provenance: this row came from the silver-derived path,
-                # not provider REST. Future audit + CH-wipe-rebuild
-                # tools rely on this tag.
+                # Provenance: this row came from the lake, not provider
+                # REST. Audit + CH-wipe-rebuild tools key off this tag.
+                # NOTE: the "silver-" prefix is a legacy tag value kept
+                # for data compatibility — there is no silver tier.
+                # Changing it would orphan existing CH rows.
                 "source": f"silver-{bar.source_provider}",
             })
         return out

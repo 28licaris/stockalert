@@ -2,7 +2,7 @@
 
 Read-only CH query execution + schema introspection for the cockpit's
 `/app/clickhouse` page. The "developer's cadillac" surface from
-[docs/frontend_api_contracts.md §10.4](../../../docs/frontend_api_contracts.md).
+[docs/product/api_contracts.md §10.4](../../../docs/product/api_contracts.md).
 
 ## Files
 

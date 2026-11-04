@@ -15,7 +15,7 @@ or the reparse backfill lands, `ch` has no bids and the screen will correctly
 refuse every symbol. `lake` proves the pipeline end-to-end on real stored
 payloads without committing to a write.
 
-Spec: `docs/vol_premium_screen_spec.md`.
+Spec: `docs/trading/vol_premium.md`.
 """
 from __future__ import annotations
 

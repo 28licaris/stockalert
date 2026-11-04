@@ -1,7 +1,7 @@
 """Pydantic contracts for the Assistant service.
 
 The full specification of each type lives in
-[docs/assistant_plan.md §5](../../../docs/assistant_plan.md). This
+[README.md](README.md). This
 module is the single source of truth for the wire format; both the
 HTTP/SSE layer and the storage layer build on these shapes.
 
@@ -133,7 +133,7 @@ class Conversation(BaseModel):
         description=(
             "Tenant scope. Defaults to the dev-mode sentinel "
             "`default-tenant`; populated by auth middleware in SaaS mode "
-            "(see frontend_plan.md §7.1)."
+            "(see docs/product/access_control.md)."
         ),
     )
     user_id: str = Field(

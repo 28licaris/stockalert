@@ -3,7 +3,7 @@
 Returns each market group's RRG quadrant (Leading / Weakening / Improving /
 Lagging) vs a benchmark (SPY), with the weekly tail + relative-strength line
 for the frontend. Backed by ``app.services.sectors``. Phase 1 = 11 SPDR
-sector ETFs. See docs/sector_rotation_spec.md.
+sector ETFs. See docs/trading/sector_rotation.md.
 """
 from __future__ import annotations
 

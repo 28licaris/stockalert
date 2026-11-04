@@ -8,7 +8,7 @@ the `INDICATOR_REGISTRY`, and returns Pydantic shapes. Same code path
 across surfaces means the SMA(20) value at timestamp T is identical
 no matter who's asking.
 
-Full architectural design: `docs/indicator_exposure_design.md`. This
+Full architectural design: `docs/trading/indicators.md`. This
 module is the implementation of §4.3 (the reader service).
 
 Phase-6 Gold path: when pre-computed feature tables ship in the

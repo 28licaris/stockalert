@@ -8,7 +8,7 @@ likely to trade, and how asymmetric is the risk?"* — never *"should I be
 long?"*. There is no directional claim here, so there is no MCPT gate; the gate
 is **distributional calibration** (PIT coverage), landing in P3.
 
-Spec: [`docs/posterior_predictive_levels_spec.md`](../../../docs/posterior_predictive_levels_spec.md).
+Spec: [`docs/trading/ppl.md`](../../../docs/trading/ppl.md).
 
 ## Layout
 
@@ -49,7 +49,7 @@ Still open at 1d per symbol: SPY (KS p=0.041) and DIA (p=0.077) retain a small
 **drift**, not volatility, and it works out to roughly one standard error of the
 drift estimator itself (16%/√16yr ≈ 4%/yr). Tuning drift until PIT passes would
 be fitting the evaluation window; see
-[`docs/ppl_mathematics.md`](../../../docs/ppl_mathematics.md) §8.5.
+[`docs/trading/ppl_mathematics.md`](../../../docs/trading/ppl_mathematics.md) §8.5.
 
 `/ppl` stays operator-only pending a product call on opening it.
 

@@ -3,7 +3,7 @@
 Mounted at `/api/v1/stream/*`. The CH `stream_universe` table is the
 source of truth; mutations here subscribe / unsubscribe Schwab
 directly via `StreamService` (no longer indirected through
-WatchlistService — see docs/frontend_api_contracts.md §10.1 locked
+WatchlistService — see docs/product/api_contracts.md §10.1 locked
 sticky-universe model).
 
 This is the only HTTP surface for universe membership. The retired
@@ -122,7 +122,7 @@ async def stream_status() -> StreamStatusResponse:
 @router.post("/stream", response_model=StreamMutationResponse, status_code=201)
 async def add_to_stream(req: AddStreamRequest) -> StreamMutationResponse:
     """Promote one symbol into the stream universe. Subscribes Schwab
-    immediately + queues a silver-derived warmup (if enabled).
+    immediately + queues the lake warmup / hotload (if enabled).
 
     Idempotent: re-adding an already-active symbol returns `changed=[]`.
     """

@@ -1,7 +1,7 @@
 """
 Cross-cutting primitives every cockpit endpoint reuses.
 
-Rules these enforce (see docs/frontend_api_contracts.md §3):
+Rules these enforce (see docs/product/api_contracts.md §3):
   - Error envelope is uniform across the API. Routes never raise
     `HTTPException(detail="...")` — the global exception handler in
     `app/main_api.py` translates them into `ErrorResponse` envelopes.

@@ -222,7 +222,7 @@ def _register_background_jobs(
 
     # CV13: silver_ohlcv_build job removed. polygon_adjustment_job runs
     # OUT-OF-PROCESS via EMR Serverless (or the local-Spark recipe in
-    # docs/architecture_v2/07_runbook.md), so it doesn't register as
+    # docs/operations/runbook.md), so it doesn't register as
     # a uvicorn job — no in-process JobRegistry entry to surface.
 
     # Journal sync — `sync_all` doesn't write ingestion_runs, wrap it.
@@ -681,7 +681,7 @@ async def lifespan(app: FastAPI):
     # CV13: nightly_silver_ohlcv_build loop removed.
     # equities.polygon_adjusted is now built whole-market by the
     # weekly polygon_adjustment_job (Spark, EMR Serverless / CodeBuild
-    # / local — see docs/architecture_v2/07_runbook.md). uvicorn no
+    # / local — see docs/operations/runbook.md). uvicorn no
     # longer runs the silver compute in-process.
 
     async def broadcast_signal(signal_data: dict):

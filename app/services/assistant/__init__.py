@@ -1,6 +1,6 @@
 """Assistant service — conversational copilot over the platform's MCP tools.
 
-See [docs/assistant_plan.md](../../../docs/assistant_plan.md) for the
+See [README.md](README.md) for the
 full spec. Phase AS-1 is the read-only loop: ask a question, the LLM
 calls MCP read tools, the answer streams back grounded in real
 platform data.

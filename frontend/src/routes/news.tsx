@@ -75,7 +75,7 @@ function NewsCard({ item }: { item: NewsItem }) {
  * later), AI-summarized with a link to the source. From /api/v1/news.
  * Unenriched items fall back to the filing title until the summary lands.
  * Per-user watchlist scoping + push/digest alerts arrive in a later phase
- * (docs/news_alerts_spec.md).
+ * (docs/product/news_alerts.md).
  */
 type Mode = "all" | "digest";
 

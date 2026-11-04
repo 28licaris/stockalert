@@ -6,8 +6,10 @@ product without a rewrite.
 
 Companion docs:
 
-- [docs/frontend_plan.md](../docs/frontend_plan.md) — full plan,
-  page catalog, SaaS-readiness contract.
+- [docs/product/api_contracts.md](../docs/product/api_contracts.md) — the
+  API contract this SPA consumes (endpoint shapes, type-chain, versioning).
+- [docs/product/access_control.md](../docs/product/access_control.md)
+  — admin vs customer nav + per-page policy.
 
 ---
 
@@ -180,9 +182,8 @@ No build present → no mount; legacy `/dashboard`, `/symbol/{ticker}`,
 | Lint/format | **ESLint + Prettier** | Ubiquitous (over Biome) |
 | Icons | **lucide-react** | Tree-shaken open-source set |
 
-See [docs/frontend_plan.md §3.0](../docs/frontend_plan.md) for the
-rationale on the React Router and ESLint+Prettier swaps from the
-original plan.
+React Router and ESLint+Prettier were chosen over the originally-planned
+alternatives; the rationale is in the commit history.
 
 ---
 
@@ -244,10 +245,10 @@ Always import as `@/lib/utils`, never `../../lib/utils`.
 
 ## The SaaS-readiness seams
 
-Today this is a single-tenant dev tool. The seams below are no-ops
-that future SaaS work plugs into without touching components. See
-[docs/frontend_plan.md §7](../docs/frontend_plan.md) for the full
-contract.
+The seams below keep components free of tenancy logic. Auth, tenants and
+sessions are now implemented — see
+[docs/product/access_control.md](../docs/product/access_control.md)
+and [docs/product/identity_and_subscriptions.md](../docs/product/identity_and_subscriptions.md).
 
 | Seam | File | Today | Future |
 |---|---|---|---|

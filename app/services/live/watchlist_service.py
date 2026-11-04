@@ -1,14 +1,14 @@
 """
 Watchlist Service - multi-watchlist CRUD over `app.db.watchlist_repo`.
 
-Architecture: per docs/frontend_api_contracts.md §10.1 (locked sticky-
+Architecture: per docs/product/api_contracts.md §10.1 (locked sticky-
 universe model), the *live streaming* set is owned by
 `app.services.stream.stream_service`, not this module. Watchlists are
 pure user-facing organization:
 
   - Adding a symbol to a watchlist auto-extends the stream universe
     (`stream_service.ensure_streaming`) if the symbol isn't already
-    being streamed. The new symbol gets a silver-derived warmup so
+    being streamed. The new symbol gets a hotload / lake warmup so
     its chart is usable immediately.
   - Removing a symbol from a watchlist does NOT touch the stream.
     Universe membership is sticky; only an explicit
@@ -123,7 +123,7 @@ class WatchlistService:
             # Auto-extend the stream universe (sticky). Lazy import to
             # avoid a circular at module load. For symbols not yet in
             # the stream, this subscribes Schwab + (when the flag is
-            # on) fires the silver-derived warmup chain in stream_service.
+            # on) fires the deep lake warmup chain in stream_service.
             try:
                 from app.services.stream import stream_service
 
@@ -147,7 +147,7 @@ class WatchlistService:
             # it's ON, stream_service.add() already ran the deep+tip chain
             # for promoted symbols — don't double-fill). Disable hotload
             # for a pure "stream from now" add. Spec:
-            # docs/symbol_onboarding_read_design.md §3.1.
+            # docs/data/symbol_onboarding.md §3.1.
             try:
                 from app.config import settings as _s
 

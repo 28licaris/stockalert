@@ -29,7 +29,7 @@ function addDaysUTC(d: Date, n: number): Date {
  * early-close) for equities or futures, from /api/v1/calendar. Closed days
  * show the holiday/weekend reason; early closes show the ET close time.
  * Event markers (FOMC etc.) render from each day's `events[]` — empty until
- * the events layer lands (docs/market_calendar_spec.md).
+ * the events layer lands (docs/data/market_calendar.md).
  */
 export function CalendarPage() {
   const today = useMemo(() => new Date(), []);

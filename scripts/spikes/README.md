@@ -4,7 +4,7 @@
 read path** — DuckDB-over-Iceberg, Polars, or the current
 PyIceberg+Python baseline?
 
-Spec: [`docs/lake_read_layer_design.md`](../../docs/lake_read_layer_design.md)
+Spec: [`docs/data/lake_read_layer.md`](../../docs/data/lake_read_layer.md)
 (§3.2, §6 open question 1, §5 Risk "DuckDB Iceberg maturity").
 
 This is a **spike**: throwaway-until-chosen code under `scripts/spikes/`.

@@ -58,7 +58,9 @@ progress + totals, never silently. Zero-row inputs return cleanly
 WITHOUT calling ``.upsert()`` (the underlying PyIceberg call would
 no-op anyway but skipping it saves a wasted snapshot bump).
 
-Root cause + bisection writeup: ``docs/iceberg_performance_findings.md``.
+Root cause: PyIceberg's upsert falls back to copy-on-write and rewrites
+every file containing a match. See
+``docs/architecture/lake_schema.md`` §6 (Maintenance).
 
 Usage
 =====

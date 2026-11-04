@@ -4,7 +4,7 @@ monetary-policy press RSS (free, no key). Parsed into market-wide news items
 (symbol=''), enriched by the same LLM stage as filings.
 
 `parse_fed_rss` is pure (unit-tested without network); only `latest_fomc`
-touches the wire. See docs/news_alerts_spec.md §11/§12.
+touches the wire. See docs/product/news_alerts.md §11/§12.
 """
 from __future__ import annotations
 

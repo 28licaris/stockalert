@@ -69,7 +69,7 @@ async def backfill_deep(req: BackfillRequest):
 # NOTE: the former /backfill/daily and /backfill/intraday endpoints were
 # removed — all chart timeframes (5m/15m/30m/1h/1d) are now resampled on read
 # from ohlcv_1m, so the ohlcv_5m / ohlcv_daily tables (and their backfills) no
-# longer exist. See docs/architecture_v2/02_schema.md.
+# longer exist. See docs/architecture/lake_schema.md.
 
 
 class GapFillRequest(BaseModel):

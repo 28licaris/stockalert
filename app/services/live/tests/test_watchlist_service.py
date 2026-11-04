@@ -2,7 +2,7 @@
 Unit tests for the post-FE-CONTRACTS-4 WatchlistService.
 
 WatchlistService is now CRUD-only: it no longer owns Schwab
-subscriptions, refcounts, or baselines. Per docs/frontend_api_contracts.md
+subscriptions, refcounts, or baselines. Per docs/product/api_contracts.md
 §10.1, those concerns moved to `StreamService`. These tests verify:
 
   - Pure CRUD passes through to the repo correctly.

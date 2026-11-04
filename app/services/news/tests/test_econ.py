@@ -157,10 +157,29 @@ class _FakeBls:
         return self._by
 
 
+class _FakeBea:
+    """Injected so ingest() never constructs a real BeaClient.
+
+    `_gather` builds one lazily whenever `BEA_API_KEY` is set, so a test that
+    stubs only BLS makes live calls to apps.bea.gov on any machine that has
+    the key — passing locally without it and failing with it. Returning no
+    points exercises the "source yielded nothing" path and keeps the BLS
+    assertions exact.
+    """
+
+    def __init__(self, by=None):
+        self._by = by or {}
+        self.calls: list[str] = []
+
+    def fetch(self, meta, *, start_year, end_year):
+        self.calls.append(meta.series_id)
+        return self._by.get(meta.series_id, [])
+
+
 def test_ingest_upserts_and_emits_release():
     pts = _pts("LNS14000000", [4.0, 4.1], start_year=2026, start_month=4)
     ch = _FakeCH(max_period=None)
-    svc = EconService(bls=_FakeBls({"LNS14000000": pts}), ch_client=ch)
+    svc = EconService(bls=_FakeBls({"LNS14000000": pts}), bea=_FakeBea(), ch_client=ch)
 
     res = svc.ingest()
 
@@ -175,7 +194,7 @@ def test_ingest_upserts_and_emits_release():
 def test_ingest_no_new_release_when_already_seen():
     pts = _pts("LNS14000000", [4.0, 4.1], start_year=2026, start_month=4)
     ch = _FakeCH(max_period="2026-05")
-    svc = EconService(bls=_FakeBls({"LNS14000000": pts}), ch_client=ch)
+    svc = EconService(bls=_FakeBls({"LNS14000000": pts}), bea=_FakeBea(), ch_client=ch)
     assert svc.ingest().releases == 0
     assert not any(i[0] == "news_items" for i in ch.inserts)
 

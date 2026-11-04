@@ -7,7 +7,7 @@ body is truncated before sending, and output tokens are capped.
 SDK). `NewsEnricher` takes an injectable `llm_complete` for tests; the real
 path lazy-loads the Anthropic SDK (same ANTHROPIC_API_KEY as the assistant).
 We send the body for ANALYSIS only — it is never stored/republished; consumers
-get our summary + the source link. See docs/news_alerts_spec.md.
+get our summary + the source link. See docs/product/news_alerts.md.
 """
 from __future__ import annotations
 

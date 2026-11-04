@@ -2,7 +2,7 @@
 News feed API — official-record items (SEC EDGAR filings; govt releases later),
 AI-summarized with a link to the source. Backed by CH `news_items` via
 ``app.services.news.reader``. Powers the frontend News feed + the symbol News
-tab. See docs/news_alerts_spec.md.
+tab. See docs/product/news_alerts.md.
 """
 from __future__ import annotations
 

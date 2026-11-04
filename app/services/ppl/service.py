@@ -356,7 +356,7 @@ class PplService:
         The two branches are a real fork in the model, not a config nicety —
         `gjr_fhs` is the product and `ewma_t` is the null it is measured
         against. Keeping both runnable is what makes the comparison in
-        `docs/ppl_mathematics.md` a measurement rather than an assertion.
+        `docs/trading/ppl_mathematics.md` a measurement rather than an assertion.
         """
         if params.vol_model == "gjr_fhs":
             return self._simulate_gjr_fhs(

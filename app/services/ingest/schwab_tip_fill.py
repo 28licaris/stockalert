@@ -7,7 +7,7 @@ to BOTH:
   - equities.schwab_universe (idempotent; the immutable archive)
   - ClickHouse ohlcv_1m      (idempotent; chart available immediately)
 
-**Why dual-write to CH directly.** Per [streaming_universe_model.md][1],
+**Why dual-write to CH directly.** Per [the symbol lifecycle standard][1],
 this is the ONE bounded exception to the "no historical → CH directly"
 rule:
   - The window is ≤48 days (Schwab REST's 1-min reach)
@@ -21,7 +21,7 @@ history is loaded in parallel by `lake_to_ch_backfill`. The schwab_universe
 write is the durable archive; the CH write makes the cockpit "warming up"
 UX instant.
 
-[1]: ../../../docs/streaming_universe_model.md
+[1]: ../../../docs/standards/data/symbol_lifecycle.md
 
 **Source tag.** Bronze + CH rows get `source = "schwab-tipfill"` to
 distinguish from:

@@ -26,7 +26,7 @@ import { cn } from "@/lib/utils";
  * Stream Service — the operator's "permanently streaming" set.
  *
  * Sticky-universe model (locked in
- * [docs/frontend_api_contracts.md §10.1]):
+ * [docs/product/api_contracts.md §10.1]):
  *   - Adding a symbol here subscribes the Schwab stream + triggers
  *     historical backfill. The symbol becomes part of the streaming
  *     universe even if no watchlist holds it.

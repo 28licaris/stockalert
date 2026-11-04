@@ -5,7 +5,7 @@ range for equities or futures, backed by ``app.services.market_calendar``
 
 Each day carries an ``events`` list — FOMC + OPEX/quad-witching today, with
 dividend/split ex-dates and (later) earnings landing via the same contract.
-See docs/market_calendar_spec.md §12a.
+See docs/data/market_calendar.md §12a.
 """
 from __future__ import annotations
 

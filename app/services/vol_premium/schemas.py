@@ -1,7 +1,7 @@
 """Vol Premium screen — public DTOs.
 
 The only files another service imports are this one and `contract.py`.
-Spec: `docs/vol_premium_screen_spec.md`.
+Spec: `docs/trading/vol_premium.md`.
 """
 from __future__ import annotations
 

@@ -860,7 +860,7 @@ FAMILIES = {
         for lb in (10, 15, 20, 30, 40, 60)
         for vm in (1.0, 1.25, 1.5, 2.0)
     ],
-    # EXP-39 battery — registered in docs/research_hypotheses.md H-3..H-8
+    # EXP-39 battery — registered in docs/research/hypotheses.md H-3..H-8
     # BEFORE implementation; grids must match the registry exactly.
     "meanrev_rsi": [
         ({"n": n, "entry": en, "exit": ex}, _meanrev_rsi)

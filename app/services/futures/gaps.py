@@ -87,7 +87,7 @@ def missing_futures_sessions(
     # calendar date where Sunday HAS bars. Using CMES labels would skip
     # Sundays and never backfill them. The marginal cost of requesting the
     # few full-CME-closure days/year (×16 roots) is negligible; correctness
-    # of the Sunday session matters more. See docs/market_calendar_spec.md.
+    # of the Sunday session matters more. See docs/data/market_calendar.md.
     out: list[date] = []
     d = start
     while d <= through:

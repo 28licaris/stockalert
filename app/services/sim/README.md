@@ -5,11 +5,11 @@ accounting, evaluator, and run registry that all agents (LLM, RL,
 rule-based) plug into.
 
 **Implementation contract:**
-[docs/trading_subsystem_design.md](../../../docs/trading_subsystem_design.md).
+[docs/trading/subsystem_design.md](../../../docs/trading/subsystem_design.md).
 Read it before changing anything here.
 
 **Strategic roadmap:**
-[docs/trading-ai-build-plan.md](../../../docs/trading-ai-build-plan.md).
+[docs/trading/roadmap.md](../../../docs/trading/roadmap.md).
 
 ## Layout
 
@@ -19,6 +19,13 @@ Read it before changing anything here.
 | [strategy.py](strategy.py) | `Strategy` Protocol + `BaseStrategy` convenience class |
 | [context.py](context.py) | `Context` (per-bar view passed to strategies) + `BarHistory` |
 | [portfolio.py](portfolio.py) | `Portfolio` — cash, positions, equity curve, trade log |
+| [risk.py](risk.py) | `RiskManager` — portfolio-level gating: max concurrent positions + portfolio heat |
+| [ranker.py](ranker.py) | Cross-sectional ranking for dynamic-universe selection |
+| [filters.py](filters.py) | Entry/exit filters |
+| [market_context.py](market_context.py) | Regime / market-wide context for strategies |
+| [intraday.py](intraday.py) / [intervals.py](intervals.py) | Intraday session + multi-timeframe handling |
+| [loader.py](loader.py) / [signal_source.py](signal_source.py) | Bar + signal sourcing for runs |
+| [paper/](paper/) | Forward paper-trading engine and its durable state |
 | [fees.py](fees.py) | `FeeModel` / `SlippageModel` Protocols + 5 default implementations + name registries |
 | [evaluator.py](evaluator.py) | `Evaluator` Protocol + `StandardEvaluator` (returns canonical metrics) |
 | [backtester.py](backtester.py) | `Backtester.run(strategy, config) -> RunResult` — the orchestrator |
@@ -109,14 +116,45 @@ pins it.
 Single-TF strategies (only `interval`, no `intervals` attribute)
 work unchanged — the harness wraps them as `[interval]` internally.
 
+## Risk and portfolio gating
+
+`Backtester.run()` runs one symbol; **`Backtester.run_portfolio()`** runs a
+shared-portfolio multi-symbol book with `RiskManager` gating on top.
+
+Conviction sizing across many concurrent long and short positions compounds
+into unacceptable drawdown if ungated, so `RiskManager` caps two things:
+
+| Cap | Meaning |
+|---|---|
+| `max_concurrent` | Don't be in everything at once |
+| `max_portfolio_heat` | Total open risk (Σ entry→stop $ risk) ≤ heat × equity |
+
+**Portfolio heat is the real lever** — it bounds how much of the book is at
+risk simultaneously regardless of per-trade size. The manager is stateful: the
+backtester registers a position's risk when an entry is allowed and releases it
+on exit. One position per symbol, so per-name capping is implicit.
+
+`BacktestConfig` also carries a **drawdown brake** (`dd_brake_limit`,
+`dd_brake_floor`) that scales exposure down as drawdown deepens, and a
+short gate for dynamic universes (short only the weakest N by as-of momentum,
+enabling long-leaders / short-laggards).
+
 ## What's NOT in the current build
 
-- Multi-symbol shared portfolio (each `Backtester.run()` runs one
-  symbol at a time; future work adds shared-portfolio multi-symbol).
-- Short selling (TA-5+ alongside RL agent).
-- Live execution (TA-6+).
-- Resampling-on-the-fly from minute bronze to 5m/15m/30m/1h/4h
-  inside the backtester (the BarReader handles this for the CH
-  live tier; bronze-side resampling is a future feature).
+- **Live execution** — paper trading is the forward record; no order routing.
+- **On-the-fly minute→coarser resampling inside the backtester.** The
+  `BarReader` handles this for the CH live tier; research tables are
+  pre-materialized by `scripts/build_ohlcv_*.py`.
 
-Don't add these in code until the journal opens the phase.
+## Before you trust a number
+
+Backtest results are **not** a track record. Any return claim needs the MCPT
+gate in [`significance.py`](significance.py) /
+[`permutation.py`](permutation.py), pre-registered in
+[`docs/research/hypotheses.md`](../../../docs/research/hypotheses.md) **before**
+the sweep. Canonical results:
+[`docs/research/findings.md`](../../../docs/research/findings.md) —
+note that **all pre-EXP-26 performance claims are dead** (data contamination).
+Methodology: [`docs/research/mcpt_methodology.md`](../../../docs/research/mcpt_methodology.md).
+No-look-ahead audit:
+[`docs/research/no_lookahead_audit.md`](../../../docs/research/no_lookahead_audit.md).

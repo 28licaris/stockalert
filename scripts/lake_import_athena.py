@@ -33,7 +33,7 @@ Steps:
 ONE-TIME OPERATION. Drops + recreates the target. If `equities.
 polygon_raw` already has live-tier rows (post-CV7 nightly writes),
 the script refuses without `--force` to avoid wiping production
-data. Operational sequencing per docs/architecture_v2/07_runbook.md:
+data. Operational sequencing per docs/operations/runbook.md:
 this script runs ONCE, in the cutover window, BEFORE CV7 deploys to
 production.
 

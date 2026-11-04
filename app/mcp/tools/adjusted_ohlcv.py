@@ -60,12 +60,13 @@ def get_adjusted_bars(
 
     USE include_live=True WHEN: the window includes today's session and
     you need both deep history AND today's live bars in one response.
-    UNIONs equities.polygon_adjusted (lags real-time by up to one
-    weekly Spark run) with equities.schwab_universe (live + tip-fill,
-    pre-adjusted with adj_factor=1.0). Polygon wins duplicates on
-    (symbol, timestamp). Costs ~2x the I/O of the default mode but
-    closes the polygon-staleness gap that's otherwise visible at the
-    right edge of charts and end of ML training windows.
+    UNIONs the read-time-adjusted Polygon tier (`polygon_raw` adjusted
+    on read; frozen at 2026-06-12 since the minute flat-file feed
+    lapsed) with equities.schwab_universe (live + tip-fill, pre-adjusted
+    with adj_factor=1.0). Polygon wins duplicates on (symbol,
+    timestamp). Costs ~2x the I/O of the default mode but closes the
+    polygon-staleness gap that's otherwise visible at the right edge of
+    charts and end of ML training windows.
 
     Snapshot-pinned: the response's `snapshot_id` lets a follow-up
     call replay against the exact lake state. When include_live=True,
@@ -116,7 +117,8 @@ def get_symbol_coverage(
     Returns per-store row counts + earliest/latest timestamps for:
       - stocks.ohlcv_1m           — ClickHouse hot cache (queryable NOW,
         live-stream fresh); query THIS for the fast path
-      - equities.polygon_adjusted — deep adjusted history (weekly Spark)
+      - equities.polygon_adjusted — deep adjusted history. NOT a table:
+        a read-time adjustment over `equities.polygon_raw`
       - equities.schwab_universe  — recent universe window (nightly)
 
     `sources` selects which stores to query (CSV of the keys above);
@@ -127,14 +129,14 @@ def get_symbol_coverage(
     Common interpretations:
       - clickhouse.latest_timestamp within ~1 min during market hours →
         live stream healthy.
-      - polygon_adjusted.row_count == 0 → cold-start; the first
-        polygon_adjustment_job hasn't run yet.
-      - polygon_adjusted.latest_timestamp older than ~7 days is normal
-        (weekly Spark cadence); the gap to "now" is covered by CH +
-        schwab_universe.
+      - polygon_adjusted.row_count == 0 → no Polygon history for this
+        symbol (it was never in the flat-file archive).
+      - polygon_adjusted.latest_timestamp stops at 2026-06-12 for every
+        symbol — that is the frozen minute lake, not a fault. The gap to
+        "now" is covered by CH + schwab_universe.
       - schwab_universe.row_count > 0 AND polygon_adjusted.row_count
-        == 0 → brand-new symbol; deep history arrives on the next
-        weekly Spark run.
+        == 0 → a symbol that post-dates the Polygon archive; CH and the
+        Schwab tier are its only history.
 
     Args:
         symbol: Ticker (case-insensitive; "nvda" → "NVDA").

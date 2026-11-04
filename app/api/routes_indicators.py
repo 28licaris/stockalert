@@ -7,7 +7,7 @@ Thin adapters over `IndicatorReader`. Two endpoints:
   POST /api/indicators/chart-data  — multi-indicator + OHLCV bars in
                                      one bundle (the dashboard path).
 
-Full design: `docs/indicator_exposure_design.md` §4.4.
+Full design: `docs/trading/indicators.md` §4.4.
 
 Same `IndicatorReader` instance backs the MCP tools — see
 `app/mcp/tools/indicators.py`. One service, two surfaces; identical

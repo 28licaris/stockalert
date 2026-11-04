@@ -812,7 +812,7 @@ class SchwabProvider(DataProvider):
 
         # `period` is intentionally OMITTED.
         #
-        # Per the Schwab market_data_api docs (see docs/schwab-api/market_data_api.md):
+        # Per the Schwab market_data_api docs (see docs/reference/schwab-api/market_data_api.md):
         #     "If not specified startDate will be (endDate - period) ..."
         # — `period` exists only to derive a default `startDate` when one
         # isn't passed. We always pass `startDate` AND `endDate` explicitly,

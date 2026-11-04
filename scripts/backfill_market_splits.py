@@ -5,7 +5,7 @@ One-time backfill of ``equities.market_splits`` from the splits already in
 After this runs, the Polygon corp-actions ingest keeps market_splits current
 (dual-write during the overlap cycle) and the read-time adjustment sources
 splits from market_splits — never scanning the ~3M-row dividend table again.
-See docs/market_splits_spec.md.
+See docs/data/market_splits.md.
 
 Idempotent: upserts on the (symbol, ex_date) identifier, so re-runs converge.
 

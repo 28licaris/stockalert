@@ -2,7 +2,7 @@
 # study (real run + N-worker permutation null + merged adjudication) in-region.
 #
 # No ClickHouse in the cloud: bars come from an immutable snapshot on S3
-# (export with scripts/research_bars.py — see docs/mcpt_methodology.md).
+# (export with scripts/research_bars.py — see docs/research/mcpt_methodology.md).
 # Shards sync to S3 per-permutation; re-running the same study name resumes.
 # The existing CodeBuild role suffices (s3 Get/Put/List on STOCK_LAKE_BUCKET).
 #

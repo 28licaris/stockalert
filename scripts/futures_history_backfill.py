@@ -18,7 +18,7 @@ fails on duplicates, but re-running the same (day, root) set DOES create
 duplicate rows in ``futures.schwab_futures``. The nightly path
 (``app.services.ingest.nightly_futures_refresh``) enforces idempotency
 upstream via the gap pre-scan; for clean manual re-runs, delete the
-affected partitions first (recipe in docs/architecture_v2/07_runbook.md).
+affected partitions first (recipe in docs/operations/runbook.md).
 
 Run:
     poetry run python scripts/futures_history_backfill.py --symbols seed --days 48

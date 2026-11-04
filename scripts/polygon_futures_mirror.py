@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Byte-for-byte mirror of Polygon futures flat files into the lake S3 bucket.
 
-Phase 1 of the futures raw-data capture (see docs/futures_flatfile_mirror.md).
+Phase 1 of the futures raw-data capture (see docs/data/futures_flatfile_mirror.md).
 This copies Polygon's gzipped CSV flat files **verbatim** — no parsing, no REST
 discovery, no roll logic, no Iceberg — from Polygon's S3 (files.massive.com)
 into our lake bucket under ``polygon_flatfiles_mirror/``.

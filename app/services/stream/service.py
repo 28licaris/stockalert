@@ -1,7 +1,7 @@
 """StreamService — owns the Schwab live subscription set + the
 `stream_universe` CH table.
 
-Architecture: see docs/frontend_api_contracts.md §10.1 (locked
+Architecture: see docs/product/api_contracts.md §10.1 (locked
 sticky-universe model). The CH `stream_universe` table is the source
 of truth for what's currently being streamed. Watchlists auto-extend
 this universe via `ensure_streaming()` but **never** remove from it
@@ -829,7 +829,7 @@ class StreamService:
         symbols): chart populated end-to-end in under 10 seconds
         for actively-traded names. Brand-new IPOs without deep-
         history coverage get the 48-day tip_fill window
-        immediately + the deep history on the next weekly Spark run.
+        immediately + deep history via the lake warmup / read-path gap-fill.
         """
         tip_task = asyncio.create_task(
             self._warmup_tip_fill_one(symbol),

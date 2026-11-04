@@ -27,7 +27,8 @@ class Principal(Protocol):
     """Minimal protocol for the auth principal.
 
     The full type lives in `app/auth/principal.py` (landing as part of
-    the SaaS-readiness contract — see frontend_plan.md §7.2). The
+    the tenant-scoping contract — see
+    docs/product/access_control.md). The
     assistant only needs to know `user_id`, `tenant_id`, and `roles`.
 
     In dev mode, callers pass a sentinel principal (see

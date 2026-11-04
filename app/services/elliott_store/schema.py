@@ -2,7 +2,7 @@
 
 One append-only row per (symbol, interval, as_of_date, engine_ver) — the wave
 count *as known on that trading day* (the no-look-ahead store contract from
-docs/elliott_wave_system_spec.md §3). Mirrored across the `equities` and
+docs/trading/elliott_wave.md). Mirrored across the `equities` and
 `futures` Glue namespaces; `asset_class` + the table namespace are the only
 things that differ between the two.
 

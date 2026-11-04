@@ -78,7 +78,7 @@ class Settings(BaseModel):
 
     # ─────────────────────────────────────────────────────────
     # Stock Lake (S3) — your own data lake, separate from Polygon Flat Files.
-    # See docs/architecture_v2/03_s3_layout.md for layout. Empty AWS creds fall through
+    # See docs/architecture/lake_schema.md for layout. Empty AWS creds fall through
     # to the default boto3 credential chain (env, ~/.aws/credentials, IAM
     # role, etc.), so deploys on EC2 / ECS need only set the bucket name.
     # ─────────────────────────────────────────────────────────
@@ -112,7 +112,7 @@ class Settings(BaseModel):
     # a daily background loop that labels `elliott_recompute_symbols` and appends
     # to `<ns>.elliott_wave_labels`. Run hour is UTC; default 22:00 (after the
     # equities session settles). Symbols is a comma-separated list (`/`-prefixed
-    # = futures); empty means the loop no-ops. See docs/elliott_wave_system_spec.md §4.
+    # = futures); empty means the loop no-ops. See docs/trading/elliott_wave.md.
     elliott_recompute_enabled: bool = os.getenv("ELLIOTT_RECOMPUTE_ENABLED", "false").lower() == "true"
     elliott_recompute_run_hour_utc: int = int(os.getenv("ELLIOTT_RECOMPUTE_RUN_HOUR_UTC", "22"))
     elliott_recompute_symbols: str = os.getenv("ELLIOTT_RECOMPUTE_SYMBOLS", "")
@@ -191,7 +191,7 @@ class Settings(BaseModel):
     ch_reconcile_lookback_days: int = int(os.getenv("CH_RECONCILE_LOOKBACK_DAYS", "7"))
 
     # ─────────────────────────────────────────────────────────
-    # Iceberg catalog (AWS Glue) — see docs/architecture_v2/.
+    # Iceberg catalog (AWS Glue) — see docs/architecture/.
     # Iceberg warehouse path: s3://${STOCK_LAKE_BUCKET}/${ICEBERG_WAREHOUSE_PREFIX}/
     # Glue database holding namespaces bronze/silver/gold (we use one Glue
     # database; Iceberg namespaces are the `bronze.*` etc. qualifiers).
@@ -206,7 +206,7 @@ class Settings(BaseModel):
     # at read time). Fully-qualified as `lake.equities.<table>` when
     # read via DuckDB/Polars; via PyIceberg as `<this_db>.<table>`.
     # Created by `app/services/equities/tables.py::ensure_*`.
-    # Spec: docs/architecture_v2/ (Gate 1 — equities database name).
+    # Spec: docs/architecture/ (Gate 1 — equities database name).
     iceberg_equities_glue_database: str = os.getenv(
         "ICEBERG_EQUITIES_GLUE_DATABASE", "equities"
     )
@@ -255,7 +255,7 @@ class Settings(BaseModel):
     # chart paints quickly without waiting on the weekly lake.
     # When False: pure "stream from now" — subscribe live, no backfill.
     # Independent of `lake_warmup_enabled` (the deep 730d lake tier).
-    # Spec: docs/symbol_onboarding_read_design.md §3.1.
+    # Spec: docs/data/symbol_onboarding.md §3.1.
     # `symbol_hotload_days` default 30 is sized for a <5s first paint
     # (quick backfill chunks Schwab's ~10d/call cap); tune down (e.g. 7)
     # if a provider/window pushes past the budget.
@@ -272,7 +272,7 @@ class Settings(BaseModel):
     # single-flight. The nightly provider jobs own the steady state; this
     # is the on-demand fallback only. Equities only in v1 (futures + a
     # pluggable provider knob are follow-ups). Spec:
-    # docs/symbol_onboarding_read_design.md §3.3.
+    # docs/data/symbol_onboarding.md §3.3.
     symbol_gapfill_enabled: bool = (
         os.getenv("SYMBOL_GAPFILL_ENABLED", "true").lower() == "true"
     )
@@ -437,7 +437,7 @@ class Settings(BaseModel):
     min_pivot_separation: int = int(os.getenv("MIN_PIVOT_SEPARATION", "12"))  # 12 minutes
 
     # ─────────────────────────────────────────────────────────
-    # Sector Rotation (RRG) Settings — see docs/sector_rotation_spec.md
+    # Sector Rotation (RRG) Settings — see docs/trading/sector_rotation.md
     # ─────────────────────────────────────────────────────────
     # Daily-bar windows for the relative-strength (RS-Ratio) and its
     # momentum (RS-Momentum). Both axes are centered at 100 (= in line

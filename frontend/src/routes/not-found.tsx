@@ -14,7 +14,7 @@ export function NotFoundPage() {
           {location.pathname}
         </code>
         . The cockpit is shipping page-by-page — see{" "}
-        <code className="font-mono text-xs">docs/frontend_plan.md §5</code> for
+        <code className="font-mono text-xs">docs/product/api_contracts.md</code> for
         what's coming.
       </p>
       <div className="flex justify-center pt-2">

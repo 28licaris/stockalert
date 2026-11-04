@@ -6,7 +6,7 @@ the HTTP routes in `app/api/routes_indicators.py`. Same math, same
 numbers, regardless of whether the consumer is an LLM agent
 (MCP) or a dashboard (HTTP).
 
-Full design: `docs/indicator_exposure_design.md` §4.5.
+Full design: `docs/trading/indicators.md` §4.5.
 """
 from __future__ import annotations
 
