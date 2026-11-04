@@ -6,9 +6,9 @@ fills. Futures have no equity corporate-action adjustment tier.
 
 Symbols use `/`-prefixed continuous roots such as `/ES`; preserve that routing
 contract through storage and reader boundaries. The architecture is documented
-in [`../../../docs/futures_data_plan.md`](../../../docs/futures_data_plan.md) and
+in [`../../../docs/architecture/README.md`](../../../docs/architecture/README.md) and
 the canonical lake conventions in
-[`../../../docs/architecture_v2/`](../../../docs/architecture_v2/).
+[`../../../docs/architecture/`](../../../docs/architecture/).
 
 Tests live in [`tests/`](tests/). Cross-layer futures routing tests live in
 [`../../../tests/contract/`](../../../tests/contract/).

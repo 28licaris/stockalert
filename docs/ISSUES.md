@@ -5,7 +5,7 @@ cleanup. Lighter than GitHub Issues; lives in-repo so context goes
 with the code and PRs can cite IDs.
 
 For longer-running work (phases, multi-step initiatives), use commit
-messages and the [`architecture_v2/`](architecture_v2/README.md)
+messages and the [`architecture/`](architecture/README.md)
 phase docs. This file is for the "things that are wrong" list.
 
 ## How to file an issue
@@ -26,7 +26,7 @@ phase docs. This file is for the "things that are wrong" list.
 If you're not sure whether something is an issue or a backlog item:
 issues are "this is broken / known wrong"; backlog items are "this is
 fine, we'd just like more of it." Backlog goes in commit messages
-or the relevant phase doc under `architecture_v2/`.
+or the relevant phase doc under `architecture/`.
 
 ## Area tags
 
@@ -282,6 +282,23 @@ renames: `SQ -> XYZ` (Block), `DFS -> COF` (acquired). Deactivated in
 Brief summary + commit / PR link.
 -->
 
+### `econ-ingest-release-detection-test-drift` — resolved 2026-11-04
+
+Two `test_econ.py` ingest tests were **making live HTTP calls to
+`apps.bea.gov`**. They injected a fake BLS client but not a BEA one, and
+`EconService._gather` lazily builds a real `BeaClient` whenever
+`BEA_API_KEY` is set — so the tests pulled real GDP/PCE data
+(`series=3 points=62` instead of `series=1 points=2`) and failed their
+assertions. They passed on any machine without the key, which is why they
+read as "pre-existing failures" rather than as wrong tests.
+
+`EconService` was correct and unchanged. Fix: inject a `_FakeBea` in both
+tests so they are hermetic regardless of ambient env. Runtime dropped from
+3.53s to 0.07s — the tell that they had been doing network I/O.
+
+Rule added to [`standards/testing.md`](standards/testing.md): inject every
+collaborator, not just the one under test.
+
 ### `schwab-chart-fields-test-drift` — resolved 2026-05-17
 
 Three `TestChartContentToBar` / `TestDataProviderContract` fixtures
@@ -330,7 +347,7 @@ Two findings, both addressed:
 [app/providers/schwab_provider.py](../app/providers/schwab_provider.py)
 used to send `period` alongside explicit `startDate`/`endDate` for
 `periodType=day` (minute charts). Per
-[docs/schwab-api/market_data_api.md](schwab-api/market_data_api.md):
+[docs/reference/schwab-api/market_data_api.md](reference/schwab-api/market_data_api.md):
 *"If not specified startDate will be (endDate - period) ..."* —
 `period` is purely a default-startDate derivation, ignored when
 `startDate` is explicit. Sending both can confuse Schwab's internal

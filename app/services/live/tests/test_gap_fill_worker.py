@@ -7,7 +7,7 @@ thread, so the two-tier behaviour is deterministic:
   2. Only when the lake fill comes up EMPTY does the Schwab provider
      tip-fill fire — and only for equities, when `symbol_gapfill_enabled`.
 
-Spec: docs/symbol_onboarding_read_design.md §3.3.
+Spec: docs/data/symbol_onboarding.md §3.3.
 """
 from __future__ import annotations
 

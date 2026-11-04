@@ -2,7 +2,7 @@
 
 Classifies market groups into the four RRG quadrants — **Leading / Weakening
 / Improving / Lagging** — relative to a benchmark (SPY). Phase 1 covers the 11
-SPDR sector ETFs. Spec: [`docs/sector_rotation_spec.md`](../../../docs/sector_rotation_spec.md).
+SPDR sector ETFs. Spec: [`docs/trading/sector_rotation.md`](../../../docs/trading/sector_rotation.md).
 
 ## The one abstraction
 

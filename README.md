@@ -4,7 +4,7 @@ AI/ML-driven equities trading platform. **FastAPI** exposes REST + WebSockets an
 
 The dashboard is a **React + Vite** app under [`frontend/`](frontend/), served at `/app/`. (The old static HTML pages were removed — `frontend/` is the only UI.)
 
-For architecture + design see [docs/](docs/README.md). The canonical lake/ML design is [`docs/architecture_v2/`](docs/architecture_v2/README.md); detailed phase history lives in commit messages (`git log --grep CV`). Env details in [CONFIG.md](CONFIG.md) and [.env.example](.env.example); Schwab helper flows in [scripts/README.md](scripts/README.md).
+For architecture + design see [docs/](docs/README.md). The canonical lake/ML design is [`docs/architecture/`](docs/architecture/README.md); detailed phase history lives in commit messages (`git log --grep CV`). Env details in [CONFIG.md](CONFIG.md) and [.env.example](.env.example); Schwab helper flows in [scripts/README.md](scripts/README.md).
 
 ## Prerequisites
 

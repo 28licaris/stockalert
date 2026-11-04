@@ -25,8 +25,8 @@ contradicts a standard here, the standard wins. Update the standard
 | Doc | When |
 |-----|------|
 | [`trading_subsystem.md`](trading_subsystem.md) | Before touching `app/services/sim/*`, `app/services/sim/strategies/*`, or `app/indicators/*` |
-| [`data/bronze_idempotency.md`](data/bronze_idempotency.md) | Before writing a bronze sink or maintenance script |
-| [`data/lean_silver.md`](data/lean_silver.md) | Before adding a column to silver or any canonical schema |
+| [`../architecture/lake_schema.md`](../architecture/lake_schema.md) | Before writing a lake sink or maintenance script |
+| [`../data/adjusted_storage.md`](../data/adjusted_storage.md) | Before adding a column to any canonical schema |
 | [`data/timezone_et_vs_utc.md`](data/timezone_et_vs_utc.md) | Before any trading-day math |
 | [`data/athena_dialects.md`](data/athena_dialects.md) | Before writing Athena SQL |
 

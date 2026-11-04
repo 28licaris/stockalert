@@ -3,7 +3,7 @@ Screener — scan a universe with a declarative `ScreenerSpec` and
 return ranked candidates.
 
 This is the "fast filter" stage of the canonical swing-trade
-pipeline (per `docs/trading_subsystem_design.md` Phase TA-4.3):
+pipeline (per `docs/trading/subsystem_design.md` Phase TA-4.3):
 
     universe (1000s of symbols) -> screener -> 10-30 candidates -> strategy
 

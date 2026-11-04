@@ -13,7 +13,7 @@ Idempotent-ish:
   - However, re-running for the same (day, symbol) set DOES create
     duplicate rows in equities.schwab_universe. For clean re-runs,
     delete the affected partitions manually before re-running (recipe
-    in docs/architecture_v2/07_runbook.md — "Recover a known-bad
+    in docs/operations/runbook.md — "Recover a known-bad
     partition"). For the nightly cron path, idempotency is enforced
     upstream by the gap-detection pre-scan in
     `app.services.ingest.nightly_schwab_refresh`.

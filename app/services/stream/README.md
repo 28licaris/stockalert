@@ -4,7 +4,7 @@ Owns the live Schwab subscription set + the `stream_universe` CH table
 (the operator's "things we stream into ClickHouse 24/7" list).
 
 Implements the locked sticky-universe model defined in
-[`docs/frontend_api_contracts.md §10.1`](../../../docs/frontend_api_contracts.md).
+[`docs/product/api_contracts.md §10.1`](../../../docs/product/api_contracts.md).
 
 ## What it owns
 

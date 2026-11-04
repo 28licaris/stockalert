@@ -73,7 +73,7 @@ def init_schema() -> None:
 
     # NOTE: ohlcv_5m and ohlcv_daily were retired — all chart timeframes
     # (5m/15m/30m/1h/1d) are resampled on read from ohlcv_1m, the single CH
-    # source of truth. See docs/architecture_v2/02_schema.md.
+    # source of truth. See docs/architecture/lake_schema.md.
 
     client.command(
         """
@@ -133,7 +133,7 @@ def init_schema() -> None:
     # ─────────────────────────────────────────────────────────────────
     # Stream universe (FE-CONTRACTS-4) — operator-curated "always
     # streaming into ClickHouse 24/7" set. Per the locked sticky-
-    # universe model in docs/frontend_api_contracts.md §10.1:
+    # universe model in docs/product/api_contracts.md §10.1:
     #   - StreamService owns this table.
     #   - StreamService.add subscribes to Schwab + writes a row.
     #   - StreamService.remove unsubscribes + marks is_active=0.
@@ -465,7 +465,7 @@ def init_schema() -> None:
     # ledger for LakeArchiveService (v1 raw-Parquet writer); both the
     # service and its WatermarkRepo consumer were deleted in CV19. The
     # existing prod table is a no-op orphan — the cutover-completion
-    # checklist in docs/architecture_v2/07_runbook.md drops it.
+    # checklist in docs/operations/runbook.md drops it.
 
     # Ingestion-run audit log (TA-5.7 + future ingest jobs).
     # One row per cycle / run of any ingest job (live_lake_writer,
@@ -672,7 +672,7 @@ def init_schema() -> None:
     # `external_id` dedups within a source; ReplacingMergeTree(version) lets
     # re-syncs overwrite cleanly. ORDER BY leads with event_date so the
     # calendar's "events on date D" read is index-pruned; symbol next so the
-    # symbol page's "events for X" is also fast. See market_calendar_spec §12a.
+    # symbol page's "events for X" is also fast. See docs/data/market_calendar.md §12a.
     client.command(
         """
         CREATE TABLE IF NOT EXISTS market_events (
@@ -698,7 +698,7 @@ def init_schema() -> None:
     # AI-summarized with a link to the source. `id` = EDGAR accession (or
     # source uid), the dedup key. `summary`/`why_it_matters`/`materiality` are
     # filled by LLM enrichment (enriched=1); '' until then. We never store the
-    # source body — only our summary + the `url` link. See docs/news_alerts_spec.md.
+    # source body — only our summary + the `url` link. See docs/product/news_alerts.md.
     client.command(
         """
         CREATE TABLE IF NOT EXISTS news_items (
@@ -729,7 +729,7 @@ def init_schema() -> None:
     # BEA later). Source of truth for the Economic page + the AI; derived
     # figures (YoY, MoM change) are computed at read time (kept lean — not
     # stored). `period` = '2026-05' (monthly) / '2026-Q1' (quarterly); dedup on
-    # (series_id, period). See docs/news_alerts_spec.md §14.
+    # (series_id, period). See docs/product/news_alerts.md §14.
     client.command(
         """
         CREATE TABLE IF NOT EXISTS economic_data (

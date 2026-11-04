@@ -4,7 +4,7 @@ MCP tool — recent news for a symbol (or market-wide).
 Backed by the same CH `news_items` store as the cockpit feed: official-record
 items (SEC EDGAR filings; govt releases later), AI-summarized with a link to the
 source document. Lets an agent answer "any news on NVDA?" without leaving the
-platform. See docs/news_alerts_spec.md.
+platform. See docs/product/news_alerts.md.
 """
 from __future__ import annotations
 

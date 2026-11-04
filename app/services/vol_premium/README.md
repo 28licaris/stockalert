@@ -6,7 +6,7 @@ underlying actually moves?**
 One ranked table. `/ppl` describes a symbol you already picked; this ranks the
 whole options universe and tells you which one to pick.
 
-Spec: [`docs/vol_premium_screen_spec.md`](../../../docs/vol_premium_screen_spec.md).
+Spec: [`docs/trading/vol_premium.md`](../../../docs/trading/vol_premium.md).
 
 ## The metric
 
@@ -161,7 +161,7 @@ cross-sectional ranking only.
 Until that lands, the page must say so. A ranked list implies "the top row is
 the opportunity", and that inference needs the historical comparison.
 
-See [`docs/handoff_ppl_vol_premium.md`](../../../docs/handoff_ppl_vol_premium.md)
+See [`docs/trading/options_vol_premium_state.md`](../../../docs/trading/options_vol_premium_state.md)
 for the remaining design — parameters refit monthly, variance rolled daily.
 
 ## Failure handling

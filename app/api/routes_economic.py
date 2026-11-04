@@ -2,7 +2,7 @@
 Economic indicators API — latest figures + history for free government series
 (BLS now; BEA later). Backed by CH `economic_data` via
 ``app.services.news.econ``. Powers the cockpit Economic page + the AI.
-See docs/news_alerts_spec.md §14.
+See docs/product/news_alerts.md §14.
 """
 from __future__ import annotations
 

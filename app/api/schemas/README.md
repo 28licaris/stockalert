@@ -6,7 +6,7 @@ frontend's `npm run codegen` reads that, and the cockpit's
 TypeScript types come out the other end. A backend rename breaks
 the frontend build, not production.
 
-See [docs/frontend_api_contracts.md](../../../docs/frontend_api_contracts.md)
+See [docs/product/api_contracts.md](../../../docs/product/api_contracts.md)
 for the full rules, audit, and phased rollout.
 
 ---

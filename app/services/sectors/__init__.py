@@ -2,7 +2,7 @@
 
 Classifies market groups (Phase 1: the 11 SPDR sector ETFs) into the four
 RRG quadrants — Leading / Weakening / Improving / Lagging — relative to a
-benchmark (SPY). See `docs/sector_rotation_spec.md`.
+benchmark (SPY). See `docs/trading/sector_rotation.md`.
 
 The public surface is the contracts in `schemas` and
 `SectorRotationService` (built via `from_settings()`). Everything consumes

@@ -260,7 +260,7 @@ class PolygonCorpActionsIngest:
         # Mirror splits into the dedicated equities.market_splits store (the
         # read-time adjustment source). Tiny set; idempotent upsert keyed on
         # (symbol, ex_date). Dividends are NOT mirrored — market_splits is
-        # splits-only. See docs/market_splits_spec.md.
+        # splits-only. See docs/data/market_splits.md.
         self._mirror_splits_to_market_splits(all_splits, ingestion_run_id=run_id)
 
         duration = (datetime.now(timezone.utc) - started).total_seconds()

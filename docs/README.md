@@ -1,88 +1,136 @@
-# StockAlert — Planning Docs
+# StockAlert — documentation
 
-The architecture, plans, and live design docs for the data platform +
-AI trading system. Code lives under `app/`, `tests/`, `scripts/`; this
-folder holds the "why" + "where we're going".
+Everything here describes the system **as it is**. Plans for shipped work live
+in the commit history, not in this folder; when a doc and the code disagree,
+**the code wins** and the doc is a bug.
 
-## If you're picking up the build
+Start with [`../CLAUDE.md`](../CLAUDE.md) for the repo map, then come here.
 
-The detailed journal is the commit log — `git log origin/main`. The
-v2 architecture migration shipped on `v2-architecture` in late May
-2026 (commits prefixed `CV1`-`CV18`).
+```
+docs/
+├── standards/      the rules — read before changing anything
+├── architecture/   how the system is designed
+├── operations/     how to run it
+├── data/           the data platform: ingest, storage, read paths
+├── trading/        the trading subsystem, models and signals
+├── research/       validation methodology and findings
+├── product/        customer-facing surfaces
+├── reference/      vendor API docs (not ours)
+├── ISSUES.md       live register — what is broken
+└── TODO.md         live register — what is deferred
+```
 
-For codebase orientation, in this order:
+Module-level documentation is **not here**: every functional package carries
+its own `README.md` describing what it owns, its public contract, and how to
+test it. Those are authoritative for code; this folder holds cross-module
+design. See [`standards/doc_discipline.md`](standards/doc_discipline.md).
 
-1. [`../CLAUDE.md`](../CLAUDE.md) — the repo guide. Layer map, lake
-   table inventory, standards entry points.
-2. [`architecture_v2/`](architecture_v2/README.md) — the canonical
-   v2 lake + ML design (schemas, S3 layout, Spark, providers,
-   migration log, runbook, decision gates). **Source of truth** for
-   anything lake / ingest / ML related.
-3. [ARCHITECTURE.md](ARCHITECTURE.md) — redirect to the canonical v2
-   architecture documentation.
-4. [STARTUP_FLOW.md](STARTUP_FLOW.md) — what `uvicorn app.main_api:app`
-   does at boot; how to verify each subsystem is alive.
-5. [trading_subsystem_design.md](trading_subsystem_design.md) —
-   implementation contract for the sim/backtest layer. Pydantic
-   shapes, Protocols, folder structure.
-6. [trading-ai-build-plan.md](trading-ai-build-plan.md) — AI trading
-   roadmap (strategy framework, signals, execution).
-7. [indicator_exposure_design.md](indicator_exposure_design.md) —
-   how technical indicators are computed + served (dashboard, MCP
-   agents, backtester).
-8. [elliott_wave_plan.md](elliott_wave_plan.md) — EW structural
-   analysis as indicators + screener rules + RL features. Plan only.
-9. [frontend_plan.md](frontend_plan.md) — the cockpit SPA (React +
-   TanStack + shadcn/ui). Built SaaS-ready.
-10. [risk_management_plan.md](risk_management_plan.md) — risk layer
-    between strategies and execution. Plan only; prereq for any
-    paper / live execution.
-11. [futures_data_plan.md](futures_data_plan.md) — futures (ES, NQ,
-    CL, GC) ingestion. Plan only.
-12. [iceberg_performance_findings.md](iceberg_performance_findings.md) —
-    historical write-up of v1's PyIceberg upsert investigation.
-    Most of these findings drove the v2 partitioning (bucket(32, symbol))
-    + Spark-based whole-market batch jobs.
-13. [data_ingestion_paths.md](data_ingestion_paths.md) — the data
-    paths into the system. Originally written for v1; the v2
-    equivalent is in [`architecture_v2/01_architecture.md`](architecture_v2/01_architecture.md).
-14. [streaming_universe_model.md](streaming_universe_model.md) —
-    operational model: Schwab = only streaming provider; two-tier
-    universe; the add-streamed-symbol flow.
-15. [assistant_plan.md](assistant_plan.md) — the chat copilot
-    (LLM-backed agent over MCP tools): backend master plan.
-16. [assistant_chat_interface.md](assistant_chat_interface.md) — the
-    chat interface end-to-end (browser ⟷ server ⟷ model round-trip),
-    production-readiness checklist, and alternative model architectures.
-17. [frontend_api_contracts.md](frontend_api_contracts.md) —
-    Pydantic contracts the cockpit consumes.
-18. [customer_identity_and_subscription_spec.md](customer_identity_and_subscription_spec.md) —
-    production customer authentication, tenant isolation, PostgreSQL account
-    data, Stripe subscriptions, and customer/operator dashboard separation.
+---
 
-## Working agreement
+## [`standards/`](standards/README.md) — the rules
 
-- **Spec-first** (per [`standards/engagement.md`](standards/engagement.md)).
-  Restate, confirm, write.
-- **No silent failures** (per [`standards/coding.md`](standards/coding.md)).
-- **The commit log is the journal.** Detailed reasoning lives in
-  commit messages (`git log --grep CV` for the v2 migration).
-- **Every functional Python module has a `README.md`** describing ownership,
-  boundaries, public contracts, dependencies, and local tests.
-- **Docs stay current with code.** Adding a service or changing an
-  architectural boundary updates the relevant plan doc in the same
-  change.
+Non-negotiable. Read before writing code.
 
-## Where the rest of the docs live
+| Doc | When |
+|---|---|
+| [engagement.md](standards/engagement.md) | **Always.** Spec-first: restate, confirm, then write |
+| [coding.md](standards/coding.md) | **Always.** No silent failures |
+| [platform_design.md](standards/platform_design.md) | Any architectural call |
+| [service_modules.md](standards/service_modules.md) | Editing `app/services/*` |
+| [testing.md](standards/testing.md) | Writing tests |
+| [trading_subsystem.md](standards/trading_subsystem.md) | Touching `sim/`, strategies or indicators |
+| [doc_discipline.md](standards/doc_discipline.md) | Adding a module or changing a doc |
+| [merge_discipline.md](standards/merge_discipline.md) | Merging any branch |
+| [data/symbol_lifecycle.md](standards/data/symbol_lifecycle.md) | Adding a symbol; any ingest path |
+| [data/timezone_et_vs_utc.md](standards/data/timezone_et_vs_utc.md) | Any trading-day math |
+| [data/athena_dialects.md](standards/data/athena_dialects.md) | Writing Athena SQL |
 
-- [`../README.md`](../README.md) — repo entry point (setup, run commands).
-- [`../CLAUDE.md`](../CLAUDE.md) — repo guide (this is what Claude reads).
-- [`../CONFIG.md`](../CONFIG.md) — operator config reference.
-- [ISSUES.md](ISSUES.md) — bug + flaky-test tracker.
-- [COMMANDS.md](COMMANDS.md) — operator cheatsheet.
-- [housekeeping_review.md](housekeeping_review.md) — suspected legacy or
-  transitional files awaiting owner decisions; never a deletion authorization.
-- [`standards/`](standards/README.md) — coding / engagement / testing rules.
-- [`architecture_v2/07_runbook.md`](architecture_v2/07_runbook.md) —
-  operator procedures for the v2 lake (bulk-imports, Spark jobs,
-  monitoring, DR).
+## [`architecture/`](architecture/README.md) — how it is designed
+
+| Doc | Covers |
+|---|---|
+| [README.md](architecture/README.md) | **The system map** — providers → ingest → storage → freshness → read |
+| [lake_schema.md](architecture/lake_schema.md) | Column contracts, DDL, partitioning, S3 layout, maintenance |
+| [providers.md](architecture/providers.md) | Provider abstraction, selection, adding one, token refresh |
+
+## [`operations/`](operations/runbook.md) — how to run it
+
+| Doc | Covers |
+|---|---|
+| [runbook.md](operations/runbook.md) | Restart, backfill, monitoring, disaster recovery |
+| [startup_flow.md](operations/startup_flow.md) | What boot does; verifying each subsystem is alive |
+| [commands.md](operations/commands.md) | Command cheatsheet |
+
+## [`data/`](data/) — the data platform
+
+| Doc | Covers |
+|---|---|
+| [adjusted_storage.md](data/adjusted_storage.md) | Why split adjustment is computed on read, not stored |
+| [market_splits.md](data/market_splits.md) | The splits-only table and why it exists |
+| [lake_read_layer.md](data/lake_read_layer.md) | The cold read path — `read_arrow`, source registry, unions |
+| [symbol_onboarding.md](data/symbol_onboarding.md) | Hotload-on-add, read-path gap-fill, freshness |
+| [futures_flatfile_mirror.md](data/futures_flatfile_mirror.md) | Polygon byte-mirror → raw → continuous |
+| [options_ingestion.md](data/options_ingestion.md) | Schwab chain ingest, canonical contracts, GEX |
+| [market_calendar.md](data/market_calendar.md) | Trading calendar and market events |
+
+## [`trading/`](trading/) — subsystem, models, signals
+
+| Doc | Covers |
+|---|---|
+| [subsystem_design.md](trading/subsystem_design.md) | The sim/backtest contract — Pydantic shapes, Protocols, structure |
+| [indicators.md](trading/indicators.md) | Indicator registry + cross-timeframe sourcing |
+| [elliott_wave.md](trading/elliott_wave.md) | The EW engine as built |
+| [ppl.md](trading/ppl.md) | Posterior predictive levels — product spec |
+| [ppl_mathematics.md](trading/ppl_mathematics.md) | PPL maths — GJR-GARCH + filtered historical simulation |
+| [vol_premium.md](trading/vol_premium.md) | Vol premium ranking spec |
+| [options_vol_premium_state.md](trading/options_vol_premium_state.md) | What options data covers; what is permanently gone |
+| [sector_rotation.md](trading/sector_rotation.md) | RRG sector/theme rotation |
+| [roadmap.md](trading/roadmap.md) | AI-trading roadmap (the update target for AI-trading changes) |
+
+## [`research/`](research/) — validation and findings
+
+| Doc | Covers |
+|---|---|
+| [research/mcpt_methodology.md](research/mcpt_methodology.md) | **The validation gate.** Permutation testing before any return claim |
+| [hypotheses.md](research/hypotheses.md) | **Pre-register here before any sweep** |
+| [findings.md](research/findings.md) | Canonical results. All pre-EXP-26 performance claims are dead |
+| [platform.md](research/platform.md) | The R&D harness |
+| [no_lookahead_audit.md](research/no_lookahead_audit.md) | Anti-cheating audit of every backtested strategy |
+
+## [`product/`](product/) — customer-facing surfaces
+
+| Doc | Covers |
+|---|---|
+| [identity_and_subscriptions.md](product/identity_and_subscriptions.md) | Customer identity, tenants, subscription model |
+| [access_control.md](product/access_control.md) | Admin vs customer access, per-page policy |
+| [api_contracts.md](product/api_contracts.md) | The API contract the SPA consumes |
+| [assistant.md](product/assistant.md) | The chat copilot's interface + runtime |
+| [news_alerts.md](product/news_alerts.md) | News + economic ingest → alerts |
+| [brand.md](product/brand.md) | Brand/visual system |
+
+## [`reference/`](reference/schwab-api/) — vendor docs
+
+[`schwab-api/`](reference/schwab-api/) — Schwab's own API documentation.
+**Not our architecture.** Kept for offline lookup when writing provider code.
+
+---
+
+## Adding or changing a doc
+
+| Change | Update |
+|---|---|
+| New service / contract change | [`../CLAUDE.md`](../CLAUDE.md) layer map + that module's `README.md` |
+| Storage / ingestion change | [`architecture/`](architecture/README.md), and [`data/`](data/) if it has its own spec |
+| AI-trading change | [`trading/roadmap.md`](trading/roadmap.md) |
+| Standards rule change | [`standards/`](standards/README.md) + its index entry |
+| Operator procedure | [`operations/runbook.md`](operations/runbook.md) |
+| Phase / gate / decision log | **the commit message** |
+
+Three rules:
+
+1. **No doc for unshipped work.** A spec for work that does not exist belongs
+   in the PR that builds it, not here.
+2. **One home per fact.** If something is true in two files, one of them will
+   go stale. Link instead of restating.
+3. **No `BUILD_JOURNAL.md`** — retired 2026-05-18. Commit messages are the
+   journal.

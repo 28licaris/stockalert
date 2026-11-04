@@ -8,7 +8,7 @@ makes our alerts/setups *backtestable* — point it at `ma_cross`, `breakout`,
 or (later) an Elliott-Wave source and get reproducible win-rate / P&L / drawdown
 from the existing evaluator + agent_runs registry.
 
-Design choices (see docs/strategy_rnd_platform_design.md):
+Design choices (see docs/research/platform.md):
   - **Long-only** for now (the engine reserves quantity<0 for a later short tier).
     Short signals are skipped.
   - **Risk-based sizing:** size so entry→stop loss ≈ `risk_pct` of equity, capped

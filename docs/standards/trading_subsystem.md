@@ -1,6 +1,6 @@
 # Trading Subsystem — Enforcement Checklist
 
-Full design: [`../trading_subsystem_design.md`](../trading_subsystem_design.md).
+Full design: [`trading/subsystem_design.md`](../trading/subsystem_design.md).
 This file is the enforcement checklist.
 
 Applies to `app/services/sim/*`, `app/services/sim/strategies/*`,
@@ -57,7 +57,7 @@ Point estimates are not evidence. Before ANY strategy, signal family,
 or learned model advances to paper trading / customer-facing status:
 
 1. **Pre-register the family** (grid + universe + windows + metric) in
-   [`docs/research_hypotheses.md`](../research_hypotheses.md) BEFORE
+   [`docs/research/hypotheses.md`](../research/hypotheses.md) BEFORE
    the sweep runs. Post-hoc registration doesn't count.
 2. **Tier-1 screen** — in-sample MCPT (`scripts/mcpt_insample.py`,
    ~1000 permutations): the optimized in-sample result must beat the
@@ -71,7 +71,7 @@ or learned model advances to paper trading / customer-facing status:
    (`scripts/mcpt_ranker_labels.py`): holdout skill must beat models
    trained on shuffled labels.
 
-Report the p/q-values in `strategy_rnd_findings.md` alongside the
+Report the p/q-values in `research/findings.md` alongside the
 point estimates. A candidate that skips this gate is unvalidated
 regardless of how good its backtest looks.
 

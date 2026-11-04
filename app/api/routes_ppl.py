@@ -3,7 +3,7 @@
 Mounted behind `require_operator` while the PIT calibration harness (P3) is
 outstanding — spec D2: the public route does not open until coverage passes.
 
-Spec: `docs/posterior_predictive_levels_spec.md`.
+Spec: `docs/trading/ppl.md`.
 """
 from __future__ import annotations
 

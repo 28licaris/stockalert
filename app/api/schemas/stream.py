@@ -3,7 +3,7 @@
 The stream universe is the operator's explicit set of symbols that
 StreamService keeps subscribed to the live Schwab feed 24/7. Per the
 locked sticky-universe model in
-[docs/frontend_api_contracts.md §10.1], adding a symbol here
+[docs/product/api_contracts.md §10.1], adding a symbol here
 subscribes Schwab + triggers backfill warmup; removing here is the
 only path that fully strips a symbol from the live stream. Watchlist
 operations auto-extend this universe but never evict from it.

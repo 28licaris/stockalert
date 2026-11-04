@@ -4,7 +4,7 @@ Load split factors from ``equities.market_splits`` for read-time adjustment.
 Splits live in their own small table (~50k rows) — separated from the ~3M-row
 ``market_corp_actions`` dividend store — so this is cheap: a full read is
 sub-second and a per-symbol read is instant, with no dividend scan. See
-docs/market_splits_spec.md.
+docs/data/market_splits.md.
 
 Single source of the split-loading I/O, shared by ``AdjustedOhlcvReader`` and
 ``read_arrow``. Returns ``{}`` (→ identity adjustment) on any failure; never

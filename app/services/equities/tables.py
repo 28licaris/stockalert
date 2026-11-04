@@ -55,7 +55,7 @@ log = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────
 #
 # 128 MB target file + 16 MB row groups + zstd compression match
-# docs/architecture_v2/02_schema.md DDL. `write.distribution-mode=hash`
+# docs/architecture/lake_schema.md DDL. `write.distribution-mode=hash`
 # avoids file-per-task explosion when Spark writes with our
 # bucket-partitioned spec.
 _BASE_PROPERTIES: dict[str, str] = {
@@ -105,7 +105,7 @@ def _ensure_namespace(catalog: Catalog) -> None:
 def _equities_table_location(table_name: str) -> str:
     """Compute the explicit S3 location for an equities table.
 
-    Matches docs/architecture_v2/03_s3_layout.md (post-CV1 patch):
+    Matches docs/architecture/lake_schema.md (post-CV1 patch):
         s3://{bucket}/{warehouse_prefix}/{equities_db}/{table_name}/
 
     e.g. s3://<your-bucket>/iceberg/equities/polygon_raw/
@@ -243,7 +243,7 @@ def ensure_market_splits(catalog: Catalog | None = None) -> Table:
 
     Dedicated splits store (adjustment input) — kept separate from the
     ~3M-row market_corp_actions so split lookups don't scan dividends.
-    See docs/market_splits_spec.md.
+    See docs/data/market_splits.md.
     """
     catalog = catalog or get_catalog()
     _ensure_namespace(catalog)

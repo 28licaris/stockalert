@@ -2,13 +2,13 @@
 Tests for the silver-derived warmup path (TA-5.3.3) — now owned by
 StreamService.
 
-The TA-5.3 unified add-symbol flow per docs/streaming_universe_model.md
+The unified add-symbol flow per docs/standards/data/symbol_lifecycle.md
 replaces the legacy 3-call _enqueue_backfill path with:
   1. LakeToChBackfill.backfill_symbol(days=730) — silver.ohlcv_1m → CH
   2. SchwabTipFill.tip_fill(symbol) — silver-watermark → live gap (≤48d)
 
 Post-FE-CONTRACTS-4-finalisation this lives on `StreamService`
-(see docs/frontend_api_contracts.md §10.1 locked sticky-universe
+(see docs/product/api_contracts.md §10.1 locked sticky-universe
 model). WatchlistService's `add_members` auto-extends the stream
 universe; if the flag is ON, StreamService.add fires the silver-
 derived warmup. If the flag is OFF, WatchlistService falls back to

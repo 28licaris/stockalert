@@ -5,7 +5,7 @@ Stores raw release values in CH `economic_data` (source of truth for the
 Economic page + the AI). Derived figures (YoY, QoQ/MoM change) are computed at
 read time, not stored (lean). A genuinely-new release also emits a market-wide
 `news_items` row so it hits the feed/digest. Pure functions (parsing, transforms,
-headline) are unit-tested without network/CH. See docs/news_alerts_spec.md §14.
+headline) are unit-tested without network/CH. See docs/product/news_alerts.md §14.
 
 Sources:
 - BLS (keyless / optional free key): POST series ids → monthly index/level/rate.

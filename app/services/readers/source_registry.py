@@ -1,7 +1,7 @@
 """
 SourceSpec registry — the modular half of the lake read layer.
 
-Spec: docs/lake_read_layer_design.md §3.1.
+Spec: docs/data/lake_read_layer.md §3.1.
 
 The cold read path unions one-or-more lake tables (per security type +
 data provider) and dedups on (symbol, timestamp) by precedence. This
@@ -64,7 +64,7 @@ def equity_sources() -> list[SourceSpec]:
             # Logical "polygon adjusted" source. Adjustment is computed at
             # read time from polygon_raw + market_corp_actions (the
             # materialized polygon_adjusted table was retired — see
-            # docs/adjusted_lean_storage_spec.md), so table_id points at the
+            # docs/data/adjusted_storage.md), so table_id points at the
             # RAW table and `adjustment="computed"` drives the read-time math.
             name="polygon_adjusted",
             table_id=equities_table_id("polygon_raw"),

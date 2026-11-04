@@ -4,7 +4,7 @@ Public surface is `schemas` (DTOs) and `contract` (the `PplBuilder` Protocol).
 `service.PplService` is the implementation and must not be imported across
 service boundaries (`docs/standards/service_modules.md` rule 1).
 
-Spec: `docs/posterior_predictive_levels_spec.md`.
+Spec: `docs/trading/ppl.md`.
 """
 from app.services.ppl.contract import PplBuilder
 from app.services.ppl.schemas import (

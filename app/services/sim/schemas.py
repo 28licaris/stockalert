@@ -5,7 +5,7 @@ These shapes are the **public interface** used by strategies, the
 backtester, the evaluator, the registry, and any consumer (CLI, MCP
 tool, future feature-server). Implementations import these and
 nothing else from the sim package — that's how the modularity
-contracts in `trading_subsystem_design.md` get enforced.
+contracts in `docs/trading/subsystem_design.md` get enforced.
 """
 from __future__ import annotations
 

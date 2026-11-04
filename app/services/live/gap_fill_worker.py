@@ -103,7 +103,7 @@ def _maybe_provider_gap_fill(symbol: str, start: datetime, end: datetime) -> Non
 
     Gated by `symbol_gapfill_enabled`. Equities only in v1 — futures and
     a pluggable per-fill provider knob are follow-ups (see
-    docs/symbol_onboarding_read_design.md §3.3). Runs on this daemon
+    docs/data/symbol_onboarding.md §3.3). Runs on this daemon
     thread (no event loop), so the async tip-fill is driven via
     asyncio.run. Never raises.
     """

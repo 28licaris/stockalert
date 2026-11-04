@@ -8,7 +8,7 @@ references. EDGAR requires a ``User-Agent`` with a contact email and ≤10 req/s
 
 The Atom PARSING is pure (`parse_latest_filings`) so it's unit-tested without
 network; only `latest_filings` / `fetch_*` touch the wire. See
-docs/news_alerts_spec.md.
+docs/product/news_alerts.md.
 """
 from __future__ import annotations
 

@@ -404,7 +404,7 @@ class SystemHealthReport(BaseModel):
 
 # ─────────────────────────────────────────────────────────────────────
 # Indicator exposure schemas (TA-3.2)
-# See docs/indicator_exposure_design.md for the full architectural
+# See docs/trading/indicators.md for the full architectural
 # rationale. These are the canonical shapes used by the HTTP routes
 # in `app/api/routes_indicators.py` AND the MCP tools in
 # `app/mcp/tools/indicators.py` — single contract, two surfaces.
@@ -665,8 +665,8 @@ class SourceCoverage(BaseModel):
         None,
         description=(
             "Max(timestamp) UTC. None when row_count=0. The lag between "
-            "this and 'now' is the staleness gauge for this source — "
-            "polygon_adjusted lags by up to one weekly Spark run; "
+            "this and 'now' is the staleness gauge for this source — the "
+            "Polygon minute tier is frozen at 2026-06-12 (lapsed feed); "
             "schwab_universe is live-cadence."
         ),
     )

@@ -4,7 +4,7 @@ Free, licensing-clean news feed for the alerts product: SEC EDGAR filings (and,
 later, govt economic/monetary releases), AI-summarized with a link to the source
 document. We never store/republish source bodies — only our summary + the link.
 
-Spec: [`docs/news_alerts_spec.md`](../../../docs/news_alerts_spec.md).
+Spec: [`docs/product/news_alerts.md`](../../../docs/product/news_alerts.md).
 
 ## Layout
 - `schemas.py` — `NewsItem` (Pydantic, API/internal shape) + `NewsIngestResult`.

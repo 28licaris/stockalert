@@ -21,7 +21,7 @@ Partitioning (Gate 3):
   - schwab_universe:                 bucket(16, symbol), month(timestamp)
   - market_corp_actions:             month(ex_date) only
 
-Spec: docs/architecture_v2/02_schema.md + docs/architecture_v2/08_decisions.md.
+Spec: docs/architecture/lake_schema.md + docs/architecture/lake_schema.md.
 """
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def equities_table_id(name: str) -> str:
     return f"{settings.iceberg_equities_glue_database}.{name}"
 
 
-# Gate 3 — bucket count (docs/architecture_v2/08_decisions.md#gate-3).
+# Gate 3 — bucket count (docs/architecture/lake_schema.md#gate-3).
 # Only polygon_adjusted (whole 33K-symbol market) is bucketed;
 # schwab_universe partitions by month(timestamp) only — see its
 # partition spec below for the rationale.
@@ -151,7 +151,7 @@ POLYGON_DAILY_RAW_SORT = SortOrder(
 # The materialized adjusted table was dropped: adjusted OHLCV is a pure
 # function of polygon_raw + market_corp_actions splits, so it's computed at
 # read time via app.services.equities.adjust.apply_adjustment instead of
-# stored as a second ~2.1B-row copy. See docs/adjusted_lean_storage_spec.md.
+# stored as a second ~2.1B-row copy. See docs/data/adjusted_storage.md.
 # No POLYGON_ADJUSTED_SCHEMA / _PARTITION / _SORT — there is no table.
 
 
@@ -305,7 +305,7 @@ MARKET_CORP_ACTIONS_SORT = SortOrder(
 # dividend rows) so the split lookup the read-time adjustment needs is
 # cheap: the whole set is ~50k rows, so a full read is sub-second and a
 # per-symbol read is instant. Sorted by (symbol, ex_date); unpartitioned
-# (the table is tiny). See docs/market_splits_spec.md.
+# (the table is tiny). See docs/data/market_splits.md.
 MARKET_SPLITS_SCHEMA = Schema(
     NestedField(1, "symbol", StringType(), required=True),
     NestedField(2, "ex_date", DateType(), required=True),

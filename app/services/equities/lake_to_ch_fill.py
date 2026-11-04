@@ -136,7 +136,7 @@ def _fill_sync(symbol: str, start: datetime, end: datetime, source_tag: str) -> 
     replaced the Athena UNLOAD path, which still targeted the retired
     materialized ``equities.polygon_adjusted`` table and so silently
     returned zero rows for every fill (the v2 read-time-adjustment
-    migration left it behind). See docs/lake_read_layer_design.md.
+    migration left it behind). See docs/data/lake_read_layer.md.
     """
     from app.services.readers.read_arrow import read_arrow
 

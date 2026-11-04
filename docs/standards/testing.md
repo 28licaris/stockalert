@@ -7,7 +7,8 @@ whole point of the architecture.
 ## Layout
 
 - `<module>/tests/` — unit tests owned by that module. They have no
-  external dependencies and must pass with zero AWS / CH / provider creds.
+  external dependencies and must pass with zero AWS / CH / provider creds —
+  **and identically whether or not those creds happen to be present.**
 - `tests/contract/` — in-process behavior spanning more than one module
   (for example, parity between a reader, HTTP route, and MCP tool). No live
   infrastructure.
@@ -51,6 +52,24 @@ decorators. If a test silently stalls, check `asyncio_mode` in
 4. **Cross-side mutation verify** — re-read via fresh client. See
    [`coding.md`](coding.md) §5.
 
+## Inject every collaborator, not just the one under test
+
+A service that lazily builds its own client (`X.from_settings()` when none was
+passed) will reach the network in a unit test unless **every** such
+collaborator is injected. When construction is gated on an env var, the test
+then passes on a machine without that key and fails on one with it — so it
+looks flaky or "pre-existing" rather than wrong.
+
+`EconService` is the worked example: its two ingest tests stubbed the BLS
+client but not BEA, so on any machine with `BEA_API_KEY` set they made live
+calls to `apps.bea.gov`, returned real GDP/PCE data, and failed their
+row-count assertions. They were wrong for months and read as a known failure.
+Runtime is the tell — those tests dropped from 3.5s to 0.07s once BEA was
+injected.
+
+**If a test's runtime is dominated by anything other than CPU, it is talking to
+something it should not be.**
+
 ## Forbidden
 
 - Asserting only "no exception raised" — that's a smoke check, not a
@@ -58,3 +77,5 @@ decorators. If a test silently stalls, check `asyncio_mode` in
 - Mocking the DB when the test exists to verify a write.
 - New fixtures in test files when they belong in `conftest.py`.
 - Skipping the `integration` marker on a live-service test — blocks CI.
+- Leaving a collaborator un-injected in a unit test, so the real client is
+  constructed when an env var happens to be set.

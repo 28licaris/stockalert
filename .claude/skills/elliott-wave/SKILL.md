@@ -10,7 +10,7 @@ corrections in **3 waves (A-B-C)**. The pattern is **fractal** — each wave
 decomposes into the same structure one degree lower. Wave relationships
 track **Fibonacci ratios** (.236 .382 .50 .618 .786 1.0 1.272 1.618 2.618).
 
-Full build plan & rationale: [docs/elliott_wave_plan.md](../../../docs/elliott_wave_plan.md).
+As-built architecture: [docs/trading/elliott_wave.md](../../../docs/trading/elliott_wave.md).
 
 ## The three inviolable rules (a count breaking any is invalid)
 

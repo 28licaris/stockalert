@@ -2,7 +2,7 @@
 Market session calendar — the single source of "is the market open?".
 
 Backed by the maintained ``exchange_calendars`` library (no hand-kept holiday
-table that drifts and rots — see docs/market_calendar_spec.md):
+table that drifts and rots — see docs/data/market_calendar.md):
 
   - equities → ``XNYS`` (NYSE/Nasdaq): holidays, half-days, early closes.
   - futures  → ``CMES`` (CME Globex): Sun–Fri sessions + CME holidays.

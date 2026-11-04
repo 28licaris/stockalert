@@ -12,8 +12,8 @@ a 5xx. The page should always be reachable; failures are visible
 through the state field instead.
 
 Shape is stable; new fields are additive. See
-[docs/frontend_plan.md §5.1](../../docs/frontend_plan.md) for
-expected fields.
+[docs/product/api_contracts.md](../../docs/product/api_contracts.md) for
+the consumed fields.
 """
 from __future__ import annotations
 

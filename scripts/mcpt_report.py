@@ -7,7 +7,7 @@ Two modes, composable:
       Reads Tier-1 in-sample results (mcpt_insample.py JSON) and prints
       the family table with Benjamini-Hochberg q-values computed ACROSS
       the whole glob — the glob must be exactly one registered family
-      battery (docs/research_hypotheses.md). Survivors = q <= alpha.
+      battery (docs/research/hypotheses.md). Survivors = q <= alpha.
 
   --walkforward 'data/mcpt/exp37_t2_2006_2021*.jsonl' --metric sharpe_ratio
       Merges Tier-2 shard JSONLs (mcpt_walkforward.py): real row from

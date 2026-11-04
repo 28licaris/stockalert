@@ -64,7 +64,7 @@ logger = logging.getLogger(__name__)
 # Read-time adjustment (lean storage): the canonical source is polygon_raw
 # + market_corp_actions splits; adjusted bars are computed on read via
 # app.services.equities.adjust.apply_adjustment. The materialized
-# polygon_adjusted table is being retired (docs/adjusted_lean_storage_spec.md).
+# polygon_adjusted table is being retired (docs/data/adjusted_storage.md).
 _RAW_TABLE_NAME = "polygon_raw"
 _SPLITS_TABLE_NAME = "market_splits"
 
@@ -74,8 +74,8 @@ class AdjustedOhlcvReader:
 
     Two read paths:
 
-      - `get_bars(symbol, start, end)` — polygon_adjusted only.
-        Deep history; lags real-time by up to one weekly Spark run.
+      - `get_bars(symbol, start, end)` — the Polygon tier only, adjusted
+        on read. Deep history; frozen at 2026-06-12 (lapsed feed).
       - `get_bars_union(symbol, start, end)` — polygon_adjusted +
         equities.schwab_universe stitched on (symbol, timestamp).
         Use when the window includes "today" and you need both deep

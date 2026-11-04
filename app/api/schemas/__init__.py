@@ -5,7 +5,7 @@ One file per concern (bars.py, signals.py, watchlists.py, ...). The
 common primitives (ErrorResponse, Page[T], AssetType, HealthState)
 live in `common.py` and are imported by every other schema file.
 
-See [docs/frontend_api_contracts.md](../../../docs/frontend_api_contracts.md)
+See [docs/product/api_contracts.md](../../../docs/product/api_contracts.md)
 for the rules every new schema must follow.
 """
 

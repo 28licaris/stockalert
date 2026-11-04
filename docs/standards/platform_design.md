@@ -39,10 +39,18 @@ not under pressure.
    (pattern detectors, pure fns) → `strategies/` (compose). Don't
    conflate.
 
-5. **Medallion: bronze → silver → gold.** Bronze append-only (see
-   [`data/bronze_idempotency.md`](data/bronze_idempotency.md)). Silver
-   lean and canonical (see [`data/lean_silver.md`](data/lean_silver.md)).
-   Gold = pre-computed features pinned to snapshots.
+5. **Raw storage, derived on read.** The lake stores what the provider
+   gave us; anything recomputable is computed at read time, not
+   materialized. Split adjustment is the worked example — the old
+   `polygon_adjusted` table and its weekly job were retired in favour of
+   `adjusted = f(polygon_raw, market_splits)` on read. Writes append and
+   dedup on read; never `overwrite(filter)` in the hot path. See
+   [`../architecture/lake_schema.md`](../architecture/lake_schema.md) and
+   [`../data/adjusted_storage.md`](../data/adjusted_storage.md).
+
+   > The medallion vocabulary (bronze → silver → gold) is **retired**. It
+   > survives only in table and function names that have not been renamed.
+   > Do not introduce new "silver" or "gold" tiers.
 
 6. **Hot/cold split.** ClickHouse (hot, seconds-fresh) and Iceberg
    (cold, T+1) share no runtime deps. Either can be off.
@@ -50,8 +58,10 @@ not under pressure.
 7. **Startup isolation.** `_safe_start()` in `main_api.py` wraps every
    non-foundation subsystem.
 
-8. **Reproducibility.** Every saved model logs the Iceberg snapshot ID
-   it trained on. `model_training_runs` registry is authoritative.
+8. **Reproducibility.** Anything trained or backtested records the Iceberg
+   snapshot it read, so a run can be replayed exactly. Today that is
+   `agent_runs` (`app/services/sim/registry.py`); a model registry does not
+   exist yet and must not be assumed.
 
 9. **Provider abstraction = config param, not service boundary.**
    Service folders organize by domain (`bronze/`, `ingest/`, `live/`),

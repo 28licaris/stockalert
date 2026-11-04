@@ -66,7 +66,7 @@ aws s3api put-bucket-encryption --bucket "${BUCKET}" --server-side-encryption-co
   }]
 }'
 
-# Lifecycle (transitions per docs/architecture_v2/03_s3_layout.md)
+# Lifecycle (transitions per docs/architecture/lake_schema.md)
 echo "==> Applying lifecycle rules"
 LIFECYCLE_JSON="$(mktemp)"
 cat >"${LIFECYCLE_JSON}" <<JSON

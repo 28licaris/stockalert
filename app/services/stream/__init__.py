@@ -1,6 +1,6 @@
 """Stream service — owns Schwab live subscriptions + the stream universe.
 
-See README.md and docs/frontend_api_contracts.md §10.1 (locked
+See README.md and docs/product/api_contracts.md §10.1 (locked
 sticky-universe model) for the architectural contract.
 """
 from app.services.stream.schemas import (

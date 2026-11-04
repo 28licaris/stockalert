@@ -1,7 +1,7 @@
 """Unit tests for architecture-v2 equities Iceberg schemas (CV1).
 
 These tests verify the schema/partition/sort definitions against the
-spec in docs/architecture_v2/02_schema.md without touching AWS. They
+spec in docs/architecture/lake_schema.md without touching AWS. They
 exist to catch accidental drift: a one-character partition-count typo
 would otherwise only surface when CV2 tries to write data.
 """
@@ -86,7 +86,7 @@ def test_polygon_raw_has_no_adj_factor():
 
 # polygon_adjusted: RETIRED — adjusted OHLCV is computed at read time
 # (app.services.equities.adjust), not stored. Its schema tests were removed
-# with the table (docs/adjusted_lean_storage_spec.md). The read-time output
+# with the table (docs/data/adjusted_storage.md). The read-time output
 # shape is covered by app/services/equities/tests/test_adjust.py.
 
 

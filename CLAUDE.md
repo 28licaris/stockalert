@@ -14,7 +14,7 @@ day/swing trading**.
 | New service / arch change | [`doc_discipline.md`](docs/standards/doc_discipline.md) |
 | Merging any branch | [`merge_discipline.md`](docs/standards/merge_discipline.md) (rebase first, verify the feature after) |
 | `sim/` / strategies / indicators | [`trading_subsystem.md`](docs/standards/trading_subsystem.md) |
-| Lake / ML architecture (canonical v2) | [`docs/architecture_v2/`](docs/architecture_v2/README.md) (**source of truth for lake design**) |
+| Any architecture / data-platform question | [`docs/architecture/`](docs/architecture/README.md) (**the source of truth**) |
 | Adding a symbol / ingest paths | [`data/symbol_lifecycle.md`](docs/standards/data/symbol_lifecycle.md) |
 | Trading-day math | [`data/timezone_et_vs_utc.md`](docs/standards/data/timezone_et_vs_utc.md) |
 | Athena SQL | [`data/athena_dialects.md`](docs/standards/data/athena_dialects.md) |
@@ -42,15 +42,15 @@ docker compose --profile identity up -d postgres  # local identity PostgreSQL
 docker compose --profile full up --build          # full stack
 ```
 
-## Layer map (v2 — post Phase 1 migration)
+## Layer map
 
 ```
 app/api/             FastAPI routes (routes_*.py — one per domain)
 app/services/        Domain modules (see standards/service_modules.md)
   identity/          Customer users/tenants/sessions; Pydantic contracts + PostgreSQL repository;
                      tenant-scoped session management + security audit trail
-  equities/          v2 lake: schemas + sink + tables + gaps + models
-  futures/           v2 futures mirror: schemas/sink/tables/gaps +
+  equities/          Equities lake: schemas + sink + tables + gaps + models
+  futures/           Futures mirror: schemas/sink/tables/gaps +
                      universe + symbols (/-prefix routing) + lake_to_ch_fill
   options/           Options lake: Schwab chain schemas/parser + tables/sink;
                      derived GEX snapshots (MCP/API readers follow)
@@ -64,7 +64,7 @@ app/services/        Domain modules (see standards/service_modules.md)
   ppl/               Posterior predictive levels: GJR-GARCH(1,1) + filtered
                      historical simulation → forward price fan + quantile
                      levels. Gate is PIT calibration, not MCPT (it makes no
-                     directional claim). See docs/ppl_mathematics.md
+                     directional claim). See docs/trading/ppl_mathematics.md
   vol_premium/       Ranks the options universe by implied vol vs the PPL
                      forecast ("where are options expensive relative to how
                      much the underlying actually moves"). ThetaData EOD
@@ -94,19 +94,21 @@ docs/                Plans, runbooks; docs/standards/ = rules
 tests/  tests/integration/
 ```
 
-Lake tables (v2 / `equities.*` Glue DB):
+Lake tables (`equities.*` Glue DB):
 
 | Table | Source | Notes |
 |---|---|---|
-| `equities.polygon_raw` | Polygon flat-files (CV7 nightly, CV3 history puller) | Raw unadjusted, bucket(32, symbol) + month(timestamp) |
-| `equities.schwab_universe` | Schwab live + REST (CV8) | Pre-adjusted (adj_factor=1.0); bucket(16) |
-| `equities.market_corp_actions` | Polygon REST (CV9) | Dividends (+ splits, legacy); month(ex_date) partition |
+| `equities.polygon_raw` | Polygon flat-files | Raw unadjusted minute bars, bucket(32, symbol) + month(timestamp). **Frozen at 2026-06-12** — the flat-file subscription lapsed |
+| `equities.polygon_daily_raw` | Polygon REST grouped-daily (nightly, paced) | Raw unadjusted daily bars; the live daily path now that flat-files lapsed |
+| `equities.schwab_universe` | Schwab live + REST | Pre-adjusted (adj_factor=1.0); bucket(16) |
+| `equities.schwab_daily_raw` | Schwab REST daily | Pre-adjusted daily tier |
+| `equities.market_corp_actions` | Polygon REST | Dividends (+ splits, legacy); month(ex_date) partition |
 | `equities.market_splits` | Polygon REST (mirrored from corp-actions) | Splits-only, ~27k rows; the read-time adjustment source. Tiny + symbol-sorted so per-symbol lookup is instant (no dividend scan) |
 
 > **Split-adjusted OHLCV is computed at read time**, not stored — `adjusted =
-> f(polygon_raw, market_corp_actions splits)` via `app/services/equities/adjust.py`.
+> f(polygon_raw, market_splits)` via `app/services/equities/adjust.py`.
 > The old materialized `equities.polygon_adjusted` table + its weekly Spark job
-> were retired (see [`docs/adjusted_lean_storage_spec.md`](docs/adjusted_lean_storage_spec.md)).
+> were retired (see [`docs/data/adjusted_storage.md`](docs/data/adjusted_storage.md)).
 > Readers (`AdjustedOhlcvReader`, `read_arrow` "polygon_adjusted" source) apply
 > the adjustment on read.
 
@@ -114,7 +116,10 @@ Futures lake (separate `futures.*` Glue DB + `iceberg/futures/` S3):
 
 | Table | Source | Notes |
 |---|---|---|
-| `futures.schwab_futures` | Schwab live (F2) + REST nightly (F3) | Continuous roots (/ES,…); no adjustment tier; month(timestamp) partition |
+| `futures.schwab_futures` | Schwab live + REST nightly | Continuous roots (/ES,…), recent ~48d 1-min; month(timestamp) partition |
+| `futures.schwab_futures_daily` | Schwab REST | Deep daily tier for continuous roots |
+| `futures.polygon_raw` | Polygon flat-file mirror → parse | Every outright contract (ESH4…), no roll applied |
+| `futures.polygon_continuous` | `futures.polygon_raw` + volume roll | Back-adjusted continuous roots; `adj_factor` recovers true contract prices |
 
 Options lake (separate `options.*` Glue DB + `iceberg/options/` S3):
 
@@ -125,19 +130,42 @@ Options lake (separate `options.*` Glue DB + `iceberg/options/` S3):
 | `options.schwab_expirations` | Schwab chain/expiration data | Observed expirations per underlying |
 | `options.gamma_exposure_snapshots` | Derived from canonical contracts | GEX totals/levels by underlying, strike, expiry, strike+expiry |
 
+ClickHouse (hot tier) — `ohlcv_1m` and `futures_ohlcv_1m` are the **only**
+serving bar tables; every chart timeframe is resampled from them on read.
+`ohlcv_daily` / `ohlcv_30m` / `ohlcv_hourly` are **research** tables built by
+`scripts/build_ohlcv_*.py`, not on the serving path. `ohlcv_1m` covers only
+the 300 symbols Schwab will stream, while `ohlcv_daily` covers 415 via REST —
+**do not resample 1m into daily expecting full coverage.**
+
 ## Docs
 
-| Doc | When |
-|-----|------|
-| [`docs/standards/`](docs/standards/README.md) | **Always — the rules** |
-| [`docs/architecture_v2/`](docs/architecture_v2/README.md) | v2 lake / ML design (canonical) |
-| `docs/ARCHITECTURE.md` | Redirect stub — points to the canonical docs after v1 deprecation |
-| `docs/ISSUES.md` | Known issues, flaky tests |
-| `docs/TODO.md` | Parked / deferred work (billing activation, calendar events 2b/2c, …) |
-| `docs/COMMANDS.md` | Cheatsheet |
-| `docs/architecture_v2/07_runbook.md` | Operator procedures |
-| `docs/trading_subsystem_design.md` | Trading subsystem contract |
-| `docs/mcpt_methodology.md` | Strategy-validation manual — MCPT gate; pre-register in `docs/research_hypotheses.md` BEFORE any sweep |
+`docs/` is organized by purpose; [`docs/README.md`](docs/README.md) is the
+index.
+
+| Dir | Holds |
+|-----|-------|
+| [`docs/standards/`](docs/standards/README.md) | **The rules — always read first** |
+| [`docs/architecture/`](docs/architecture/README.md) | System map, lake schema, providers |
+| [`docs/operations/`](docs/operations/runbook.md) | Runbook, startup flow, command cheatsheet |
+| [`docs/data/`](docs/data/) | Data-platform specs: ingest, storage, read paths |
+| [`docs/trading/`](docs/trading/) | Trading subsystem, models, signals |
+| [`docs/research/`](docs/research/) | Validation methodology + findings |
+| [`docs/product/`](docs/product/) | Customer-facing surfaces |
+| [`docs/reference/`](docs/reference/schwab-api/) | Vendor API docs (not ours) |
+| [`docs/ISSUES.md`](docs/ISSUES.md) | Live register — what is broken |
+| [`docs/TODO.md`](docs/TODO.md) | Live register — what is deferred |
+
+Hot paths:
+
+| You need | Read |
+|---|---|
+| To run or fix the running system | [`operations/runbook.md`](docs/operations/runbook.md) |
+| How data flows end to end | [`architecture/README.md`](docs/architecture/README.md) |
+| The trading/backtest contract | [`trading/subsystem_design.md`](docs/trading/subsystem_design.md) |
+| To make any performance claim | [`research/mcpt_methodology.md`](docs/research/mcpt_methodology.md) — pre-register in [`research/hypotheses.md`](docs/research/hypotheses.md) **before** the sweep |
+
+Every module carries its own `README.md` — what it owns, its public contract,
+how to test it. Read that before the cross-module docs.
 
 Plan vs code conflict: code wins. The journal lives in detailed
 commit messages; BUILD_JOURNAL was retired 2026-05-18 and the file
@@ -146,8 +174,8 @@ deleted 2026-05-21 (CV18).
 ## Infra
 
 AWS only. Glue + S3 (Iceberg warehouse), CodeBuild for long backfills
-(`scripts/codebuild/`). No CDK / Terraform. Self-hosted ClickHouse.
-(EMR Serverless + the weekly Spark adjustment job were retired — adjustment
-is computed at read time.)
+(`scripts/codebuild/`). No CDK / Terraform. No Spark and no EMR — split
+adjustment is computed at read time, and lake maintenance runs via Athena.
+Self-hosted ClickHouse.
 Secrets via `.env` (gitignored; template in `.env.example`, docs in
 `CONFIG.md`).

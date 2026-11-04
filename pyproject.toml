@@ -52,7 +52,7 @@ optional = true
 [tool.poetry.group.spark.dependencies]
 pyspark = "3.5.*"
 
-# Lake read-layer engine spike (docs/lake_read_layer_design.md). Optional —
+# Lake read-layer engine spike (docs/data/lake_read_layer.md). Optional —
 # only needed to run scripts/spikes/lake_read_engine_bench.py, which
 # benchmarks DuckDB-over-Iceberg vs Polars vs the PyIceberg+Python baseline
 # for the cold read path. Install: `poetry install --with spike`

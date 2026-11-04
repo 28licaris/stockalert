@@ -1,86 +1,92 @@
 # assistant/
 
-Conversational copilot over the platform's MCP tools. The developer
-(today) and tenants (after SaaS lands) type natural language;
-Claude plans, calls the system's tools, streams answers back grounded
+Conversational copilot over the platform's MCP tools. The user types natural
+language; Claude plans, calls the system's tools, streams answers back grounded
 in real platform data, and renders rich artifacts inline.
 
-Full spec: [docs/assistant_plan.md](../../../docs/assistant_plan.md).
+Chat surface + UX contract:
+[`docs/product/assistant.md`](../../../docs/product/assistant.md).
 
-## Status
+## What this owns
 
-**Phase AS-1 — complete.** All six slices committed.
+The interactive, user-driven assistant — and **nothing that routes orders**,
+enforced by tool allowlist rather than by convention.
 
-| Slice | Status | Lands |
-|---|---|---|
-| 1. Scaffold + schemas + contract + env | ✅ committed (`feat/assistant-as1-slice1`) | shape only |
-| 2. `service.py` + Anthropic + cache + prompts + models | ✅ committed (`feat/assistant-as1-slice2`) | core loop |
-| 3. `policy.py` + `runner.py` | ✅ committed (`feat/assistant-as1-slice3`) | tool dispatch |
-| 4. CH tables + `store.py` | ✅ committed (`feat/assistant-as1-slice4`) | persistence |
-| 5. `/cockpit/assistant/*` + SSE | ✅ committed (`feat/assistant-as1-slice5`) | HTTP surface |
-| 6. Integration gate test | ✅ committed (`feat/assistant-as1-slice6`) | AS-1 done |
+Distinct from the trading `LLMAgent` in
+[`app/services/sim/strategies/llm_agent.py`](../sim/strategies/llm_agent.py),
+which is the *autonomous* per-bar trading agent: different caller, different
+cadence, different output shape, different cache file.
 
-## Distinct from the trading `LLMAgent`
-
-This service is **interactive, user-driven, and cannot route orders**
-by tool allowlist. The trading `LLMAgent` in
-[`app/services/sim/strategies/llm_agent.py`](../sim/strategies/llm_agent.py)
-is the *autonomous* per-bar trading agent — different caller,
-different cadence, different output shape, different cache file.
-See [assistant_plan.md §3.2](../../../docs/assistant_plan.md) for
-the full table.
-
-## Files (this slice)
+## Layout
 
 | File | Owns |
 |---|---|
-| [schemas.py](schemas.py) | `Role`, `ToolCall`, `ConversationTurn`, `Conversation`, `AssistantStreamEvent`, `ContinueRequest`, `ConfirmRequest`, plus the dev-mode sentinels |
-| [contract.py](contract.py) | `AssistantService` Protocol + `Principal` Protocol |
+| [schemas.py](schemas.py) | `Role`, `ToolCall`, `ConversationTurn`, `Conversation`, `AssistantStreamEvent`, `ContinueRequest`, `ConfirmRequest` |
+| [contract.py](contract.py) | `AssistantService` Protocol + `Principal` Protocol — the public interface |
+| [service.py](service.py) | `DefaultAssistantService` — the Anthropic SDK turn loop |
+| [cache.py](cache.py) | `ResponseCache` — SQLite, keyed by prompt + model + system-prompt hash |
+| [models.py](models.py) | `ModelRegistry` — default vs extended-thinking model choice |
+| [prompts/](prompts/README.md) | Versioned system prompts (`v1.md`, `v2.md`, …) behind a registry — `current()` resolves the active version, whose hash is part of the cache key |
+| [policy.py](policy.py) | `ToolPolicy` + `DevModeToolPolicy` — allowlist + write-tool flag |
+| [runner.py](runner.py) | `MCPToolRunner` — MCP dispatch + result truncation |
+| [store.py](store.py) | `ConversationStore` — tenant-scoped reads/writes against ClickHouse |
+| [stream.py](stream.py) | SSE event encoder (`encode_sse`, `event_stream`) |
 | [__init__.py](__init__.py) | Public re-exports |
 
-## Files
+## Public contract
 
-| File | Slice | Owns |
+Callers depend on the `AssistantService` Protocol in
+[contract.py](contract.py), never on `DefaultAssistantService`.
+
+HTTP surface is mounted at **`/cockpit/assistant/*`** by `main_api.py`
+(`app/api/routes_assistant.py`) and streams over SSE. The prefix is
+deliberately UI-internal; a public `/api/v1/assistant/*` is a separate
+product decision, not an alias to add casually.
+
+## Design decisions
+
+These were locked before the service was built and the code still depends on
+them — change them deliberately, not incidentally.
+
+| Decision | Choice | Why |
 |---|---|---|
-| [schemas.py](schemas.py) | 1 | Wire contracts |
-| [contract.py](contract.py) | 1 | `AssistantService` Protocol + `Principal` Protocol |
-| [__init__.py](__init__.py) | 1+ | Public re-exports (updated each slice) |
-| [service.py](service.py) | 2 | `DefaultAssistantService` — Anthropic SDK turn loop |
-| [cache.py](cache.py) | 2 | `ResponseCache` — SQLite, keyed by prompt hash |
-| [models.py](models.py) | 2 | `ModelRegistry` — Sonnet 4.6 default, Opus 4.7 for `/explain` |
-| [prompts/v1.md](prompts/v1.md) | 2 | Versioned system prompt (hash is part of cache key) |
-| [policy.py](policy.py) | 3 | `ToolPolicy` + `DevModeToolPolicy` — allowlist + write-tool flag |
-| [runner.py](runner.py) | 3 | `MCPToolRunner` — MCP dispatch + §8.4 truncation |
-| [store.py](store.py) | 4 | `ConversationStore` — owner-scoped reads/writes against CH |
-| [stream.py](stream.py) | 5 | SSE event encoder (`encode_sse`, `event_stream`) |
+| Endpoint prefix | `/cockpit/assistant/*` | UI-internal; a public API is a product decision |
+| Conversation store | ClickHouse (`assistant_conversations`, `assistant_turns`) | No second database for this; reuses the existing client |
+| Model selection | `ModelRegistry` — default model, plus an extended-thinking model for `/explain` | Same code path, per-turn switch; the model id is part of the cache key, so switching invalidates it |
+| System prompt source | Versioned markdown in-repo behind `prompts.current()` (**`v2` today**) | Reviewable in PRs; its hash keys the cache, so a prompt edit invalidates it. DB-backed live editing deliberately not built |
+| Write-tool allowlist | Opt-in, one tool per change | Each write tool lands with its own confirm-card copy and tests |
 
-## Design rules (per `feedback_service_module_design`)
+> The model ids in [models.py](models.py) are pinned constants. Verify them
+> against the current Claude model list before relying on them — a stale id
+> fails at call time, not at import.
 
-- **Contract first.** Callers depend on `AssistantService`
-  (Protocol), never the concrete class.
-- **Owner-scoped reads.** Every storage query filters by
-  `principal.tenant_id`. The lint check in
-  [frontend_plan.md §7.2](../../../docs/frontend_plan.md) enforces
-  this at PR time.
-- **No silent failures.** Anthropic and MCP errors surface as `ERROR`
-  events in the stream and as structured log lines. Pipefail in any
-  shell helpers.
+## Design rules
+
+Per [`service_modules.md`](../../../docs/standards/service_modules.md):
+
+- **Contract first.** Depend on the Protocol, not the class.
+- **Tenant-scoped reads.** Every storage query filters by
+  `principal.tenant_id`. Access model:
+  [`docs/product/access_control.md`](../../../docs/product/access_control.md).
+- **No silent failures.** Anthropic and MCP errors surface as `ERROR` events in
+  the stream *and* as structured log lines.
 - **Result objects over raises.** Tool dispatch returns a typed
-  `ToolCall.result` / `.error` shape; only programmer errors raise.
-- **Lazy imports for heavy deps** (`anthropic`, `clickhouse_connect`)
-  so importing this package stays cheap.
+  `ToolCall.result` / `.error`; only programmer errors raise.
+- **Lazy imports for heavy deps** (`anthropic`, `clickhouse_connect`) so
+  importing this package stays cheap.
 
-## Env vars
+## Env
 
-Set `ANTHROPIC_API_KEY` in `.env`. The Anthropic SDK auto-reads it;
-the assistant does not duplicate the env-var name in `app/config.py`
-(same pattern as the trading `LLMAgent`).
+Set `ANTHROPIC_API_KEY` in `.env`. The Anthropic SDK reads it directly; the
+assistant does not duplicate the name in `app/config.py` (same pattern as the
+trading `LLMAgent`).
 
-## Related docs
+## Testing
 
-- [docs/assistant_plan.md](../../../docs/assistant_plan.md) — full
-  spec, contracts, phasing.
-- [docs/frontend_plan.md §5.13](../../../docs/frontend_plan.md) — the
-  cockpit page/drawer that consumes this service.
-- [docs/ARCHITECTURE.md §5.13](../../../docs/ARCHITECTURE.md) — the
-  bounded-service entry.
+```bash
+poetry run pytest app/services/assistant/tests -q
+```
+
+Unit tests mock the Anthropic client and the MCP runner. The ClickHouse-backed
+store tests carry the `integration` marker and need
+`docker compose --profile ch up -d`.

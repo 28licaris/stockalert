@@ -1,7 +1,7 @@
 """Posterior Predictive Levels — public DTOs.
 
 The only file other services import (plus `contract.py`). See
-`docs/posterior_predictive_levels_spec.md`.
+`docs/trading/ppl.md`.
 """
 from __future__ import annotations
 
