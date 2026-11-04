@@ -112,22 +112,22 @@ metrics stay canonical; quantstats renders, never validates — it has no
 nulls/FDR and must not creep into the promotion gate. Trigger: first
 monthly paper-record review (~Aug 2026, after the 2026-07-29 FOMC trades).
 
-## Vol Premium — remaining build (in flight, `feat/bayesian-alert-system`)
+## Vol Premium — remaining build
 Full status and cold-start notes:
-[`handoff_ppl_vol_premium.md`](handoff_ppl_vol_premium.md).
+[`handoff_ppl_vol_premium.md`](handoff_ppl_vol_premium.md). Merged to main
+2026-11-03 (PRs #28, #30-33).
 
-- **Historical premium percentile.** `options_atm_iv_daily` already holds the
-  implied-vol half (208.7M ThetaData rows reduced to 87,068 daily readings,
-  2016-01 onward, validated against 2018/2020/2022). Missing is the *forecast*
-  half, so the RATIO can be percentiled rather than implied vol alone. Design
-  settled: refit GJR-GARCH parameters monthly, roll the conditional variance
-  daily off realized returns (~5,080 fits, ~17 min — versus ~87,000 fits and
-  ~5 hours if refit per day). `ppl.garch.variance_ratio_from` exists for
-  exactly this. Still to write: `vol_premium/history.py`, a build script, a
-  `vol_premium_history` table.
+- ~~**Historical premium percentile.**~~ **DONE 2026-11-03.**
+  `vol_premium_history`: 81,015 rows, 40 symbols, 2016-01 → 2026-08, built by
+  `scripts/build_vol_premium_history.py`. GJR-GARCH refit monthly with the
+  variance rolled daily; no look-ahead, tested by rewriting the future after a
+  cut point and asserting no past forecast moves. Wired through service + CLI.
 - **API + page.** `routes_vol_premium.py` + `vol-premium.tsx`, per spec §5.
-  Needs a scheduled job first — a GARCH fit per symbol is ~0.2s, so 40 symbols
-  is ~8s: fine for a job, unacceptable on a page load.
+  **The only thing left before this is a product** — the engine, the baseline
+  and the percentile all exist, but nothing in the app can reach them; the sole
+  entry point is `scripts/vol_premium_screen.py`. Needs a scheduled job writing
+  to ClickHouse first (a GARCH fit per symbol is ~0.2s, so 40 symbols is ~8s:
+  fine for a job, unacceptable on a page load).
 - **Backtest the premium.** Ten years of history makes it possible now. MCPT,
   pre-registered in `research_hypotheses.md`, before any return claim.
 - **Reparse the lake's canonical option quotes.** Deprioritized: ThetaData
@@ -136,24 +136,37 @@ Full status and cold-start notes:
   PyIceberg falls back to copy-on-write and rewrites every matching file
   (>10 min for a single symbol).
 
-## Backfill after the 2026-08→11 outage
-Nothing was collected 2026-08-12 → 2026-11-03: the options loop ran every 15
-minutes and failed every time on an **expired Schwab refresh token**, while the
-live streamer kept working (its websocket authenticates once at connect) and
-masked the problem. Re-authorized and verified writing again 2026-11-03.
-Polygon and ThetaData subscriptions have lapsed, so Schwab is now the only live
-source. Full detail: [`handoff_ppl_vol_premium.md`](handoff_ppl_vol_premium.md).
+## Nightly 1-minute backfill for the 115 stream-capped symbols
+Schwab streams only **300** equity symbols for this account — a hard
+subscription cap, confirmed 2026-11-03, not fixable in code (see
+`schwab-300-symbol-account-cap` in ISSUES). The other 115 of the 415-symbol
+universe receive **nothing** live.
 
-- **Equity + futures bars — STILL TO DO.** Three months stale (`ohlcv_daily`
-  newest was 2026-08-13). Backfill from Schwab REST:
-  `schwab_history_backfill.py` and `futures_history_backfill.py` into the lake,
-  then `rebuild_ch_from_lake.py` to refill ClickHouse.
-- **Options chains have a PERMANENT hole**, 2026-08-12 → 2026-11-03. `/chains`
-  returns only the current chain, so un-snapshotted days cannot be recovered.
-  Noted so nobody hunts for a backfill that cannot exist.
-- **ThetaData archive — verified safe, nothing to do.** 2017-01-03 → 2026-08-05
-  in `options.thetadata_greeks_eod`, and `options_atm_iv_daily` was confirmed
-  intact on 2026-11-03 (87,068 rows, 40 symbols). If it is ever lost it rebuilds
-  from the lake with **no subscription** via `scripts/build_atm_iv_history.py`.
-- **Re-verify after any backfill**: `scripts/ppl_calibrate.py` and
-  `scripts/vol_premium_screen.py` both depend on fresh bars.
+**REST is not subject to that cap, and returns full 1-minute history** —
+verified on symbols that are silent on the stream:
+
+```
+SBUX 487 bars · WMT 819 · SHOP 572 · XLF 535 · SCHW 412   (Nov 2-3, 1m, via REST)
+```
+
+So the shape is: stream the 300 live, backfill the other 115 nightly at the
+**same 1-minute resolution**. All 415 end up with complete intraday history;
+the 115 simply lag by a day, which costs real-time alerting on them and costs
+research nothing.
+
+- **Not happening today.** Checked 2026-11-02, 10-30, 10-29: **zero** 1m bars
+  for any of the 115. This is new work, not a config flag.
+- **The machinery exists.** `scripts/schwab_history_backfill.py` already pulls
+  REST 1-minute bars into `equities.schwab_universe`; it is simply not run
+  against the symbols that need it. Scope is roughly: pick the universe
+  symbols NOT currently delivering, run that puller for them nightly, then
+  `rebuild_ch_from_lake` / `fill_ch_from_lake` for the CH side.
+- **Load-bearing, so monitor it.** Schwab's 1-minute history reaches back only
+  ~48 days. Miss this job for more than ~7 weeks and that window is gone
+  permanently — exactly how the 2026-08→11 options gap became unrecoverable.
+- **Do it in the AWS session.** Where this runs and how it is alerted is a
+  deployment question; building it before that means building it twice.
+- **Related and more important than the backfill itself:** the health panel
+  must compare *delivered* against *subscribed*. The cap hid for three months
+  because `/stream/status` reported 424 subscribed while 131 delivered nothing,
+  and nothing anywhere compared the two numbers.
