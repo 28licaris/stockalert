@@ -15,7 +15,10 @@ an ownership boundary; read its README before editing it.
 
 `config.py` is the only environment-variable boundary. `main_api.py` composes
 the packages and owns process startup; domain logic does not belong in either
-file.
+file. `logging_setup.py` owns the process log format and **secret redaction**:
+the HTTP clients are held at WARNING and every formatted line masks credential
+parameters (`apiKey`, `UserID`, `registrationkey`, tokens). A provider that
+puts a credential in a URL adds its parameter name there.
 
 Unit tests live beside their owning package in `tests/`. Cross-package contract
 tests live in [`../tests/contract/`](../tests/contract/), and tests requiring

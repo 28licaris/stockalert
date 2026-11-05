@@ -12,6 +12,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSock
 
 from app.api.auth_dependencies import require_operator
 from app.api.auth_middleware import SessionGateMiddleware, resolve_session_principal
+from app.logging_setup import configure_logging
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -70,10 +71,7 @@ from app.api import (
 )
 from app.services.journal.journal_sync import journal_sync_service
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+configure_logging()  # format + quiet httpx + secret redaction (app/logging_setup.py)
 logger = logging.getLogger(__name__)
 
 active_connections = []
