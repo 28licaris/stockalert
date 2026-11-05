@@ -40,11 +40,20 @@ needed:
 git log --diff-filter=D -- scripts/aws/setup_emr_serverless.sh
 ```
 
-> **The AWS-side resources were still live when the files were deleted.** An
-> EMR Serverless application `stockalert-spark-batch`
-> (`00g5u3fmfj03dg09`, us-east-1) exists in STOPPED state, created
-> 2026-05-24, last touched 2026-05-28. Stopped applications bill nothing, but
-> it and its `stock-lake-spark-emr` execution role are orphaned IAM/infra
-> surface. De-provisioning is tracked in
-> [`../../docs/TODO.md`](../../docs/TODO.md) — do it as part of the AWS
-> deployment, not piecemeal.
+> **The AWS-side resources were deleted on 2026-11-05.** The EMR Serverless
+> application `stockalert-spark-batch` (`00g5u3fmfj03dg09`) is TERMINATED and
+> the `stock-lake-spark-emr` execution role and its inline
+> `spark-emr-execution-permissions` policy are gone. The application had run
+> **zero jobs** in its lifetime — it was provisioned for an adjustment job that
+> was retired before it ever ran there.
+>
+> `AWSServiceRoleForAmazonEMRServerless` remains: it is an AWS-managed
+> service-linked role, not ours to curate.
+>
+> To stand Spark back up, recover the setup script and policy documents from
+> git history (verified identical to what was live at deletion time):
+>
+> ```bash
+> git show 5f3ad0d^:scripts/aws/setup_emr_serverless.sh
+> git show 5f3ad0d^:scripts/aws/iam_policies/spark-emr-execution-role-permissions.json
+> ```
