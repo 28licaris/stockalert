@@ -1,0 +1,48 @@
+{
+ "imap_id": "167791",
+ "message_id": "6f96fec274924795989a5986a92ecf84@elliottwavetrader.net",
+ "date": "2026-07-22T19:48:12Z",
+ "subject": "Metals  Update from ElliottWaveTrader",
+ "analyst": "Avi",
+ "timeframe": "daily",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "GDX": {
+   "count": "Break through 77 makes a lower low less likely; the only remaining path to one is an expanded b-wave within wave 5 of an ending diagonal c-wave \u2014 explicitly flagged as a low-confidence structure.",
+   "alternates": [
+    "Low may already be in place."
+   ],
+   "levels": {
+    "pivot": [
+     "77"
+    ]
+   },
+   "confidence": "explicitly 'very creative' / not to be traded aggressively"
+  },
+  "GC": {
+   "count": "4th-wave flat still primary, but roughly equal odds the downside is already complete.",
+   "alternates": [
+    "Downside complete; corrective rally underway."
+   ],
+   "levels": {
+    "target": [
+     "5050-5500"
+    ]
+   },
+   "confidence": "primary count, ~equal probability alternate"
+  },
+  "SI": {
+   "count": "4th-wave flat still primary; potential for a lower low retained.",
+   "alternates": [
+    "Downside complete."
+   ],
+   "levels": {
+    "target": [
+     "97-123"
+    ]
+   },
+   "confidence": "primary, with explicit caution against shorting"
+  }
+ }
+}

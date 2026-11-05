@@ -1,0 +1,24 @@
+{
+ "imap_id": "168891",
+ "message_id": "553ce1c0a96f4ddb99e9ec3b10cf8b07@elliottwavetrader.net",
+ "date": "2026-08-05T19:43:58Z",
+ "subject": "Wave Alert - Metals",
+ "analyst": "Arkady",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "SI": {
+   "count": "66 remains the key resistance and primary inflection point; test expected within days.",
+   "alternates": [
+    "Two scenarios still competing; reaction at 66 decides."
+   ],
+   "levels": {
+    "resistance": [
+     "66"
+    ]
+   },
+   "confidence": "undecided"
+  }
+ }
+}

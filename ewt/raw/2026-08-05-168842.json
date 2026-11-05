@@ -1,0 +1,64 @@
+{
+ "imap_id": "168842",
+ "message_id": "4850ed2dabf543639969f0c6ac788800@elliottwavetrader.net",
+ "date": "2026-08-05T15:02:57Z",
+ "subject": "Bayesian Swing Signals Portfolio Alert",
+ "analyst": "Luke",
+ "timeframe": "swing",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "SPY": {
+   "count": "Not a wave count \u2014 Bayesian/statistical service. QQQ-vs-SPY divergence persists at new ATHs, typically seen near larger-degree turning points; clustering toward at least ~710 has not gone away.",
+   "alternates": [],
+   "levels": {
+    "pivot": [
+     "710 (cluster)"
+    ]
+   },
+   "confidence": "divergence noted"
+  },
+  "GDX": {
+   "count": "Booked profits, added back shorts with weight on the bounce.",
+   "alternates": [],
+   "levels": {},
+   "confidence": "positioning"
+  },
+  "SLV": {
+   "count": "Booked profits, added back shorts with weight on the bounce.",
+   "alternates": [],
+   "levels": {},
+   "confidence": "positioning"
+  },
+  "USO": {
+   "count": "Holding near the 116s; the 110-112s cluster below has persisted for several quarters. Holding keeps a strongly bullish path in play.",
+   "alternates": [],
+   "levels": {
+    "support": [
+     "116s",
+     "110-112s (cluster)"
+    ]
+   },
+   "confidence": "conditional"
+  },
+  "TLT": {
+   "count": "The 80-83s region (dividend-adjusted) still holding, with 2027 targets above 120.",
+   "alternates": [],
+   "levels": {
+    "support": [
+     "80-83s"
+    ],
+    "target": [
+     "120+ (2027)"
+    ]
+   },
+   "confidence": "stated"
+  },
+  "BTC": {
+   "count": "Shorting into the bounce this week.",
+   "alternates": [],
+   "levels": {},
+   "confidence": "positioning"
+  }
+ }
+}

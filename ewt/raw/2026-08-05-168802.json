@@ -1,0 +1,24 @@
+{
+ "imap_id": "168802",
+ "message_id": "d0026fd36b24494ba5916256c46c3f30@elliottwavetrader.net",
+ "date": "2026-08-05T12:31:46Z",
+ "subject": "Wave Alert - Metals",
+ "analyst": "Avi",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "GC": {
+   "count": "Triangle removed; resistance moved up to 4400. Explicitly 50/50 on whether a bottom is in or one more lower low is needed.",
+   "alternates": [
+    "One more lower low."
+   ],
+   "levels": {
+    "resistance": [
+     "4400"
+    ]
+   },
+   "confidence": "explicitly 50/50"
+  }
+ }
+}

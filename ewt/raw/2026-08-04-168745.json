@@ -1,0 +1,27 @@
+{
+ "imap_id": "168745",
+ "message_id": "7936bd1884a1441bbbace5fe38874430@elliottwavetrader.net",
+ "date": "2026-08-04T19:17:18Z",
+ "subject": "Wave Alert - Energy",
+ "analyst": "Arkady",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "CL": {
+   "count": "Wave (b) high believed in place; decline toward 70.9-71.15 expected.",
+   "alternates": [
+    "Extension lower below the 67.04 signal level (Option 1-1 Micro Linear)."
+   ],
+   "levels": {
+    "support": [
+     "70.9-71.15"
+    ],
+    "invalidation": [
+     "67.04 (signal level)"
+    ]
+   },
+   "confidence": "belief stated, conditional on support"
+  }
+ }
+}

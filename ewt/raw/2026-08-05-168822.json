@@ -1,0 +1,24 @@
+{
+ "imap_id": "168822",
+ "message_id": "743841bc4ef94461ae6e129e4a6c25ec@elliottwavetrader.net",
+ "date": "2026-08-05T13:31:42Z",
+ "subject": "Wave Alert - Metals",
+ "analyst": "Arkady",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "SI": {
+   "count": "Impulsive-looking advance makes a re-test of the 66 resistance a realistic near-term prospect.",
+   "alternates": [
+    "Two published counts still competing; the reaction at 66 decides."
+   ],
+   "levels": {
+    "resistance": [
+     "66"
+    ]
+   },
+   "confidence": "undecided between two counts"
+  }
+ }
+}

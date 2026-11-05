@@ -1,0 +1,18 @@
+{
+ "imap_id": "168796",
+ "message_id": "b29a06d9b51c4a9bab6b8928f736ee21@elliottwavetrader.net",
+ "date": "2026-08-05T10:26:25Z",
+ "subject": "Wave Alert - U.S. Indices (Day)",
+ "analyst": "Avi",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "SPX": {
+   "count": "Final touches on iii of (iii) of i of 3, conditional on the bullish count and holding support.",
+   "alternates": [],
+   "levels": {},
+   "confidence": "conditional"
+  }
+ }
+}

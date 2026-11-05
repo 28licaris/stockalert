@@ -1,0 +1,30 @@
+{
+ "imap_id": "167786",
+ "message_id": "1f92d6564adf4d4dbbb3f1985f33b4fb@elliottwavetrader.net",
+ "date": "2026-07-22T19:00:15Z",
+ "subject": "Market Update from ElliottWaveTrader",
+ "analyst": "Mike",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "ES": {
+   "count": "Unchanged \u2014 white count wave 2 of larger (c) down still base case while under resistance.",
+   "alternates": [
+    "Yellow bullish count unchanged."
+   ],
+   "levels": {
+    "resistance": [
+     "7551-7594",
+     "7633",
+     "7703"
+    ],
+    "pivot": [
+     "7504",
+     "7470"
+    ]
+   },
+   "confidence": "base case, reiterated"
+  }
+ }
+}

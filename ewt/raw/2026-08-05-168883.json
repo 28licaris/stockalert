@@ -1,0 +1,27 @@
+{
+ "imap_id": "168883",
+ "message_id": "c221f45771234eccaec21ee31f8aa22e@elliottwavetrader.net",
+ "date": "2026-08-05T19:39:02Z",
+ "subject": "Wave Alert - Energy",
+ "analyst": "Arkady",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "NG": {
+   "count": "Maintained: wave 5 of circled wave 3 down, minimum target 2.518.",
+   "alternates": [
+    "Red wave 4 expanded flat."
+   ],
+   "levels": {
+    "support": [
+     "2.615"
+    ],
+    "target": [
+     "2.518 (minimum)"
+    ]
+   },
+   "confidence": "uncertainty acknowledged"
+  }
+ }
+}

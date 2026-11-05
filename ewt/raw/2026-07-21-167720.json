@@ -1,0 +1,30 @@
+{
+ "imap_id": "167720",
+ "message_id": "d497beeb0395458286e415a89aed9774@elliottwavetrader.net",
+ "date": "2026-07-21T19:25:31Z",
+ "subject": "Market Update from ElliottWaveTrader",
+ "analyst": "Mike",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "ES": {
+   "count": "White count primary: wave 2 of a larger wave (c) down; corrective bounce off last week's low.",
+   "alternates": [
+    "Yellow count (immediately bullish) \u2014 promoted on a break back over 7594 then 7633, confirmed over 7703."
+   ],
+   "levels": {
+    "resistance": [
+     "7551-7594",
+     "7633",
+     "7703"
+    ],
+    "pivot": [
+     "7504",
+     "7470"
+    ]
+   },
+   "confidence": "base case / higher probability"
+  }
+ }
+}

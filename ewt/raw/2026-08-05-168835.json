@@ -1,0 +1,40 @@
+{
+ "imap_id": "168835",
+ "message_id": "0de01c5644064a48b876b3781629596b@elliottwavetrader.net",
+ "date": "2026-08-05T14:34:45Z",
+ "subject": "Wave Alert - Metals",
+ "analyst": "Jason",
+ "timeframe": "daily",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "GC": {
+   "count": "A break over the 7/22 high invalidates all triangle interpretations; pattern from the June lows still looks corrective and has not exceeded wave 4 resistance. Prefers a high in resistance then one more swing low.",
+   "alternates": [
+    "(A)-wave bottom in place if price continues over the mid-June high."
+   ],
+   "levels": {
+    "invalidation": [
+     "7/22 high (triangles)"
+    ]
+   },
+   "confidence": "preference stated"
+  },
+  "GDX": {
+   "count": "Getting the projected c of 4 high. Preference remains a lower low.",
+   "alternates": [
+    "Significant low in place on a sustained break over 90 (mid-June high)."
+   ],
+   "levels": {
+    "pivot": [
+     "85.10 (wave 1 overlap)",
+     "88 (prefers price stays below)"
+    ],
+    "invalidation": [
+     "90"
+    ]
+   },
+   "confidence": "preference for a lower low"
+  }
+ }
+}

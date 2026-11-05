@@ -1,0 +1,27 @@
+{
+ "imap_id": "168879",
+ "message_id": "1609950af9cf46fa916d6973bf3db132@elliottwavetrader.net",
+ "date": "2026-08-05T19:25:28Z",
+ "subject": "Market Update from ElliottWaveTrader",
+ "analyst": "Mike",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "ES": {
+   "count": "Yellow count now primary \u2014 pullback into the upper end of 7743-7662 support after a two-day rally into the wave iii of (iii) target zone. Pressure up while support holds.",
+   "alternates": [
+    "White wave (b) top \u2014 opened by a five-wave break of support, confirmed under 7400."
+   ],
+   "levels": {
+    "support": [
+     "7743-7662"
+    ],
+    "invalidation": [
+     "7400 (confirms white top)"
+    ]
+   },
+   "confidence": "yellow primary; white alternate live"
+  }
+ }
+}

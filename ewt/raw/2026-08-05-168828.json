@@ -1,0 +1,22 @@
+{
+ "imap_id": "168828",
+ "message_id": "47d2396f9db74a80b8e95f6b3487b1fe@elliottwavetrader.net",
+ "date": "2026-08-05T13:58:46Z",
+ "subject": "Wave Alert - U.S. Indices (Swing)",
+ "analyst": "Avi",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "SPX": {
+   "count": "7580 SPX is the floor; yellow count primary while held. May also hold as wave ii support even after wave i completes.",
+   "alternates": [],
+   "levels": {
+    "invalidation": [
+     "7580"
+    ]
+   },
+   "confidence": "primary while over 7580"
+  }
+ }
+}

@@ -1,0 +1,23 @@
+{
+  "last_scanned_at": null,
+  "last_run_at": "2026-08-05",
+  "last_run_status": "partial_first_ingest",
+  "blocked_run_count": 3,
+  "routes_last_verified_at": "2026-08-05",
+  "messages_processed_total": 30,
+  "note": "last_scanned_at REMAINS null on purpose. Full history has been discovered and fetched, but only 30 of 496 analysis-bearing messages have been extracted. Setting a watermark now would silently skip the 466-message backfill. The real watermark is ewt/processed_manifest.json (extracted_imap_ids / pending_backfill_imap_ids); ewt/raw/ is append-only so re-running never duplicates or skips.",
+  "mail_route": "himalaya v2.0.0 (/opt/homebrew/bin/himalaya), configured at ~/.config/himalaya/config.toml. Read-only Gmail IMAP, no SMTP block, app password read from the macOS Keychain (service 'himalaya-gmail'). Verified working 2026-08-05: `himalaya account check` reports imap: OK.",
+  "corpus": {
+    "discovered": 658,
+    "date_range": "2026-01-27 .. 2026-08-05",
+    "fetch_result": "ok=658 skip=0 fail=0",
+    "senders": "info@ (640), billing@ (10), welcome@ (8) elliottwavetrader.net",
+    "classified_analysis_bearing": 496,
+    "attachments_found": 0,
+    "attachments_note": "ZERO attachments across all 658 messages. Charts are hosted links to elliottwavetrader.net/images/charts/, not files. The task's PDF/XLSX/chart-image handling is therefore inapplicable to this source; chart labels are preserved inline in the extracted text as <chart: label> markers.",
+    "coverage_gaps": "No fetch failures. Two natural quiet periods in the mail itself: 2026-02-15..2026-02-22 and 2026-07-25..2026-08-02."
+  },
+  "extracted_window": "2026-07-21 .. 2026-08-05 (current-state window). Chosen because the full 496-message analysis set is ~360k tokens and does not fit one context; the recent window is what determines live counts, alternates and open trade ideas.",
+  "backfill_pending": "466 analysis-bearing messages from 2026-01-27 .. 2026-07-23 still to extract. Ids queued in ewt/processed_manifest.json. Raw .eml corpus is already on disk in the session scratchpad but that is ephemeral — a backfill run should re-fetch via himalaya (idempotent) rather than assume it survives.",
+  "ruled_out": "claude.ai Gmail connector can never reach a local Claude Code run (gmail.mcp.claude.com is on tengu_mcp_local_oauth_blocked_hosts; the host also serves no usable MCP endpoint). Full Disk Access route useless (Mail.app not configured locally). Chrome-extension route unsuitable for an unattended scheduled task. Do not re-diagnose these."
+}

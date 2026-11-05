@@ -1,0 +1,27 @@
+{
+ "imap_id": "168827",
+ "message_id": "048a4c512a904618835c1188560e1abd@elliottwavetrader.net",
+ "date": "2026-08-05T13:55:07Z",
+ "subject": "Wave Alert - U.S. Indices (Swing)",
+ "analyst": "Mike",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "NQ": {
+   "count": "Yellow count: pressure up while over 29543-29148.",
+   "alternates": [
+    "Wave B top \u2014 needs a five-wave break back under 29543-29148."
+   ],
+   "levels": {
+    "support": [
+     "29543-29148"
+    ],
+    "resistance": [
+     "30212-30704"
+    ]
+   },
+   "confidence": "stated"
+  }
+ }
+}

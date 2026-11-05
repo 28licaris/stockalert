@@ -20,6 +20,9 @@ docs/
 └── TODO.md         live register — what is deferred
 ```
 
+`ewt/` at the repo root holds Elliott Wave scan data — see "Research data at
+the repo root" below.
+
 Module-level documentation is **not here**: every functional package carries
 its own `README.md` describing what it owns, its public contract, and how to
 test it. Those are authoritative for code; this folder holds cross-module
@@ -96,6 +99,7 @@ Non-negotiable. Read before writing code.
 | [findings.md](research/findings.md) | Canonical results. All pre-EXP-26 performance claims are dead |
 | [platform.md](research/platform.md) | The R&D harness |
 | [no_lookahead_audit.md](research/no_lookahead_audit.md) | Anti-cheating audit of every backtested strategy |
+| [bayesian_alert_system.md](research/bayesian_alert_system.md) | Engine A (Bayesian posterior) design — **unbuilt**; Engine B shipped as PPL |
 
 ## [`product/`](product/) — customer-facing surfaces
 
@@ -114,6 +118,19 @@ Non-negotiable. Read before writing code.
 **Not our architecture.** Kept for offline lookup when writing provider code.
 
 ---
+
+## Research data at the repo root
+
+`ewt/` — Elliott Wave consensus scan output: 18 ticker files, an index, and
+structured extractions of analyst emails (ids, dates, symbols — not verbatim
+newsletter text). Produced by the `ewt-email-scan` scheduled task, which lives
+**outside this repo** at `~/.claude/scheduled-tasks/ewt-email-scan/`.
+
+Partial by design: 30 of 496 analysis-bearing messages extracted as of
+2026-08-05. `ewt/README.md` holds the backfill state and explains why
+`state.json`'s watermark is deliberately `null` — the real watermark is
+`processed_manifest.json`. Committed 2026-11-05; it had previously existed
+only as untracked files in a single checkout.
 
 ## Adding or changing a doc
 
