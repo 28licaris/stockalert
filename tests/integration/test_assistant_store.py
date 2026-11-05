@@ -229,7 +229,7 @@ def test_turn_preserves_model_and_tokens(clickhouse_ready: bool) -> None:
         sequence=0,
         role=Role.ASSISTANT,
         content="answer",
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         tokens_in=100,
         tokens_out=42,
         cost_usd=0.001,
@@ -241,7 +241,7 @@ def test_turn_preserves_model_and_tokens(clickhouse_ready: bool) -> None:
     turns = store.load_turns(conversation_id=conv.id, owner_id=owner)
     assert len(turns) == 1
     t = turns[0]
-    assert t.model == "claude-sonnet-4-6"
+    assert t.model == "claude-sonnet-5"
     assert t.tokens_in == 100
     assert t.tokens_out == 42
     assert abs(t.cost_usd - 0.001) < 1e-6

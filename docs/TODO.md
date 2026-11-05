@@ -216,3 +216,24 @@ Production-ready for backtesting. Pipeline and nightly behaviour:
   `polygon_flatfiles_mirror/` plus trades files are write-once and read-never
   after parsing. An S3 lifecycle policy (Intelligent-Tiering at 30d, Glacier at
   90d) saves ~$2-3/month with no correctness impact.
+
+## De-provision the retired EMR Serverless stack (AWS deployment)
+Spark and EMR Serverless were retired when split adjustment moved to read time,
+and their provisioning files were deleted 2026-11-05 — but **the AWS resources
+are still there**, verified 2026-11-05:
+
+```
+EMR Serverless app  stockalert-spark-batch  00g5u3fmfj03dg09  us-east-1
+                    STOPPED (AUTO_STOPPING), created 2026-05-24, last 2026-05-28
+```
+
+- **Cost is zero while stopped** (EMR Serverless bills per-use), so this is
+  hygiene and attack surface, not spend.
+- Also expected: the `stock-lake-spark-emr` execution role and the three Spark
+  IAM policies that were attached to it. **Unverified** — the
+  `stock-lake-ingest` user cannot `iam:ListRoles`, so confirm with an admin
+  profile before deleting anything.
+- Do it in the deployment session with an admin profile, after confirming
+  nothing else references the role. Policy documents are recoverable from git
+  history if a rollback is ever needed.
+

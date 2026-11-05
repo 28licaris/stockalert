@@ -36,7 +36,7 @@ def test_encode_sse_json_round_trip() -> None:
 def test_encode_sse_turn_completed_payload() -> None:
     e = _event(
         StreamEventType.TURN_COMPLETED,
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         tokens_in=100,
         tokens_out=42,
         cache_hit=False,
@@ -46,7 +46,7 @@ def test_encode_sse_turn_completed_payload() -> None:
     line = encode_sse(e)
     body = json.loads(line.removeprefix("data: ").strip())
     assert body["type"] == "turn_completed"
-    assert body["payload"]["model"] == "claude-sonnet-4-6"
+    assert body["payload"]["model"] == "claude-sonnet-5"
 
 
 def test_encode_sse_done_event() -> None:

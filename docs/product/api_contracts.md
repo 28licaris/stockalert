@@ -57,7 +57,7 @@ frontend side.
 | `GET  /api/lake/last-day` | `LakeLatestDayResponse` | Latest-day bronze sample |
 | `GET  /api/health/services` | `HealthServicesResponse` | Composite cockpit health (FE-1.5) |
 | `GET  /api/corp-actions/{symbol}` | `CorpActionsResponse` | Splits/divs from silver |
-| `GET  /api/silver/bars` | `SilverBarsResponse` | Silver-tier OHLCV |
+| `GET  /api/silver/bars` | `AdjustedBarsResponse` | Silver-tier OHLCV |
 | `GET  /api/silver/quality` | `BarQualityResponse` | Per-bar quality flags |
 
 ### 2.2 Endpoints WITHOUT `response_model` — gaps to close

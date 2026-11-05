@@ -83,7 +83,7 @@ has three properties that hurt in the cloud at scale:
    Single-threaded; fine for one symbol, does not scale to many
    symbols / whole-market.
 2. **Per-row Pydantic materialization.** `_arrow_to_bars` instantiates
-   one `SilverBar` per bar. A 5y 1m single symbol ≈ 500k objects; an
+   one `AdjustedBar` per bar. A 5y 1m single symbol ≈ 500k objects; an
    ML batch across hundreds of symbols is pathological.
 3. **Single-node + cold S3 latency.** No cross-symbol parallelism;
    per-query Iceberg metadata planning + per-file S3 GETs.
@@ -100,7 +100,7 @@ two tables with "polygon wins" dedup baked in. Adding a third provider
 - A single place to register a new data source; zero edits to merge
   logic to onboard one.
 - Keep the existing public contract (`get_bars`, `get_bars_union`,
-  `SilverBarsResponse`) working unchanged for current callers.
+  `AdjustedBarsResponse`) working unchanged for current callers.
 - Stay cluster-free for point/bounded reads (no Spark/Trino on the
   request path).
 
@@ -150,7 +150,7 @@ Pydantic:
   no cluster; does scan + union + dedup + sort in C++ and hands back
   Arrow. (Polars is the fallback if DuckDB's Iceberg support is
   insufficient; both keep us columnar.)
-- **`get_bars` / `get_bars_union` -> SilverBarsResponse** — unchanged
+- **`get_bars` / `get_bars_union` -> AdjustedBarsResponse** — unchanged
   small-response API for HTTP/MCP. Internally these become a thin
   `read_arrow(...)` + Arrow→Pydantic adapter for a single symbol, so
   there is one code path and one dedup rule.
@@ -184,7 +184,7 @@ precedence and adjustment semantics are identical regardless of engine.
    (so its lightweight unit tests are unchanged — all 54 reader +
    read_arrow tests green), feeding already-scanned Arrow into
    `union_arrow`. `get_bars` (single source, no dedup) is unchanged.
-   `SilverBarsResponse` output is identical; verified vs the real lake
+   `AdjustedBarsResponse` output is identical; verified vs the real lake
    (AAPL union 13,832 rows, snapshot pinned, sorted, provenance kept).
 3. Point ML/whole-market consumers at `read_arrow`; leave HTTP/MCP on
    the Pydantic API.

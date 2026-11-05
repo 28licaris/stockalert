@@ -52,13 +52,15 @@ them — change them deliberately, not incidentally.
 |---|---|---|
 | Endpoint prefix | `/cockpit/assistant/*` | UI-internal; a public API is a product decision |
 | Conversation store | ClickHouse (`assistant_conversations`, `assistant_turns`) | No second database for this; reuses the existing client |
-| Model selection | `ModelRegistry` — default model, plus an extended-thinking model for `/explain` | Same code path, per-turn switch; the model id is part of the cache key, so switching invalidates it |
+| Model selection | `ModelRegistry` — `claude-sonnet-5` default, `claude-opus-5` for `/explain` | Same code path, per-turn switch; the model id is in the cache key, so switching invalidates it |
+| Thinking | **Adaptive**, always on, depth via `output_config.effort` (`medium` default / `xhigh` for `/explain`) | The fixed `budget_tokens` form and any `temperature` return a **400** on these models. Thinking also stays on because with it disabled the model can write a tool call into visible text instead of emitting a `tool_use` block — the turn succeeds and the call never runs |
 | System prompt source | Versioned markdown in-repo behind `prompts.current()` (**`v2` today**) | Reviewable in PRs; its hash keys the cache, so a prompt edit invalidates it. DB-backed live editing deliberately not built |
 | Write-tool allowlist | Opt-in, one tool per change | Each write tool lands with its own confirm-card copy and tests |
 
-> The model ids in [models.py](models.py) are pinned constants. Verify them
-> against the current Claude model list before relying on them — a stale id
-> fails at call time, not at import.
+> Model ids are exact strings — never append a date suffix. When bumping
+> them, re-check the thinking/effort contract and update `_PRICING_PER_1K`
+> in [service.py](service.py) in the same change: an unknown model there
+> logs an error and shows the cost footer as $0.00.
 
 ## Design rules
 

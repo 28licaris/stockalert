@@ -144,11 +144,22 @@ def test_extract_json_object_returns_none_on_garbage() -> None:
 
 
 def test_cache_key_is_deterministic() -> None:
-    k1 = _cache_key("claude-x", "sys-prompt", "user-prompt")
-    k2 = _cache_key("claude-x", "sys-prompt", "user-prompt")
+    k1 = _cache_key("claude-x", "medium", "sys-prompt", "user-prompt")
+    k2 = _cache_key("claude-x", "medium", "sys-prompt", "user-prompt")
     assert k1 == k2
     # Same content, different model -> different key.
-    assert _cache_key("claude-y", "sys-prompt", "user-prompt") != k1
+    assert _cache_key("claude-y", "medium", "sys-prompt", "user-prompt") != k1
+
+
+def test_cache_key_separates_effort_levels() -> None:
+    """Effort changes the answer, so it must change the key.
+
+    Without this, a cheap low-effort reply would be served for a
+    high-effort request.
+    """
+    low = _cache_key("claude-x", "low", "sys-prompt", "user-prompt")
+    high = _cache_key("claude-x", "xhigh", "sys-prompt", "user-prompt")
+    assert low != high
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -362,7 +373,7 @@ def test_llm_agent_api_failure_degrades_to_hold(tmp_path: Path) -> None:
     assert strat._stats.api_failures >= 1
     # The bad call shouldn't be cached — next run will retry.
     assert strat._cache.get(_cache_key(
-        strat.params.model, strat.params.system_prompt,
+        strat.params.model, strat.params.effort, strat.params.system_prompt,
         strat._build_user_prompt(ctx),
     )) is None
     strat.teardown(ctx)

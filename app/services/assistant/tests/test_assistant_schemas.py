@@ -129,7 +129,7 @@ def test_conversation_turn_assistant_with_cost() -> None:
         sequence=1,
         role=Role.ASSISTANT,
         content="Bronze is fresh through ...",
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         tokens_in=1234,
         tokens_out=456,
         cost_usd=0.0008,

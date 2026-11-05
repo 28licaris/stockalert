@@ -117,8 +117,8 @@ class LLMClient(Protocol):
         tools: list[dict[str, Any]],
         messages: list[dict[str, Any]],
         max_tokens: int,
-        temperature: float,
-        thinking_budget: int | None,
+        effort: str,
+        thinking_display: str,
     ) -> "AsyncContextManagerOf[LLMStream]": ...
 
 
@@ -155,8 +155,8 @@ class AnthropicLLMClient:
         tools: list[dict[str, Any]],
         messages: list[dict[str, Any]],
         max_tokens: int,
-        temperature: float,
-        thinking_budget: int | None,
+        effort: str,
+        thinking_display: str,
     ) -> "_AnthropicStreamCM":
         return _AnthropicStreamCM(
             client=self._client,
@@ -165,8 +165,8 @@ class AnthropicLLMClient:
             tools=tools,
             messages=messages,
             max_tokens=max_tokens,
-            temperature=temperature,
-            thinking_budget=thinking_budget,
+            effort=effort,
+            thinking_display=thinking_display,
         )
 
 
@@ -182,23 +182,25 @@ class _AnthropicStreamCM:
         tools: list[dict[str, Any]],
         messages: list[dict[str, Any]],
         max_tokens: int,
-        temperature: float,
-        thinking_budget: int | None,
+        effort: str,
+        thinking_display: str,
     ) -> None:
+        # NOTE on the request shape — all three of these are load-bearing:
+        #  * `thinking: {"type": "adaptive"}` is the only on-mode. The old
+        #    {"type": "enabled", "budget_tokens": N} form returns a 400.
+        #  * NO `temperature` / `top_p` / `top_k`. They are removed on these
+        #    models and return a 400 — not ignored.
+        #  * depth is `output_config.effort`, which is nested, not top-level.
         kwargs: dict[str, Any] = {
             "model": model,
             "system": system_blocks,
             "messages": messages,
             "max_tokens": max_tokens,
-            "temperature": temperature,
+            "thinking": {"type": "adaptive", "display": thinking_display},
+            "output_config": {"effort": effort},
         }
         if tools:
             kwargs["tools"] = tools
-        if thinking_budget is not None:
-            kwargs["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": thinking_budget,
-            }
         self._mgr = client.messages.stream(**kwargs)
         self._stream: Any = None
 
@@ -256,26 +258,45 @@ class _AnthropicStreamAdapter:
 # ─────────────────────────────────────────────────────────────────────
 
 
-# Approximate per-1k-token costs for cost accounting on each turn.
-# These are *display* numbers (the bill is whatever Anthropic charges);
-# we keep them in one place so the UI footer can stay consistent.
-# Bump when pricing changes.
+# Per-1k-token list prices for the cost footer. These are *display*
+# numbers — the bill is whatever Anthropic charges. Keep them here so
+# the UI stays consistent, and update them in the same change as any
+# model-id bump: a stale entry here is a silently wrong cost.
 _PRICING_PER_1K: dict[str, tuple[float, float]] = {
     # model_id: (input_per_1k_usd, output_per_1k_usd)
-    "claude-sonnet-4-6": (0.003, 0.015),
-    "claude-opus-4-7": (0.015, 0.075),
+    "claude-opus-5": (0.005, 0.025),     # $5.00 / $25.00 per 1M
+    "claude-sonnet-5": (0.002, 0.010),   # $2.00 / $10.00 per 1M
+    "claude-haiku-4-5": (0.001, 0.005),  # $1.00 /  $5.00 per 1M
 }
+
+# Cache-read input is billed at ~0.1x the input rate; a cache *write*
+# at ~1.25x. `tokens_in` already excludes both, so they're priced
+# separately rather than folded in at the full rate.
+_CACHE_READ_MULTIPLIER = 0.1
+_CACHE_WRITE_MULTIPLIER = 1.25
 
 
 def _estimate_cost_usd(model: str, usage: LLMUsage) -> float:
+    """Best-effort USD estimate for one turn.
+
+    An unknown model is a bug, not a zero — returning 0.0 silently made
+    a model-id change look free. Log it loudly and keep serving the
+    turn; the cost footer is not worth failing a response over.
+    """
     pricing = _PRICING_PER_1K.get(model)
     if pricing is None:
+        logger.error(
+            "assistant: no pricing entry for model %r — cost footer will "
+            "read $0.00. Add it to _PRICING_PER_1K.", model,
+        )
         return 0.0
     in_rate, out_rate = pricing
-    # Cache-read input tokens are billed at a discount but we don't
-    # have an authoritative public multiplier here; approximate as
-    # the same rate. Tweak if/when we want a more precise estimate.
-    return (usage.tokens_in / 1000.0) * in_rate + (usage.tokens_out / 1000.0) * out_rate
+    return (
+        (usage.tokens_in / 1000.0) * in_rate
+        + (usage.tokens_out / 1000.0) * out_rate
+        + (usage.cache_read_input_tokens / 1000.0) * in_rate * _CACHE_READ_MULTIPLIER
+        + (usage.cache_creation_input_tokens / 1000.0) * in_rate * _CACHE_WRITE_MULTIPLIER
+    )
 
 
 class DefaultAssistantService:
@@ -420,8 +441,8 @@ class DefaultAssistantService:
                     tools=tool_defs,
                     messages=messages,
                     max_tokens=choice.max_tokens,
-                    temperature=choice.temperature,
-                    thinking_budget=choice.thinking_budget,
+                    effort=choice.effort,
+                    thinking_display=choice.thinking_display,
                 ) as stream:
                     text_buf: list[str] = []
                     async for chunk in stream:

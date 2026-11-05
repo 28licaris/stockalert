@@ -21,6 +21,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/health/freshness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Is data still arriving? (distinct from 'can I connect?') */
+        get: operations["health_freshness_api_v1_health_freshness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/movers": {
         parameters: {
             query?: never;
@@ -1088,7 +1105,8 @@ export interface paths {
          *     Returns per-store row counts and earliest/latest timestamps for:
          *       - `stocks.ohlcv_1m`           — ClickHouse hot cache (what's
          *         queryable now; live-stream fresh)
-         *       - `equities.polygon_adjusted` — deep adjusted history (weekly Spark)
+         *       - `equities.polygon_adjusted` — deep adjusted history. NOT a table:
+         *         a read-time adjustment over `equities.polygon_raw`
          *       - `equities.schwab_universe`  — recent universe window (nightly)
          *
          *     Use this to answer:
@@ -1644,7 +1662,7 @@ export interface paths {
         /**
          * Add To Stream
          * @description Promote one symbol into the stream universe. Subscribes Schwab
-         *     immediately + queues a silver-derived warmup (if enabled).
+         *     immediately + queues the lake warmup / hotload (if enabled).
          *
          *     Idempotent: re-adding an already-active symbol returns `changed=[]`.
          */
@@ -2214,6 +2232,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ppl/{symbol}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Posterior predictive fan and extracted levels for one symbol
+         * @description Build one fan.
+         *
+         *     Deterministic: the same symbol at the same anchor bar returns an identical
+         *     payload, so a reload never reshuffles the chart.
+         *
+         *     The four levels are **quantiles of a simulated distribution**, not price
+         *     targets — each carries its `quantile` so the UI can say which.
+         */
+        get: operations["get_posterior_predictive_levels_api_v1_ppl__symbol__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ppl/{symbol}/meta": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Supported PPL parameters and defaults
+         * @description Everything the UI needs to build its controls without hardcoding.
+         */
+        get: operations["get_ppl_meta_api_v1_ppl__symbol__meta_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/signals": {
         parameters: {
             query?: never;
@@ -2416,6 +2480,104 @@ export interface components {
             asset_type?: string | null;
             /** Notes */
             notes?: string | null;
+        };
+        /**
+         * AdjustedBar
+         * @description One canonical 1-minute split-adjusted OHLCV bar.
+         *
+         *     Sourced from the Polygon tier (`equities.polygon_raw`, adjusted at
+         *     READ time by `equities/adjust.py` — there is no materialized
+         *     `polygon_adjusted` table) or `equities.schwab_universe` (live +
+         *     tip-fill, already adjusted by the provider). Consumers see one
+         *     set of split-adjusted OHLCV columns — what chart, indicators,
+         *     backtests, screener, and ML all need (continuous lines across
+         *     split events, no fake gaps).
+         *
+         *     **If a consumer needs raw prices** (trade-tape replay, fill
+         *     reconciliation): multiply the adjusted value by the bar's
+         *     `adj_factor` (stored on every polygon_adjusted row in CV1's
+         *     schema, defaults to 1.0 on schwab_universe rows). The reader
+         *     surfaces adj_factor only when explicitly asked — the default
+         *     AdjustedBar carries the adjusted view.
+         */
+        AdjustedBar: {
+            /** Symbol */
+            symbol: string;
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp: string;
+            /** Open */
+            open: number;
+            /** High */
+            high: number;
+            /** Low */
+            low: number;
+            /** Close */
+            close: number;
+            /** Volume */
+            volume: number;
+            /** Vwap */
+            vwap?: number | null;
+            /** Trade Count */
+            trade_count?: number | null;
+            /**
+             * Source Provider
+             * @description Provider source tag for this bar. Examples: 'polygon-adjusted' for rows from equities.polygon_adjusted (the Spark adjustment job's output); 'schwab-rest' / 'schwab-live' for rows from equities.schwab_universe.
+             */
+            source_provider: string;
+            /**
+             * Sources Seen
+             * @description v1-silver multi-provider artifact; in v2 the equities tables are single-provider per row so this stays empty. Preserved on the contract for backwards compatibility.
+             */
+            sources_seen?: string[];
+            /**
+             * Ingestion Ts
+             * @description When the underlying lake row was written (UTC).
+             */
+            ingestion_ts?: string | null;
+            /**
+             * Ingestion Run Id
+             * @description Ingest/build run that produced the row.
+             */
+            ingestion_run_id?: string | null;
+        };
+        /**
+         * AdjustedBarsResponse
+         * @description Response wrapper for a windowed adjusted-OHLCV query.
+         *
+         *     Deep history comes from `equities.polygon_raw` adjusted on read;
+         *     optionally UNION'd with `equities.schwab_universe` for fresh bars.
+         *
+         *     `snapshot_id` is the Iceberg snapshot pinned by the read. Recording
+         *     it lets callers replay against the exact lake state.
+         */
+        AdjustedBarsResponse: {
+            /** Symbol */
+            symbol: string;
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+            /**
+             * End
+             * Format: date-time
+             */
+            end: string;
+            /**
+             * Snapshot Id
+             * @description Iceberg snapshot pinned by the read. None when the source table does not exist yet.
+             */
+            snapshot_id?: string | null;
+            /** Bars */
+            bars: components["schemas"]["AdjustedBar"][];
+            /**
+             * Count
+             * @description len(bars). Echoed for cheap client-side checks.
+             */
+            count: number;
         };
         /**
          * AdjustedSymbolsResponse
@@ -3074,6 +3236,56 @@ export interface components {
             cached: boolean;
         };
         /**
+         * ConditioningParams
+         * @description Indicator parameters defining the conditioning state.
+         *
+         *     Fixed per interval — **never** optimized per symbol (spec D5). The
+         *     reference charts carry a different tuned set on every image; that is a
+         *     fitting-noise generator, not a model.
+         */
+        ConditioningParams: {
+            /**
+             * Psar Af Start
+             * @default 0.02
+             */
+            psar_af_start: number;
+            /**
+             * Psar Af Max
+             * @default 0.2
+             */
+            psar_af_max: number;
+            /**
+             * Tsi Long
+             * @default 25
+             */
+            tsi_long: number;
+            /**
+             * Tsi Short
+             * @default 13
+             */
+            tsi_short: number;
+            /**
+             * Tsi Signal
+             * @default 13
+             */
+            tsi_signal: number;
+            /**
+             * Macd Fast
+             * @default 12
+             */
+            macd_fast: number;
+            /**
+             * Macd Slow
+             * @default 26
+             */
+            macd_slow: number;
+            /**
+             * Macd Signal
+             * @default 9
+             */
+            macd_signal: number;
+        };
+        /**
          * ConfirmRequest
          * @description Body of POST /cockpit/assistant/conversations/{id}/confirm.
          *
@@ -3391,6 +3603,49 @@ export interface components {
             reason: string;
         };
         /**
+         * FreshnessRowModel
+         * @description One data source's freshness — 'is data still arriving?'
+         */
+        FreshnessRowModel: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /**
+             * Group
+             * @description Market data | Options | Platform.
+             */
+            group: string;
+            /**
+             * State
+             * @description ok=fresh, warn=late, error=badly late DURING its expected window, idle=stale but outside its window (normal), unknown=probe failed.
+             * @enum {string}
+             */
+            state: "ok" | "warn" | "error" | "idle" | "unknown";
+            /**
+             * Last Data At
+             * @description UTC ISO of newest data.
+             */
+            last_data_at?: string | null;
+            /** Age Seconds */
+            age_seconds?: number | null;
+            /**
+             * Cadence Seconds
+             * @description How often data is expected.
+             */
+            cadence_seconds: number;
+            /**
+             * Expected Fresh
+             * @description Is this source expected to be producing data right now?
+             */
+            expected_fresh: boolean;
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+        };
+        /**
          * GammaExposureResponse
          * @description Response wrapper for derived gamma exposure snapshots.
          */
@@ -3503,6 +3758,21 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * HealthFreshnessResponse
+         * @description Freshness of every monitored data source, worst-first.
+         */
+        HealthFreshnessResponse: {
+            /** Server Time */
+            server_time: string;
+            /** Rows */
+            rows: components["schemas"]["FreshnessRowModel"][];
+            /**
+             * Worst State
+             * @enum {string}
+             */
+            worst_state: "ok" | "warn" | "error" | "idle" | "unknown";
         };
         /**
          * HealthServicesResponse
@@ -4596,6 +4866,337 @@ export interface components {
             url: string;
         };
         /**
+         * PplCalibration
+         * @description PIT coverage for this (symbol, interval). Populated in P3.
+         */
+        PplCalibration: {
+            /**
+             * Window Start
+             * Format: date-time
+             */
+            window_start: string;
+            /**
+             * Window End
+             * Format: date-time
+             */
+            window_end: string;
+            /** N Effective */
+            n_effective: number;
+            /** Coverage */
+            coverage: {
+                [key: string]: number;
+            };
+            /** Ks Stat */
+            ks_stat?: number | null;
+            /** Ks P */
+            ks_p?: number | null;
+            /** Computed At */
+            computed_at?: string | null;
+        };
+        /**
+         * PplLevel
+         * @description One extracted price level.
+         *
+         *     `side` and `rank` describe the level's position **in the forecast
+         *     distribution**, not relative to spot: the two lower quantiles are "down",
+         *     the two nearest the median are "inner". `pct_from_spot` carries the truth
+         *     about where the level actually sits — under a strong drift a "down" level
+         *     can print above spot, and that is information, not a bug.
+         */
+        PplLevel: {
+            /** Price */
+            price: number;
+            /** Quantile */
+            quantile: number | null;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "up" | "down";
+            /**
+             * Rank
+             * @enum {string}
+             */
+            rank: "inner" | "outer";
+            /** Pct From Spot */
+            pct_from_spot: number;
+            /**
+             * Suppressed
+             * @default false
+             */
+            suppressed: boolean;
+            /** Suppressed Reason */
+            suppressed_reason?: string | null;
+        };
+        /**
+         * PplParams
+         * @description Everything that determines a fan, so a snapshot is reproducible from it.
+         */
+        PplParams: {
+            /**
+             * Interval
+             * @default 30m
+             */
+            interval: string;
+            /**
+             * Horizon Bars
+             * @default 40
+             */
+            horizon_bars: number;
+            /**
+             * N Paths
+             * @default 2000
+             */
+            n_paths: number;
+            /**
+             * N Render Paths
+             * @default 300
+             */
+            n_render_paths: number;
+            /**
+             * Method
+             * @default quantile
+             * @enum {string}
+             */
+            method: "quantile" | "density";
+            /**
+             * Quantiles
+             * @default [
+             *       0.15,
+             *       0.35,
+             *       0.65,
+             *       0.85
+             *     ]
+             */
+            quantiles: [
+                number,
+                number,
+                number,
+                number
+            ];
+            /**
+             * Include Terminal Sample
+             * @default false
+             */
+            include_terminal_sample: boolean;
+            /**
+             * @default {
+             *       "psar_af_start": 0.02,
+             *       "psar_af_max": 0.2,
+             *       "tsi_long": 25,
+             *       "tsi_short": 13,
+             *       "tsi_signal": 13,
+             *       "macd_fast": 12,
+             *       "macd_slow": 26,
+             *       "macd_signal": 9
+             *     }
+             */
+            conditioning: components["schemas"]["ConditioningParams"];
+            /**
+             * Rth Only
+             * @default true
+             */
+            rth_only: boolean;
+            /**
+             * Vol Model
+             * @default gjr_fhs
+             * @enum {string}
+             */
+            vol_model: "gjr_fhs" | "ewma_t";
+            /**
+             * Drift Mode
+             * @default zero
+             * @enum {string}
+             */
+            drift_mode: "zero" | "unconditional" | "state";
+            /**
+             * Fit Lookback Bars
+             * @default 4000
+             */
+            fit_lookback_bars: number;
+            /**
+             * Shrink Kappa
+             * @default 200
+             */
+            shrink_kappa: number;
+            /**
+             * Min State Obs
+             * @default 50
+             */
+            min_state_obs: number;
+            /**
+             * Min Move Sigma Mult
+             * @default 0.25
+             */
+            min_move_sigma_mult: number;
+            /**
+             * Ewma Lambda
+             * @default 0.94
+             */
+            ewma_lambda: number;
+            /** Nu */
+            nu?: number | null;
+            /**
+             * Max Stale Bars
+             * @default 3
+             */
+            max_stale_bars: number;
+            /** Seed */
+            seed?: number | null;
+        };
+        /**
+         * PplSnapshot
+         * @description One fan chart, fully self-describing.
+         */
+        PplSnapshot: {
+            /** Symbol */
+            symbol: string;
+            /** Interval */
+            interval: string;
+            /**
+             * As Of
+             * Format: date-time
+             */
+            as_of: string;
+            /** Spot */
+            spot: number;
+            /** Horizon Bars */
+            horizon_bars: number;
+            /**
+             * Horizon End
+             * Format: date-time
+             */
+            horizon_end: string;
+            /** Levels */
+            levels: components["schemas"]["PplLevel"][];
+            /** Paths */
+            paths: number[][];
+            /** Terminal Quantiles */
+            terminal_quantiles: {
+                [key: string]: number;
+            };
+            /** Terminal Sample */
+            terminal_sample?: number[] | null;
+            /** Sigma Horizon */
+            sigma_horizon: number;
+            /** Min Move */
+            min_move: number;
+            /**
+             * Drift Mode
+             * @enum {string}
+             */
+            drift_mode: "zero" | "unconditional" | "state";
+            /** Drift Per Bar */
+            drift_per_bar: number;
+            /** State Drift Per Bar */
+            state_drift_per_bar: number;
+            /** Unconditional Drift Per Bar */
+            unconditional_drift_per_bar: number;
+            vol: components["schemas"]["PplVolModel"];
+            /** Nu */
+            nu: number;
+            /** Bars Per Session */
+            bars_per_session: number;
+            state: components["schemas"]["PplState"];
+            /** N Fit Bars */
+            n_fit_bars: number;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /** Stale Age Bars */
+            stale_age_bars?: number | null;
+            /**
+             * Staleness Checked
+             * @default false
+             */
+            staleness_checked: boolean;
+            calibration?: components["schemas"]["PplCalibration"] | null;
+            /**
+             * Model Version
+             * @default ppl-0.2.0
+             */
+            model_version: string;
+            /** Seed */
+            seed: number;
+            params: components["schemas"]["PplParams"];
+        };
+        /**
+         * PplState
+         * @description The conditioning state at the anchor bar, with its fit support.
+         */
+        PplState: {
+            /** Code */
+            code: number;
+            /** Label */
+            label: string;
+            /**
+             * Psar Side
+             * @enum {string}
+             */
+            psar_side: "above" | "below";
+            /** Psar Value */
+            psar_value: number;
+            /** Tsi Value */
+            tsi_value: number;
+            /** Tsi Signal Value */
+            tsi_signal_value: number;
+            /** Macd Hist */
+            macd_hist: number;
+            /** Observations */
+            observations: number;
+            /** Pooled */
+            pooled: boolean;
+        };
+        /**
+         * PplVolModel
+         * @description The fitted volatility dynamics behind one fan.
+         *
+         *     Attached to every snapshot so the model is inspectable from its own output.
+         *     The GARCH fields are None under `ewma_t`, which has no such parameters —
+         *     that is the substantive difference between the two, not a missing value.
+         */
+        PplVolModel: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "gjr_fhs" | "ewma_t";
+            /** Sigma Next */
+            sigma_next: number;
+            /** Omega */
+            omega?: number | null;
+            /** Alpha */
+            alpha?: number | null;
+            /** Gamma */
+            gamma?: number | null;
+            /** Beta */
+            beta?: number | null;
+            /** Persistence */
+            persistence?: number | null;
+            /** Long Run Sigma */
+            long_run_sigma?: number | null;
+            /** Half Life Bars */
+            half_life_bars?: number | null;
+            /** Leverage Ratio */
+            leverage_ratio?: number | null;
+            /** Vol Response Asymmetry */
+            vol_response_asymmetry?: number | null;
+            /** Variance Ratio */
+            variance_ratio?: number | null;
+            /** Pool Size */
+            pool_size?: number | null;
+            /** Pool Skew */
+            pool_skew?: number | null;
+            /** Pool Excess Kurtosis */
+            pool_excess_kurtosis?: number | null;
+            /** Raw Abs Autocorr */
+            raw_abs_autocorr?: number | null;
+            /** Residual Abs Autocorr */
+            residual_abs_autocorr?: number | null;
+        };
+        /**
          * RenameWatchlistRequest
          * @description Body for `PATCH /api/v1/watchlists/{name}`.
          */
@@ -5044,106 +5645,6 @@ export interface components {
             indicator_value?: number | null;
         };
         /**
-         * SilverBar
-         * @description One canonical 1-minute split-adjusted OHLCV bar.
-         *
-         *     Post-CV11/CV14: sourced from `equities.polygon_adjusted` (built by
-         *     the weekly Spark adjustment job) or `equities.schwab_universe`
-         *     (live + tip-fill). Both stores are pre-adjusted; consumers see one
-         *     set of split-adjusted OHLCV columns — what chart, indicators,
-         *     backtests, screener, and ML all need (continuous lines across
-         *     split events, no fake gaps).
-         *
-         *     **If a consumer needs raw prices** (trade-tape replay, fill
-         *     reconciliation): multiply the adjusted value by the bar's
-         *     `adj_factor` (stored on every polygon_adjusted row in CV1's
-         *     schema, defaults to 1.0 on schwab_universe rows). The reader
-         *     surfaces adj_factor only when explicitly asked — the default
-         *     SilverBar carries the adjusted view.
-         */
-        SilverBar: {
-            /** Symbol */
-            symbol: string;
-            /**
-             * Timestamp
-             * Format: date-time
-             */
-            timestamp: string;
-            /** Open */
-            open: number;
-            /** High */
-            high: number;
-            /** Low */
-            low: number;
-            /** Close */
-            close: number;
-            /** Volume */
-            volume: number;
-            /** Vwap */
-            vwap?: number | null;
-            /** Trade Count */
-            trade_count?: number | null;
-            /**
-             * Source Provider
-             * @description Provider source tag for this bar. Examples: 'polygon-adjusted' for rows from equities.polygon_adjusted (the Spark adjustment job's output); 'schwab-rest' / 'schwab-live' for rows from equities.schwab_universe.
-             */
-            source_provider: string;
-            /**
-             * Sources Seen
-             * @description v1-silver multi-provider artifact; in v2 the equities tables are single-provider per row so this stays empty. Preserved on the contract for backwards compatibility.
-             */
-            sources_seen?: string[];
-            /**
-             * Ingestion Ts
-             * @description When the underlying lake row was written (UTC).
-             */
-            ingestion_ts?: string | null;
-            /**
-             * Ingestion Run Id
-             * @description Ingest/build run that produced the row.
-             */
-            ingestion_run_id?: string | null;
-        };
-        /**
-         * SilverBarsResponse
-         * @description Response wrapper for a windowed adjusted-OHLCV query.
-         *
-         *     Sources from `equities.polygon_adjusted` (deep history, split-adjusted
-         *     by the Spark adjustment job); optionally UNION'd with the live tier
-         *     `equities.schwab_universe` for fresh bars. The `SilverBars` name is
-         *     a v1 carry-over kept for API stability — see the section header
-         *     above for the rationale.
-         *
-         *     `snapshot_id` is the Iceberg snapshot pinned by the read.
-         *     Recording this lets callers replay against the exact lake state.
-         */
-        SilverBarsResponse: {
-            /** Symbol */
-            symbol: string;
-            /**
-             * Start
-             * Format: date-time
-             */
-            start: string;
-            /**
-             * End
-             * Format: date-time
-             */
-            end: string;
-            /**
-             * Snapshot Id
-             * @description Iceberg snapshot pinned by the read. None if the target table doesn't exist yet (cold-start before first Spark run).
-             */
-            snapshot_id?: string | null;
-            /** Bars */
-            bars: components["schemas"]["SilverBar"][];
-            /**
-             * Count
-             * @description len(bars). Echoed for cheap client-side checks.
-             */
-            count: number;
-        };
-        /**
          * SourceCoverage
          * @description Per-table coverage stats for one symbol (CV26).
          *
@@ -5169,7 +5670,7 @@ export interface components {
             earliest_timestamp?: string | null;
             /**
              * Latest Timestamp
-             * @description Max(timestamp) UTC. None when row_count=0. The lag between this and 'now' is the staleness gauge for this source — polygon_adjusted lags by up to one weekly Spark run; schwab_universe is live-cadence.
+             * @description Max(timestamp) UTC. None when row_count=0. The lag between this and 'now' is the staleness gauge for this source — the Polygon minute tier is frozen at 2026-06-12 (lapsed feed); schwab_universe is live-cadence.
              */
             latest_timestamp?: string | null;
             /**
@@ -6109,6 +6610,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HealthServicesResponse"];
+                };
+            };
+        };
+    };
+    health_freshness_api_v1_health_freshness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthFreshnessResponse"];
                 };
             };
         };
@@ -7618,7 +8139,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SilverBarsResponse"];
+                    "application/json": components["schemas"]["AdjustedBarsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -9479,6 +10000,87 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WaveStateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_posterior_predictive_levels_api_v1_ppl__symbol__get: {
+        parameters: {
+            query?: {
+                /** @description One of: 30m, 1h, 4h, 1d. */
+                interval?: string;
+                /** @description Bars to simulate forward. */
+                horizon_bars?: number;
+                /** @description Paths to simulate. */
+                n_paths?: number;
+                /** @description Paths returned for drawing. */
+                n_render_paths?: number;
+                /** @description Level extraction method. */
+                method?: "quantile" | "density";
+                /** @description 'zero' = no drift. 'unconditional' = the symbol's own baseline drift (no timing claim). 'state' = the shrunk per-state conditional drift, a timing claim this platform's evidence rejects. */
+                drift_mode?: "zero" | "unconditional" | "state";
+                /** @description min_move = this multiple of the horizon sigma. */
+                min_move_sigma_mult?: number;
+                /** @description Override the derived seed. */
+                seed?: number | null;
+            };
+            header?: never;
+            path: {
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PplSnapshot"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_ppl_meta_api_v1_ppl__symbol__meta_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

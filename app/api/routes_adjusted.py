@@ -30,7 +30,7 @@ from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 from app.services.readers.schemas import (
     AdjustedSymbolsResponse,
     CrossProviderDiffResponse,
-    SilverBarsResponse,
+    AdjustedBarsResponse,
     SymbolCoverageResponse,
 )
 
@@ -51,7 +51,7 @@ def get_adjusted_ohlcv_reader() -> AdjustedOhlcvReader:
 
 @router.get(
     "/adjusted/bars/{symbol}",
-    response_model=SilverBarsResponse,
+    response_model=AdjustedBarsResponse,
 )
 def get_adjusted_bars(
     symbol: str = Path(..., min_length=1, description="Ticker (case-insensitive)."),
@@ -82,7 +82,7 @@ def get_adjusted_bars(
         ),
     ),
     reader: AdjustedOhlcvReader = Depends(get_adjusted_ohlcv_reader),
-) -> SilverBarsResponse:
+) -> AdjustedBarsResponse:
     """Return 1-minute split-adjusted bars for `symbol` in `[start, end)`.
 
     Default (`include_live=false`) reads `equities.polygon_adjusted`

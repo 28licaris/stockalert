@@ -30,9 +30,19 @@ Why this design:
     bad LLM response is a data condition, not a server bug; the
     backtest continues so we still get a measurable run.
 
-  - **Deterministic by default.** `temperature=0.0` removes
-    randomness; combined with response caching, the same strategy +
-    same config produces the same agent_runs row twice in a row.
+  - **Replay-deterministic via the cache, not via temperature.**
+    `temperature` is REMOVED on current models (400, not ignored), so
+    there is no sampling knob to pin. Reproducibility comes from the
+    response cache: the same (model + effort + system_prompt +
+    user_prompt) is a cache hit, so a replay of an already-run backtest
+    is byte-identical and costs nothing. A *fresh* run against the API
+    is not guaranteed bit-identical — treat the cache file as part of
+    the run artifact if you need exact reproduction.
+
+  - **Adaptive thinking is on.** Depth is `output_config.effort`
+    (default `medium`). Thinking tokens count against `max_tokens`,
+    which is why the default is 8192 and not a few hundred — see
+    `max_tokens` below.
 """
 from __future__ import annotations
 
@@ -61,7 +71,8 @@ logger = logging.getLogger(__name__)
 
 # Latest Claude family per the harness's knowledge cutoff (2026-01).
 # Override in YAML configs as new models ship.
-_DEFAULT_MODEL = "claude-sonnet-4-6"
+# Exact model id — never append a date suffix.
+_DEFAULT_MODEL = "claude-sonnet-5"
 
 
 class IndicatorSpec(BaseModel):
@@ -111,8 +122,24 @@ class LLMAgentParams(BaseModel):
         ),
         description="System prompt sent on every call. Part of the cache key.",
     )
-    temperature: float = Field(0.0, ge=0.0, le=1.0)
-    max_tokens: int = Field(256, ge=16, le=4096)
+    effort: str = Field(
+        "medium",
+        description=(
+            "output_config.effort — low | medium | high | xhigh | max. "
+            "Controls thinking depth and cost PER BAR, so a backtest "
+            "multiplies it by (n_bars - warmup). Part of the cache key."
+        ),
+    )
+    max_tokens: int = Field(
+        8192, ge=512, le=32000,
+        description=(
+            "Hard output ceiling INCLUDING thinking tokens. Must leave "
+            "room for both the reasoning and the one-line JSON verdict; "
+            "too low truncates mid-thought, the JSON never arrives, and "
+            "every bar silently degrades to HOLD. 512 is the floor for "
+            "that reason."
+        ),
+    )
     position_size_pct: float = Field(
         0.95, gt=0.0, le=1.0,
         description="Hard cap on `size_pct` for BUY decisions. Belt-and-suspenders.",
@@ -200,10 +227,17 @@ class _ResponseCache:
             self._conn.close()
 
 
-def _cache_key(model: str, system_prompt: str, user_prompt: str) -> str:
-    """sha256(model || system || user). Stable across processes."""
+def _cache_key(model: str, effort: str, system_prompt: str, user_prompt: str) -> str:
+    """sha256(model || effort || system || user). Stable across processes.
+
+    `effort` is in the key because it changes the answer — without it a
+    cheap low-effort reply would be served for a high-effort request.
+    Adding it invalidates every cache entry written before 2026-11-05;
+    that is intended, since those entries came from a different model.
+    """
     h = hashlib.sha256()
     h.update(b"M:"); h.update(model.encode("utf-8"))
+    h.update(b"|E:"); h.update(effort.encode("utf-8"))
     h.update(b"|S:"); h.update(system_prompt.encode("utf-8"))
     h.update(b"|U:"); h.update(user_prompt.encode("utf-8"))
     return h.hexdigest()
@@ -231,7 +265,7 @@ class LLMAgentStrategy:
     setup/teardown for the API client + cache.
 
     Cost shape: at most (n_bars - warmup) API calls per backtest run.
-    Cache hits cost nothing. With temperature=0 + a stable
+    Cache hits cost nothing: with a stable model + effort +
     system_prompt, replays cost zero after the first run.
 
     Per the modularity contract, this strategy is **side-effecting**
@@ -301,7 +335,7 @@ class LLMAgentStrategy:
             return hold()
 
         user_prompt = self._build_user_prompt(ctx)
-        key = _cache_key(p.model, p.system_prompt, user_prompt)
+        key = _cache_key(p.model, p.effort, p.system_prompt, user_prompt)
 
         # Cache hit -> no API call.
         cached = self._cache.get(key) if self._cache else None
@@ -384,13 +418,27 @@ class LLMAgentStrategy:
         """Call Anthropic and return the text response, or None on failure."""
         p = self.params
         try:
+            # No `temperature` — removed on current models (400, not
+            # ignored). Depth is output_config.effort; thinking is
+            # adaptive so the model spends only what the bar warrants.
             resp = self._client.messages.create(
                 model=p.model,
                 max_tokens=p.max_tokens,
-                temperature=p.temperature,
+                thinking={"type": "adaptive"},
+                output_config={"effort": p.effort},
                 system=p.system_prompt,
                 messages=[{"role": "user", "content": user_prompt}],
             )
+            if getattr(resp, "stop_reason", None) == "max_tokens":
+                # Truncated before the JSON verdict. Without this the
+                # parse fails and the bar degrades to HOLD — a whole
+                # backtest of HOLDs that looks like "no signal".
+                logger.error(
+                    "llm_agent: response hit max_tokens=%d (effort=%s) — "
+                    "the JSON verdict was truncated. Raise max_tokens or "
+                    "lower effort; this bar will degrade to HOLD.",
+                    p.max_tokens, p.effort,
+                )
             # Concatenate all text-content blocks.
             parts = []
             for block in resp.content:

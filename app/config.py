@@ -277,11 +277,11 @@ class Settings(BaseModel):
         os.getenv("SYMBOL_GAPFILL_ENABLED", "true").lower() == "true"
     )
 
-    # CV13: silver_ohlcv_build_* settings removed.
-    # The v2 equivalent (polygon_adjustment_job) runs OUT-OF-PROCESS
-    # via EMR Serverless / CodeBuild / local Spark — it's not a
-    # uvicorn-scheduled job, so no enabled / run_hour / symbols
-    # settings on the Settings class.
+    # CV13: silver_ohlcv_build_* settings removed. Its successor,
+    # polygon_adjustment_job (Spark on EMR Serverless), was itself
+    # retired — split adjustment is computed at READ time now
+    # (app/services/equities/adjust.py), so there is no adjustment job
+    # and no enabled / run_hour / symbols settings for one.
     # CV14: silver_provider_precedence + bronze_history_start removed
     # (precedence merged into the deleted silver build; bronze
     # replaced by lake_history_start above).
@@ -397,7 +397,7 @@ class Settings(BaseModel):
     # News enrichment LLM — cheap model for filing triage + summary (cost-capped:
     # only watchlist-relevant filings are enriched, body truncated, output capped).
     # Uses ANTHROPIC_API_KEY (same env var as the assistant).
-    news_enrich_model: str = os.getenv("NEWS_ENRICH_MODEL", "claude-haiku-4-5-20251001")
+    news_enrich_model: str = os.getenv("NEWS_ENRICH_MODEL", "claude-haiku-4-5")
 
     # News ingest job. Off by default — enable once EDGAR_USER_AGENT + an
     # ANTHROPIC_API_KEY are set. Polls EDGAR on an interval (batch cadence) and

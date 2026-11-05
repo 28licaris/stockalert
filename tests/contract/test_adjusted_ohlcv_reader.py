@@ -23,7 +23,7 @@ from app.api.routes_adjusted import get_adjusted_ohlcv_reader
 from app.services.readers.schemas import (
     BarQualityResponse,
     BarQualityRow,
-    SilverBarsResponse,
+    AdjustedBarsResponse,
     SymbolCoverageResponse,
 )
 from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
@@ -163,7 +163,7 @@ class TestGetBarsHappyPath:
         end = datetime(2024, 6, 11, tzinfo=timezone.utc)
         resp = reader.get_bars("aapl", start, end)
 
-        assert isinstance(resp, SilverBarsResponse)
+        assert isinstance(resp, AdjustedBarsResponse)
         assert resp.symbol == "AAPL"
         assert resp.start == start
         assert resp.end == end
@@ -347,7 +347,7 @@ class _StubReader:
     def __init__(
         self,
         *,
-        bars_response: SilverBarsResponse | None = None,
+        bars_response: AdjustedBarsResponse | None = None,
         bq_response: BarQualityResponse | None = None,
         raises: Exception | None = None,
     ) -> None:
@@ -362,7 +362,7 @@ class _StubReader:
         self.last_get_bars = {"symbol": symbol, "start": start, "end": end}
         if self._raises:
             raise self._raises
-        return self._bars or SilverBarsResponse(
+        return self._bars or AdjustedBarsResponse(
             symbol=symbol.upper(), start=start, end=end,
             snapshot_id=None, bars=[], count=0,
         )
@@ -371,7 +371,7 @@ class _StubReader:
         self.last_get_bars_union = {"symbol": symbol, "start": start, "end": end}
         if self._raises:
             raise self._raises
-        return self._bars or SilverBarsResponse(
+        return self._bars or AdjustedBarsResponse(
             symbol=symbol.upper(), start=start, end=end,
             snapshot_id=None, bars=[], count=0,
         )
@@ -459,14 +459,14 @@ class TestMCPRegistration:
         class _Stub:
             def get_bars(self, symbol, start, end):
                 calls["get_bars"] += 1
-                return SilverBarsResponse(
+                return AdjustedBarsResponse(
                     symbol=symbol.upper(), start=start, end=end,
                     snapshot_id=None, bars=[], count=0,
                 )
 
             def get_bars_union(self, symbol, start, end):
                 calls["get_bars_union"] += 1
-                return SilverBarsResponse(
+                return AdjustedBarsResponse(
                     symbol=symbol.upper(), start=start, end=end,
                     snapshot_id=None, bars=[], count=0,
                 )
@@ -535,7 +535,7 @@ class TestV2ReaderTargets:
     def test_arrow_to_bars_accepts_v2_source_column(self) -> None:
         """v2 polygon_adjusted has `source` (not `source_provider`).
         Reader's conversion must read `source` so v2 rows produce
-        valid SilverBar objects."""
+        valid AdjustedBar objects."""
         import pyarrow as pa
         from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 
@@ -731,7 +731,7 @@ class TestRouteIncludeLiveParam:
 
         app = _make_adjusted_app()
         stub = _StubReader(
-            bars_response=SilverBarsResponse(
+            bars_response=AdjustedBarsResponse(
                 symbol="AAPL",
                 start=datetime(2024, 6, 1, tzinfo=timezone.utc),
                 end=datetime(2024, 6, 2, tzinfo=timezone.utc),
@@ -755,7 +755,7 @@ class TestRouteIncludeLiveParam:
 
         app = _make_adjusted_app()
         stub = _StubReader(
-            bars_response=SilverBarsResponse(
+            bars_response=AdjustedBarsResponse(
                 symbol="AAPL",
                 start=datetime(2024, 6, 1, tzinfo=timezone.utc),
                 end=datetime(2024, 6, 2, tzinfo=timezone.utc),

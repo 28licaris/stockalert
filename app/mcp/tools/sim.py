@@ -61,7 +61,7 @@ def run_backtest(
         strategy_params: Strategy-specific Pydantic params as a dict.
             For sma_crossover: fast_period / slow_period /
             position_size_pct. For llm_agent: model / context_bars /
-            indicators / system_prompt / temperature / max_tokens /
+            indicators / system_prompt / effort / max_tokens /
             position_size_pct / cache_path.
         config: `BacktestConfig` as a dict. Required keys: symbols
             (list), start (ISO 8601), end (ISO 8601), interval

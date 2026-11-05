@@ -20,8 +20,8 @@ from app.services.ingest.lake_to_ch_backfill import (
     LakeToChBackfill,
     LakeToChBackfillResult,
 )
-from app.services.readers.schemas import SilverBarsResponse
-from app.services.equities.models import SilverBar
+from app.services.readers.schemas import AdjustedBarsResponse
+from app.services.equities.models import AdjustedBar
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -39,9 +39,9 @@ def _silver_bar(
     volume: int = 1000,
     vwap: Optional[float] = None,
     trade_count: Optional[int] = None,
-) -> SilverBar:
-    """SilverBar fixture (split-adjusted OHLCV — the canonical view)."""
-    return SilverBar(
+) -> AdjustedBar:
+    """AdjustedBar fixture (split-adjusted OHLCV — the canonical view)."""
+    return AdjustedBar(
         symbol=symbol,
         timestamp=ts,
         open=close,
@@ -62,7 +62,7 @@ class _StubReader:
     def __init__(
         self,
         *,
-        response: Optional[SilverBarsResponse] = None,
+        response: Optional[AdjustedBarsResponse] = None,
         raises: Optional[Exception] = None,
     ) -> None:
         self._response = response
@@ -75,7 +75,7 @@ class _StubReader:
             raise self._raises
         if self._response is not None:
             return self._response
-        return SilverBarsResponse(
+        return AdjustedBarsResponse(
             symbol=symbol.upper(),
             start=start,
             end=end,
@@ -123,7 +123,7 @@ class TestBackfillHappyPath:
         what CH gets — no provider-direct fetching, no extra math."""
         ts = datetime(2024, 6, 7, 14, 30, tzinfo=timezone.utc)
         bar = _silver_bar("AAPL", ts, close=120.88)
-        resp = SilverBarsResponse(
+        resp = AdjustedBarsResponse(
             symbol="AAPL",
             start=datetime(2024, 6, 7, tzinfo=timezone.utc),
             end=datetime(2024, 6, 8, tzinfo=timezone.utc),
@@ -167,7 +167,7 @@ class TestBackfillHappyPath:
         bar = _silver_bar(
             "AAPL", ts, close=100.0, source_provider="schwab",
         )
-        resp = SilverBarsResponse(
+        resp = AdjustedBarsResponse(
             symbol="AAPL",
             start=datetime(2024, 6, 7, tzinfo=timezone.utc),
             end=datetime(2024, 6, 8, tzinfo=timezone.utc),
@@ -247,7 +247,7 @@ class TestBackfillEdgeCases:
     ) -> None:
         ts = datetime(2024, 1, 1, 14, 30, tzinfo=timezone.utc)
         bar = _silver_bar("AAPL", ts, close=100.0)
-        resp = SilverBarsResponse(
+        resp = AdjustedBarsResponse(
             symbol="AAPL",
             start=datetime(2024, 1, 1, tzinfo=timezone.utc),
             end=datetime(2024, 1, 2, tzinfo=timezone.utc),
