@@ -227,7 +227,7 @@ async def test_basic_text_turn_emits_deltas_then_completion(tmp_path: Path) -> N
     assert completion["stop_reason"] == "end_turn"
     assert completion["tokens_in"] == 120
     assert completion["tokens_out"] == 42
-    assert completion["model"] == "claude-sonnet-4-6"
+    assert completion["model"] == "claude-sonnet-5"
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -273,16 +273,15 @@ async def test_passes_model_kwargs_correctly(tmp_path: Path) -> None:
     )
 
     kwargs = client.calls[0]
-    assert kwargs["model"] == "claude-sonnet-4-6"
-    assert kwargs["temperature"] == 0.0
+    assert kwargs["model"] == "claude-sonnet-5"
     assert kwargs["max_tokens"] > 0
-    assert kwargs["thinking_budget"] is None
+    assert kwargs["effort"] == "medium"
     assert kwargs["messages"] == [{"role": "user", "content": "hi"}]
     assert kwargs["tools"] == []  # slice 3 supplies these
 
 
 @pytest.mark.asyncio
-async def test_extended_thinking_invokes_opus_with_thinking_budget(
+async def test_extended_thinking_invokes_opus_at_higher_effort(
     tmp_path: Path,
 ) -> None:
     client = _FakeLLMClient()
@@ -300,9 +299,11 @@ async def test_extended_thinking_invokes_opus_with_thinking_budget(
     )
 
     kwargs = client.calls[0]
-    assert kwargs["model"] == "claude-opus-4-7"
-    assert kwargs["thinking_budget"] is not None and kwargs["thinking_budget"] > 0
-    assert kwargs["temperature"] == 1.0
+    assert kwargs["model"] == "claude-opus-5"
+    assert kwargs["effort"] == "xhigh"
+    # No token budget, no temperature — both 400 on these models.
+    assert "thinking_budget" not in kwargs
+    assert "temperature" not in kwargs
 
 
 # ─────────────────────────────────────────────────────────────────────

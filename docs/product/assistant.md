@@ -143,7 +143,7 @@ Not yet surfaced (room to grow): `thinking_delta`, `tool_call_pending_confirm`,
 
 ## 5. Cost & persistence
 
-- **Model:** `claude-sonnet-4-6` default; `claude-opus-4-7` when extended
+- **Model:** `claude-sonnet-5` default; `claude-opus-5` when extended
   thinking is requested (`ModelRegistry`). Output capped at 8k tokens.
 - **Prompt cache:** the system prompt is sent with an Anthropic ephemeral cache
   marker → 5-minute reuse across turns with identical (system, model, tools).

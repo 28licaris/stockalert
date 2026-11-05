@@ -38,7 +38,7 @@ class SourceSpec:
                    (symbol, timestamp). Lets the reader tell Polars the
                    per-symbol timestamp column is pre-sorted (lever 2:
                    merge instead of re-sort on the single-symbol path).
-      provider_tag: fallback provenance tag stamped onto SilverBar.
+      provider_tag: fallback provenance tag stamped onto AdjustedBar.
                    source_provider when the row's own `source` column is
                    absent.
     """

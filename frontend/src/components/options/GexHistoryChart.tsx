@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { fmtGex } from "@/components/options/GexLadder";
+import { fmtGex } from "@/components/options/gex-levels";
 
 /**
  * GEX regime history: price line over a signed net-GEX histogram sharing

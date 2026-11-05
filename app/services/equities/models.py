@@ -12,17 +12,10 @@ The Iceberg schemas that lived alongside these in v1 silver
 NOT carried forward — their v2 replacements live in
 `app/services/equities/schemas.py` (CV1).
 
-Why "SilverBar" still has the silver name: the class is consumed by
-the `AdjustedOhlcvReader` (renamed in CV15) and many downstream call
-sites (route handlers, MCP tools, tests, ingest paths). The v1 HTTP
-URL `/api/silver/bars/{symbol}` was retired in CV20 (current path is
-`/api/v1/adjusted/bars/{symbol}`), but renaming the Python class +
-the dependent Pydantic schemas (`SilverBarsResponse`) is deferred
-until the cross-cutting rename has explicit signoff. The class
-today represents "an adjusted OHLCV bar from the v2 lake
-(`equities.polygon_adjusted` + optional `equities.schwab_universe`
-UNION)" — call it that mentally; the literal name stays for caller
-compatibility.
+`AdjustedBar` is one split-adjusted OHLCV bar read out of the lake.
+It was called `SilverBar` until 2026-11-05, when the retired medallion
+vocabulary was removed; recover that history with
+`git log --follow -- app/services/equities/models.py`.
 """
 from __future__ import annotations
 
@@ -114,11 +107,11 @@ class CorpAction(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# SilverBar — one adjusted OHLCV bar (post-CV14 sources from lake)
+# AdjustedBar — one adjusted OHLCV bar (post-CV14 sources from lake)
 # ─────────────────────────────────────────────────────────────────────
 
 
-class SilverBar(BaseModel):
+class AdjustedBar(BaseModel):
     """One canonical 1-minute split-adjusted OHLCV bar.
 
     Sourced from the Polygon tier (`equities.polygon_raw`, adjusted at
@@ -134,7 +127,7 @@ class SilverBar(BaseModel):
     `adj_factor` (stored on every polygon_adjusted row in CV1's
     schema, defaults to 1.0 on schwab_universe rows). The reader
     surfaces adj_factor only when explicitly asked — the default
-    SilverBar carries the adjusted view.
+    AdjustedBar carries the adjusted view.
     """
 
     symbol: str
@@ -181,5 +174,5 @@ class SilverBar(BaseModel):
 __all__ = [
     "CorpAction",
     "CorpActionKind",
-    "SilverBar",
+    "AdjustedBar",
 ]

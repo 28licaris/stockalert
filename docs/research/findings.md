@@ -6,6 +6,18 @@ A running, dated log of strategy experiments and what we concluded. This is
 ([`platform.md`](platform.md) §7), nothing
 here is shown to a customer until it survives out-of-sample + forward paper-trade.
 
+> **2026-11-05 — `llm_agent` runs before this date are not comparable to runs
+> after it.** The strategy moved from `claude-sonnet-4-6` with
+> `temperature=0.0` to `claude-sonnet-5` with adaptive thinking
+> (`output_config.effort`, default `medium`). `temperature` is removed on
+> current models, so the old sampling pin no longer exists; depth is an effort
+> level instead, and `max_tokens` went 256 → 8192 because thinking tokens count
+> against it. The response-cache key now includes `effort`, so every prior
+> cache entry is invalidated by design — a replay re-queries the API rather
+> than reproducing the old answer. **Do not pool `agent_runs` rows across that
+> boundary**, and re-baseline before comparing any `llm_agent` result to a
+> pre-2026-11-05 number.
+
 ## Methodology (applies to all entries unless noted)
 
 - Engine: `app/services/sim/` Backtester; metrics from `StandardEvaluator`.

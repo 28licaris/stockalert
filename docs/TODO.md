@@ -216,3 +216,27 @@ Production-ready for backtesting. Pipeline and nightly behaviour:
   `polygon_flatfiles_mirror/` plus trades files are write-once and read-never
   after parsing. An S3 lifecycle policy (Intelligent-Tiering at 30d, Glacier at
   90d) saves ~$2-3/month with no correctness impact.
+
+## Frontend: 60 hand-declared types duplicate generated OpenAPI schemas
+`frontend/src/api/queries.ts` declares 85 shapes, **60 of which already exist**
+in `src/api/types.gen.ts` as `components["schemas"][...]` — effectively a
+parallel type system. Nothing is broken today; the hazard is **drift**: the
+backend changes a shape, TypeScript still compiles against the hand-written
+copy, and it fails at runtime instead of at build time.
+
+**Deliberately not done before the AWS deployment** (decided 2026-11-05): it
+touches every page's data layer for zero functional gain, which is the wrong
+risk to take on the eve of a deploy. Land it early in the next cycle instead.
+
+- **Root cause is already fixed.** `npm run codegen` needs a running API, so it
+  got skipped and `types.gen.ts` went months stale (missing `/api/v1/ppl/*` and
+  `/api/v1/health/freshness` entirely) — which is what let the duplicates
+  diverge unnoticed. `tests/contract/test_openapi_types_in_sync.py` now fails
+  the suite when a schema is missing from the generated file.
+- Migration order: start with the newest shapes (PPL, freshness), which have
+  had the least time to be depended on, then the high-traffic ones.
+- Replace `fetchJson<T>(path)` with the typed `openapi-fetch` client wherever a
+  generated path exists, so the URL is compile-checked too. 11 call sites.
+- Keep `fetchJson` only for endpoints genuinely absent from the schema, with a
+  comment saying why.
+

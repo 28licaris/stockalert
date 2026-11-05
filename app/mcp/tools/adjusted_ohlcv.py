@@ -31,7 +31,7 @@ from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 from app.services.readers.schemas import (
     AdjustedSymbolsResponse,
     CrossProviderDiffResponse,
-    SilverBarsResponse,
+    AdjustedBarsResponse,
     SymbolCoverageResponse,
 )
 
@@ -49,7 +49,7 @@ def get_adjusted_bars(
     start: datetime,
     end: datetime,
     include_live: bool = False,
-) -> SilverBarsResponse:
+) -> AdjustedBarsResponse:
     """Return 1-minute split-adjusted OHLCV bars from the v2 lake.
 
     USE WHEN: an agent needs canonical 1-minute history for analysis,
@@ -83,9 +83,9 @@ def get_adjusted_bars(
             (closes the polygon-staleness gap for windows that include
             today).
 
-    Returns: `SilverBarsResponse` with the matching bars, sorted by
+    Returns: `AdjustedBarsResponse` with the matching bars, sorted by
     timestamp ASC, plus the snapshot_id and the request echo. The
-    class name retains the v1 `SilverBarsResponse` for Pydantic-shape
+    class name retains the v1 `AdjustedBarsResponse` for Pydantic-shape
     compatibility; the data inside is sourced from
     equities.polygon_adjusted (default) or polygon_adjusted ∪
     schwab_universe (include_live=True).

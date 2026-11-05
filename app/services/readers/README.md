@@ -18,7 +18,7 @@ Three goals, in priority order:
    `equities.schwab_universe` UNION). ClickHouse can be down,
    redeployed, or wiped and training reproducibility is unaffected.
 2. **Single contract across surfaces.** The same Pydantic shape
-   (`BronzeBar`, `SilverBar`, etc.) flows out of routes and MCP
+   (`BronzeBar`, `AdjustedBar`, etc.) flows out of routes and MCP
    tools. An agent that consumes a route response can consume an MCP
    response with zero shape-conversion code.
 3. **Liftable services.** Each reader can become its own container
@@ -29,7 +29,7 @@ Three goals, in priority order:
 
 | File | Reader | Source | Notes |
 |---|---|---|---|
-| [schemas.py](schemas.py) | — | — | All Pydantic DTOs. Lake-history: `BronzeBar`/`BronzeBarsResponse`, `SilverBar`/`SilverBarsResponse` (CV11 name carry-overs — actually adjusted bars; see schemas.py section header), `CorpActionsResponse`, `LakeSymbolsResponse`, `LakeLatestDayResponse`, `LakeSnapshot`/`LakeSnapshotsResponse`, `AdjustedSymbolsResponse`, `SourceCoverage`/`SymbolCoverageResponse`, `CrossProviderDiffRow`/`CrossProviderDiffResponse`, `BarQualityRow`/`BarQualityResponse` (empty-only until v2 has a quality table). Live tier: `LiveBar`/`LiveBarsResponse`, `LatestBarsResponse`, `Signal`/`SignalsResponse`. Discovery + observability: `WatchlistSummary`/`WatchlistDetail`/`WatchlistsResponse`, `CoverageReport`, `IntradayGap`/`GapReport`, `BronzeTableStats`, `LakeFreshnessReport`, `ServiceStatus`/`SystemHealthReport`. Quotes: `Quote`/`QuotesResponse`. Indicators: `IndicatorValue`/`IndicatorSeries`/`IndicatorChartData`. |
+| [schemas.py](schemas.py) | — | — | All Pydantic DTOs. Lake-history: `BronzeBar`/`BronzeBarsResponse`, `AdjustedBar`/`AdjustedBarsResponse` (CV11 name carry-overs — actually adjusted bars; see schemas.py section header), `CorpActionsResponse`, `LakeSymbolsResponse`, `LakeLatestDayResponse`, `LakeSnapshot`/`LakeSnapshotsResponse`, `AdjustedSymbolsResponse`, `SourceCoverage`/`SymbolCoverageResponse`, `CrossProviderDiffRow`/`CrossProviderDiffResponse`, `BarQualityRow`/`BarQualityResponse` (empty-only until v2 has a quality table). Live tier: `LiveBar`/`LiveBarsResponse`, `LatestBarsResponse`, `Signal`/`SignalsResponse`. Discovery + observability: `WatchlistSummary`/`WatchlistDetail`/`WatchlistsResponse`, `CoverageReport`, `IntradayGap`/`GapReport`, `BronzeTableStats`, `LakeFreshnessReport`, `ServiceStatus`/`SystemHealthReport`. Quotes: `Quote`/`QuotesResponse`. Indicators: `IndicatorValue`/`IndicatorSeries`/`IndicatorChartData`. |
 | [bronze_reader.py](bronze_reader.py) | `BronzeReader` | Iceberg `equities.polygon_raw` (provider=polygon) or `equities.schwab_universe` (provider=schwab) | CH-independent. Class name kept from v1 for caller stability — actually reads v2 equities tables (see file docstring). `get_bars`, `list_symbols`, `latest_trading_day`. |
 | [adjusted_ohlcv_reader.py](adjusted_ohlcv_reader.py) | `AdjustedOhlcvReader` | Iceberg `equities.polygon_adjusted` (deep history, split-adjusted by the Spark job) + optional UNION with `equities.schwab_universe` when `include_live=True` (CV25) | CH-independent. `get_bars`, `get_bar_quality` (returns empty — no v2 quality table yet). Canonical post-CV11 reader for adjusted OHLCV. |
 | [corp_actions_reader.py](corp_actions_reader.py) | `CorpActionsReader` | Iceberg `equities.market_corp_actions` | CH-independent. `get_corp_actions(symbol, since, until, action_types)`. Backed by Polygon REST nightly + on-demand backfills via `scripts/run_corp_actions_backfill.py`. |

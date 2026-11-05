@@ -15,7 +15,7 @@ from app.services.assistant.cache import CacheKeyInputs, ResponseCache
 
 def _inputs(**overrides: object) -> CacheKeyInputs:
     base = dict(
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         system_prompt_sha256="a" * 64,
         tool_schema_sha256="b" * 64,
         messages=[{"role": "user", "content": "hi"}],
@@ -34,8 +34,8 @@ def test_compute_key_is_deterministic() -> None:
 
 
 def test_compute_key_changes_with_model() -> None:
-    a = _inputs(model="claude-sonnet-4-6").compute_key()
-    b = _inputs(model="claude-opus-4-7").compute_key()
+    a = _inputs(model="claude-sonnet-5").compute_key()
+    b = _inputs(model="claude-opus-5").compute_key()
     assert a != b
 
 

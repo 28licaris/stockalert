@@ -18,7 +18,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from app.services.equities.models import CorpAction, SilverBar
+from app.services.equities.models import CorpAction, AdjustedBar
 
 
 class BronzeBar(BaseModel):
@@ -511,26 +511,21 @@ class IndicatorChartData(BaseModel):
 # and the MCP tool (`get_adjusted_bars`) both surface. Same Pydantic
 # contract on both surfaces. The reader (`AdjustedOhlcvReader`) sources
 # from `equities.polygon_adjusted` — split-adjusted whole-market history
-# produced by the Spark adjustment job — UNION'd with the live tier
-# `equities.schwab_universe` when `include_live=True` (CV25).
-#
-# Class names retain the v1 `Silver*` prefix (SilverBar, SilverBarsResponse,
-# BarQualityRow) for downstream API stability; the docstring describes the
-# real v2 source. See app/services/equities/models.py for the SilverBar
-# definition + rename rationale.
+# Adjusted OHLCV DTOs. Split adjustment is computed at READ time from
+# `equities.polygon_raw` + `equities.market_splits`
+# (app/services/equities/adjust.py) — there is no materialized
+# `polygon_adjusted` table. Optionally UNION'd with the live tier
+# `equities.schwab_universe` when `include_live=True`.
 
 
-class SilverBarsResponse(BaseModel):
+class AdjustedBarsResponse(BaseModel):
     """Response wrapper for a windowed adjusted-OHLCV query.
 
-    Sources from `equities.polygon_adjusted` (deep history, split-adjusted
-    by the Spark adjustment job); optionally UNION'd with the live tier
-    `equities.schwab_universe` for fresh bars. The `SilverBars` name is
-    a v1 carry-over kept for API stability — see the section header
-    above for the rationale.
+    Deep history comes from `equities.polygon_raw` adjusted on read;
+    optionally UNION'd with `equities.schwab_universe` for fresh bars.
 
-    `snapshot_id` is the Iceberg snapshot pinned by the read.
-    Recording this lets callers replay against the exact lake state.
+    `snapshot_id` is the Iceberg snapshot pinned by the read. Recording
+    it lets callers replay against the exact lake state.
     """
 
     symbol: str
@@ -539,11 +534,11 @@ class SilverBarsResponse(BaseModel):
     snapshot_id: Optional[str] = Field(
         None,
         description=(
-            "Iceberg snapshot pinned by the read. None if the target "
-            "table doesn't exist yet (cold-start before first Spark run)."
+            "Iceberg snapshot pinned by the read. None when the source "
+            "table does not exist yet."
         ),
     )
-    bars: list[SilverBar]
+    bars: list[AdjustedBar]
     count: int = Field(..., description="len(bars). Echoed for cheap client-side checks.")
 
 

@@ -39,7 +39,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.db.queries import insert_bars_batch
-from app.services.readers.schemas import SilverBarsResponse
+from app.services.readers.schemas import AdjustedBarsResponse
 from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 
 logger = logging.getLogger(__name__)
@@ -154,7 +154,7 @@ class LakeToChBackfill:
                 )
                 return result
 
-            ch_rows = self._silver_to_ch_rows(resp)
+            ch_rows = self._lake_to_ch_rows(resp)
             insert_bars_batch(ch_rows)
             result.bars_written = len(ch_rows)
             logger.info(
@@ -176,8 +176,8 @@ class LakeToChBackfill:
     # ─────────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _silver_to_ch_rows(resp: SilverBarsResponse) -> list[dict]:
-        """Translate `SilverBarsResponse` → CH ohlcv_1m row dicts.
+    def _lake_to_ch_rows(resp: AdjustedBarsResponse) -> list[dict]:
+        """Translate `AdjustedBarsResponse` → CH ohlcv_1m row dicts.
 
         Silver's split-adjusted OHLCV maps directly to CH ohlcv_1m's
         single OHLCV set. Source tag is set to `silver-{provider}` so

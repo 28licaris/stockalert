@@ -6,11 +6,8 @@ import {
   GexHistoryChart,
   type GexHistoryPoint,
 } from "@/components/options/GexHistoryChart";
-import {
-  deriveGexLevels,
-  fmtGex,
-  GexLadder,
-} from "@/components/options/GexLadder";
+import { GexLadder } from "@/components/options/GexLadder";
+import { deriveGexLevels, fmtGex } from "@/components/options/gex-levels";
 import { Button } from "@/components/ui/button";
 import { fmtAgo, fmtDate } from "@/lib/fmt";
 import { cn } from "@/lib/utils";
@@ -53,7 +50,9 @@ export function GexPage() {
       .map(([date, gex]) => ({ date, gex, close: closeByDay.get(date) ?? null }));
   }, [historyQ.data, barsQ.data]);
 
-  const strikeRows = strikeQ.data?.rows ?? [];
+  // Memoized: `?? []` makes a new array every render, which re-ran
+  // `deriveGexLevels` (a full ladder scan) on every unrelated state change.
+  const strikeRows = useMemo(() => strikeQ.data?.rows ?? [], [strikeQ.data]);
   const totalRow = (totalQ.data?.rows ?? [])[0];
   const expiryRows = useMemo(
     () =>

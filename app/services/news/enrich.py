@@ -120,7 +120,7 @@ class NewsEnricher:
         from anthropic import Anthropic  # lazy — keeps the package import cheap
         client = Anthropic()  # reads ANTHROPIC_API_KEY from the env
         resp = client.messages.create(
-            model=self._model or "claude-haiku-4-5-20251001",
+            model=self._model or "claude-haiku-4-5",
             max_tokens=self._max_tokens,
             system=system,
             messages=[{"role": "user", "content": user}],

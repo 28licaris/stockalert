@@ -49,7 +49,7 @@ const FLAGS: Record<string, FlagValue> = {
 
   // Model picks for LLM-driven strategies (read by the backend too,
   // eventually — for now this is FE-only).
-  "model.strategy.llm": "claude-sonnet-4-6",
+  "model.strategy.llm": "claude-sonnet-5",
 };
 
 export function useFeatureFlag<T extends FlagValue>(key: string, fallback: T): T {

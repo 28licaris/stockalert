@@ -114,8 +114,14 @@ provider credentials, so a dev/CI box without them is a clean no-op.
 - `SCHWAB_NIGHTLY_ENABLED` (default `true`), `…_RUN_HOUR_UTC` (22), `SCHWAB_NIGHTLY_SYMBOLS` (`active`) → `equities.schwab_universe`.
 - `FUTURES_NIGHTLY_ENABLED` (default `true`), `FUTURES_POLYGON_NIGHTLY_ENABLED` (default `true`) → futures lake tables.
 - `CH_RECONCILE_ENABLED` (default `true`), `…_RUN_HOUR_UTC` (23), `…_LOOKBACK_DAYS` (7) → heals `ohlcv_1m` from the lake.
-- **Not in-process:** `equities.polygon_adjusted` (the split-adjusted tier) is built by a **weekly external Spark job** (EMR/CodeBuild) — it has no auto-catchup, so wire it up + alert on failure separately.
-- **Verify freshness** anytime via the `get_lake_freshness` MCP tool / `LakeFreshnessReport`, which now reports the raw, **adjusted (`polygon_adjusted`)**, and futures tiers — the adjusted entry is the only signal that the external weekly Spark job has stalled.
+- **No separate adjusted tier to schedule.** Split adjustment is computed at
+  **read time** from `equities.polygon_raw` + `equities.market_splits`
+  (`app/services/equities/adjust.py`), so there is no materialized
+  `polygon_adjusted` table and no external job that can fall behind. The old
+  weekly Spark job and its EMR Serverless application were retired.
+- **Verify freshness** anytime via the `get_lake_freshness` MCP tool /
+  `LakeFreshnessReport`, which reports the raw equities and futures Iceberg
+  tiers. Raw freshness *is* adjusted freshness now.
 
 ## Alerts and monitoring
 

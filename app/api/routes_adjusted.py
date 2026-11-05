@@ -30,7 +30,7 @@ from app.services.readers.adjusted_ohlcv_reader import AdjustedOhlcvReader
 from app.services.readers.schemas import (
     AdjustedSymbolsResponse,
     CrossProviderDiffResponse,
-    SilverBarsResponse,
+    AdjustedBarsResponse,
     SymbolCoverageResponse,
 )
 
@@ -51,7 +51,7 @@ def get_adjusted_ohlcv_reader() -> AdjustedOhlcvReader:
 
 @router.get(
     "/adjusted/bars/{symbol}",
-    response_model=SilverBarsResponse,
+    response_model=AdjustedBarsResponse,
 )
 def get_adjusted_bars(
     symbol: str = Path(..., min_length=1, description="Ticker (case-insensitive)."),
@@ -82,13 +82,17 @@ def get_adjusted_bars(
         ),
     ),
     reader: AdjustedOhlcvReader = Depends(get_adjusted_ohlcv_reader),
-) -> SilverBarsResponse:
+) -> AdjustedBarsResponse:
     """Return 1-minute split-adjusted bars for `symbol` in `[start, end)`.
 
-    Default (`include_live=false`) reads `equities.polygon_adjusted`
-    only — the canonical adjusted store, built whole-market weekly by
-    the Spark `polygon_adjustment_job`. Each row carries the cumulative
+    Default (`include_live=false`) reads the Polygon tier only —
+    `equities.polygon_raw` with split adjustment applied at READ time
+    (`app/services/equities/adjust.py`); there is no materialized
+    `polygon_adjusted` table. Each bar carries the cumulative
     future-splits factor as `adj_factor`; multiply back to recover raw.
+
+    Note this tier is frozen at 2026-06-12 — the Polygon minute
+    flat-file feed lapsed. Use `include_live=true` for anything newer.
 
     With `include_live=true` the response also includes rows from
     `equities.schwab_universe` (live + tip-fill, also pre-adjusted with

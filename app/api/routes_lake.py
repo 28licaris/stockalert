@@ -265,8 +265,8 @@ def list_lake_snapshots(
     Use this to answer:
       - When did the nightly cron last run? (most-recent snapshot's
         committed_at on polygon_raw / schwab_universe)
-      - What did the last polygon_adjustment_job add? (most-recent
-        polygon_adjusted snapshot's `added_records`)
+      - What did the last nightly write add? (most-recent snapshot's
+        `added_records`)
       - I want a deterministic backtest — what snapshot_id should I
         pin? (any snapshot_id from this list)
       - Bad data in latest commit — what's the previous good snapshot?

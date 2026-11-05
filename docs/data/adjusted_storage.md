@@ -55,7 +55,7 @@ Replace the `polygon_adjusted` scan in `AdjustedOhlcvReader` with:
    cumulative product (the **exact algorithm the Spark job already uses** —
    `polygon_adjustment_job.py` cumulative-future-splits + broadcast lookup,
    lifted into a small pure function).
-4. Apply `/factor` to prices, `×factor` to volume; emit the same `SilverBar`.
+4. Apply `/factor` to prices, `×factor` to volume; emit the same `AdjustedBar`.
 
 This shared transform lives in one pure function (e.g.
 `app/services/equities/adjust.py::apply_adjustment(raw_arrow, splits)`),

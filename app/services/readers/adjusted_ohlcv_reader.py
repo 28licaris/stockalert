@@ -8,8 +8,8 @@ in CV5/CV6). Same adjusted-OHLCV semantics, different storage layer.
 
 The class name + module name are kept stable to avoid cascading
 caller rewrites; the rename pass happens in CV14 when the silver
-module is deleted. The public API (`get_bars`, `SilverBarsResponse`,
-`SilverBar`) is unchanged — every consumer (chart, screener,
+module is deleted. The public API (`get_bars`, `AdjustedBarsResponse`,
+`AdjustedBar`) is unchanged — every consumer (chart, screener,
 indicator, backtest, MCP tool, the CH cold-loader in
 lake_to_ch_backfill) keeps working with no change.
 
@@ -31,9 +31,8 @@ Design contract (mirrors `CorpActionsReader` post-CV10):
   - Filters push down to Iceberg — CV1's POLYGON_ADJUSTED_PARTITION
     uses bucket(32, symbol) + month(timestamp), so single-symbol
     queries scan ~1/32 of each month's data.
-  - Cold-start safe: returns empty result if equities.polygon_adjusted
-    doesn't exist yet (initial system state before the first
-    polygon_adjustment_job run).
+  - Cold-start safe: returns an empty result when the source table
+    does not exist yet.
 """
 from __future__ import annotations
 
@@ -52,11 +51,11 @@ from app.services.readers.schemas import (
     BarQualityRow,
     CrossProviderDiffResponse,
     CrossProviderDiffRow,
-    SilverBarsResponse,
+    AdjustedBarsResponse,
     SourceCoverage,
     SymbolCoverageResponse,
 )
-from app.services.equities.models import SilverBar
+from app.services.equities.models import AdjustedBar
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +206,7 @@ class AdjustedOhlcvReader:
         symbol: str,
         start: datetime,
         end: datetime,
-    ) -> SilverBarsResponse:
+    ) -> AdjustedBarsResponse:
         """Read 1-minute adjusted OHLCV bars for `symbol` in `[start, end)`.
 
         Source: `equities.polygon_adjusted` (CV1's table populated by
@@ -232,7 +231,7 @@ class AdjustedOhlcvReader:
         """
         sym = (symbol or "").strip().upper()
         if not sym:
-            return SilverBarsResponse(
+            return AdjustedBarsResponse(
                 symbol=symbol or "",
                 start=_coerce_utc(start),
                 end=_coerce_utc(end),
@@ -251,7 +250,7 @@ class AdjustedOhlcvReader:
                 "AdjustedOhlcvReader: equities.polygon_raw not "
                 "loadable (%s); returning empty result", e,
             )
-            return SilverBarsResponse(
+            return AdjustedBarsResponse(
                 symbol=sym, start=start_utc, end=end_utc,
                 snapshot_id=None, bars=[], count=0,
             )
@@ -259,7 +258,7 @@ class AdjustedOhlcvReader:
         # Read-time adjustment: scan polygon_raw + apply split factors.
         adjusted = self._scan_adjusted_window(sym, start_utc, end_utc)
         if adjusted is None:
-            return SilverBarsResponse(
+            return AdjustedBarsResponse(
                 symbol=sym, start=start_utc, end=end_utc,
                 snapshot_id=None, bars=[], count=0,
             )
@@ -269,7 +268,7 @@ class AdjustedOhlcvReader:
         snap = table.current_snapshot()
         snap_id = str(snap.snapshot_id) if snap else None
 
-        return SilverBarsResponse(
+        return AdjustedBarsResponse(
             symbol=sym,
             start=start_utc,
             end=end_utc,
@@ -283,7 +282,7 @@ class AdjustedOhlcvReader:
         symbol: str,
         start: datetime,
         end: datetime,
-    ) -> SilverBarsResponse:
+    ) -> AdjustedBarsResponse:
         """Adjusted bars for `[start, end)` UNIONing the two v2 sources.
 
         Reads BOTH the polygon source — `equities.polygon_raw` with the
@@ -309,14 +308,14 @@ class AdjustedOhlcvReader:
         warm cache; the union + sort happens in Python over the
         combined Arrow tables.
 
-        Same return contract as `get_bars()` — `SilverBarsResponse`
+        Same return contract as `get_bars()` — `AdjustedBarsResponse`
         with bars sorted ascending by timestamp.
         """
         sym = (symbol or "").strip().upper()
         start_utc = _coerce_utc(start)
         end_utc = _coerce_utc(end)
         if not sym:
-            return SilverBarsResponse(
+            return AdjustedBarsResponse(
                 symbol=symbol or "",
                 start=start_utc, end=end_utc,
                 snapshot_id=None, bars=[], count=0,
@@ -360,7 +359,7 @@ class AdjustedOhlcvReader:
         except Exception:
             pass
 
-        return SilverBarsResponse(
+        return AdjustedBarsResponse(
             symbol=sym,
             start=start_utc,
             end=end_utc,
@@ -876,8 +875,8 @@ class AdjustedOhlcvReader:
     # ─────────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _arrow_to_bars(arrow) -> list[SilverBar]:
-        """Convert PyArrow Table → sorted list[SilverBar]."""
+    def _arrow_to_bars(arrow) -> list[AdjustedBar]:
+        """Convert PyArrow Table → sorted list[AdjustedBar]."""
         if arrow.num_rows == 0:
             return []
 
@@ -886,7 +885,7 @@ class AdjustedOhlcvReader:
         rows = arrow.to_pylist()
         rows.sort(key=lambda r: r["timestamp"])
 
-        out: list[SilverBar] = []
+        out: list[AdjustedBar] = []
         for r in rows:
             ts = r.get("timestamp")
             if ts is not None and ts.tzinfo is None:
@@ -911,12 +910,12 @@ class AdjustedOhlcvReader:
             sources_seen = [s for s in seen_raw.split(",") if s] if seen_raw else []
 
             # The Iceberg schema permits NULLs on price columns; the
-            # Pydantic SilverBar declares them as non-Optional float for
+            # Pydantic AdjustedBar declares them as non-Optional float for
             # the canonical row. Skip rows missing any OHLC (upstream
             # bug worth surfacing rather than silently 0-filling).
             # Skip rows with NULL or NaN OHLC. Read-time adjustment turns a
             # NULL raw price into NaN (None → float64 nan), so check both —
-            # an invalid bar must not leak through as a NaN-priced SilverBar.
+            # an invalid bar must not leak through as a NaN-priced AdjustedBar.
             if any(
                 (v := r.get(c)) is None or (isinstance(v, float) and v != v)
                 for c in ("open", "high", "low", "close")
@@ -930,7 +929,7 @@ class AdjustedOhlcvReader:
             # Polygon flat-files store volume + trade_count as DoubleType
             # in the Iceberg schema because some extended-hours / low-
             # liquidity bars arrive with fractional values (VWAP-weighted
-            # aggregation in Polygon's pipeline). SilverBar declares these
+            # aggregation in Polygon's pipeline). AdjustedBar declares these
             # as `int` for downstream consumers (CH ohlcv_1m's volume
             # column is integer; chart UI doesn't render fractional
             # shares). Round at the reader boundary — sub-share precision
@@ -938,7 +937,7 @@ class AdjustedOhlcvReader:
             vol_raw = r.get("volume")
             tc_raw = r.get("trade_count")
             out.append(
-                SilverBar(
+                AdjustedBar(
                     symbol=r["symbol"],
                     timestamp=ts,
                     open=r["open"],
