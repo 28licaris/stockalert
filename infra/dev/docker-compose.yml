@@ -20,23 +20,27 @@ x-awslogs: &awslogs
     awslogs-create-group: "false"   # CloudFormation owns the group (14-day retention)
     tag: "{{.Name}}"                # one log stream per container name
 
-# Streamer + the writers that ride on the live stream. ON in worker, OFF in api.
+# Mirrors the laptop's .env as of 2026-11-05 — the known-good set; change here
+# and there together. (Not .env.example's defaults: three flags differ.)
+
+# Streamer + the writers that ride on the live stream. Worker only; api sets them all off.
 x-stream-flags: &stream-flags
   STREAM_PROVIDER: schwab
   JOURNAL_ENABLED: "true"
   LIVE_LAKE_WRITER_ENABLED: "true"
   OPTIONS_SNAPSHOT_ENABLED: "true"        # exactly one process may own this (startup_flow.md)
-  ELLIOTT_LIVE_SCANNER_ENABLED: "true"
+  ELLIOTT_LIVE_SCANNER_ENABLED: "false"   # off on the laptop: wave detection on every live bar
 
-# Every scheduled loop. ON in worker, OFF in api.
+# Scheduled loops. Worker only; api sets them all off.
 x-jobs-flags: &jobs-flags
-  POLYGON_NIGHTLY_ENABLED: "true"
+  POLYGON_NIGHTLY_ENABLED: "false"        # off since the flat-files subscription lapsed; the daily
+                                          # refresh runs inside scripts/paper_daily_pipeline.py
   SCHWAB_NIGHTLY_ENABLED: "true"
   FUTURES_NIGHTLY_ENABLED: "true"
   FUTURES_POLYGON_NIGHTLY_ENABLED: "true"
   CH_RECONCILE_ENABLED: "true"
   NEWS_INGEST_ENABLED: "true"
-  ELLIOTT_RECOMPUTE_ENABLED: "true"
+  ELLIOTT_RECOMPUTE_ENABLED: "false"      # off on the laptop
 
 x-app: &app
   image: ${APP_IMAGE:?APP_IMAGE missing — bin/release.sh <image> writes release.env}
