@@ -39,7 +39,7 @@ parallel; all three must be green before a merge:
 
 | Job | What runs | What it proves |
 |---|---|---|
-| `backend` | Python 3.12, Poetry venv from `poetry.lock`, `pytest -m "not integration" -q` | Every unit + contract test passes with **no** credentials and no live service |
+| `backend` | Python 3.12, Poetry venv from `poetry.lock`, `pytest -m "not integration" -q -rs` | Every unit + contract test passes with **no** credentials and no live service |
 | `frontend` | Node 20, `npm ci`, `npm run typecheck`, `npm run lint` | The cockpit compiles and is lint-clean at zero warnings |
 | `image` | `docker buildx build --platform linux/arm64` of the repo `Dockerfile`, no push | The deployable image still builds |
 

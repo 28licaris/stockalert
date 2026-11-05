@@ -36,7 +36,7 @@ poetry run uvicorn app.main_api:app --reload      # API on :8000
 poetry run pytest                                 # all tests
 poetry run pytest -m "not integration"            # unit only (fast)
 poetry run pytest -m integration                  # live-service
-poetry run pytest -m "not integration" -q         # what CI runs on every PR (.github/workflows/ci.yml; see standards/testing.md "CI")
+poetry run pytest -m "not integration" -q -rs     # what CI runs on every PR (.github/workflows/ci.yml; see standards/testing.md "CI")
 poetry run pytest app/providers/tests/test_schwab_provider.py::TestChartContentToBar  # single test
 docker compose --profile ch up -d                 # local ClickHouse
 docker compose --profile identity up -d postgres  # local identity PostgreSQL

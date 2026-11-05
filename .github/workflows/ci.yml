@@ -70,7 +70,9 @@ jobs:
           poetry run python -c "import app, arch, lightgbm, pyiceberg; print('deps ok')"
 
       - name: Unit tests (integration marker excluded)
-        run: poetry run pytest -m "not integration" -q
+        # -rs: print every skip with its reason, so a module skipped for a missing
+        # optional dependency (e.g. the `spike` group) is visible, not silent.
+        run: poetry run pytest -m "not integration" -q -rs
 
   frontend:
     name: frontend (typecheck, lint)
