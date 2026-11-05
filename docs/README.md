@@ -126,6 +126,8 @@ structured extractions of analyst emails (ids, dates, symbols — not verbatim
 newsletter text). Produced by the `ewt-email-scan` scheduled task, which lives
 **outside this repo** at `~/.claude/scheduled-tasks/ewt-email-scan/`.
 
+The task is mirrored at
+[`../.claude/scheduled-tasks/`](../.claude/scheduled-tasks/README.md).
 Partial by design: 30 of 496 analysis-bearing messages extracted as of
 2026-08-05. `ewt/README.md` holds the backfill state and explains why
 `state.json`'s watermark is deliberately `null` — the real watermark is

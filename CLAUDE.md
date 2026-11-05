@@ -184,6 +184,15 @@ installer can manage them. Don't add first-party skills there: a duplicate
 `preflight-change` was swept into `.agents/` by an unrelated commit and the
 two copies could drift silently. Removed 2026-11-05.
 
+### Scheduled tasks
+
+Claude Code scheduled tasks that drive this repo are mirrored in
+[`.claude/scheduled-tasks/`](.claude/scheduled-tasks/README.md) — currently
+`daily-paper-trade-momentum` (advances the forward paper record) and
+`ewt-email-scan` (produces `ewt/`). They are **backups, not live
+installations**: Claude Code runs them from `~/.claude/scheduled-tasks/`,
+so edit the live copy and mirror it back in the same change.
+
 ## Infra
 
 AWS only. Glue + S3 (Iceberg warehouse), CodeBuild for long backfills
