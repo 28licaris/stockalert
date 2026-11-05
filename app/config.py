@@ -49,6 +49,11 @@ def _normalize_aws_env() -> None:
 _normalize_aws_env()
 
 
+# ``STREAM_PROVIDER=none`` disables live streaming in this process. Module-level
+# (not a Settings attribute) so pydantic does not read it as a field.
+STREAM_PROVIDER_NONE = "none"
+
+
 class Settings(BaseModel):
     """
     Application settings with environment variable support.
@@ -73,6 +78,8 @@ class Settings(BaseModel):
     polygon_s3_bucket: str = os.getenv("POLYGON_S3_BUCKET", "flatfiles")
     data_provider: str = os.getenv("DATA_PROVIDER", "alpaca")
     # Optional role-specific overrides. Empty values fall back to DATA_PROVIDER.
+    # STREAM_PROVIDER accepts the sentinel ``none`` (see STREAM_PROVIDER_NONE):
+    # an *empty* value does NOT disable streaming, it falls back to DATA_PROVIDER.
     stream_provider: str = os.getenv("STREAM_PROVIDER", "")
     # Worker-side universe re-sync (deployment spec C2). Every N seconds the
     # StreamService re-reads stream_universe ∪ futures_universe and applies the
@@ -549,7 +556,19 @@ class Settings(BaseModel):
 
     @property
     def effective_stream_provider(self) -> str:
-        return (self.stream_provider or self.data_provider).strip().lower()
+        """Provider for live WebSocket bars; ``""`` means streaming is disabled.
+
+        ``STREAM_PROVIDER=none`` (case-insensitive) is the only way to disable
+        the streamer in a process: the deployment's ``api`` container and any
+        second laptop checkout set it, because Schwab allows one streamer
+        session. An empty ``STREAM_PROVIDER`` falls back to ``DATA_PROVIDER``
+        (the documented default), so it does *not* disable anything.
+        ``effective_history_provider`` is unaffected by the sentinel.
+        """
+        raw = (self.stream_provider or "").strip().lower()
+        if raw == STREAM_PROVIDER_NONE:
+            return ""
+        return (raw or self.data_provider).strip().lower()
 
     @property
     def effective_history_provider(self) -> str:
@@ -601,8 +620,20 @@ def get_provider(provider_name: str | None = None):
 
 
 def get_stream_provider():
-    """Provider used for live WebSocket bars."""
-    return get_provider(settings.effective_stream_provider)
+    """Provider used for live WebSocket bars.
+
+    Raises ``ValueError`` when streaming is disabled (``STREAM_PROVIDER=none``).
+    Without this guard ``get_provider("")`` would fall back to ``DATA_PROVIDER``
+    and this process would open a second Schwab streamer session.
+    ``StreamService.ensure_provider`` catches it, logs it and records
+    ``provider_error`` so the status tile says why there is no stream.
+    """
+    name = settings.effective_stream_provider
+    if not name:
+        raise ValueError(
+            "live streaming is disabled in this process (STREAM_PROVIDER=none)"
+        )
+    return get_provider(name)
 
 
 def get_history_provider():

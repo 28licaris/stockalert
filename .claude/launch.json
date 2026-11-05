@@ -6,10 +6,10 @@
       "runtimeExecutable": "bash",
       "runtimeArgs": [
         "-c",
-        "STREAM_PROVIDER= POLYGON_NIGHTLY_ENABLED=false SCHWAB_NIGHTLY_ENABLED=false FUTURES_NIGHTLY_ENABLED=false FUTURES_POLYGON_NIGHTLY_ENABLED=false OPTIONS_SNAPSHOT_ENABLED=false poetry run uvicorn app.main_api:app --port 8001"
+        "STREAM_PROVIDER=none POLYGON_NIGHTLY_ENABLED=false SCHWAB_NIGHTLY_ENABLED=false FUTURES_NIGHTLY_ENABLED=false FUTURES_POLYGON_NIGHTLY_ENABLED=false OPTIONS_SNAPSHOT_ENABLED=false poetry run uvicorn app.main_api:app --port 8001"
       ],
       "port": 8001,
-      "comment": "This branch's API. Every writer is OFF because exactly one process may own each of them. Measured 2026-08-12: running the options loop here while :8000 also ran it made BOTH fail — concurrent Iceberg appends hit optimistic-concurrency ('branch main has changed') and all 40 symbols errored with rows_written=0 on both sides, so even the raw payload archive stopped. One writer is strictly better than two. To let this branch own options snapshots (it is the only checkout with the Schwab quote-field fix), first disable OPTIONS_SNAPSHOT_ENABLED on :8000, THEN flip it true here. STREAM_PROVIDER stays empty regardless: Schwab permits a single streamer session and :8000 holds it."
+      "comment": "This branch's API. Every writer is OFF because exactly one process may own each of them. Measured 2026-08-12: running the options loop here while :8000 also ran it made BOTH fail — concurrent Iceberg appends hit optimistic-concurrency ('branch main has changed') and all 40 symbols errored with rows_written=0 on both sides, so even the raw payload archive stopped. One writer is strictly better than two. To let this branch own options snapshots (it is the only checkout with the Schwab quote-field fix), first disable OPTIONS_SNAPSHOT_ENABLED on :8000, THEN flip it true here. STREAM_PROVIDER stays `none` regardless: Schwab permits a single streamer session and :8000 holds it. An EMPTY value does not disable streaming (it inherits DATA_PROVIDER) — `none` is the sentinel app/config.py honours."
     },
     {
       "name": "cockpit",

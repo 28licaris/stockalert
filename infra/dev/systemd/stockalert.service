@@ -1,0 +1,25 @@
+# Brings the compose stack up after the env file is rendered. The containers
+# carry `restart: unless-stopped`, so Docker — not systemd — keeps them alive
+# across crashes; this unit exists so a reboot ends with every container back
+# within two minutes and no operator action (acceptance test §10.11).
+# Type=oneshot cannot take Restart=always; on-failure + RemainAfterExit is the
+# systemd-sanctioned shape for "run compose up once per boot, retry if it fails".
+[Unit]
+Description=StockAlert — docker compose stack
+Requires=docker.service stockalert-env.service
+After=docker.service stockalert-env.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/stockalert
+EnvironmentFile=/etc/stockalert.conf
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
+ExecStop=/usr/bin/docker compose down
+TimeoutStartSec=600
+Restart=on-failure
+RestartSec=15s
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target

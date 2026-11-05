@@ -1,0 +1,19 @@
+<!-- ClickHouse system.* log retention for the dev box.
+     deployment_dev.md §3: the laptop's `system` database reached 13 GiB —
+     bigger than `stocks` at 5.5 GiB — because every system log table keeps
+     rows forever by default. 7-day TTL on the two we read for diagnostics;
+     the two we never read are disabled outright (remove="1" drops the table
+     definition; the existing table is left on disk until dropped manually:
+     `DROP TABLE system.trace_log` after the first restart).
+     Other candidates if disk pressure returns: metric_log, asynchronous_metric_log,
+     text_log — not changed here because the spec names only these four. -->
+<clickhouse>
+    <query_log>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </query_log>
+    <part_log>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </part_log>
+    <trace_log remove="1"/>
+    <query_thread_log remove="1"/>
+</clickhouse>

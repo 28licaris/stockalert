@@ -48,7 +48,7 @@ routes should call:
 In the AWS dev deployment
 ([`docs/operations/deployment_dev.md`](../../../docs/operations/deployment_dev.md)
 §3) the app runs as two containers from one image: `api` (request path,
-`STREAM_PROVIDER=""`) and `worker` (the streamer). A customer's watchlist
+`STREAM_PROVIDER=none`) and `worker` (the streamer). A customer's watchlist
 add runs in `api`: `ensure_streaming()` writes the `stream_universe` row,
 and the in-process subscribe is a logged no-op because `api` has no
 provider. Before C2 the `worker` read the table only in `start()`, so the

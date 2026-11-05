@@ -1,0 +1,146 @@
+# StockAlert — AWS dev box. Spec: docs/operations/deployment_dev.md §3.
+#
+# Lives at /opt/stockalert/docker-compose.yml on the instance (synced from
+# infra/dev/ by scripts/deploy/release.sh). The project directory is
+# /opt/stockalert, so `./.env` is /opt/stockalert/.env — rendered by
+# bin/render_env.sh from app.env + release.env + SSM Parameter Store, mode 0600.
+# The same file feeds `${VAR}` interpolation below and `env_file:` for the app
+# containers; postgres/clickhouse/caddy receive only the single value they need.
+#
+# One image, two roles: `api` serves every customer request and runs no
+# writer; `worker` owns the Schwab streamer and every scheduled loop. The two
+# anchors below are the whole difference, so splitting `worker` into
+# `stream` + `jobs` later is a third service definition, not a code change.
+
+x-awslogs: &awslogs
+  driver: awslogs
+  options:
+    awslogs-region: ${AWS_REGION:?AWS_REGION missing from .env (app.env)}
+    awslogs-group: ${LOG_GROUP:?LOG_GROUP missing from .env (app.env)}
+    awslogs-create-group: "false"   # CloudFormation owns the group (14-day retention)
+    tag: "{{.Name}}"                # one log stream per container name
+
+# Streamer + the writers that ride on the live stream. ON in worker, OFF in api.
+x-stream-flags: &stream-flags
+  STREAM_PROVIDER: schwab
+  JOURNAL_ENABLED: "true"
+  LIVE_LAKE_WRITER_ENABLED: "true"
+  OPTIONS_SNAPSHOT_ENABLED: "true"        # exactly one process may own this (startup_flow.md)
+  ELLIOTT_LIVE_SCANNER_ENABLED: "true"
+
+# Every scheduled loop. ON in worker, OFF in api.
+x-jobs-flags: &jobs-flags
+  POLYGON_NIGHTLY_ENABLED: "true"
+  SCHWAB_NIGHTLY_ENABLED: "true"
+  FUTURES_NIGHTLY_ENABLED: "true"
+  FUTURES_POLYGON_NIGHTLY_ENABLED: "true"
+  CH_RECONCILE_ENABLED: "true"
+  NEWS_INGEST_ENABLED: "true"
+  ELLIOTT_RECOMPUTE_ENABLED: "true"
+
+x-app: &app
+  image: ${APP_IMAGE:?APP_IMAGE missing — bin/release.sh <image> writes release.env}
+  env_file: ./.env
+  restart: unless-stopped
+  logging: *awslogs
+  depends_on:
+    clickhouse:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    logging: *awslogs
+    ports:
+      - "80:80"     # ACME HTTP-01 challenge + redirect to 443 only
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DEV_HOST: ${DEV_HOST:?DEV_HOST missing from .env (render_env.sh derives it from the EIP)}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data        # certificates — losing this re-issues against LE rate limits
+      - caddy_config:/config
+    depends_on:
+      - api
+      - worker
+
+  api:
+    <<: *app
+    # The request path. Nothing here may block: no streamer, no loops, no limits
+    # (it is the thing we protect). Request-driven hotload/gap-fill stay on.
+    environment:
+      STREAM_PROVIDER: none                 # the sentinel — "" would inherit DATA_PROVIDER
+      JOURNAL_ENABLED: "false"
+      LIVE_LAKE_WRITER_ENABLED: "false"
+      OPTIONS_SNAPSHOT_ENABLED: "false"
+      ELLIOTT_LIVE_SCANNER_ENABLED: "false"
+      POLYGON_NIGHTLY_ENABLED: "false"
+      SCHWAB_NIGHTLY_ENABLED: "false"
+      FUTURES_NIGHTLY_ENABLED: "false"
+      FUTURES_POLYGON_NIGHTLY_ENABLED: "false"
+      CH_RECONCILE_ENABLED: "false"
+      NEWS_INGEST_ENABLED: "false"
+      ELLIOTT_RECOMPUTE_ENABLED: "false"
+      SYMBOL_HOTLOAD_ENABLED: "true"
+      SYMBOL_GAPFILL_ENABLED: "true"
+
+  worker:
+    <<: *app
+    # Streamer + batcher + every scheduled loop. Capped at one of the two
+    # vCPUs and 2.5 GiB so a nightly cannot starve api or OOM the box.
+    environment:
+      <<: [*stream-flags, *jobs-flags]
+    cpus: "1.0"
+    mem_limit: 2500m
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    restart: unless-stopped
+    logging: *awslogs
+    environment:
+      CLICKHOUSE_DB: stocks
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD missing from .env (SSM clickhouse_password)}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - chdata:/var/lib/clickhouse
+      - ./clickhouse/config.d:/etc/clickhouse-server/config.d:ro
+    # No host ports: api/worker reach it as clickhouse:8123 on the compose
+    # network; the operator uses `docker compose exec clickhouse clickhouse-client`.
+    mem_limit: 3g
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *awslogs
+    environment:
+      POSTGRES_DB: stockalert_identity
+      POSTGRES_USER: stockalert
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD missing from .env (SSM postgres_password)}
+    volumes:
+      - identity_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stockalert -d stockalert_identity"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  chdata:
+  identity_pgdata:
+  caddy_data:
+  caddy_config:

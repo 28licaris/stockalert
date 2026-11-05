@@ -8,7 +8,7 @@ All settings can be overridden via a `.env` file or environment variables. **Nev
 
 ### Split live vs history (optional)
 
-- **`STREAM_PROVIDER`** – If set, used only for live WebSocket bars (`get_stream_provider()`). Example: `DATA_PROVIDER=polygon` and `STREAM_PROVIDER=schwab` keeps Polygon for REST/history while Schwab supplies real-time bars (no Polygon delayed feed).
+- **`STREAM_PROVIDER`** – If set, used only for live WebSocket bars (`get_stream_provider()`). `STREAM_PROVIDER=none` disables live streaming in this process (an empty value inherits `DATA_PROVIDER` instead). Example: `DATA_PROVIDER=polygon` and `STREAM_PROVIDER=schwab` keeps Polygon for REST/history while Schwab supplies real-time bars (no Polygon delayed feed).
 - **`HISTORY_PROVIDER`** – If set, used for historical/backfill REST paths (`get_history_provider()`). Empty means `DATA_PROVIDER` is used for both roles when `STREAM_PROVIDER` is also empty.
 
 ## Alpaca (when `DATA_PROVIDER=alpaca`)

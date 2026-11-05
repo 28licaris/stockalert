@@ -1,0 +1,34 @@
+# StockAlert dev ingress. Spec: docs/operations/deployment_dev.md §3 "Caddy routing".
+# DEV_HOST comes from the container env (compose → .env). A hostname site
+# address turns on automatic HTTPS: Let's Encrypt certificate, HTTP→HTTPS
+# redirect on :80, HSTS off by default (dev).
+#
+# Operator control-plane paths go to the worker because JobRegistry, the live
+# subscription set and the backfill queue are in-process state of the process
+# that owns the loops. Everything else goes to api. The session cookie is
+# same-origin, so require_operator validates identically on either upstream.
+
+{$DEV_HOST} {
+	encode zstd gzip
+
+	# Operator tooling with no cookie login (MCP) or no customer purpose (OpenAPI UI).
+	# Reach them via SSM port-forwarding to api:8000, never over the internet.
+	@blocked path /mcp /mcp/* /docs /redoc /openapi.json
+	handle @blocked {
+		respond "forbidden" 403
+	}
+
+	@worker path /api/v1/jobs /api/v1/jobs/* /api/v1/stream /api/v1/stream/* /api/v1/backfill /api/v1/backfill/* /api/v1/health/services
+	handle @worker {
+		reverse_proxy worker:8000
+	}
+
+	handle {
+		reverse_proxy api:8000
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}
