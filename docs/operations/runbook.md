@@ -206,19 +206,41 @@ today, then reconcile CH from Schwab.
 poetry run python scripts/schwab_history_backfill.py --start 2026-11-04 --end 2026-11-04
 ```
 
-### Rebuild ClickHouse from the lake
+### Rebuild ClickHouse from the lake (disaster recovery / a new machine)
 
-`scripts/rebuild_ch_from_lake.py` is the **one** bulk loader. Per-symbol fills
-go through `fill_ch_from_lake` / the `read_arrow` union (Schwab tip included).
+ClickHouse is a cache; the lake plus the nightly **state snapshot** in S3
+(`s3://$STOCK_LAKE_BUCKET/ch_state/`) hold everything. One command rebuilds it:
 
 ```bash
-poetry run python scripts/rebuild_ch_from_lake.py --help
+poetry run python scripts/ch_bootstrap.py --dry-run             # the plan: snapshot, windows, steps
+poetry run python scripts/ch_bootstrap.py --state-mode replace  # schema -> state -> bars -> futures -> daily -> verify
 ```
 
-Wall-clock for the active universe: ~5-15 min. If ClickHouse is wiped
-entirely, `stream_universe` goes with it — recreate it from the
-operator-curated `data/stream_universe_seed.csv` *before* running the rebuild,
-since the loader fills exactly that row set.
+- **State** (stream universe, strategies, paper record, watchlists, run history,
+  journal, options history) comes from the snapshot. `--state-mode replace`
+  TRUNCATES any state table that already has rows, so use it on a fresh box and
+  never on a ClickHouse holding newer data.
+- **Bars** are rebuilt from the lake, each symbol over the window its recorded
+  history needs (the 2006-era names start before the loader's 2021 default).
+- **Verify** compares the result with the coverage recorded in the snapshot and
+  exits 2 on any shortfall. The lake may hold more than the source ClickHouse did.
+- Wall-clock is dominated by the bar rebuild: ~76 s per heavy symbol on a
+  2-vCPU box (AAPL, 1.07M rows). Measure the first batch before estimating.
+- Do the same restore as a **rehearsal** into a scratch database:
+  `scripts/ch_state_snapshot.py restore --target-database stocks_restore_test`.
+
+**Before wiping or replacing any ClickHouse that has been collecting live bars,
+archive what only it holds:**
+
+```bash
+poetry run python scripts/lake_archive_ch.py --family all           # dry run: what is missing
+poetry run python scripts/lake_archive_ch.py --family all --apply   # append + verify from the lake side
+```
+
+Schwab's 1-minute history reaches back ~48 days, so a bar the live writer missed
+cannot be re-fetched later. The nightly `lake_completeness_guard` job does this
+for the last 14 days automatically and fails loudly if a write does not verify.
+Check both jobs on the Health page (`lake_completeness_guard`, `ch_state_snapshot`).
 
 ### Recover a bad lake partition
 

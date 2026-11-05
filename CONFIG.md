@@ -113,6 +113,8 @@ provider credentials, so a dev/CI box without them is a clean no-op.
 - `POLYGON_NIGHTLY_ENABLED` (default `true`), `…_RUN_HOUR_UTC` (7), `POLYGON_NIGHTLY_SYMBOLS` (`all`) → `equities.polygon_raw`.
 - `SCHWAB_NIGHTLY_ENABLED` (default `true`), `…_RUN_HOUR_UTC` (22), `SCHWAB_NIGHTLY_SYMBOLS` (`active`) → `equities.schwab_universe`.
 - `FUTURES_NIGHTLY_ENABLED` (default `true`), `FUTURES_POLYGON_NIGHTLY_ENABLED` (default `true`) → futures lake tables.
+- `LAKE_GUARD_ENABLED` (default `true`), `LAKE_GUARD_RUN_HOUR_UTC` (`23`), `LAKE_GUARD_LOOKBACK_DAYS` (`14`) → nightly archive of ClickHouse-only Schwab bars into the lake (`app/services/lake_integrity`). One writer per ClickHouse.
+- `CH_STATE_SNAPSHOT_ENABLED` (default `true`), `CH_STATE_SNAPSHOT_RUN_HOUR_UTC` (`1`), `CH_STATE_SNAPSHOT_KEEP` (`14`), `STOCKALERT_PAPER_DIR` (default `<cwd>/data/paper`) → nightly export of non-rebuildable ClickHouse state to `s3://$STOCK_LAKE_BUCKET/ch_state/`.
 - `CH_RECONCILE_ENABLED` (default `true`), `…_RUN_HOUR_UTC` (23), `…_LOOKBACK_DAYS` (7) → heals `ohlcv_1m` from the lake.
 - **No separate adjusted tier to schedule.** Split adjustment is computed at
   **read time** from `equities.polygon_raw` + `equities.market_splits`
