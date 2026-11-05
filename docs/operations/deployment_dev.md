@@ -25,7 +25,7 @@ second instantiation, not a fork.
 | Decision | Choice | Why — and what was rejected |
 |---|---|---|
 | Compute | **One Graviton EC2 instance** (`t4g.large`, 2 vCPU / 8 GiB, arm64) running Docker Compose | ClickHouse needs a local disk and ~2–3 GiB RAM regardless, so a "serverless" layout still ends up with an EC2 box. ECS Fargate + RDS + ALB costs ~2.5× (§9) and adds three moving parts for zero dev benefit. Apple Silicon builds arm64 images natively, so no cross-compile. |
-| Process topology | **Two app containers from one image**: `api` (request path) and `worker` (live streamer + every scheduled loop). Plus `clickhouse`, `postgres`, `caddy`. | This is what makes requirement 3 true: jobs cannot block the API event loop or starve its GIL if they are not in its process. The flags to do this already exist — every writer is env-gated and `STREAM_PROVIDER=""` disables the streamer (the pattern `.claude/launch.json` already uses). See §4. |
+| Process topology | **Two app containers from one image**: `api` (request path) and `worker` (live streamer + every scheduled loop). Plus `clickhouse`, `postgres`, `caddy`. | This is what makes requirement 3 true: jobs cannot block the API event loop or starve its GIL if they are not in its process. The flags to do this already exist — every writer is env-gated and `STREAM_PROVIDER=none` disables the streamer (sentinel added in C3 — see the note in §3). See §4. |
 | Ingress + TLS | **Caddy** reverse proxy with automatic Let's Encrypt certificates. No ALB. | ALB is ~$17/month before traffic and buys nothing at this scale. Cognito requires an `https://` callback for anything but localhost, so TLS is mandatory, not optional. |
 | DNS | **`sslip.io` for now**: `DEV_HOST=app.<eip-with-dashes>.sslip.io`, no Route 53 record | No domain yet (§13). sslip.io resolves to the IP embedded in the name; Let's Encrypt and Cognito both accept it. When a domain exists, `DEV_HOST` changes, the Cognito callback list and the Stripe webhook URL get one more entry, and nothing else moves. `dev.<domain>` below means `DEV_HOST`. |
 | Identity | The **existing dev Cognito pool** (`stockalert-auth-dev` stack, `us-east-1_NxTarvrk4`), self-signup on, email verification via Cognito's default sender | Already deployed and verified (AUTH-4). Only its callback/logout URLs change. Friends = customers; the operator is `ADMIN_EMAILS`. |
@@ -142,7 +142,7 @@ case). `AWS_REQUEST_CHECKSUM_CALCULATION=when_required` is set globally.
   forced nightly run before we call this done.
 
 **Schwab allows one streamer session.** The moment the worker streams, the
-laptop must run with `STREAM_PROVIDER=""` (the `.claude/launch.json` pattern).
+laptop must run with `STREAM_PROVIDER=none` (the sentinel C3 adds).
 This is a cutover step (§8), not a nice-to-have.
 
 ### 4a. Job placement — why not Lambda, and the roadmap
@@ -304,7 +304,7 @@ Nothing else changes.
 | M0 | §13 decided; Stripe test keys + webhook created (webhook URL known only after the EIP exists, so it is created in M2) | — |
 | M1 | C1 + C2 + C3 land as three separate PRs with tests | `poetry run pytest -m "not integration"` green; image runs locally with `AUTH_ENABLED=true` via the compose file |
 | M2 | `infra/dev/stack.yaml` deployed; SSM params loaded; Cognito stack re-deployed with the new URLs | `https://dev.<domain>/health` → `{"status":"ok"}`; operator can log in; `api` + fresh CH/PG only — worker not yet streaming |
-| M3 | Data move: stop the laptop's streamer (`STREAM_PROVIDER=""`), truncate CH `system.*` logs, tar `chdata` → S3 → restore on the box; start `worker` | Health page shows `streaming_count > 0`; `ingestion_runs` grows that night |
+| M3 | Data move: stop the laptop's streamer (`STREAM_PROVIDER=none`), truncate CH `system.*` logs, tar `chdata` → S3 → restore on the box; start `worker` | Health page shows `streaming_count > 0`; `ingestion_runs` grows that night |
 | M4 | Point the paper pipeline cron at the box; disable the laptop scheduled task; wire the health check → SNS | the next morning's `ingestion_runs` has every nightly + the paper run; §10.10 latency test passes |
 | M5 | Invite friends | each one signs up, lands on `/charts`, sees no admin items |
 
