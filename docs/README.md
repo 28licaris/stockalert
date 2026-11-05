@@ -111,6 +111,7 @@ Non-negotiable. Read before writing code.
 | [assistant.md](product/assistant.md) | The chat copilot's interface + runtime |
 | [news_alerts.md](product/news_alerts.md) | News + economic ingest → alerts |
 | [brand.md](product/brand.md) | Brand/visual system |
+| [customer_surfaces.md](product/customer_surfaces.md) | Home dashboard (shipped) + marketing landing (not built) |
 
 ## [`reference/`](reference/schwab-api/) — vendor docs
 

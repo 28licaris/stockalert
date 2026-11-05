@@ -1,6 +1,16 @@
 # Customer surfaces — home dashboard + marketing landing
 
-Status: **plan** (2026-07-05). Confirmed decisions from product review.
+> **Status (verified 2026-11-05): Part 1 shipped, Part 2 not built.**
+>
+> | | |
+> |---|---|
+> | **Part 1 — customer home dashboard** | **SHIPPED**, both phases. `frontend/src/routes/dashboard.tsx` + `home-index.tsx`, non-admin index routing in `router.tsx`. All widgets are live, including the v2 strategy-track-record one — `/api/v1/strategies/leaderboard` exists (`app/api/routes_strategies.py`). Read the code, not the phase list below, for what the dashboard does today. |
+> | **Part 2 — public marketing landing** | **NOT BUILT.** No static site, no S3/CloudFront distribution. Still a decision, and a deployment one — see [`../TODO.md`](../TODO.md). |
+>
+> Written 2026-07-05 as a plan; kept because Part 2 is undecided and the
+> Part 1 rationale (why assistant-first, why a separate marketing site) is
+> not recorded anywhere else. Where this and the code disagree, the code wins.
+
 
 ## Decisions
 

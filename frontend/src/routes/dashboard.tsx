@@ -26,7 +26,7 @@ import { cn } from "@/lib/utils";
  * Customer home — an AI-assistant-first dashboard. The assistant is the hero;
  * glanceable widgets (watchlists, strategy track records, market, news) give
  * at-a-glance context and link to their full pages. See
- * docs/customer_surface_plan.md.
+ * docs/product/customer_surfaces.md.
  */
 export function DashboardPage() {
   const user = useCurrentUser();
