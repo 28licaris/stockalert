@@ -588,8 +588,8 @@ export interface paths {
          *     Use this to answer:
          *       - When did the nightly cron last run? (most-recent snapshot's
          *         committed_at on polygon_raw / schwab_universe)
-         *       - What did the last polygon_adjustment_job add? (most-recent
-         *         polygon_adjusted snapshot's `added_records`)
+         *       - What did the last nightly write add? (most-recent snapshot's
+         *         `added_records`)
          *       - I want a deterministic backtest — what snapshot_id should I
          *         pin? (any snapshot_id from this list)
          *       - Bad data in latest commit — what's the previous good snapshot?
@@ -1060,10 +1060,14 @@ export interface paths {
          * Get Adjusted Bars
          * @description Return 1-minute split-adjusted bars for `symbol` in `[start, end)`.
          *
-         *     Default (`include_live=false`) reads `equities.polygon_adjusted`
-         *     only — the canonical adjusted store, built whole-market weekly by
-         *     the Spark `polygon_adjustment_job`. Each row carries the cumulative
+         *     Default (`include_live=false`) reads the Polygon tier only —
+         *     `equities.polygon_raw` with split adjustment applied at READ time
+         *     (`app/services/equities/adjust.py`); there is no materialized
+         *     `polygon_adjusted` table. Each bar carries the cumulative
          *     future-splits factor as `adj_factor`; multiply back to recover raw.
+         *
+         *     Note this tier is frozen at 2026-06-12 — the Polygon minute
+         *     flat-file feed lapsed. Use `include_live=true` for anything newer.
          *
          *     With `include_live=true` the response also includes rows from
          *     `equities.schwab_universe` (live + tip-fill, also pre-adjusted with

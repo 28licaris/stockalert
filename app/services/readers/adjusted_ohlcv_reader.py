@@ -31,9 +31,8 @@ Design contract (mirrors `CorpActionsReader` post-CV10):
   - Filters push down to Iceberg — CV1's POLYGON_ADJUSTED_PARTITION
     uses bucket(32, symbol) + month(timestamp), so single-symbol
     queries scan ~1/32 of each month's data.
-  - Cold-start safe: returns empty result if equities.polygon_adjusted
-    doesn't exist yet (initial system state before the first
-    polygon_adjustment_job run).
+  - Cold-start safe: returns an empty result when the source table
+    does not exist yet.
 """
 from __future__ import annotations
 
