@@ -13,6 +13,23 @@ counterpart to the ephemeral in-app task chips). Bugs and flaky tests live in
   verify the endpoints for an authed session. Code: `app/services/billing/`,
   `app/api/auth_dependencies.py::get_billing_service`.
 
+## Research page — premium screener (spec: [`research_page_spec.md`](research_page_spec.md))
+**P1 shipped** (PR #27, 2026-11-05): EOD preset rankings (momentum / gainers /
+losers / most-active / streaks) over the top-1000 `ohlcv_daily` universe,
+guarded against ticker-reuse garbage; `GET /api/v1/research/rankings` + the
+research page with preset tabs and row actions. Verified sane against live data.
+Remaining phases, in order:
+- **P2 — Custom builder.** Criteria UI (return / $-vol / streak / RSI / %-from-
+  52w-high / above-below SMA) + extend `app/services/screener` + the
+  `POST /api/v1/research/screen` endpoint (declared in the spec, **not built**).
+- **P3 — Live Movers tab.** Intraday movers from streamed `ohlcv_1m` resample +
+  `/movers` provider fallback.
+- **P4 — Save screens.** Per-user `saved_screens` table in identity Postgres +
+  save/load/manage.
+- **Gating for production.** The route sits behind `require_subscription`
+  (no-op in dev). A paid launch needs **Stripe billing activated** (see Billing
+  above) — otherwise the premium screener is open to all.
+
 ## News → Alerts + Economic hub (design: [`product/news_alerts.md`](product/news_alerts.md))
 Shipped + **activated 2026-06-28** (`NEWS_INGEST_ENABLED=true`): EDGAR filings
 (relevance-filtered, AI-summarized) + FOMC (Fed RSS) + BLS (CPI/jobs/unemployment)
@@ -62,6 +79,14 @@ Free + production-robust only (no runtime HTML scraping).
   entitlement is renewed; once renewed, re-run the equities Polygon nightly to
   fill the gap. Cold tier only — does not affect ClickHouse freshness (Schwab
   feeds the hot tier).
+- **`ohlcv_daily` grouped-daily nightly runs ~2–3 days behind.** The top-1000
+  daily feed (Polygon grouped-daily REST → `polygon_daily_raw` → `ohlcv_daily`)
+  IS refreshing again — 1,050 symbols through last close 2026-11-02 as of
+  2026-11-05 — but it lags the current trading day by a few sessions. This is
+  the freshness source for the **Research page** (premium screener), which
+  labels results "as of {last close}", so the lag is cosmetic, not a blocker.
+  Confirm the nightly is scheduled and keeping pace in the AWS deployment (same
+  question as the other hardcoded-path scheduled jobs below).
 
 ## GEX / dealer-flow research (chapter opened 2026-07-02 — GEX-0 in research/findings.md)
 Collection flywheel is LIVE: `OPTIONS_SNAPSHOT_ENABLED=true`, 40-name
