@@ -112,7 +112,11 @@ services:
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     volumes:
       - chdata:/var/lib/clickhouse
-      - ./clickhouse/config.d:/etc/clickhouse-server/config.d:ro
+      # Mount the ONE file, never the directory: the image ships
+      # config.d/docker_related_config.xml (listen_host 0.0.0.0). Mounting a
+      # directory over config.d hides it and ClickHouse listens on 127.0.0.1 only,
+      # so its own healthcheck passes while api/worker cannot connect.
+      - ./clickhouse/config.d/system_logs.xml:/etc/clickhouse-server/config.d/system_logs.xml:ro
     # No host ports: api/worker reach it as clickhouse:8123 on the compose
     # network; the operator uses `docker compose exec clickhouse clickhouse-client`.
     mem_limit: 3g
