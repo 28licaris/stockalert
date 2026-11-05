@@ -63,6 +63,7 @@ Non-negotiable. Read before writing code.
 | [runbook.md](operations/runbook.md) | Restart, backfill, monitoring, disaster recovery |
 | [startup_flow.md](operations/startup_flow.md) | What boot does; verifying each subsystem is alive |
 | [commands.md](operations/commands.md) | Command cheatsheet |
+| [deployment_dev.md](operations/deployment_dev.md) | **Spec (unbuilt)** — the AWS dev environment: one Graviton box, `api`/`worker` split, Cognito + Stripe test mode, cost |
 
 ## [`data/`](data/) — the data platform
 
