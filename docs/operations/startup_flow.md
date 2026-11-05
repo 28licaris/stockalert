@@ -36,7 +36,9 @@ FOUNDATION (failure here aborts startup)
  4. futures_batcher.start()            [HOT]   futures batch writer
 
 LIVE TIER (soft-fail)
- 5. stream_service.start()             [HOT]   opens the provider WebSocket
+ 5. stream_service.start()             [HOT]   opens the provider WebSocket; then starts the
+                                                universe re-sync loop (STREAM_UNIVERSE_RESYNC_SECONDS,
+                                                default 60, 0=off; only when a stream provider is set)
  6. _warm_names() + names refresh loop [OPS]   instrument_names warm; loop re-resolves blanks
  7. watchlist_service.start()          [HOT]   ⚠ inits the stream provider; soft-fails without creds
  8. live_lake_writer                   [COLD]  if LIVE_LAKE_WRITER_ENABLED → CH → lake every 5 min
@@ -73,6 +75,7 @@ Each has in-process auto-catchup for runs missed while the process was down.
 | `DATA_PROVIDER` | `.env` | Default for live streaming + history REST. `STREAM_PROVIDER` / `HISTORY_PROVIDER` override per role. |
 | Provider credentials (e.g. `ALPACA_API_KEY`, `SCHWAB_REFRESH_TOKEN`) | `.env` | Whether `watchlist_service` can actually subscribe to bars. Missing creds → soft-fail (logged ERROR + WARNING; app continues). |
 | `JOURNAL_ENABLED` + Schwab creds | `.env` | Whether `journal_sync_service` polls Schwab account balances + trades into CH. |
+| `STREAM_UNIVERSE_RESYNC_SECONDS` > 0 + a stream provider | `.env` | Whether `stream_service` re-reads `stream_universe` ∪ `futures_universe` on a timer and converges its live subscriptions on it. A process with no stream provider (the `api` container) never runs it. |
 | `POLYGON_NIGHTLY_ENABLED` + `STOCK_LAKE_BUCKET` | `.env` | Whether the 07:00 UTC Polygon → lake loop runs. |
 | `SCHWAB_NIGHTLY_ENABLED` + `STOCK_LAKE_BUCKET` + Schwab creds | `.env` | Whether the 22:00 UTC Schwab → lake loop runs. |
 
@@ -89,6 +92,7 @@ Each one corresponds to one subsystem actually being live:
 ✅ ClickHouse schema ready                                # step 1
 ✅ OHLCV batch writer started                             # steps 3-4
 ✅ Stream service started                                 # step 5
+Stream: universe re-sync loop started (every 60s)         # step 5 — STREAM_UNIVERSE_RESYNC_SECONDS>0 + a stream provider
 ✅ Watchlist service started (provider=X, symbols=N)      # step 7 — no ERROR above ⇒ streaming OK
 ✅ Live lake writer started                               # step 8  — LIVE_LAKE_WRITER_ENABLED
 ✅ Journal sync started (every 5min: balances + trades)   # step 9  — JOURNAL_ENABLED + Schwab creds
@@ -109,6 +113,7 @@ you which gate to check.
 | Job | Schedule | Direction |
 |---|---|---|
 | `streamer` (live WS) | continuous | provider WS → CH `ohlcv_1m` |
+| `stream_universe_resync` | every 60 s (`STREAM_UNIVERSE_RESYNC_SECONDS`; 0 disables) | CH `stream_universe` ∪ `futures_universe` → live subscription set. Lets the `worker` pick up a row the `api` container wrote (deployment C2); heartbeat-audited, so no-op cycles write one `ingestion_runs` row per day |
 | `batcher` | 500 rows or 5s, whichever first | in-memory queue → CH |
 | `backfill_service` quick path | on watchlist change + every 15 min | provider REST → CH |
 | `backfill_service` deep path | on demand via API | provider REST → CH |
@@ -159,10 +164,11 @@ Cancels all background tasks in reverse order. From
 2. Cancel nightly_schwab_refresh task
 3. `monitor_manager.stop_all()`
 4. `watchlist_service.stop()`
-5. `backfill_service.stop()`
-6. `journal_sync_service.stop()` (if it was started)
-7. `get_bar_batcher().stop()` (flushes pending writes)
-8. `close_client()` (CH connection)
+5. `stream_service.stop()` (cancels the universe re-sync loop, unsubscribes everything)
+6. `backfill_service.stop()`
+7. `journal_sync_service.stop()` (if it was started)
+8. `get_bar_batcher().stop()` (flushes pending writes)
+9. `close_client()` (CH connection)
 
 ## Recommended improvements (not yet implemented)
 

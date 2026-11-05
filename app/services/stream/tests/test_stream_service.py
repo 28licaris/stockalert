@@ -13,6 +13,9 @@ Integration coverage (real CH, real provider) lives behind the
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import logging
+from types import SimpleNamespace
 from typing import Callable, Optional
 
 import pandas as pd
@@ -89,11 +92,45 @@ class FakeUniverseRepo:
             "is_active": bool(is_active),
         }
 
+class FakeAudit:
+    """Stands in for `audit_run(frequent=True)`: records every cycle's
+    (job_name, result, error) without touching ClickHouse."""
+
+    def __init__(self) -> None:
+        self.runs: list[tuple[str, object, Optional[str]]] = []
+
+    @contextlib.asynccontextmanager
+    async def __call__(self, job_name: str):
+        rec = SimpleNamespace(result=None)
+        try:
+            yield rec
+        except Exception as exc:
+            self.runs.append((job_name, rec.result, repr(exc)))
+            raise
+        else:
+            self.runs.append((job_name, rec.result, None))
+
+
+async def _wait_until(pred: Callable[[], bool], *, timeout: float = 3.0) -> None:
+    """Poll `pred` until true or fail the test — the re-sync loop runs on a
+    timer, so tests observe it rather than driving it."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not pred():
+        if loop.time() > deadline:
+            raise AssertionError("condition not reached within timeout")
+        await asyncio.sleep(0.01)
+
+
 # ----- Fixture -----
 
 
 @pytest.fixture
-def svc(monkeypatch) -> StreamService:
+def make_svc(monkeypatch) -> Callable[..., StreamService]:
+    """Factory: build a StreamService whose CH reads/writes hit an in-memory
+    repo and whose provider is a FakeDataProvider. `universe_resync_seconds`
+    defaults to 0 (loop off) so the CRUD tests stay timer-free; the re-sync
+    tests pass a short interval + a FakeAudit."""
     fake_repo = FakeUniverseRepo()
     fake_prov = FakeDataProvider()
 
@@ -111,7 +148,7 @@ def svc(monkeypatch) -> StreamService:
     # equities universe logic, so stub it to empty.
     monkeypatch.setattr(
         StreamService, "_read_futures_universe",
-        lambda self, *, owner_id=None: set(),
+        lambda self, *, owner_id=None, strict=False: set(),
     )
     monkeypatch.setattr(
         StreamService, "_write_row",
@@ -120,12 +157,27 @@ def svc(monkeypatch) -> StreamService:
     )
     # Patch provider acquisition so the service never calls Schwab.
     monkeypatch.setattr(stream_module, "get_stream_provider", lambda: fake_prov)
+    # The re-sync gate reads the configured provider name; pin it so the
+    # tests pass identically whatever DATA_PROVIDER / STREAM_PROVIDER the
+    # machine has in its environment.
+    monkeypatch.setattr(stream_module.settings, "stream_provider", "fake")
 
-    s = StreamService()
-    s._provider = fake_prov
-    s._fake_repo = fake_repo  # type: ignore[attr-defined]
-    s._fake_prov = fake_prov  # type: ignore[attr-defined]
-    return s
+    def _build(*, universe_resync_seconds: float = 0, audit=None) -> StreamService:
+        s = StreamService(
+            universe_resync_seconds=universe_resync_seconds,
+            audit_factory=audit,
+        )
+        s._provider = fake_prov
+        s._fake_repo = fake_repo  # type: ignore[attr-defined]
+        s._fake_prov = fake_prov  # type: ignore[attr-defined]
+        return s
+
+    return _build
+
+
+@pytest.fixture
+def svc(make_svc) -> StreamService:
+    return make_svc()
 
 
 # ----- start subscribes everything in the universe -----
@@ -398,3 +450,212 @@ async def test_status_returns_expected_keys(svc: StreamService) -> None:
     assert st["streaming_symbols"] == ["A"]
     assert st["universe_count"] == 1
     assert st["provider_ready"] is True
+
+
+# ----- periodic universe re-sync (deployment spec C2) -----
+#
+# The worker process must pick up rows written by ANOTHER process (the api
+# container's watchlist add) without a restart. The loop is observed, not
+# driven: a 20 ms interval + _wait_until.
+
+
+@pytest.mark.asyncio
+async def test_resync_subscribes_row_added_after_start(make_svc) -> None:
+    audit = FakeAudit()
+    s = make_svc(universe_resync_seconds=0.02, audit=audit)
+    s._fake_repo.write("AAPL", 1)
+    await s.start()
+    assert s.universe_resync_active is True
+    assert s._fake_prov.subscribed == {"AAPL"}
+
+    # Another process writes the row; this process never called add().
+    s._fake_repo.write("NVDA", 1)
+    await _wait_until(lambda: "NVDA" in s._fake_prov.subscribed)
+
+    assert s._subscribed == {"AAPL", "NVDA"}
+    assert s.is_streaming("NVDA")
+    # The cycle that did the work was audited with the +1 / -0 summary.
+    assert ("stream_universe_resync", {"subscribed": 1, "unsubscribed": 0}, None) in audit.runs
+    await s.stop()
+
+
+@pytest.mark.asyncio
+async def test_resync_unsubscribes_row_marked_inactive(make_svc) -> None:
+    audit = FakeAudit()
+    s = make_svc(universe_resync_seconds=0.02, audit=audit)
+    s._fake_repo.write("AAPL", 1)
+    s._fake_repo.write("TSLA", 1)
+    await s.start()
+    assert s._fake_prov.subscribed == {"AAPL", "TSLA"}
+
+    s._fake_repo.write("TSLA", 0)  # operator removed it elsewhere
+    await _wait_until(lambda: "TSLA" not in s._fake_prov.subscribed)
+
+    assert s._subscribed == {"AAPL"}
+    assert ["TSLA"] in s._fake_prov.unsubscribe_calls
+    assert ("stream_universe_resync", {"subscribed": 0, "unsubscribed": 1}, None) in audit.runs
+    await s.stop()
+
+
+@pytest.mark.asyncio
+async def test_resync_noop_cycle_reports_zero_zero(make_svc) -> None:
+    """A cycle with nothing to do still returns a result (logged outcome,
+    including zero) — the audit layer is what collapses it to a heartbeat."""
+    s = make_svc(universe_resync_seconds=0)
+    s._fake_repo.write("AAPL", 1)
+    await s.start()
+    assert await s.resync_universe() == {"subscribed": 0, "unsubscribed": 0}
+    assert s._fake_prov.subscribe_calls == [["AAPL"]]  # start() only
+    await s.stop()
+
+
+@pytest.mark.asyncio
+async def test_resync_loop_not_started_without_provider(make_svc, monkeypatch) -> None:
+    """The api container (no stream provider) must not run the loop."""
+    monkeypatch.setattr(stream_module.settings, "stream_provider", "")
+    monkeypatch.setattr(stream_module.settings, "data_provider", "")
+    assert stream_module.settings.effective_stream_provider == ""
+
+    s = make_svc(universe_resync_seconds=0.02, audit=FakeAudit())
+    await s.start()
+    assert s._started is True
+    assert s._resync_task is None
+    assert s.universe_resync_active is False
+    await s.stop()
+
+
+@pytest.mark.asyncio
+async def test_resync_loop_not_started_when_interval_zero(make_svc) -> None:
+    s = make_svc(universe_resync_seconds=0)
+    await s.start()
+    assert s._resync_task is None
+    assert s.universe_resync_active is False
+    await s.stop()
+
+
+@pytest.mark.asyncio
+async def test_resync_read_failure_logs_and_next_cycle_runs(
+    make_svc, monkeypatch, caplog,
+) -> None:
+    audit = FakeAudit()
+    s = make_svc(universe_resync_seconds=0.02, audit=audit)
+    s._fake_repo.write("AAPL", 1)
+    await s.start()
+
+    calls = {"n": 0}
+    real_read = s._read_universe
+
+    def _flaky_read(*, owner_id=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("ClickHouse unavailable")
+        return real_read(owner_id=owner_id)
+
+    monkeypatch.setattr(s, "_read_universe", _flaky_read)
+    s._fake_repo.write("NVDA", 1)
+
+    with caplog.at_level(logging.ERROR, logger="app.services.stream.service"):
+        await _wait_until(lambda: "NVDA" in s._fake_prov.subscribed)
+
+    # Cycle 1 raised, was logged with the error, and left the set untouched.
+    failed = [r for r in audit.runs if r[2] is not None]
+    assert failed and "ClickHouse unavailable" in failed[0][2]
+    assert any(
+        "cycle 1 failed" in rec.getMessage() and "ClickHouse unavailable" in rec.getMessage()
+        for rec in caplog.records
+    )
+    # A later cycle succeeded and did the subscribe.
+    assert ("stream_universe_resync", {"subscribed": 1, "unsubscribed": 0}, None) in audit.runs
+    assert s.universe_resync_active is True
+    await s.stop()
+
+
+@pytest.mark.asyncio
+async def test_resync_futures_read_failure_raises_and_changes_nothing(
+    make_svc, monkeypatch,
+) -> None:
+    """An unreadable futures_universe must NOT be applied as 'no futures':
+    that would unsubscribe every live root. Strict read → cycle fails."""
+    s = make_svc(universe_resync_seconds=0)
+    s._fake_repo.write("AAPL", 1)
+    monkeypatch.setattr(
+        StreamService, "_read_futures_universe",
+        lambda self, *, owner_id=None, strict=False: {"/ES"},
+    )
+    await s.start()
+    assert s._subscribed == {"AAPL", "/ES"}
+
+    def _futures_down(self, *, owner_id=None, strict=False):
+        if strict:
+            raise RuntimeError("futures_universe unreadable")
+        return set()
+
+    monkeypatch.setattr(StreamService, "_read_futures_universe", _futures_down)
+    with pytest.raises(RuntimeError, match="futures_universe unreadable"):
+        await s.resync_universe()
+
+    assert s._subscribed == {"AAPL", "/ES"}
+    assert s._fake_prov.unsubscribe_calls == []
+    assert not s._lock.locked()  # released on the error path
+    await s.stop()
+
+
+@pytest.mark.asyncio
+async def test_resync_skips_when_not_started(make_svc) -> None:
+    s = make_svc()
+    assert await s.resync_universe() == {"skipped": True, "reason": "not_started"}
+    assert s._fake_prov.subscribe_calls == []
+
+
+@pytest.mark.asyncio
+async def test_resync_skips_when_provider_unavailable(make_svc, monkeypatch) -> None:
+    s = make_svc()
+    s._fake_repo.write("AAPL", 1)
+    await s.start()
+    s._fake_repo.write("NVDA", 1)
+
+    s._provider = None
+    monkeypatch.setattr(
+        stream_module, "get_stream_provider",
+        lambda: (_ for _ in ()).throw(RuntimeError("no creds")),
+    )
+    assert await s.resync_universe() == {"skipped": True, "reason": "provider_unavailable"}
+    assert s._subscribed == {"AAPL"}  # not silently marked as subscribed
+    s._provider = s._fake_prov
+    await s.stop()
+
+
+@pytest.mark.asyncio
+async def test_resync_skips_when_lock_busy(make_svc, monkeypatch) -> None:
+    """A route thread mid-add() holds the lock; the cycle must give up, not
+    block the event loop (that would deadlock the thread's provider call)."""
+    s = make_svc()
+    s._fake_repo.write("AAPL", 1)
+    await s.start()
+    monkeypatch.setattr(StreamService, "RESYNC_LOCK_WAIT_SECONDS", 0.1)
+
+    s._fake_repo.write("NVDA", 1)
+    assert s._lock.acquire(blocking=False)
+    try:
+        assert await s.resync_universe() == {"skipped": True, "reason": "lock_busy"}
+    finally:
+        s._lock.release()
+    assert "NVDA" not in s._subscribed
+
+    # Lock free again → the same cycle succeeds.
+    assert await s.resync_universe() == {"subscribed": 1, "unsubscribed": 0}
+    await s.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_resync_loop(make_svc) -> None:
+    s = make_svc(universe_resync_seconds=0.02, audit=FakeAudit())
+    await s.start()
+    task = s._resync_task
+    assert task is not None and not task.done()
+
+    await s.stop()
+
+    assert s._resync_task is None
+    assert task.done()
+    assert s.universe_resync_active is False

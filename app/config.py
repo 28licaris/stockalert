@@ -74,6 +74,15 @@ class Settings(BaseModel):
     data_provider: str = os.getenv("DATA_PROVIDER", "alpaca")
     # Optional role-specific overrides. Empty values fall back to DATA_PROVIDER.
     stream_provider: str = os.getenv("STREAM_PROVIDER", "")
+    # Worker-side universe re-sync (deployment spec C2). Every N seconds the
+    # StreamService re-reads stream_universe ∪ futures_universe and applies the
+    # diff against its live subscription set, so a row written by ANOTHER
+    # process (the `api` container's watchlist add) starts streaming within one
+    # cycle instead of waiting for a worker restart. 0 disables. Only runs when
+    # a stream provider is configured.
+    stream_universe_resync_seconds: int = int(
+        os.getenv("STREAM_UNIVERSE_RESYNC_SECONDS", "60")
+    )
     history_provider: str = os.getenv("HISTORY_PROVIDER", "")
 
     # ─────────────────────────────────────────────────────────

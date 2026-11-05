@@ -21,6 +21,12 @@ class StreamServiceProtocol(Protocol):
     async def stop(self) -> None:
         """Unsubscribe everything and stop the streamer."""
 
+    async def resync_universe(self) -> dict:
+        """One cycle of the universe re-sync: re-read stream_universe ∪
+        futures_universe and apply the diff to the live subscription set.
+        The loop runs this every STREAM_UNIVERSE_RESYNC_SECONDS; the
+        `stream_universe_resync` job's ▶ button runs it on demand."""
+
     def list_universe(self, *, owner_id: Optional[str] = None) -> list[dict]:
         ...
 
