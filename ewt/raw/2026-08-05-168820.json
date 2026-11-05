@@ -1,0 +1,25 @@
+{
+ "imap_id": "168820",
+ "message_id": "ebb267aae6444ea7a0d824b89bc736d5@elliottwavetrader.net",
+ "date": "2026-08-05T13:26:42Z",
+ "subject": "Wave Alert - U.S. Indices (Swing)",
+ "analyst": "Mike",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "ES": {
+   "count": "No change; support 7743-7662 holds, pressure up. In the yellow wave iii target zone 7793-7924, so a wave iv of (iii) consolidation would be expected here.",
+   "alternates": [],
+   "levels": {
+    "support": [
+     "7743-7662"
+    ],
+    "target": [
+     "7793-7924 (yellow wave iii)"
+    ]
+   },
+   "confidence": "no change"
+  }
+ }
+}

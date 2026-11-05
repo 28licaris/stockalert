@@ -1,0 +1,36 @@
+{
+ "imap_id": "168747",
+ "message_id": "c36d4646f148472c935173c208f1781e@elliottwavetrader.net",
+ "date": "2026-08-04T19:27:04Z",
+ "subject": "Wave Alert - Metals",
+ "analyst": "Arkady",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "GC": {
+   "count": "Two local rally scenarios live; cautiously leaning Option 1 Micro Linear.",
+   "alternates": [
+    "Option 1-1 Micro Linear \u2014 tested at the 4353-4415 resistance region."
+   ],
+   "levels": {
+    "resistance": [
+     "4353-4415"
+    ]
+   },
+   "confidence": "cautiously leaning"
+  },
+  "SI": {
+   "count": "Local bullish scenarios held; re-test of the 66 resistance expected.",
+   "alternates": [
+    "Second count, held equally likely pending the reaction at 66."
+   ],
+   "levels": {
+    "resistance": [
+     "66"
+    ]
+   },
+   "confidence": "both counts equally likely"
+  }
+ }
+}

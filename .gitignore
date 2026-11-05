@@ -44,3 +44,37 @@ agent-skills/
 .cache/
 data_news.db
 /data/
+
+# ── Agent skills ──────────────────────────────────────────────────────
+# CANONICAL LOCATION FOR OUR SKILLS: .claude/skills/<name>/SKILL.md
+# That is what Claude Code reads, and it is where the repo's own skills
+# (elliott-wave, preflight-change) have always lived. Add new ones there
+# and commit them; nothing below should need touching.
+#
+# `.agents/skills/` is NOT ours — it is a third-party pack installed by
+# its own `setup-matt-pocock-skills` script, which puts the real content
+# in .agents/ and symlinks it into .claude/skills/ so Claude Code can see
+# it. Both halves are ignored so the installer can manage them without
+# polluting `git status`. A tracked copy of preflight-change was once
+# swept into .agents/ by an unrelated commit (fef712a) and removed
+# 2026-11-05 — do not recreate it.
+/.agents/
+/.claude/skills/ask-matt
+/.claude/skills/codebase-design
+/.claude/skills/diagnosing-bugs
+/.claude/skills/domain-modeling
+/.claude/skills/git-guardrails-claude-code
+/.claude/skills/grill-me
+/.claude/skills/grill-with-docs
+/.claude/skills/grilling
+/.claude/skills/handoff
+/.claude/skills/improve-codebase-architecture
+/.claude/skills/prototype
+/.claude/skills/research
+/.claude/skills/setup-matt-pocock-skills
+/.claude/skills/tdd
+/.claude/skills/teach
+/.claude/skills/to-issues
+/.claude/skills/to-prd
+/.claude/skills/triage
+/.claude/skills/writing-great-skills

@@ -1,0 +1,22 @@
+{
+ "imap_id": "168799",
+ "message_id": "499328f92faf40cbb0ff2d09bfe91b18@elliottwavetrader.net",
+ "date": "2026-08-05T12:11:12Z",
+ "subject": "Wave Alert - Metals",
+ "analyst": "Avi",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "GDX": {
+   "count": "Move through the 1.00 extension called a positive development.",
+   "alternates": [],
+   "levels": {
+    "pivot": [
+     "1.00 extension"
+    ]
+   },
+   "confidence": "positive read"
+  }
+ }
+}

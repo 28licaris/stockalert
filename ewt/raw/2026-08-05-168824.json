@@ -1,0 +1,27 @@
+{
+ "imap_id": "168824",
+ "message_id": "c6b7da50e941475bb96e3ab1a35b2aa8@elliottwavetrader.net",
+ "date": "2026-08-05T13:34:41Z",
+ "subject": "Wave Alert - Energy",
+ "analyst": "Arkady",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "CL": {
+   "count": "Yesterday's update fully maintained \u2014 wave (b) high in place, decline toward 70.9-71.15.",
+   "alternates": [
+    "Extension below 67.04."
+   ],
+   "levels": {
+    "support": [
+     "70.9-71.15"
+    ],
+    "invalidation": [
+     "67.04"
+    ]
+   },
+   "confidence": "maintained"
+  }
+ }
+}

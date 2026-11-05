@@ -1,0 +1,53 @@
+{
+ "imap_id": "168868",
+ "message_id": "8018e3b8aab147b8ac3fd579a0606441@elliottwavetrader.net",
+ "date": "2026-08-05T17:43:55Z",
+ "subject": "Metals  Update from ElliottWaveTrader",
+ "analyst": "Avi",
+ "timeframe": "daily",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "GDX": {
+   "count": "Beyond the 1.00 extension off the lows \u2014 MAY be a 3rd wave in a leading diagonal. Wants a corrective wave (iv) then a higher wave (v) toward 87.",
+   "alternates": [
+    "Lower lows still open if a five-wave decline starts from here or from a completed wave i."
+   ],
+   "levels": {
+    "target": [
+     "87"
+    ]
+   },
+   "confidence": "conditional; wants a clear corrective pullback before adding"
+  },
+  "GC": {
+   "count": "Triangle invalidated. Rally so far is corrective-looking and ambiguous \u2014 either a 4th-wave bounce before a lower low, or an initial a-wave of a larger (b)-wave rally.",
+   "alternates": [
+    "Lower low still possible."
+   ],
+   "levels": {
+    "resistance": [
+     "4400"
+    ]
+   },
+   "confidence": "explicitly 50/50 on lower lows"
+  },
+  "SI": {
+   "count": "Triangle invalidated; same ambiguity as gold. First resistance at 63.12.",
+   "alternates": [
+    "Larger rally confirmed on a break of 63.12 with follow-through beyond 67.10."
+   ],
+   "levels": {
+    "resistance": [
+     "63.12",
+     "67.10"
+    ],
+    "target": [
+     "97 (minimum)",
+     "107-124 (preferred)"
+    ]
+   },
+   "confidence": "50/50 on lower lows; targets conditional on breakout"
+  }
+ }
+}

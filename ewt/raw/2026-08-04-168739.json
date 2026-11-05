@@ -1,0 +1,22 @@
+{
+ "imap_id": "168739",
+ "message_id": "d3e2ba0a54ab44c4bff35c5907e9ec2a@elliottwavetrader.net",
+ "date": "2026-08-04T18:51:22Z",
+ "subject": "Wave Alert - U.S. Indices (Day)",
+ "analyst": "Avi",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "SPX": {
+   "count": "Possible run at the 1.382 extension for wave iii of (iii); wave iv support to be raised if reached.",
+   "alternates": [],
+   "levels": {
+    "target": [
+     "1.382 extension"
+    ]
+   },
+   "confidence": "conditional"
+  }
+ }
+}

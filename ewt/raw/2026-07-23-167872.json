@@ -1,0 +1,34 @@
+{
+ "imap_id": "167872",
+ "message_id": "7e4d6ccf1a984cc98b33cdd783337acf@elliottwavetrader.net",
+ "date": "2026-07-23T19:32:55Z",
+ "subject": "Market Update from ElliottWaveTrader",
+ "analyst": "Mike",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "ES": {
+   "count": "Breakdown confirms white count: wave 3 of (c) down. Reached the 100% extension at 7408.",
+   "alternates": [
+    "Yellow count still not invalidated but less probable.",
+    "Ending Diagonal for wave (c) added if 7468 is retaken on a three-wave rally."
+   ],
+   "levels": {
+    "pivot": [
+     "7468",
+     "7408",
+     "7355"
+    ],
+    "target": [
+     "7355-7288 (wave 3)",
+     "7250-7153 (wave 5 of c)"
+    ],
+    "invalidation": [
+     "over 7567 high (yellow (ii) bottomed)"
+    ]
+   },
+   "confidence": "primary white count, bullish alternate not ruled out"
+  }
+ }
+}

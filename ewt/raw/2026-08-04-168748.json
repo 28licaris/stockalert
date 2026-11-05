@@ -1,0 +1,24 @@
+{
+ "imap_id": "168748",
+ "message_id": "ec378856305545738cad350c450a57c7@elliottwavetrader.net",
+ "date": "2026-08-04T19:28:38Z",
+ "subject": "Wave Alert - Metals",
+ "analyst": "Jason",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "GDX": {
+   "count": "Preferred: filling in wave 4 with one more low to come.",
+   "alternates": [
+    "Low of sorts in place \u2014 promoted on five waves up or a break of 90."
+   ],
+   "levels": {
+    "invalidation": [
+     "90"
+    ]
+   },
+   "confidence": "preferred interpretation"
+  }
+ }
+}

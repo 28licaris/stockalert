@@ -1,0 +1,22 @@
+{
+ "imap_id": "168744",
+ "message_id": "774938729ed5496ea020473fdab3dad9@elliottwavetrader.net",
+ "date": "2026-08-04T19:14:15Z",
+ "subject": "Wave Alert - U.S. Indices (Day)",
+ "analyst": "Mike",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "ES": {
+   "count": "Support raised to 7743-7662 on continued push higher; pressure up while held.",
+   "alternates": [],
+   "levels": {
+    "support": [
+     "7743-7662"
+    ]
+   },
+   "confidence": "stated"
+  }
+ }
+}

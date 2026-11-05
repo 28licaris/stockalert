@@ -1,0 +1,39 @@
+{
+ "imap_id": "168882",
+ "message_id": "0db6beb78f984f4394495c42dc12c5c0@elliottwavetrader.net",
+ "date": "2026-08-05T19:37:20Z",
+ "subject": "Wave Alert - Forex",
+ "analyst": "Arkady",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "EURUSD": {
+   "count": "Slight adjustment \u2014 circled wave C of ii target moved to 1.1572. Count intact below that.",
+   "alternates": [
+    "Alternative scenario required on a direct extension above 1.1572."
+   ],
+   "levels": {
+    "invalidation": [
+     "1.1572"
+    ]
+   },
+   "confidence": "count fully intact below 1.1572"
+  },
+  "DXY": {
+   "count": "Maintained above 99.42; preferred rally toward 102.5.",
+   "alternates": [
+    "Revision below 99.42."
+   ],
+   "levels": {
+    "invalidation": [
+     "99.42"
+    ],
+    "target": [
+     "102.5"
+    ]
+   },
+   "confidence": "preferred"
+  }
+ }
+}

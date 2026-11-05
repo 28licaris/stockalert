@@ -1,0 +1,24 @@
+{
+ "imap_id": "168895",
+ "message_id": "68424258bed943e7b4ef749ab22cddbb@elliottwavetrader.net",
+ "date": "2026-08-05T19:45:28Z",
+ "subject": "Wave Alert - Metals",
+ "analyst": "Arkady",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "GC": {
+   "count": "Nothing added; near-term target remains the 4353-4415 resistance region.",
+   "alternates": [
+    "Option 1-1 Micro may become primary if resistance breaks."
+   ],
+   "levels": {
+    "resistance": [
+     "4353-4415"
+    ]
+   },
+   "confidence": "unchanged"
+  }
+ }
+}

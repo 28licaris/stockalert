@@ -1,0 +1,24 @@
+{
+ "imap_id": "168762",
+ "message_id": "0eb923f441e343b2b24f249310c6c351@elliottwavetrader.net",
+ "date": "2026-08-04T19:56:42Z",
+ "subject": "Wave Alert - U.S. Indices (Swing)",
+ "analyst": "Avi",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "SPX": {
+   "count": "Bulls in charge while the support box holds.",
+   "alternates": [
+    "(c)-wave drop to the 7100-7200 SPX region if the support boxes break."
+   ],
+   "levels": {
+    "target": [
+     "7100-7200 (bear case)"
+    ]
+   },
+   "confidence": "conditional on support"
+  }
+ }
+}

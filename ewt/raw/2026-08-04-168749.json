@@ -1,0 +1,42 @@
+{
+ "imap_id": "168749",
+ "message_id": "b6e45b5ed9d84c1fb32fdb50f8e50156@elliottwavetrader.net",
+ "date": "2026-08-04T19:30:01Z",
+ "subject": "Wave Alert - Forex",
+ "analyst": "Arkady",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "DXY": {
+   "count": "Option 2-1 Micro Log preferred, valid above 99.42; circled wave 5 of A targets 102.48.",
+   "alternates": [
+    "Option 2 Micro Log \u2014 given very little chance, not updated regularly."
+   ],
+   "levels": {
+    "invalidation": [
+     "99.42"
+    ],
+    "target": [
+     "102.48"
+    ]
+   },
+   "confidence": "preferred scenario"
+  },
+  "EURUSD": {
+   "count": "Wave ii for the 1.15587 high is the primary scenario; immediate extension lower toward 1.12-1.118.",
+   "alternates": [
+    "Count revision required on a break over 1.156."
+   ],
+   "levels": {
+    "support": [
+     "1.118-1.12"
+    ],
+    "invalidation": [
+     "1.156"
+    ]
+   },
+   "confidence": "primary scenario"
+  }
+ }
+}

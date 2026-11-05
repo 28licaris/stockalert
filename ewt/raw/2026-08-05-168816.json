@@ -1,0 +1,42 @@
+{
+ "imap_id": "168816",
+ "message_id": "16429edeb14c44098b6d529ed52bdf17@elliottwavetrader.net",
+ "date": "2026-08-05T13:18:58Z",
+ "subject": "Wave Alert - Forex",
+ "analyst": "Arkady",
+ "timeframe": "intraday",
+ "extracted_at": "2026-08-05",
+ "attachments": [],
+ "symbols": {
+  "DXY": {
+   "count": "Count maintained above 99.42; preferred scenario a rally toward 102.5.",
+   "alternates": [
+    "Pattern revision forced below 99.42."
+   ],
+   "levels": {
+    "invalidation": [
+     "99.42"
+    ],
+    "target": [
+     "102.5"
+    ]
+   },
+   "confidence": "preferred"
+  },
+  "EURUSD": {
+   "count": "At a critical juncture; downside potential intact below 1.1849.",
+   "alternates": [
+    "Alternative count required above 1.15587."
+   ],
+   "levels": {
+    "invalidation": [
+     "1.15587"
+    ],
+    "resistance": [
+     "1.1849"
+    ]
+   },
+   "confidence": "critical juncture"
+  }
+ }
+}

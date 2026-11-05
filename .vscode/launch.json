@@ -1,220 +1,148 @@
 {
-    "version": "0.2.0",
-    "configurations": [
-        {
-            "name": "Start FastAPI Server",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "uvicorn",
-            "args": [
-                "app.main_api:app",
-                "--reload",
-                "--host", "0.0.0.0",
-                "--port", "8000"
-            ],
-            "jinja": true,
-            "justMyCode": false,
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}/stockalert"
-            },
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}/stockalert"
-        },
-        {
-            "name": "Detect Divergence: SPY (30 days, RSI, Hidden Bullish)",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "app.detect_divergence",
-            "args": [
-                "--tickers", "SPY",
-                "--days", "30",
-                "--indicator", "rsi",
-                "--signal-type", "hidden_bullish_divergence"
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}/stockalert",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}/stockalert"
-            },
-            "justMyCode": false
-        },
-        {
-            "name": "Detect Divergence: Multiple Tickers (7 days)",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "app.detect_divergence",
-            "args": [
-                "--tickers", "SPY", "QQQ", "AAPL",
-                "--days", "7",
-                "--indicator", "rsi",
-                "--signal-type", "hidden_bullish_divergence"
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}/stockalert",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}/stockalert"
-            },
-            "justMyCode": false
-        },
-        {
-            "name": "Test: Historical Data",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/tests/test_historical.py",
-            "console": "integratedTerminal",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "name": "Test: Live Stream",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/tests/test_livestream.py",
-            "console": "integratedTerminal",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "name": "Test: Database",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "pytest",
-            "args": [
-                "${workspaceFolder}/tests/test_database_alert.py",
-                "-v",
-                "-s"
-            ],
-            "console": "integratedTerminal",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "name": "Test: Indicators",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "pytest",
-            "args": [
-                "${workspaceFolder}/tests/test_indicators.py",
-                "-v",
-                "-s"
-            ],
-            "console": "integratedTerminal",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "name": "Test: Alert Flow",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "pytest",
-            "args": [
-                "${workspaceFolder}/tests/test_alert_flow.py",
-                "-v",
-                "-s"
-            ],
-            "console": "integratedTerminal",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "name": "Test: WebSocket",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "pytest",
-            "args": [
-                "${workspaceFolder}/tests/test_websocket.py",
-                "-v",
-                "-s"
-            ],
-            "console": "integratedTerminal",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "name": "Test: Schwab Provider",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "pytest",
-            "args": [
-                "${workspaceFolder}/tests/test_schwab_provider.py",
-                "-v",
-                "-s"
-            ],
-            "console": "integratedTerminal",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "cwd": "${workspaceFolder}",
-            "justMyCode": false
-        },
-        {
-            "name": "Schwab: Live API test (real keys)",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/scripts/test_schwab_live.py",
-            "args": ["--symbol", "SPY", "--days", "1"],
-            "console": "integratedTerminal",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "cwd": "${workspaceFolder}",
-            "justMyCode": false
-        },
-        {
-            "name": "Test: Current File (pytest)",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "pytest",
-            "args": [
-                "${file}",
-                "-v",
-                "-s"
-            ],
-            "console": "integratedTerminal",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "cwd": "${workspaceFolder}",
-            "justMyCode": false
-        },
-        {
-            "name": "Run All Tests",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "pytest",
-            "args": [
-                "${workspaceFolder}/tests",
-                "-v",
-                "-s"
-            ],
-            "console": "integratedTerminal",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "name": "Python: Current File",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${file}",
-            "console": "integratedTerminal",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "cwd": "${workspaceFolder}"
-        }
-    ]
+  // VS Code debug configurations.
+  //
+  // Rewritten 2026-11-05: every one of the previous 14 entries pointed at a
+  // file that no longer exists (app/detect_divergence.py, tests/test_*.py at
+  // the repo root, scripts/test_schwab_live.py), and three set PYTHONPATH to
+  // ${workspaceFolder}/stockalert — a directory that has never existed in
+  // this layout. None of them could run.
+  //
+  // PYTHONPATH is not set anywhere below: the project is installed into the
+  // Poetry venv, so imports resolve without it. Pick that interpreter with
+  // "Python: Select Interpreter" (.venv/bin/python) and these all work.
+  //
+  // THERE IS DELIBERATELY NO "API WITH AUTH" ENTRY. Auth needs
+  // COGNITO_CLIENT_SECRET, fetched from AWS at startup and not checked in,
+  // so it cannot live in this file. Use the script:
+  //
+  //     bash scripts/dev/run_auth_api.sh
+  //
+  // Starting the auth-enabled API any other way fails *silently*:
+  // AUTH_COOKIE_SECURE defaults true, browsers drop Secure cookies over
+  // plain http://localhost, and every CSRF-protected action then dies with
+  // "Your security token is missing." The script sets AUTH_COOKIE_SECURE
+  // =false and resolves the secret. See docs/operations/runbook.md.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Plain dev server. AUTH IS EFFECTIVELY OFF here — see the auth note
+      // below before debugging anything that needs a signed-in user.
+      //
+      // Every background writer is disabled. Exactly one process may own the
+      // options snapshot loop and the Schwab stream: concurrent Iceberg
+      // appends make ALL of them fail, and the Schwab streamer permits a
+      // single session. Leave these false unless you have stopped the other
+      // server first.
+      "name": "API: FastAPI (writers off)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "app.main_api:app",
+        "--reload",
+        "--host", "127.0.0.1",
+        "--port", "8000"
+      ],
+      "env": {
+        "STREAM_PROVIDER": "",
+        "OPTIONS_SNAPSHOT_ENABLED": "false",
+        "POLYGON_NIGHTLY_ENABLED": "false",
+        "SCHWAB_NIGHTLY_ENABLED": "false",
+        "FUTURES_NIGHTLY_ENABLED": "false",
+        "FUTURES_POLYGON_NIGHTLY_ENABLED": "false",
+        "CH_RECONCILE_ENABLED": "false"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      // Same, on 8001, for debugging beside an already-running :8000.
+      "name": "API: FastAPI on :8001 (alongside :8000)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "app.main_api:app",
+        "--reload",
+        "--host", "127.0.0.1",
+        "--port", "8001"
+      ],
+      "env": {
+        "STREAM_PROVIDER": "",
+        "OPTIONS_SNAPSHOT_ENABLED": "false",
+        "POLYGON_NIGHTLY_ENABLED": "false",
+        "SCHWAB_NIGHTLY_ENABLED": "false",
+        "FUTURES_NIGHTLY_ENABLED": "false",
+        "FUTURES_POLYGON_NIGHTLY_ENABLED": "false",
+        "CH_RECONCILE_ENABLED": "false"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Tests: unit (not integration)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["-m", "not integration", "-q"],
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      // Live ClickHouse / AWS / provider tests. Needs CH up
+      // (docker compose --profile ch up -d) and real credentials.
+      "name": "Tests: integration",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["-m", "integration", "-q"],
+      "env": { "AWS_PROFILE": "stock-lake" },
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Tests: current file",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["${file}", "-v", "-s"],
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      // Debug the single test under the cursor. Select the test name first;
+      // ${selectedText} is passed to -k.
+      "name": "Tests: selected name in current file (-k)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["${file}", "-v", "-s", "-k", "${selectedText}"],
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      // Any script under scripts/. AWS_PROFILE is set because every
+      // lake/S3 call needs it — a blank one makes calls hang 45-90s
+      // before failing.
+      "name": "Script: current file (lake creds)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "args": [],
+      "env": {
+        "AWS_PROFILE": "stock-lake",
+        "AWS_REQUEST_CHECKSUM_CALCULATION": "when_required"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Python: current file",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    }
+  ]
 }
