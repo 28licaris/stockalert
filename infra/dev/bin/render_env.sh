@@ -103,13 +103,16 @@ set -a; source "$TMP"; set +a
 missing=()
 for k in APP_IMAGE AWS_REGION LOG_GROUP STOCK_LAKE_BUCKET CLICKHOUSE_PASSWORD POSTGRES_PASSWORD \
          COGNITO_CLIENT_ID COGNITO_CLIENT_SECRET SCHWAB_CLIENT_ID SCHWAB_CLIENT_SECRET \
-         SCHWAB_REFRESH_TOKEN POLYGON_API_KEY ADMIN_EMAILS; do
+         SCHWAB_REFRESH_TOKEN ADMIN_EMAILS; do
   [[ -n "${!k:-}" ]] || missing+=("$k")
 done
 if (( ${#missing[@]} )); then
   die "required keys missing: ${missing[*]} (APP_IMAGE → bin/release.sh; others → scripts/deploy/put_param.sh)"
 fi
-for k in STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET STRIPE_PRICE_MONTHLY STRIPE_PRICE_ANNUAL ANTHROPIC_API_KEY BLS_API_KEY BEA_API_KEY; do
+# POLYGON_API_KEY is optional: Schwab is the default provider and Polygon is a
+# lapsed subscription kept supported for a possible renewal. Without it the
+# Polygon-backed paths degrade; nothing else is affected.
+for k in POLYGON_API_KEY STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET STRIPE_PRICE_MONTHLY STRIPE_PRICE_ANNUAL ANTHROPIC_API_KEY BLS_API_KEY BEA_API_KEY; do
   [[ -n "${!k:-}" ]] || log "WARN optional key unset: $k (feature degrades to 'not configured')"
 done
 
