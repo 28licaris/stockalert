@@ -151,7 +151,7 @@ Resources:
         - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTPS }
         - { IpProtocol: udp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTP/3 (Caddy) }
       SecurityGroupEgress:
-        - { IpProtocol: "-1", CidrIp: 0.0.0.0/0, Description: "all outbound (providers, AWS APIs, ECR, Let's Encrypt)" }
+        - { IpProtocol: "-1", CidrIp: 0.0.0.0/0, Description: "all outbound (providers, AWS APIs, ECR, ACME)" }
       Tags:
         - { Key: Name, Value: !Sub "stockalert-${EnvironmentName}-box" }
 
