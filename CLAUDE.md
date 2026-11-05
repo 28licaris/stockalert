@@ -171,6 +171,19 @@ Plan vs code conflict: code wins. The journal lives in detailed
 commit messages; BUILD_JOURNAL was retired 2026-05-18 and the file
 deleted 2026-05-21 (CV18).
 
+## Agent skills
+
+**Our skills live in `.claude/skills/<name>/SKILL.md`.** That is what Claude
+Code reads and where the repo's own skills (`elliott-wave`,
+`preflight-change`) have always lived. Add a new one there and commit it.
+
+`.agents/skills/` is **not ours** — a third-party pack installed by its own
+`setup-matt-pocock-skills` script, which keeps the real content in `.agents/`
+and symlinks it into `.claude/skills/`. Both halves are gitignored so the
+installer can manage them. Don't add first-party skills there: a duplicate
+`preflight-change` was swept into `.agents/` by an unrelated commit and the
+two copies could drift silently. Removed 2026-11-05.
+
 ## Infra
 
 AWS only. Glue + S3 (Iceberg warehouse), CodeBuild for long backfills
