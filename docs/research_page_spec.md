@@ -1,6 +1,7 @@
 # Research page — spec
 
-Status: **building P1** (2026-07-05). Confirmed via product review.
+Status: **P1 shipped** (2026-11-05, PR #27) — verified against live data.
+Confirmed via product review (2026-07-05). **P2 is next.**
 
 A **premium, customer-facing** research/screener: find top stocks by momentum,
 gainers/losers, activity, and streaks — one-click **presets** backed by a
@@ -35,12 +36,14 @@ gainers/losers, activity, and streaks — one-click **presets** backed by a
    - **Currently trading**: latest bar within a few days of the table max.
    - **Sanity cap** on |return| for display (data-error guard).
    Verified: with guards the momentum leaders are sane (MU/AMD/SOXL/ARM…).
-2. **Freshness caveat.** `ohlcv_daily` is currently a snapshot (last close
-   2026-06-30) — the top-1000 daily feed (Polygon grouped-daily → ohlcv_daily)
-   is not currently refreshing. **v1 labels results "as of {last close}".**
-   Keeping the top-1000 daily current is an **ops task** (re-enable/verify the
-   grouped-daily nightly), tracked separately — it is NOT a blocker for the
-   feature, which reads whatever the latest close in the table is.
+2. **Freshness — resolved, with a small lag to watch.** The top-1000 daily feed
+   (Polygon grouped-daily → `ohlcv_daily`) IS refreshing again: as of 2026-11-05
+   the table holds 1,050 symbols through last close **2026-11-02** (the stale
+   2026-06-30 snapshot noted during prototyping is no longer the state). The
+   feed runs ~2–3 trading days behind, so keeping the grouped-daily nightly
+   caught up is an **ops item** tracked in `docs/TODO.md` — NOT a blocker, since
+   v1 always labels results **"as of {last close}"** and reads whatever the
+   latest close in the table is.
 
 ## Architecture
 - **Rankings (EOD)**: `app/services/research/rankings.py` — guarded ClickHouse
@@ -54,8 +57,10 @@ gainers/losers, activity, and streaks — one-click **presets** backed by a
   (no-op in dev where auth is off).
 
 ## Phases
-- **P1 — EOD presets**: rankings service + `/research/rankings` + research page
-  (preset tabs, guarded table, row actions chart/watchlist/assistant). ← now
-- **P2 — Custom builder**: criteria UI + engine extensions + `/research/screen`.
+- **P1 — EOD presets** ✅ **shipped (PR #27, 2026-11-05)**: rankings service +
+  `GET /research/rankings` + research page (preset tabs, guarded table, row
+  actions chart/watchlist/assistant). Guarded momentum ranking verified sane
+  against live `ohlcv_daily`. `POST /research/screen` is not built yet (P2).
+- **P2 — Custom builder**: criteria UI + engine extensions + `/research/screen`. ← next
 - **P3 — Live Movers tab**: intraday + provider fallback.
 - **P4 — Save screens**: `saved_screens` table + save/load/manage.
