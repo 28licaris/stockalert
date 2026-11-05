@@ -48,7 +48,7 @@ second instantiation, not a fork.
   ───── https 443 ─────► │  caddy ──┬── default ───────────────────────► api     (uvicorn :8000)  ──┐           │
                          │          │                                     no streamer, no loops     │  CH http   │
   Cognito hosted login   │          └── /api/v1/jobs*, /api/v1/stream*,                             ├─► clickhouse (:8123, 3 GiB cap)
-  (us-east-1_NxTarvrk4)  │              /api/v1/backfill*, /health/services ► worker  (uvicorn :8000) ─┘           │
+  (us-east-1_NxTarvrk4)  │              /api/v1/backfill*, /api/v1/health/services ► worker  (uvicorn :8000) ─┘           │
                          │                                                     streamer + every loop   │           │
   Stripe test webhook ─► │              /mcp, /docs, /openapi.json ─► 403      cpus: 1.0               ├─► postgres (:5432, identity)
                          │                                                                             │           │
@@ -71,10 +71,17 @@ identically. No proxy code in the app.
 | Container | Image | Role | Key env (only the differences) | Limits |
 |---|---|---|---|---|
 | `caddy` | `caddy:2` | TLS termination, path routing, `/mcp` + `/docs` block | `DEV_HOST` | — |
-| `api` | `stockalert/app:<sha>` | Every customer + auth + billing request | `STREAM_PROVIDER=""` · all `*_NIGHTLY_ENABLED=false` · `OPTIONS_SNAPSHOT_ENABLED=false` · `CH_RECONCILE_ENABLED=false` · `NEWS_INGEST_ENABLED=false` · `ELLIOTT_RECOMPUTE_ENABLED=false` · `ELLIOTT_LIVE_SCANNER_ENABLED=false` · `JOURNAL_ENABLED=false` · `LIVE_LAKE_WRITER_ENABLED=false` · `SYMBOL_HOTLOAD_ENABLED=true` · `SYMBOL_GAPFILL_ENABLED=true` | none (it is the thing we protect) |
+| `api` | `stockalert/app:<sha>` | Every customer + auth + billing request | `STREAM_PROVIDER=none` (see note) · all `*_NIGHTLY_ENABLED=false` · `OPTIONS_SNAPSHOT_ENABLED=false` · `CH_RECONCILE_ENABLED=false` · `NEWS_INGEST_ENABLED=false` · `ELLIOTT_RECOMPUTE_ENABLED=false` · `ELLIOTT_LIVE_SCANNER_ENABLED=false` · `JOURNAL_ENABLED=false` · `LIVE_LAKE_WRITER_ENABLED=false` · `SYMBOL_HOTLOAD_ENABLED=true` · `SYMBOL_GAPFILL_ENABLED=true` | none (it is the thing we protect) |
 | `worker` | same | Schwab streamer, batcher, all scheduled loops, options snapshots, journal sync | the inverse: `STREAM_PROVIDER=schwab` and every loop flag at its `.env.example` default; `OPTIONS_SNAPSHOT_ENABLED=true` **here and nowhere else** | `cpus: "1.0"`, `mem_limit: 2500m` |
 | `clickhouse` | `clickhouse/clickhouse-server:24.8` | hot tier | config.d: `system_logs.xml` (7-day TTL on `query_log`, `part_log`; `trace_log`/`query_thread_log` off — the laptop's `system` DB is **13 GiB**, bigger than `stocks` at 5.5 GiB) | `mem_limit: 3g` |
 | `postgres` | `postgres:16-alpine` | identity | password from SSM | — |
+
+**`STREAM_PROVIDER=""` does not disable the streamer** (found while building
+C2): `Settings.effective_stream_provider` falls back to `DATA_PROVIDER`, so an
+empty value still initialises Schwab. `.claude/launch.json` relies on the same
+wrong assumption. C3 adds a `none` sentinel in `app/config.py`
+(`effective_stream_provider` returns `""` for it) and the `api` container sets
+`STREAM_PROVIDER=none`; `launch.json` gets the same value.
 
 The `worker` env is written as two compose YAML anchors, `stream-flags`
 (streamer, batcher, journal sync, options snapshots) and `jobs-flags` (every
@@ -96,7 +103,7 @@ case). `AWS_REQUEST_CHECKSUM_CALCULATION=when_required` is set globally.
 | `/api/v1/jobs*` | `worker:8000` | `JobRegistry` is in-process; the Health page's job list + ▶ button must hit the process that owns the loops |
 | `/api/v1/stream*` | `worker:8000` | `stream_service.status()` / add / remove act on the live subscription set |
 | `/api/v1/backfill*` | `worker:8000` | `backfill_service` queue |
-| `/health/services` | `worker:8000` | reports streamer / backfill / monitors state of the worker (the API container has none) |
+| `/api/v1/health/services` | `worker:8000` | reports streamer / backfill / monitors state of the worker (the API container has none) |
 | `/mcp*`, `/docs`, `/redoc`, `/openapi.json` | **403** | MCP has no cookie login; the OpenAPI UI is operator tooling. Reach them via `aws ssm start-session … AWS-StartPortForwardingSession` to `api:8000`. |
 | everything else | `api:8000` | |
 
@@ -108,7 +115,7 @@ case). `AWS_REQUEST_CHECKSUM_CALCULATION=when_required` is set globally.
 | Hotload-on-add / read-path gap-fill | Schwab REST → CH, request-driven | Stays in `api`: it is latency the customer asked for. Shares the Schwab token and rate limit with the worker; acceptable. |
 | `/ws/signals`, `monitor_manager` | live detector output | Monitors page is flag-off; lives in `worker`; `/ws` is not routed in dev. |
 | `/health` (public liveness) | CH ping | `api`; this is what the Route 53 check hits |
-| `/health/freshness` | CH tables | `api` |
+| `/api/v1/health/freshness` | CH tables | `api` |
 
 ## 4. Why requirement 3 holds
 
@@ -201,7 +208,7 @@ prod moves to SES.
 | `AUTH_PROVIDER_TOKEN_CIPHER` | `local` (AES-GCM keyed from the client secret). `kms` is prod. |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` / `STRIPE_PRICE_*` | **test-mode** values, SSM |
 | `BILLING_RETURN_URL` | `https://dev.<domain>/app/settings` |
-| Stripe webhook endpoint (configured in the Stripe dashboard) | `https://dev.<domain>/api/v1/billing/webhook` |
+| Stripe webhook endpoint (configured in the Stripe dashboard) | `https://dev.<domain>/api/v1/customer/billing/webhook` (the billing router is mounted at `/customer/billing`) |
 
 ### The gap that blocks sharing the URL — code change C1
 
@@ -216,8 +223,8 @@ that was fine. On a public hostname it is not.
 C1 adds one deny-by-default ASGI middleware, active only when
 `AUTH_ENABLED=true`: any request to `/api/`, `/cockpit/`, `/ws/` or `/mcp`
 without a valid session gets `401 {"error":"authentication_required"}`.
-Allowlist: `/health`, `/auth/*`, `/app/*` (static SPA), `/api/v1/billing/webhook`
-(Stripe signature is its auth). Operator routers keep `require_operator` on
+Allowlist: `/health`, `/auth/*`, `/app/*` (static SPA), `/api/v1/customer/billing/webhook`
+(Stripe signature is its auth). Built as PR #43. Operator routers keep `require_operator` on
 top. Subscription-entitlement gating of premium pages stays a TODO; in dev
 every signed-in customer sees everything.
 
@@ -356,9 +363,9 @@ apex (`docs/TODO.md`). Same compose file, same image, `ENV=prod`.
 
 | # | Change | Files | Estimate |
 |---|---|---|---|
-| C1 | Deny-by-default session middleware for `/api/`, `/cockpit/`, `/ws/`, `/mcp` when `AUTH_ENABLED=true`, with the allowlist in §5; tests for 401/allowlist/operator | `app/main_api.py`, `app/api/auth_dependencies.py` (or new `app/api/auth_middleware.py` + README entry), `app/api/tests/` | ~2 h |
-| C2 | Worker universe re-sync loop: every 60 s diff `stream_universe` ∪ `futures_universe` against `_subscribed` and apply; registered with `JobRegistry` as `stream_universe_resync` (frequent heartbeat). **Optional:** the one-shot job entry point from §4a | `app/services/stream/service.py`, `app/main_api.py`, `app/services/stream/README.md`, tests (+ `app/services/ingest/run.py` if the option is taken) | ~2 h (+2 h) |
-| C3 | Two-stage Dockerfile + `.dockerignore` + `infra/dev/{docker-compose.yml, Caddyfile, clickhouse/config.d/system_logs.xml, app.env, systemd/*, bootstrap.sh, stack.yaml}` + `scripts/deploy/*.sh` + `infra/README.md` | new files; `Dockerfile` | ~1 day incl. first deploy |
+| C1 (PR #43) | Deny-by-default session middleware for `/api/`, `/cockpit/`, `/ws/`, `/mcp` when `AUTH_ENABLED=true`, with the allowlist in §5; tests for 401/allowlist/operator | `app/main_api.py`, `app/api/auth_dependencies.py` (or new `app/api/auth_middleware.py` + README entry), `app/api/tests/` | ~2 h |
+| C2 (PR #44) | Worker universe re-sync loop: every 60 s diff `stream_universe` ∪ `futures_universe` against `_subscribed` and apply; registered with `JobRegistry` as `stream_universe_resync` (frequent heartbeat). **Optional:** the one-shot job entry point from §4a | `app/services/stream/service.py`, `app/main_api.py`, `app/services/stream/README.md`, tests (+ `app/services/ingest/run.py` if the option is taken) | ~2 h (+2 h) |
+| C3 | `STREAM_PROVIDER=none` sentinel in `app/config.py` (+ `.env.example`, `.claude/launch.json`); two-stage Dockerfile + `.dockerignore` + `infra/dev/{docker-compose.yml, Caddyfile, clickhouse/config.d/system_logs.xml, app.env, systemd/*, bootstrap.sh, stack.yaml}` + `scripts/deploy/*.sh` + `infra/README.md` | new files; `Dockerfile` | ~1 day incl. first deploy |
 
 Follow-ups filed, not in scope: "no bars in `ohlcv_1m` during market hours"
 CloudWatch metric + alarm; subscription-entitlement gating of premium pages;
