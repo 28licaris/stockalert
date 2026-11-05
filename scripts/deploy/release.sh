@@ -35,10 +35,10 @@ log "image present in ECR"
 
 # 2. Sync the box config. No --delete: the bucket prefix is ours alone, and the
 #    box-side sync must never remove .env/release.env/data.
-n_before=$(aws s3 ls "s3://$ops_bucket/infra/" --recursive | wc -l | tr -d ' ')
+n_before=$(aws s3api list-objects-v2 --bucket "$ops_bucket" --prefix infra/ --query 'length(Contents || `[]`)' --output text) || die "listing s3://$ops_bucket/infra/ failed"
 aws s3 sync "infra/$ENV_NAME/" "s3://$ops_bucket/infra/" --only-show-errors --exclude stack.yaml \
   || die "s3 sync infra/$ENV_NAME/ failed"
-n_after=$(aws s3 ls "s3://$ops_bucket/infra/" --recursive | wc -l | tr -d ' ')
+n_after=$(aws s3api list-objects-v2 --bucket "$ops_bucket" --prefix infra/ --query 'length(Contents || `[]`)' --output text) || die "listing s3://$ops_bucket/infra/ failed"
 log "synced infra/$ENV_NAME/ → s3://$ops_bucket/infra/ (objects before=$n_before after=$n_after)"
 (( n_after > 0 )) || die "s3://$ops_bucket/infra/ is empty after sync"
 

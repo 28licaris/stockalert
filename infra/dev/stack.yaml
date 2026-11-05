@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
-  StockAlert single-box environment (docs/operations/deployment_dev.md §7):
+  StockAlert single-box environment (docs/operations/deployment_dev.md section 7):
   one Graviton EC2 running Docker Compose behind Caddy, plus the ops bucket,
   ECR repository, log group, DLM snapshots, SNS alerts and a Route 53 health
   check. Parameterised by EnvironmentName so prod is a second stack, not a fork.
@@ -10,8 +10,8 @@ Description: >-
 #     --stack-name stockalert-dev --template-file infra/dev/stack.yaml \
 #     --capabilities CAPABILITY_NAMED_IAM \
 #     --parameter-overrides EnvironmentName=dev LakeBucket=<STOCK_LAKE_BUCKET> \
-#       AlertEmail=<operator@…> CognitoUserPoolId=us-east-1_NxTarvrk4 \
-#       VpcId=vpc-… SubnetId=subnet-…
+#       AlertEmail=<operator@...> CognitoUserPoolId=us-east-1_NxTarvrk4 \
+#       VpcId=vpc-... SubnetId=subnet-...
 # The instance's user-data waits for `scripts/deploy/release.sh` to sync
 # infra/dev/ into the ops bucket, then runs bootstrap.sh. No SSH, no key pair:
 # `aws ssm start-session --target <InstanceId>`.
@@ -21,7 +21,7 @@ Parameters:
     Type: String
     Default: dev
     AllowedPattern: "[a-z0-9-]+"
-    Description: dev | prod — prefixes every resource name and the SSM path /stockalert/<env>/
+    Description: dev | prod - prefixes every resource name and the SSM path /stockalert/<env>/
   LakeBucket:
     Type: String
     AllowedPattern: "[a-z0-9.-]+"
@@ -44,7 +44,7 @@ Parameters:
     Type: String
     Default: t4g.large
     AllowedValues: [t4g.large, t4g.xlarge]
-    Description: §7 sizing note — step to t4g.xlarge only if the worker OOMs on a nightly
+    Description: section 7 sizing note - step to t4g.xlarge only if the worker OOMs on a nightly
   AmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
@@ -67,7 +67,7 @@ Conditions:
   CreateEcr: !Equals [!Ref CreateEcrRepository, "true"]
 
 Resources:
-  # ── Storage / registry / logs / alerts ─────────────────────────────────────
+  # -- Storage / registry / logs / alerts -------------------------------------
   OpsBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
@@ -139,19 +139,19 @@ Resources:
         - Protocol: email
           Endpoint: !Ref AlertEmail
 
-  # ── Network ────────────────────────────────────────────────────────────────
+  # -- Network ----------------------------------------------------------------
   SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: !Sub stockalert-${EnvironmentName}-box
-      GroupDescription: StockAlert box — HTTPS in, ACME/redirect on 80, no SSH (SSM Session Manager)
+      GroupDescription: StockAlert box - HTTPS in, ACME/redirect on 80, no SSH (SSM Session Manager)
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - { IpProtocol: tcp, FromPort: 80,  ToPort: 80,  CidrIp: 0.0.0.0/0, Description: ACME HTTP-01 + redirect to 443 }
         - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTPS }
         - { IpProtocol: udp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTP/3 (Caddy) }
       SecurityGroupEgress:
-        - { IpProtocol: "-1", CidrIp: 0.0.0.0/0, Description: "all outbound (providers, AWS APIs, ECR, Let's Encrypt)" }
+        - { IpProtocol: "-1", CidrIp: 0.0.0.0/0, Description: "all outbound (providers, AWS APIs, ECR, ACME)" }
       Tags:
         - { Key: Name, Value: !Sub "stockalert-${EnvironmentName}-box" }
 
@@ -168,7 +168,7 @@ Resources:
       AllocationId: !GetAtt ElasticIp.AllocationId
       InstanceId: !Ref Instance
 
-  # ── IAM (§7 policy) ────────────────────────────────────────────────────────
+  # -- IAM (section 7 policy) --------------------------------------------------------
   InstanceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -275,7 +275,7 @@ Resources:
       InstanceProfileName: !Sub stockalert-${EnvironmentName}-box
       Roles: [!Ref InstanceRole]
 
-  # ── Compute ────────────────────────────────────────────────────────────────
+  # -- Compute ----------------------------------------------------------------
   LaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
@@ -332,7 +332,7 @@ Resources:
               sleep 10
             done
             aws s3 ls "s3://${OpsBucket}/infra/bootstrap.sh" --region ${AWS::Region} >/dev/null \
-              || { echo "ERROR: infra never arrived in s3://${OpsBucket}/infra/ — run scripts/deploy/release.sh"; exit 1; }
+              || { echo "ERROR: infra never arrived in s3://${OpsBucket}/infra/ - run scripts/deploy/release.sh"; exit 1; }
             aws s3 sync "s3://${OpsBucket}/infra/" /opt/stockalert/ --region ${AWS::Region} --exclude stack.yaml
             chmod +x /opt/stockalert/bootstrap.sh /opt/stockalert/bin/*.sh
             /opt/stockalert/bootstrap.sh
@@ -348,7 +348,7 @@ Resources:
       Tags:
         - { Key: Name, Value: !Sub "stockalert-${EnvironmentName}" }
 
-  # ── Backups: daily root-volume snapshot, keep 7 ────────────────────────────
+  # -- Backups: daily root-volume snapshot, keep 7 ----------------------------
   DlmRole:
     Type: AWS::IAM::Role
     Properties:
@@ -365,7 +365,7 @@ Resources:
   DailySnapshotPolicy:
     Type: AWS::DLM::LifecyclePolicy
     Properties:
-      Description: !Sub StockAlert ${EnvironmentName} — daily root volume snapshot, keep 7
+      Description: !Sub StockAlert ${EnvironmentName} daily root volume snapshot keep 7
       State: ENABLED
       ExecutionRoleArn: !GetAtt DlmRole.Arn
       PolicyDetails:
@@ -386,9 +386,9 @@ Resources:
         - { Key: application, Value: stockalert }
         - { Key: environment, Value: !Ref EnvironmentName }
 
-  # ── Health: Route 53 endpoint check → CloudWatch alarm → SNS ───────────────
+  # -- Health: Route 53 endpoint check -> CloudWatch alarm -> SNS ---------------
   # No hosted zone needed. The hostname is app.<eip-with-dashes>.sslip.io
-  # (§13) — built here from the EIP so it matches what render_env.sh derives.
+  # (section 13) - built here from the EIP so it matches what render_env.sh derives.
   HealthCheck:
     Type: AWS::Route53::HealthCheck
     Properties:
@@ -448,7 +448,7 @@ Outputs:
     Value: !Ref ElasticIp
   DevHost:
     Value: !Join ["", ["app.", !Join ["-", !Split [".", !Ref ElasticIp]], ".sslip.io"]]
-    Description: DEV_HOST — the Cognito callback and Stripe webhook URLs derive from it
+    Description: DEV_HOST - the Cognito callback and Stripe webhook URLs derive from it
   OpsBucketName:
     Value: !Ref OpsBucket
     Description: infra/ (synced config), pg_dump/ (30-day), clickhouse-migrate/ (one-time volume tar), ssm-output/
