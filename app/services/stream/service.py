@@ -13,6 +13,12 @@ Lifecycle:
   - `add()` writes a CH row and immediately subscribes the symbol.
   - `remove()` marks the row inactive and immediately unsubscribes.
   - `stop()` unsubscribes everything.
+  - While started, `_universe_resync_loop()` re-reads the active universe
+    every STREAM_UNIVERSE_RESYNC_SECONDS and applies the diff against the
+    live subscription set. This is what lets a row written by ANOTHER
+    process (the `api` container's watchlist add, deployment spec C2)
+    start streaming here without a restart. Audited as the
+    `stream_universe_resync` job (frequent heartbeat).
 
 All callbacks emit bars to the OHLCV batcher with source tag
 `{provider}-stream` so `live_lake_writer` can disambiguate them
@@ -24,7 +30,7 @@ import asyncio
 import logging
 import threading
 from datetime import datetime, timezone
-from typing import Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from app.config import get_stream_provider, settings
 from app.db.client import get_client
@@ -61,6 +67,15 @@ def _ts(value: datetime | None) -> str:
     return value.isoformat()
 
 
+def _default_audit(job_name: str):
+    """Production audit wrapper for the re-sync loop: one `ingestion_runs`
+    row per cycle that changed something or errored, one heartbeat row per
+    UTC day otherwise (`frequent=True`). Tests inject a recorder instead."""
+    from app.services.jobs import audit_run
+
+    return audit_run(job_name, frequent=True)
+
+
 class StreamService:
     """Owns Schwab live subscriptions and the stream-universe CH table.
 
@@ -70,12 +85,33 @@ class StreamService:
 
     DEFAULT_OWNER = "default-tenant"
 
-    def __init__(self, *, bar_batcher_factory=None) -> None:
+    # How long one re-sync cycle waits for `_lock` (held briefly by
+    # add()/remove() on route threads) before giving up and reporting the
+    # cycle as skipped. Class attribute so tests can shorten it.
+    RESYNC_LOCK_WAIT_SECONDS: float = 5.0
+
+    def __init__(
+        self,
+        *,
+        bar_batcher_factory=None,
+        universe_resync_seconds: Optional[float] = None,
+        audit_factory: Optional[Callable[[str], Any]] = None,
+    ) -> None:
         self._lock = threading.Lock()
         self._provider: Optional[DataProvider] = None
         self._provider_error: Optional[str] = None
         self._started = False
         self._subscribed: set[str] = set()
+        # Periodic universe re-sync (deployment spec C2). `None` → the
+        # STREAM_UNIVERSE_RESYNC_SECONDS setting; 0 disables. The audit
+        # factory wraps each cycle (production: `audit_run(frequent=True)`).
+        self._resync_seconds: float = (
+            float(settings.stream_universe_resync_seconds)
+            if universe_resync_seconds is None
+            else float(universe_resync_seconds)
+        )
+        self._audit_factory: Callable[[str], Any] = audit_factory or _default_audit
+        self._resync_task: Optional[asyncio.Task] = None
         # The asyncio event loop captured at `start()` time. API routes
         # call `add` / `remove` via `asyncio.to_thread`, which strips the
         # loop from the worker thread; we use `run_coroutine_threadsafe`
@@ -274,11 +310,19 @@ class StreamService:
             for r in rows.result_rows
         ]
 
-    def _read_futures_universe(self, *, owner_id: Optional[str] = None) -> set[str]:
+    def _read_futures_universe(
+        self, *, owner_id: Optional[str] = None, strict: bool = False,
+    ) -> set[str]:
         """Active continuous-root symbols in the `futures_universe` table.
 
         Separate table from the equities stream_universe; merged into the
         subscription set so the provider streams these via CHART_FUTURES.
+
+        ``strict=False`` (startup, bootstrap) treats an unreadable table as
+        empty — futures are optional and nothing is subscribed yet.
+        ``strict=True`` (the re-sync cycle) re-raises instead: there, an
+        empty set would be applied as a diff and unsubscribe every live
+        futures root.
         """
         owner = owner_id or self.DEFAULT_OWNER
         try:
@@ -289,8 +333,18 @@ class StreamService:
             )
             return {r[0] for r in rows.result_rows}
         except Exception as e:  # noqa: BLE001 — boundary; futures optional
+            if strict:
+                raise
             logger.warning("Stream: could not read futures_universe: %s", e)
             return set()
+
+    def _read_active_universe(self) -> set[str]:
+        """``stream_universe`` ∪ ``futures_universe``, active rows only, for
+        the default owner. Raises if EITHER read fails: a half-read universe
+        applied as a diff would unsubscribe the half that did not load."""
+        active = {row["symbol"] for row in self._read_universe()}
+        active |= self._read_futures_universe(strict=True)
+        return active
 
     def list_futures_universe(self, *, owner_id: Optional[str] = None) -> list[dict]:
         """Full rows for the active futures universe (the continuous roots
@@ -559,10 +613,13 @@ class StreamService:
         if self._provider_error:
             logger.warning("Stream: provider error: %s", self._provider_error)
 
+        self._start_universe_resync()
+
     async def stop(self) -> None:
         if not self._started:
             return
         self._started = False
+        await self._stop_universe_resync()
         with self._lock:
             currently = sorted(self._subscribed)
             self._subscribed.clear()
@@ -577,6 +634,149 @@ class StreamService:
             except Exception as e:  # noqa: BLE001 — boundary
                 logger.error("Stream: stop_stream failed: %s", e)
         self._main_loop = None
+
+    # ─────────────────────────────────────────────────────────────────
+    # Periodic universe re-sync (deployment spec C2)
+    # ─────────────────────────────────────────────────────────────────
+
+    @property
+    def universe_resync_active(self) -> bool:
+        """True iff the re-sync loop task is running (main_api registers the
+        `stream_universe_resync` job only when this is true)."""
+        return self._resync_task is not None and not self._resync_task.done()
+
+    def _start_universe_resync(self) -> None:
+        """Spawn the loop iff enabled and a stream provider is configured.
+        Called at the end of `start()`; every branch logs so an operator can
+        tell "off by config" from "never started"."""
+        if self._resync_seconds <= 0:
+            logger.info(
+                "Stream: universe re-sync disabled "
+                "(STREAM_UNIVERSE_RESYNC_SECONDS=%s)", self._resync_seconds,
+            )
+            return
+        if not settings.effective_stream_provider:
+            logger.info(
+                "Stream: universe re-sync not started (no stream provider "
+                "configured — this process does not stream)",
+            )
+            return
+        if self.universe_resync_active:
+            return
+        self._resync_task = asyncio.create_task(
+            self._universe_resync_loop(), name="stream_universe_resync",
+        )
+        logger.info(
+            "Stream: universe re-sync loop started (every %ss)",
+            self._resync_seconds,
+        )
+
+    async def _stop_universe_resync(self) -> None:
+        task, self._resync_task = self._resync_task, None
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:  # noqa: BLE001 — boundary; shutdown must finish
+            logger.warning("Stream: universe re-sync task shutdown: %s", e)
+
+    async def _universe_resync_loop(self) -> None:
+        """Sleep, re-sync, repeat while started. A failing cycle is logged
+        (with traceback) and the loop continues — one bad ClickHouse read
+        must not end the worker's ability to pick up new symbols."""
+        interval = self._resync_seconds
+        cycle = 0
+        while self._started:
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                logger.info(
+                    "Stream resync: loop cancelled after %d cycle(s)", cycle,
+                )
+                return
+            if not self._started:
+                break
+            cycle += 1
+            try:
+                async with self._audit_factory("stream_universe_resync") as rec:
+                    rec.result = await self.resync_universe()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 — boundary; loop outlives one bad cycle
+                logger.error(
+                    "Stream resync: cycle %d failed: %s — next attempt in %ss",
+                    cycle, e, interval, exc_info=True,
+                )
+        logger.info(
+            "Stream resync: loop exited (service stopped) after %d cycle(s)",
+            cycle,
+        )
+
+    async def resync_universe(self) -> dict:
+        """One re-sync cycle, on the main loop, under `_lock`.
+
+        Reads ``stream_universe`` ∪ ``futures_universe`` and applies the diff
+        against the live subscription set via `_apply_subscription_diff`.
+        Returns a result dict for the audit summary:
+
+          - ``{"subscribed": N, "unsubscribed": M}`` — a completed cycle.
+            Both zero is the normal no-op cycle; `audit_run(frequent=True)`
+            collapses those to one heartbeat row per UTC day.
+          - ``{"skipped": True, "reason": ...}`` — the cycle could not run
+            (service not started, provider unavailable, lock busy). Nothing
+            was changed.
+
+        Raises when the universe read fails (ClickHouse down): the caller
+        logs it and `_subscribed` is left untouched.
+        """
+        if not self._started:
+            logger.warning("Stream resync: skipped (service not started)")
+            return {"skipped": True, "reason": "not_started"}
+        if self.ensure_provider() is None:
+            logger.warning(
+                "Stream resync: skipped (provider unavailable: %s)",
+                self._provider_error,
+            )
+            return {"skipped": True, "reason": "provider_unavailable"}
+
+        # Non-blocking acquire + asyncio sleep rather than a blocking
+        # `with self._lock`: a route thread inside add()/remove() holds the
+        # lock while marshalling its provider call onto THIS loop via
+        # run_coroutine_threadsafe(...).result(timeout=5). Blocking the loop
+        # on the lock would deadlock that for the full timeout. Polling is
+        # also cancellation-safe (a cancelled to_thread(acquire) would leak
+        # the lock forever).
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.RESYNC_LOCK_WAIT_SECONDS
+        while not self._lock.acquire(blocking=False):
+            if loop.time() >= deadline:
+                logger.warning(
+                    "Stream resync: skipped (lock busy for %.1fs — an "
+                    "add/remove is in flight; next cycle retries)",
+                    self.RESYNC_LOCK_WAIT_SECONDS,
+                )
+                return {"skipped": True, "reason": "lock_busy"}
+            await asyncio.sleep(0.05)
+        try:
+            # Read UNDER the lock: an add() racing this cycle would otherwise
+            # subscribe a symbol whose row this read predates, and the diff
+            # would then unsubscribe it.
+            active = await asyncio.to_thread(self._read_active_universe)
+            before = set(self._subscribed)
+            to_sub, to_unsub = self._apply_subscription_diff(before, active)
+            self._subscribed = active
+        finally:
+            self._lock.release()
+
+        logger.info(
+            "Stream resync: subscribed=+%d -%d universe=%d%s",
+            len(to_sub), len(to_unsub), len(active),
+            f" added={to_sub} removed={to_unsub}" if (to_sub or to_unsub) else "",
+        )
+        return {"subscribed": len(to_sub), "unsubscribed": len(to_unsub)}
 
     # ─────────────────────────────────────────────────────────────────
     # Public API — universe CRUD

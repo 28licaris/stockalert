@@ -101,6 +101,7 @@ def _register_background_jobs(
     options_snapshot_started: bool,
     live_lake_writer_started: bool,
     journal_started: bool,
+    stream_resync_started: bool,
 ) -> None:
     """Catalog every running background loop with the JobRegistry.
 
@@ -115,6 +116,22 @@ def _register_background_jobs(
     from app.config import settings as _s
 
     # DISABLED: Backfill gap sweeper job registration
+
+    # Stream universe re-sync (deployment spec C2) — the loop audits itself
+    # with `audit_run(frequent=True)` (heartbeat, no flood); a manual click
+    # always records a row, same convention as news_ingest below.
+    if stream_resync_started:
+        async def _run_stream_resync_once() -> None:
+            async with audit_run("stream_universe_resync") as rec:
+                rec.result = await stream_service.resync_universe()
+
+        job_registry.register(
+            name="stream_universe_resync",
+            display_name="Stream universe re-sync",
+            schedule=f"every {int(_s.stream_universe_resync_seconds)}s",
+            setting_key="STREAM_UNIVERSE_RESYNC_SECONDS",
+            run_now=_run_stream_resync_once,
+        )
 
     # Live lake writer — `run_cycle` already writes to ingestion_runs,
     # so the manual run just invokes it without an audit wrapper.
@@ -713,6 +730,7 @@ async def lifespan(app: FastAPI):
         options_snapshot_started=options_snapshot_task is not None,
         live_lake_writer_started=_llw_settings.live_lake_writer_enabled,
         journal_started=_settings.journal_enabled and _journal_has_creds,
+        stream_resync_started=stream_service.universe_resync_active,
     )
 
     app.state.broadcast_signal = broadcast_signal
