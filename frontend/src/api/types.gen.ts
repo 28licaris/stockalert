@@ -927,6 +927,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research/rankings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Rankings */
+        get: operations["rankings_api_v1_research_rankings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/screener/scan": {
         parameters: {
             query?: never;
@@ -5200,6 +5217,59 @@ export interface components {
             /** Residual Abs Autocorr */
             residual_abs_autocorr?: number | null;
         };
+        /** RankingRow */
+        RankingRow: {
+            /** Symbol */
+            symbol: string;
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /** Price */
+            price?: number | null;
+            /**
+             * Chg 1D Pct
+             * @description 1-day % change since prior close.
+             */
+            chg_1d_pct?: number | null;
+            /**
+             * Ret Pct
+             * @description Return over the lookback window (%).
+             */
+            ret_pct?: number | null;
+            /**
+             * Dollar Vol
+             * @description Avg daily dollar-volume.
+             */
+            dollar_vol?: number | null;
+            /**
+             * Up Streak
+             * @default 0
+             */
+            up_streak: number;
+            /**
+             * Down Streak
+             * @default 0
+             */
+            down_streak: number;
+        };
+        /** RankingsResponse */
+        RankingsResponse: {
+            /**
+             * As Of
+             * @description Latest close date in the ranking universe (results are as-of this).
+             */
+            as_of: string;
+            /** Preset */
+            preset: string;
+            /** Lookback Days */
+            lookback_days: number;
+            /** Count */
+            count: number;
+            /** Rows */
+            rows: components["schemas"]["RankingRow"][];
+        };
         /**
          * RenameWatchlistRequest
          * @description Body for `PATCH /api/v1/watchlists/{name}`.
@@ -7915,6 +7985,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StrategyAlert"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rankings_api_v1_research_rankings_get: {
+        parameters: {
+            query: {
+                /** @description One of: momentum, gainers, losers, most_active, streak_up, streak_down */
+                preset: string;
+                /** @description Momentum lookback: 20, 60, or 120. */
+                lookback_days?: number;
+                top_n?: number;
+                /** @description Liquidity floor (avg $/day). */
+                min_dollar_vol?: number;
+                /** @description Min streak length for streak presets. */
+                streak_min?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RankingsResponse"];
                 };
             };
             /** @description Validation Error */

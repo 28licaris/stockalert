@@ -1,0 +1,132 @@
+# Continuous integration — runs on every pull request into main and on every
+# push to main. What each job proves is written in docs/standards/testing.md
+# ("CI"). Live-service tests (pytest marker `integration`) never run here:
+# they need ClickHouse / PostgreSQL / S3 / provider credentials, and are a
+# manual `poetry run pytest -m integration` on an operator's machine.
+#
+# Action versions are pinned by major tag (actions/checkout@v4 …): patch
+# updates are picked up automatically, breaking changes are not.
+
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# A new push to the same PR supersedes the run in flight, so cancel it. Runs
+# on main itself are never cancelled: each merge commit gets a full verdict.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  # Match the version that wrote poetry.lock (first line of the file).
+  POETRY_VERSION: "2.1.4"
+  NODE_VERSION: "20"
+
+jobs:
+  backend:
+    name: backend (pytest, unit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        id: python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        run: |
+          set -euo pipefail
+          pipx install "poetry==${POETRY_VERSION}"
+          poetry config virtualenvs.in-project true
+          poetry --version
+
+      # Keyed on the exact interpreter build too: a cached .venv symlinks the
+      # runner's toolcache python, and a patch bump would leave it dangling.
+      - name: Cache virtualenv
+        id: venv-cache
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py${{ steps.python.outputs.python-version }}-poetry${{ env.POETRY_VERSION }}-${{ hashFiles('poetry.lock') }}
+
+      # `sync` (not `install`) so the venv is exactly the lock: anything a
+      # stale cache carried that is no longer locked gets removed.
+      # --no-root: tests import `app` from the checkout via conftest.py.
+      - name: Install dependencies (from poetry.lock)
+        run: |
+          set -euo pipefail
+          poetry sync --no-root --no-interaction
+          poetry run python -c "import app, arch, lightgbm, pyiceberg; print('deps ok')"
+
+      - name: Unit tests (integration marker excluded)
+        run: poetry run pytest -m "not integration" -q
+
+  frontend:
+    name: frontend (typecheck, lint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies (from package-lock.json)
+        run: npm ci --no-audit --no-fund
+
+      # `codegen` is NOT run here: it needs a live API on :8000. The committed
+      # src/api/types.gen.ts is checked against the in-process OpenAPI schema
+      # by tests/contract/test_openapi_types_in_sync.py in the backend job.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint (zero warnings allowed)
+        run: npm run lint
+
+  image:
+    name: image (docker build, linux/arm64)
+    # Native arm64 runner (free for public repositories) — the dev host is
+    # arm64 (deployment_dev.md), and an emulated build under QEMU on
+    # ubuntu-latest would blow the runtime budget on the frontend stage.
+    # Fallback if this label ever becomes unavailable: `ubuntu-latest` plus
+    # a docker/setup-qemu-action@v3 step before setup-buildx.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build only — nothing is pushed from CI. Layers are cached in the
+      # GitHub Actions cache (mode=max keeps intermediate stages too, so a
+      # code-only change reuses the dependency layer).
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/arm64
+          push: false
+          load: false
+          tags: stockalert/app:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

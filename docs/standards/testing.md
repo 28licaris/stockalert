@@ -31,6 +31,29 @@ poetry run pytest -m "not integration"   # unit only (default)
 poetry run pytest -m integration         # live-service
 ```
 
+## CI
+
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs on every
+pull request into `main` and on every push to `main`. Three jobs, in
+parallel; all three must be green before a merge:
+
+| Job | What runs | What it proves |
+|---|---|---|
+| `backend` | Python 3.12, Poetry venv from `poetry.lock`, `pytest -m "not integration" -q` | Every unit + contract test passes with **no** credentials and no live service |
+| `frontend` | Node 20, `npm ci`, `npm run typecheck`, `npm run lint` | The cockpit compiles and is lint-clean at zero warnings |
+| `image` | `docker buildx build --platform linux/arm64` of the repo `Dockerfile`, no push | The deployable image still builds |
+
+**Integration tests never run in CI.** `-m integration` is a manual run on
+an operator's machine with live ClickHouse / PostgreSQL / S3 / provider
+credentials (`poetry run pytest -m integration`). That is why the
+`integration` marker is mandatory on every live-service test: an unmarked
+one turns the `backend` job red for everyone.
+
+A new push to the same PR cancels the run in flight; runs on `main` are
+never cancelled. Frontend `codegen` is not run in CI (it needs a live API);
+`tests/contract/test_openapi_types_in_sync.py` is what catches a stale
+`types.gen.ts` instead.
+
 ## Key fixture
 
 `clickhouse_ready` (session-scoped, in repository-root `conftest.py`) skips
