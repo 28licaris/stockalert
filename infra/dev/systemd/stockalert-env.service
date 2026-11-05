@@ -1,0 +1,22 @@
+# Oneshot: SSM Parameter Store + app.env + release.env → /opt/stockalert/.env (0600).
+# Runs before stockalert.service on every boot so a rotated secret (Schwab
+# refresh token, Stripe key) lands with a plain `systemctl restart stockalert`.
+# Spec: docs/operations/deployment_dev.md §7.
+[Unit]
+Description=StockAlert — render /opt/stockalert/.env from SSM Parameter Store
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# STOCKALERT_ENV, AWS_REGION, OPS_BUCKET, LOG_GROUP — written by bootstrap.sh
+EnvironmentFile=/etc/stockalert.conf
+ExecStart=/opt/stockalert/bin/render_env.sh
+# IMDS/SSM can lag a few seconds right after boot: retry, do not give up.
+Restart=on-failure
+RestartSec=10s
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target

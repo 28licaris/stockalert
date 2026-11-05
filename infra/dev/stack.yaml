@@ -1,0 +1,465 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  StockAlert single-box environment (docs/operations/deployment_dev.md §7):
+  one Graviton EC2 running Docker Compose behind Caddy, plus the ops bucket,
+  ECR repository, log group, DLM snapshots, SNS alerts and a Route 53 health
+  check. Parameterised by EnvironmentName so prod is a second stack, not a fork.
+
+# Deploy (dev):
+#   aws cloudformation deploy --profile stockalert-admin --region us-east-1 \
+#     --stack-name stockalert-dev --template-file infra/dev/stack.yaml \
+#     --capabilities CAPABILITY_NAMED_IAM \
+#     --parameter-overrides EnvironmentName=dev LakeBucket=<STOCK_LAKE_BUCKET> \
+#       AlertEmail=<operator@…> CognitoUserPoolId=us-east-1_NxTarvrk4 \
+#       VpcId=vpc-… SubnetId=subnet-…
+# The instance's user-data waits for `scripts/deploy/release.sh` to sync
+# infra/dev/ into the ops bucket, then runs bootstrap.sh. No SSH, no key pair:
+# `aws ssm start-session --target <InstanceId>`.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedPattern: "[a-z0-9-]+"
+    Description: dev | prod — prefixes every resource name and the SSM path /stockalert/<env>/
+  LakeBucket:
+    Type: String
+    AllowedPattern: "[a-z0-9.-]+"
+    Description: Existing S3 lake bucket (STOCK_LAKE_BUCKET). Athena results live under athena-results/ in it.
+  AlertEmail:
+    Type: String
+    AllowedPattern: "[^@\\s]+@[^@\\s]+"
+    Description: Operator email subscribed to the alerts SNS topic (confirm the subscription email).
+  CognitoUserPoolId:
+    Type: String
+    AllowedPattern: "[a-z0-9-]+_[A-Za-z0-9]+"
+    Description: Existing Cognito user pool (stockalert-auth-<env> stack), e.g. us-east-1_NxTarvrk4
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: The default VPC (aws ec2 describe-vpcs --filters Name=is-default,Values=true)
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: A public subnet in VpcId (auto-assign public IP is not needed; an EIP is attached)
+  InstanceType:
+    Type: String
+    Default: t4g.large
+    AllowedValues: [t4g.large, t4g.xlarge]
+    Description: §7 sizing note — step to t4g.xlarge only if the worker OOMs on a nightly
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: Amazon Linux 2023 arm64 (resolved from the public SSM alias at deploy time)
+  RootVolumeSizeGiB:
+    Type: Number
+    Default: 100
+    MinValue: 50
+  EcrRepositoryName:
+    Type: String
+    Default: stockalert/app
+    AllowedPattern: "[a-z0-9/_-]+"
+  CreateEcrRepository:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: One image serves every environment, so only the first stack (dev) creates the repository; prod passes false.
+
+Conditions:
+  CreateEcr: !Equals [!Ref CreateEcrRepository, "true"]
+
+Resources:
+  # ── Storage / registry / logs / alerts ─────────────────────────────────────
+  OpsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub stockalert-${EnvironmentName}-ops-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-pg-dumps-30d
+            Status: Enabled
+            Prefix: pg_dump/
+            ExpirationInDays: 30
+          - Id: abort-incomplete-multipart-7d
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - { Key: application, Value: stockalert }
+        - { Key: environment, Value: !Ref EnvironmentName }
+
+  EcrRepository:
+    Type: AWS::ECR::Repository
+    Condition: CreateEcr
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Ref EcrRepositoryName
+      ImageTagMutability: MUTABLE   # the moving <env> tag
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "keep the last 10 images",
+                "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 10 },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+      Tags:
+        - { Key: application, Value: stockalert }
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /stockalert/${EnvironmentName}
+      RetentionInDays: 14
+
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub stockalert-${EnvironmentName}-alerts
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+
+  # ── Network ────────────────────────────────────────────────────────────────
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub stockalert-${EnvironmentName}-box
+      GroupDescription: StockAlert box — HTTPS in, ACME/redirect on 80, no SSH (SSM Session Manager)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80,  ToPort: 80,  CidrIp: 0.0.0.0/0, Description: ACME HTTP-01 + redirect to 443 }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTPS }
+        - { IpProtocol: udp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTP/3 (Caddy) }
+      SecurityGroupEgress:
+        - { IpProtocol: "-1", CidrIp: 0.0.0.0/0, Description: "all outbound (providers, AWS APIs, ECR, Let's Encrypt)" }
+      Tags:
+        - { Key: Name, Value: !Sub "stockalert-${EnvironmentName}-box" }
+
+  ElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - { Key: Name, Value: !Sub "stockalert-${EnvironmentName}" }
+
+  ElasticIpAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt ElasticIp.AllocationId
+      InstanceId: !Ref Instance
+
+  # ── IAM (§7 policy) ────────────────────────────────────────────────────────
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub stockalert-${EnvironmentName}-box
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: stockalert-box
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: LakeAndOpsBuckets
+                Effect: Allow
+                Action: [s3:ListBucket, s3:GetBucketLocation, s3:ListBucketMultipartUploads]
+                Resource:
+                  - !Sub arn:aws:s3:::${LakeBucket}
+                  - !GetAtt OpsBucket.Arn
+              - Sid: LakeAndOpsObjects
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:AbortMultipartUpload, s3:ListMultipartUploadParts]
+                Resource:
+                  - !Sub arn:aws:s3:::${LakeBucket}/*
+                  - !Sub ${OpsBucket.Arn}/*
+              - Sid: GlueCatalog
+                Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetDatabases
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:SearchTables
+                  - glue:CreateTable
+                  - glue:UpdateTable
+                  - glue:DeleteTable
+                  - glue:GetPartition
+                  - glue:GetPartitions
+                  - glue:BatchGetPartition
+                  - glue:CreatePartition
+                  - glue:BatchCreatePartition
+                  - glue:UpdatePartition
+                  - glue:DeletePartition
+                  - glue:BatchDeletePartition
+                Resource:
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/equities
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/futures
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/options
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/stock_lake
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/equities/*
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/futures/*
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/options/*
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/stock_lake/*
+              - Sid: AthenaCoverageQueries
+                Effect: Allow
+                Action: [athena:StartQueryExecution, athena:GetQueryExecution, athena:GetQueryResults, athena:StopQueryExecution, athena:GetWorkGroup]
+                Resource: !Sub arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/primary
+              - Sid: SsmParameters
+                Effect: Allow
+                Action: [ssm:GetParametersByPath, ssm:GetParameter, ssm:GetParameters]
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/stockalert/${EnvironmentName}/*
+              - Sid: SsmSecureStringDecrypt
+                Effect: Allow
+                Action: kms:Decrypt
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+              - Sid: EcrLogin
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: EcrPull
+                Effect: Allow
+                Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer, ecr:BatchCheckLayerAvailability]
+                Resource: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepositoryName}
+              - Sid: ContainerLogs
+                Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents, logs:DescribeLogStreams]
+                Resource: !GetAtt LogGroup.Arn
+              - Sid: CloudWatchAgentMetrics
+                Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: CWAgent
+              - Sid: CognitoTotpEnrolment
+                Effect: Allow
+                Action: [cognito-idp:GetUser, cognito-idp:AssociateSoftwareToken, cognito-idp:VerifySoftwareToken, cognito-idp:SetUserMFAPreference]
+                Resource: !Sub arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${CognitoUserPoolId}
+      Tags:
+        - { Key: application, Value: stockalert }
+        - { Key: environment, Value: !Ref EnvironmentName }
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub stockalert-${EnvironmentName}-box
+      Roles: [!Ref InstanceRole]
+
+  # ── Compute ────────────────────────────────────────────────────────────────
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub stockalert-${EnvironmentName}-box
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt InstanceProfile.Arn
+        SecurityGroupIds: [!Ref SecurityGroup]
+        MetadataOptions:
+          HttpEndpoint: enabled
+          HttpTokens: required          # IMDSv2 only
+          HttpPutResponseHopLimit: 2    # containers sit one hop behind the docker bridge
+        Monitoring:
+          Enabled: false
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeType: gp3
+              VolumeSize: !Ref RootVolumeSizeGiB
+              Encrypted: true
+              DeleteOnTermination: true
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - { Key: Name, Value: !Sub "stockalert-${EnvironmentName}" }
+              - { Key: application, Value: stockalert }
+              - { Key: environment, Value: !Ref EnvironmentName }
+          - ResourceType: volume
+            Tags:
+              - { Key: Name, Value: !Sub "stockalert-${EnvironmentName}-root" }
+              - { Key: stockalert:backup, Value: !Sub "daily-${EnvironmentName}" }   # DLM target
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            # user-data shim: write the box config, wait for infra/dev/ in the ops
+            # bucket (scripts/deploy/release.sh syncs it), then run bootstrap.sh.
+            # Everything else lives in versioned files, not here.
+            set -euo pipefail
+            exec > >(tee -a /var/log/stockalert-userdata.log) 2>&1
+            echo "$(date -u +%FT%TZ) user-data: start env=${EnvironmentName}"
+            cat > /etc/stockalert.conf <<CONF
+            STOCKALERT_ENV=${EnvironmentName}
+            AWS_REGION=${AWS::Region}
+            OPS_BUCKET=${OpsBucket}
+            LOG_GROUP=/stockalert/${EnvironmentName}
+            CONF
+            chmod 0644 /etc/stockalert.conf
+            mkdir -p /opt/stockalert
+            for i in $(seq 1 1080); do
+              if aws s3 ls "s3://${OpsBucket}/infra/bootstrap.sh" --region ${AWS::Region} >/dev/null 2>&1; then break; fi
+              echo "$(date -u +%FT%TZ) user-data: waiting for s3://${OpsBucket}/infra/bootstrap.sh ($i/1080)"
+              sleep 10
+            done
+            aws s3 ls "s3://${OpsBucket}/infra/bootstrap.sh" --region ${AWS::Region} >/dev/null \
+              || { echo "ERROR: infra never arrived in s3://${OpsBucket}/infra/ — run scripts/deploy/release.sh"; exit 1; }
+            aws s3 sync "s3://${OpsBucket}/infra/" /opt/stockalert/ --region ${AWS::Region} --exclude stack.yaml
+            chmod +x /opt/stockalert/bootstrap.sh /opt/stockalert/bin/*.sh
+            /opt/stockalert/bootstrap.sh
+            echo "$(date -u +%FT%TZ) user-data: done"
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      SubnetId: !Ref SubnetId
+      Tags:
+        - { Key: Name, Value: !Sub "stockalert-${EnvironmentName}" }
+
+  # ── Backups: daily root-volume snapshot, keep 7 ────────────────────────────
+  DlmRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub stockalert-${EnvironmentName}-dlm
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: dlm.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole
+
+  DailySnapshotPolicy:
+    Type: AWS::DLM::LifecyclePolicy
+    Properties:
+      Description: !Sub StockAlert ${EnvironmentName} — daily root volume snapshot, keep 7
+      State: ENABLED
+      ExecutionRoleArn: !GetAtt DlmRole.Arn
+      PolicyDetails:
+        PolicyType: EBS_SNAPSHOT_MANAGEMENT
+        ResourceTypes: [VOLUME]
+        TargetTags:
+          - { Key: stockalert:backup, Value: !Sub "daily-${EnvironmentName}" }
+        Schedules:
+          - Name: daily-0900utc
+            CopyTags: true
+            CreateRule:
+              Interval: 24
+              IntervalUnit: HOURS
+              Times: ["09:00"]
+            RetainRule:
+              Count: 7
+      Tags:
+        - { Key: application, Value: stockalert }
+        - { Key: environment, Value: !Ref EnvironmentName }
+
+  # ── Health: Route 53 endpoint check → CloudWatch alarm → SNS ───────────────
+  # No hosted zone needed. The hostname is app.<eip-with-dashes>.sslip.io
+  # (§13) — built here from the EIP so it matches what render_env.sh derives.
+  HealthCheck:
+    Type: AWS::Route53::HealthCheck
+    Properties:
+      HealthCheckConfig:
+        Type: HTTPS
+        IPAddress: !Ref ElasticIp
+        FullyQualifiedDomainName: !Join ["", ["app.", !Join ["-", !Split [".", !Ref ElasticIp]], ".sslip.io"]]
+        Port: 443
+        ResourcePath: /health
+        RequestInterval: 30
+        FailureThreshold: 3
+        EnableSNI: true
+      HealthCheckTags:
+        - { Key: Name, Value: !Sub "stockalert-${EnvironmentName}-health" }
+
+  HealthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub stockalert-${EnvironmentName}-health
+      AlarmDescription: https://<DEV_HOST>/health failing from Route 53 checkers for 3 minutes
+      Namespace: AWS/Route53
+      MetricName: HealthCheckStatus
+      Dimensions:
+        - { Name: HealthCheckId, Value: !Ref HealthCheck }
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlertsTopic]
+      OKActions: [!Ref AlertsTopic]
+
+  DiskAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub stockalert-${EnvironmentName}-disk
+      AlarmDescription: Root volume above 85% (CloudWatch agent; bootstrap.sh configures it)
+      Namespace: CWAgent
+      MetricName: disk_used_percent
+      Dimensions:
+        - { Name: InstanceId, Value: !Ref Instance }
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 85
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: breaching   # no metric = agent down = also worth an email
+      AlarmActions: [!Ref AlertsTopic]
+      OKActions: [!Ref AlertsTopic]
+
+Outputs:
+  InstanceId:
+    Value: !Ref Instance
+    Description: aws ssm start-session --target <this>
+  ElasticIp:
+    Value: !Ref ElasticIp
+  DevHost:
+    Value: !Join ["", ["app.", !Join ["-", !Split [".", !Ref ElasticIp]], ".sslip.io"]]
+    Description: DEV_HOST — the Cognito callback and Stripe webhook URLs derive from it
+  OpsBucketName:
+    Value: !Ref OpsBucket
+    Description: infra/ (synced config), pg_dump/ (30-day), clickhouse-migrate/ (one-time volume tar), ssm-output/
+  EcrRepositoryUri:
+    Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EcrRepositoryName}
+  LogGroupName:
+    Value: !Ref LogGroup
+  AlertsTopicArn:
+    Value: !Ref AlertsTopic
+  SsmParameterPath:
+    Value: !Sub /stockalert/${EnvironmentName}/
+    Description: scripts/deploy/put_param.sh writes SecureStrings here; render_env.sh reads them at boot
+  SecurityGroupId:
+    Value: !Ref SecurityGroup

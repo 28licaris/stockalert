@@ -1,0 +1,33 @@
+# Build context for the two-stage Dockerfile (deployment_dev.md §6).
+# Everything the image does not need stays out: smaller context, no secrets,
+# no 1 GiB frontend/node_modules, no local data.
+.git
+.github
+.claude
+.vscode
+.agents
+.cache
+.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.env*
+!.env.example
+**/.schwab_refresh_token
+secrets/
+data/
+!data/market_events_seed.json
+ewt/
+docs/
+tests/
+logs/
+*.log
+*.pdf
+frontend/node_modules
+frontend/dist
+app/static/dist
+client-python/
+docker-compose.yml
+infra/
+Dockerfile
+.dockerignore

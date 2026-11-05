@@ -201,3 +201,9 @@ adjustment is computed at read time, and lake maintenance runs via Athena.
 Self-hosted ClickHouse.
 Secrets via `.env` (gitignored; template in `.env.example`, docs in
 `CONFIG.md`).
+Deployment: one Graviton EC2 per environment running Docker Compose
+(`api` + `worker` from one image, `caddy`, `clickhouse`, `postgres`) —
+CloudFormation + box files in [`infra/dev/`](infra/dev/README.md), Mac-side
+release scripts in [`scripts/deploy/`](scripts/deploy/README.md), spec in
+[`docs/operations/deployment_dev.md`](docs/operations/deployment_dev.md).
+Box secrets come from SSM Parameter Store (`/stockalert/<env>/`), not `.env`.
