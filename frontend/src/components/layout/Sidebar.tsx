@@ -34,7 +34,10 @@ export function Sidebar({
   const user = useCurrentUser();
   const isOperator = user.permissions.includes("operator.access");
   const visible: NavItem[] = NAV_ITEMS.filter(
-    (item) => flags[item.flag] === true && (!item.adminOnly || isOperator),
+    (item) =>
+      flags[item.flag] === true &&
+      (!item.adminOnly || isOperator) &&
+      !(item.hideForOperator && isOperator),
   );
 
   const grouped = CATEGORY_ORDER.map((cat) => ({
