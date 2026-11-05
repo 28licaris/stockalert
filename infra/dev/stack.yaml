@@ -365,7 +365,7 @@ Resources:
   DailySnapshotPolicy:
     Type: AWS::DLM::LifecyclePolicy
     Properties:
-      Description: !Sub StockAlert ${EnvironmentName} - daily root volume snapshot, keep 7
+      Description: !Sub StockAlert ${EnvironmentName} daily root volume snapshot keep 7
       State: ENABLED
       ExecutionRoleArn: !GetAtt DlmRole.Arn
       PolicyDetails:
