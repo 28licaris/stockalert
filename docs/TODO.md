@@ -256,3 +256,18 @@ project has.
 - Same question for `ewt-email-scan`, which needs inbox access — that may be
   a reason to keep it local rather than move it.
 
+## Public marketing landing page (AWS deployment)
+Not built. Decided 2026-07-05 and still the plan of record:
+[`product/customer_surfaces.md`](product/customer_surfaces.md) Part 2.
+
+- **Separate static site on S3 + CloudFront**, deliberately decoupled from the
+  app: no coupling to auth or customer data, so minimal attack surface, and
+  cheapest to run.
+- Apex / `www` serves marketing; the app stays on `app.` / `/app`.
+- Sections: hero, features (alerts, backtesting, the honest forward track
+  record, AI assistant), pricing → CTA into Cognito signup / Stripe checkout.
+  **Both of those already exist**, so this is a static site plus two links.
+- Deploy is a bucket sync + CloudFront invalidation; no server.
+- Sequence it with the rest of the AWS work — it shares the CloudFront/DNS
+  decisions, and doing it separately means making them twice.
+
