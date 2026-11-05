@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 
 from app.api.auth_dependencies import require_operator
+from app.api.auth_middleware import SessionGateMiddleware, resolve_session_principal
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -913,6 +914,26 @@ async def validation_exception_handler(
 # ─────────────────────────────────────────────────────────────────────
 
 _V1 = "/api/v1"
+
+# Deny-by-default session gate (deployment_dev.md §5, C1). Sits in front of
+# every router below: with AUTH_ENABLED=true, /api/, /cockpit/, /ws/ and /mcp
+# need a session cookie (401 otherwise); /health, /auth/*, /app/* and the
+# Stripe webhook are allowlisted. With AUTH_ENABLED=false it is a no-op.
+# The flag is read per request so tests can flip it with monkeypatch.
+# Operator routers keep `require_operator` on top (403 for customers).
+
+
+def _session_gate_enabled() -> bool:
+    from app.config import settings
+
+    return settings.auth_enabled
+
+
+app.add_middleware(
+    SessionGateMiddleware,
+    is_enabled=_session_gate_enabled,
+    resolve_principal=resolve_session_principal,
+)
 
 app.include_router(
     routes_health.router,
