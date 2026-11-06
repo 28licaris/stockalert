@@ -63,3 +63,25 @@ def verify_coverage(
             problems.append(Problem(symbol=e.symbol, kind="too_few_rows",
                                     detail=f"{a.rows} rows, expected at least {int(e.rows * rows_tolerance)} of {e.rows}"))
     return problems
+
+
+def split_window(since: date, until: date, max_years: int = 3) -> list[tuple[date, date]]:
+    """Split [since, until] into consecutive inclusive segments of at most ``max_years``.
+
+    Rebuilding a symbol's whole history in one call holds all of it in memory at once
+    (measured 2026-11-05: ~3.5 GB for one 20-year symbol), so three parallel workers
+    exceeded the box's cap and thrashed. Bounded segments keep the memory per worker small.
+    """
+    if since > until:
+        raise ValueError(f"since {since} is after until {until}")
+    out: list[tuple[date, date]] = []
+    start = since
+    while start <= until:
+        try:
+            nxt = start.replace(year=start.year + max_years)
+        except ValueError:  # Feb 29 -> Feb 28
+            nxt = start.replace(year=start.year + max_years, day=28)
+        end = min(until, nxt - timedelta(days=1))
+        out.append((start, end))
+        start = end + timedelta(days=1)
+    return out
