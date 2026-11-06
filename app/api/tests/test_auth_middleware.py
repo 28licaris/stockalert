@@ -29,6 +29,7 @@ from app.api import auth_dependencies
 from app.api.auth_middleware import (
     AUTH_REQUIRED_CODE,
     WEBSOCKET_POLICY_VIOLATION,
+    FORBIDDEN_CODE,
     SessionGateMiddleware,
     classify_path,
 )
@@ -228,8 +229,14 @@ def test_enabled_open_path_is_not_this_gates_business() -> None:
     assert resolver.calls == []
 
 
-@pytest.mark.parametrize("path", GATED_HTTP)
-def test_enabled_valid_session_passes(path: str) -> None:
+# Gated, but also customer-allowed by the role policy (CUSTOMER_RULES).
+CUSTOMER_HTTP = ["/api/v1/bars", "/cockpit/assistant/chat"]
+# Gated and operator-only: a signed-in customer is refused with 403.
+OPERATOR_ONLY_HTTP = ["/mcp", "/mcp/messages"]
+
+
+@pytest.mark.parametrize("path", CUSTOMER_HTTP)
+def test_enabled_valid_customer_session_passes(path: str) -> None:
     resolver = RecordingResolver(_principal())
     client = TestClient(_gated_app(enabled=True, resolver=resolver))
     client.cookies.set("stockalert_session", SESSION_TOKEN)
@@ -238,6 +245,30 @@ def test_enabled_valid_session_passes(path: str) -> None:
 
     assert response.status_code == 200, response.text
     assert resolver.calls == [(path, SESSION_TOKEN)]
+
+
+@pytest.mark.parametrize("path", OPERATOR_ONLY_HTTP)
+def test_enabled_customer_session_is_refused_on_operator_only_path(path: str) -> None:
+    resolver = RecordingResolver(_principal(operator=False))
+    client = TestClient(_gated_app(enabled=True, resolver=resolver))
+    client.cookies.set("stockalert_session", SESSION_TOKEN)
+
+    response = client.get(path)
+
+    assert response.status_code == 403, response.text
+    body = response.json()
+    assert body["error"] == FORBIDDEN_CODE
+    assert body["code"] == FORBIDDEN_CODE
+    assert response.headers["X-Error-Code"] == FORBIDDEN_CODE
+
+
+@pytest.mark.parametrize("path", OPERATOR_ONLY_HTTP)
+def test_enabled_operator_session_passes_operator_only_path(path: str) -> None:
+    resolver = RecordingResolver(_principal(operator=True))
+    client = TestClient(_gated_app(enabled=True, resolver=resolver))
+    client.cookies.set("stockalert_session", SESSION_TOKEN)
+
+    assert client.get(path).status_code == 200
 
 
 def test_enabled_websocket_without_cookie_is_closed_before_accept() -> None:
@@ -253,8 +284,21 @@ def test_enabled_websocket_without_cookie_is_closed_before_accept() -> None:
     assert resolver.calls == [("/ws/signals", "")]
 
 
-def test_enabled_websocket_with_valid_session_connects() -> None:
-    resolver = RecordingResolver(_principal())
+def test_enabled_websocket_customer_session_is_refused() -> None:
+    resolver = RecordingResolver(_principal(operator=False))
+    client = TestClient(_gated_app(enabled=True, resolver=resolver))
+    client.cookies.set("stockalert_session", SESSION_TOKEN)
+
+    with pytest.raises(WebSocketDisconnect) as excinfo:
+        with client.websocket_connect("/ws/signals"):
+            pass  # pragma: no cover — the handshake must be refused
+
+    assert excinfo.value.code == WEBSOCKET_POLICY_VIOLATION
+    assert excinfo.value.reason == FORBIDDEN_CODE
+
+
+def test_enabled_websocket_with_operator_session_connects() -> None:
+    resolver = RecordingResolver(_principal(operator=True))
     client = TestClient(_gated_app(enabled=True, resolver=resolver))
     client.cookies.set("stockalert_session", SESSION_TOKEN)
 
@@ -478,8 +522,8 @@ def test_real_app_operator_session_passes_gate_and_operator_route(
     assert jobs.json() == {"jobs": []}
 
 
-def test_real_app_valid_session_websocket_connects(real_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
-    _enable_auth(monkeypatch, real_app, _principal())
+def test_real_app_operator_session_websocket_connects(real_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    _enable_auth(monkeypatch, real_app, _principal(operator=True))
     client = TestClient(real_app)
     client.cookies.set("stockalert_session", SESSION_TOKEN)
 

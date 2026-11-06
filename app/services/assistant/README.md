@@ -27,7 +27,7 @@ cadence, different output shape, different cache file.
 | [cache.py](cache.py) | `ResponseCache` — SQLite, keyed by prompt + model + system-prompt hash |
 | [models.py](models.py) | `ModelRegistry` — default vs extended-thinking model choice |
 | [prompts/](prompts/README.md) | Versioned system prompts (`v1.md`, `v2.md`, …) behind a registry — `current()` resolves the active version, whose hash is part of the cache key |
-| [policy.py](policy.py) | `ToolPolicy` + `DevModeToolPolicy` — allowlist + write-tool flag |
+| [policy.py](policy.py) | `ToolPolicy` + `DevModeToolPolicy` (all read tools) + `RoleAwareToolPolicy` (customers get only `CUSTOMER_TOOLS`; every MCP tool must be classified in `CUSTOMER_TOOLS` or `OPERATOR_TOOLS`, enforced by a test) |
 | [runner.py](runner.py) | `MCPToolRunner` — MCP dispatch + result truncation |
 | [store.py](store.py) | `ConversationStore` — tenant-scoped reads/writes against ClickHouse |
 | [stream.py](stream.py) | SSE event encoder (`encode_sse`, `event_stream`) |
@@ -68,7 +68,10 @@ Per [`service_modules.md`](../../../docs/standards/service_modules.md):
 
 - **Contract first.** Depend on the Protocol, not the class.
 - **Tenant-scoped reads.** Every storage query filters by
-  `principal.tenant_id`. Access model:
+  `principal.tenant_id`. With auth on, `routes_assistant` passes the caller's
+  session principal (so a tenant only sees its own conversations); the tool
+  allowlist is enforced both when building the prompt and again at execution
+  time (the model can emit any tool name). Access model:
   [`docs/product/access_control.md`](../../../docs/product/access_control.md).
 - **No silent failures.** Anthropic and MCP errors surface as `ERROR` events in
   the stream *and* as structured log lines.

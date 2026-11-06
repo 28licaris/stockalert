@@ -381,6 +381,7 @@ class DefaultAssistantService:
 
         # Build tool defs from the policy allowlist -------------------------------------
         tool_defs: list[dict[str, Any]] = []
+        allowed: list[str] = []
         if self._policy and self._runner:
             allowed = self._policy.allowed_for(principal)
             tool_defs = await self._runner.get_tool_defs(allowed)
@@ -504,7 +505,22 @@ class DefaultAssistantService:
                 # Dispatch tools and collect results
                 tool_result_content: list[dict[str, Any]] = []
                 for tu in result.tool_uses:
-                    tr: ToolResult = await self._runner.run(tu.id, tu.name, tu.args)
+                    # Enforce the allowlist at EXECUTION time too: the prompt
+                    # only advertises allowed tools, but the model can emit any
+                    # name (hallucinated or prompt-injected).
+                    if self._policy is not None and tu.name not in allowed:
+                        logger.warning(
+                            "assistant.tool denied conv=%s principal=%s tool=%s",
+                            conversation_id, principal.user_id, tu.name,
+                        )
+                        tr = ToolResult(
+                            tool_call_id=tu.id,
+                            name=tu.name,
+                            content="{}",
+                            error=f"tool {tu.name!r} is not available to this account",
+                        )
+                    else:
+                        tr = await self._runner.run(tu.id, tu.name, tu.args)
                     yield AssistantStreamEvent(
                         type=StreamEventType.TOOL_RESULT,
                         payload={

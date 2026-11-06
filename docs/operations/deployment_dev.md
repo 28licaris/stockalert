@@ -225,8 +225,10 @@ C1 adds one deny-by-default ASGI middleware, active only when
 without a valid session gets `401 {"error":"authentication_required"}`.
 Allowlist: `/health`, `/auth/*`, `/app/*` (static SPA), `/api/v1/customer/billing/webhook`
 (Stripe signature is its auth). Built as PR #43. Operator routers keep `require_operator` on
-top. Subscription-entitlement gating of premium pages stays a TODO; in dev
-every signed-in customer sees everything.
+top. **Follow-up (role policy):** the gate is also default-deny for non-operators,
+with an explicit customer-allowed route table; see
+[`access_control.md`](../product/access_control.md). Subscription-entitlement
+gating of premium pages stays a TODO.
 
 ### Expected behaviour matrix (this is acceptance test §10.3–10.4)
 

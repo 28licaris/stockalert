@@ -18,6 +18,74 @@ from app.services.assistant.contract import Principal
 WRITE_TOOLS: frozenset[str] = frozenset({"run_backtest"})
 
 
+# Tools a non-operator (customer) may use. DEFAULT-DENY: a tool absent from this
+# set is invisible to customers. Mirrors the customer REST surface
+# (app/api/auth_middleware.py CUSTOMER_RULES): market data, options hot tier,
+# Elliott Wave, news, instruments. Lake/ops/health tools, the shared (operator)
+# watchlists, shared backtest registry, universe screener and the
+# sector-theme writers stay operator-only.
+CUSTOMER_TOOLS: frozenset[str] = frozenset(
+    {
+        "compute_indicator",
+        "compute_indicators",
+        "evaluate_wave_targets",
+        "get_bars_for_chart",
+        "get_bars_in_range",
+        "get_chart_data",
+        "get_economic_data",
+        "get_instruments",
+        "get_latest_bar_per_symbol",
+        "get_latest_option_contracts",
+        "get_latest_option_gamma_exposure",
+        "get_market_hours",
+        "get_news",
+        "get_option_gamma_exposure",
+        "get_price_stats",
+        "get_quote",
+        "get_quotes",
+        "get_recent_bars",
+        "get_recent_signals",
+        "get_signals_by_symbol",
+        "get_wave_state",
+        "list_sector_themes",
+        "list_wave_alerts",
+        "scan_intraday_wave_alerts",
+        "search_instrument",
+    }
+)
+
+# Explicitly operator-only (classification is checked by a test so a newly
+# registered MCP tool cannot silently appear in neither set).
+OPERATOR_TOOLS: frozenset[str] = frozenset(
+    {
+        "create_sector_theme",
+        "delete_sector_theme",
+        "find_intraday_gaps",
+        "get_adjusted_bars",
+        "get_bronze_bars",
+        "get_bronze_table_stats",
+        "get_corp_actions",
+        "get_coverage",
+        "get_cross_provider_diff",
+        "get_health",
+        "get_lake_freshness",
+        "get_latest_trading_day",
+        "get_movers",
+        "get_option_contracts",
+        "get_symbol_coverage",
+        "get_watchlist",
+        "get_watchlist_members",
+        "list_adjusted_symbols",
+        "list_bronze_symbols",
+        "list_lake_snapshots",
+        "list_strategy_runs",
+        "list_watchlists",
+        "run_backtest",
+        "scan_universe",
+    }
+)
+
+
 @runtime_checkable
 class ToolPolicy(Protocol):
     """Decides which tools a principal may see and invoke."""
@@ -67,4 +135,33 @@ class DevModeToolPolicy:
         return name in WRITE_TOOLS
 
 
-__all__ = ["DevModeToolPolicy", "ToolPolicy", "WRITE_TOOLS"]
+class RoleAwareToolPolicy:
+    """Production policy: operators get ``inner``'s tools; everyone else gets
+    only the :data:`CUSTOMER_TOOLS` subset of them.
+
+    "Operator" is read from ``principal.is_operator`` (set by
+    ``routes_assistant`` from the ``operator.access`` permission). A principal
+    without the attribute is treated as a customer — fail closed.
+    """
+
+    def __init__(self, inner: ToolPolicy) -> None:
+        self._inner = inner
+
+    def allowed_for(self, principal: Principal) -> list[str]:
+        allowed = self._inner.allowed_for(principal)
+        if getattr(principal, "is_operator", False):
+            return allowed
+        return [n for n in allowed if n in CUSTOMER_TOOLS]
+
+    def is_write_tool(self, name: str) -> bool:
+        return self._inner.is_write_tool(name)
+
+
+__all__ = [
+    "CUSTOMER_TOOLS",
+    "OPERATOR_TOOLS",
+    "DevModeToolPolicy",
+    "RoleAwareToolPolicy",
+    "ToolPolicy",
+    "WRITE_TOOLS",
+]
