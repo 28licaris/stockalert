@@ -183,3 +183,9 @@ class IdentityService:
 
     def get_current_user(self, principal: Principal) -> CurrentUserResponse | None:
         return self._repository.get_current_user(principal)
+
+    def update_display_name(
+        self, principal: Principal, display_name: str
+    ) -> CurrentUserResponse | None:
+        """Rename the caller (only ever the caller: the id comes from the session)."""
+        return self._repository.update_display_name(principal, display_name)

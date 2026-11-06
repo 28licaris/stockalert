@@ -6,7 +6,11 @@ import {
   type ReactNode,
 } from "react";
 import { DEV_PRINCIPAL, type Principal } from "./principal";
-import { endSession, fetchCurrentUser } from "./client";
+import {
+  endSession,
+  fetchCurrentUser,
+  updateDisplayName as saveDisplayName,
+} from "./client";
 import {
   AuthContext,
   type AuthContextValue,
@@ -89,9 +93,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const updateDisplayName = useCallback(async (displayName: string) => {
+    if (isDevPrincipal || isPreview) {
+      // No backend session in these modes: rename locally only.
+      setUser((current) => (current ? { ...current, displayName } : current));
+      return;
+    }
+    // Throws AuthRequestError on failure; the caller shows the message.
+    const updated = await saveDisplayName(displayName);
+    setUser(updated);
+  }, []);
+
   const value = useMemo<AuthContextValue>(
-    () => ({ status, user, error, signingOut, refresh, signOut }),
-    [status, user, error, signingOut, refresh, signOut],
+    () => ({
+      status,
+      user,
+      error,
+      signingOut,
+      refresh,
+      signOut,
+      updateDisplayName,
+    }),
+    [status, user, error, signingOut, refresh, signOut, updateDisplayName],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

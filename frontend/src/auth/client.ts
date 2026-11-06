@@ -62,7 +62,7 @@ function readCookie(name: string): string | null {
 
 async function authenticatedMutation(
   path: string,
-  method: "POST" | "DELETE",
+  method: "POST" | "DELETE" | "PATCH",
   body?: unknown,
 ): Promise<Response> {
   const csrfToken = readCookie("stockalert_csrf");
@@ -83,6 +83,25 @@ async function authenticatedMutation(
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+}
+
+export async function updateDisplayName(displayName: string): Promise<Principal> {
+  const response = await authenticatedMutation("/api/v1/customer/me", "PATCH", {
+    display_name: displayName,
+  });
+  if (response.status === 422) {
+    throw new AuthRequestError(
+      "Use 1 to 80 characters, with no line breaks.",
+      response.status,
+    );
+  }
+  if (!response.ok) {
+    throw new AuthRequestError(
+      "We couldn't save your name. Please try again.",
+      response.status,
+    );
+  }
+  return toPrincipal((await response.json()) as CurrentUserDto);
 }
 
 export async function endSession(): Promise<string> {

@@ -15,6 +15,8 @@ export interface AuthContextValue {
   signingOut: boolean;
   refresh: () => Promise<void>;
   signOut: () => Promise<void>;
+  /** Rename the signed-in user (display name only) and refresh the cached user. */
+  updateDisplayName: (displayName: string) => Promise<void>;
 }
 
 export const AuthContext = createContext<AuthContextValue | null>(null);

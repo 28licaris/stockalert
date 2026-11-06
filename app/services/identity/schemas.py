@@ -329,5 +329,18 @@ class CurrentUserResponse(BaseModel):
     entitlements: frozenset[str]
 
 
+class UpdateDisplayNameRequest(BaseModel):
+    """Body of ``PATCH /customer/me``: the name shown in the UI (not the email).
+
+    Control characters are rejected with a ``pattern`` constraint rather than a
+    custom validator: a ``ValueError`` in the error context is not JSON
+    serialisable, which would turn a bad input into a 500 instead of a 422.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    display_name: str = Field(min_length=1, max_length=80, pattern=r"^[^\x00-\x1f\x7f]+$")
+
+
 class LogoutResponse(BaseModel):
     redirect_url: str

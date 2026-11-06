@@ -27,7 +27,9 @@ session token in a secure HTTP-only cookie. PostgreSQL stores its SHA-256
 lookup digest, never the raw token.
 
 Browser routes are `/auth/login`, `/auth/callback`, and `/auth/logout`.
-`/api/v1/customer/me` proves the authenticated customer boundary;
+`/api/v1/customer/me` proves the authenticated customer boundary (`PATCH` on it
+changes the caller's own display name, CSRF-protected, 1-80 characters, no control
+characters; the user row is selected by the session's user id only);
 `/api/v1/admin/me` additionally requires the explicit `operator.access`
 permission and therefore denies ordinary tenant admins.
 

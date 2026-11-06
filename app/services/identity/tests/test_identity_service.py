@@ -52,6 +52,9 @@ class FakeIdentityRepository:
             account=AccountRef(user_id=uuid4(), tenant_id=uuid4(), role=Role.OWNER),
         )
 
+    def update_display_name(self, principal: Principal, display_name: str):
+        return None
+
     def create_session(self, command: CreateSessionCommand) -> CreateSessionResult:
         self.created_command = command
         return CreateSessionResult(

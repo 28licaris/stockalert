@@ -87,6 +87,21 @@ class FakeAuthenticationService:
 class FakeIdentityService:
     def __init__(self, principal: Principal | None) -> None:
         self.principal = principal
+        self.renamed: list[tuple[UUID, str]] = []
+
+    def update_display_name(
+        self, principal: Principal, display_name: str
+    ) -> CurrentUserResponse | None:
+        self.renamed.append((principal.user_id, display_name))
+        return CurrentUserResponse(
+            user_id=principal.user_id,
+            tenant_id=principal.tenant_id,
+            email="trader@example.com",
+            display_name=display_name,
+            roles=principal.roles,
+            permissions=principal.permissions,
+            entitlements=principal.entitlements,
+        )
 
     def authenticate_session(self, token: str) -> Principal | None:
         return self.principal if token == "session-token" else None
@@ -376,5 +391,67 @@ def test_customer_mfa_enrollment_requires_csrf_and_valid_code(monkeypatch) -> No
         assert verified.json() == {"enabled": True}
         assert fake_mfa.verified_code == "123456"
         assert invalid.status_code == 422
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_customer_can_rename_self_with_csrf(monkeypatch) -> None:
+    principal = _principal()
+    _configure_auth(monkeypatch, principal)
+    try:
+        client = TestClient(app)
+        client.cookies.set("stockalert_session", "session-token")
+        client.cookies.set("stockalert_csrf", "csrf-token")
+        headers = {"X-CSRF-Token": "csrf-token"}
+
+        no_csrf = client.patch("/api/v1/customer/me", json={"display_name": "Ada"})
+        ok = client.patch(
+            "/api/v1/customer/me", json={"display_name": "  Ada Lovelace  "}, headers=headers
+        )
+        empty = client.patch("/api/v1/customer/me", json={"display_name": "   "}, headers=headers)
+        too_long = client.patch(
+            "/api/v1/customer/me", json={"display_name": "x" * 81}, headers=headers
+        )
+        control = client.patch(
+            "/api/v1/customer/me", json={"display_name": "Ada\nLovelace"}, headers=headers
+        )
+
+        assert no_csrf.status_code == 403
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["display_name"] == "Ada Lovelace"  # trimmed
+        assert empty.status_code == 422
+        assert too_long.status_code == 422
+        assert control.status_code == 422
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_rename_only_ever_targets_the_session_user(monkeypatch) -> None:
+    """The route takes no user id from the client: a body naming someone else
+    is ignored and the session principal is what gets renamed."""
+    principal = _principal()
+    _configure_auth(monkeypatch, principal)
+    service = app.dependency_overrides[auth_dependencies.get_identity_service]()
+    try:
+        client = TestClient(app)
+        client.cookies.set("stockalert_session", "session-token")
+        client.cookies.set("stockalert_csrf", "csrf-token")
+        client.patch(
+            "/api/v1/customer/me",
+            json={"display_name": "Mallory", "user_id": str(uuid4()), "email": "victim@x.com"},
+            headers={"X-CSRF-Token": "csrf-token"},
+        )
+        assert service.renamed == [(principal.user_id, "Mallory")]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_rename_requires_a_session(monkeypatch) -> None:
+    _configure_auth(monkeypatch, None)
+    try:
+        response = TestClient(app).patch(
+            "/api/v1/customer/me", json={"display_name": "Ada"}
+        )
+        assert response.status_code == 401
     finally:
         app.dependency_overrides.clear()

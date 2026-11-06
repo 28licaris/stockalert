@@ -39,9 +39,85 @@ import {
 import { useAuth } from "@/auth/auth-context";
 import { useCurrentUser } from "@/auth/useCurrentUser";
 
+/** Edit the name shown in the menu and greetings. The email is not editable here. */
+function DisplayNameForm({
+  current,
+  onSave,
+}: {
+  current: string;
+  onSave: (displayName: string) => Promise<void>;
+}) {
+  const [value, setValue] = useState(current);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(
+    null,
+  );
+  const trimmed = value.trim();
+  const unchanged = trimmed === current.trim();
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!trimmed || unchanged || saving) return;
+    setSaving(true);
+    setMessage(null);
+    try {
+      await onSave(trimmed);
+      setMessage({ ok: true, text: "Name updated." });
+    } catch (caught) {
+      setMessage({
+        ok: false,
+        text:
+          caught instanceof Error ? caught.message : "We couldn't save your name.",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form onSubmit={(event) => void submit(event)} className="mt-6">
+      <label
+        htmlFor="display-name"
+        className="text-sm font-medium text-fg-base"
+      >
+        Display name
+      </label>
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        <input
+          id="display-name"
+          type="text"
+          value={value}
+          maxLength={80}
+          autoComplete="name"
+          onChange={(event) => {
+            setValue(event.target.value);
+            setMessage(null);
+          }}
+          className="w-72 max-w-full rounded-lg border border-border bg-bg-base px-3 py-2 text-sm text-fg-base outline-none focus:border-accent focus:ring-2 focus:ring-accent/40"
+        />
+        <Button
+          type="submit"
+          variant="outline"
+          disabled={!trimmed || unchanged || saving}
+        >
+          {saving ? "Saving…" : "Save name"}
+        </Button>
+        {message ? (
+          <span
+            role="status"
+            className={message.ok ? "text-sm text-up" : "text-sm text-danger"}
+          >
+            {message.text}
+          </span>
+        ) : null}
+      </div>
+    </form>
+  );
+}
+
 export function SettingsPage() {
   const user = useCurrentUser();
-  const { signOut, signingOut, error } = useAuth();
+  const { signOut, signingOut, error, updateDisplayName } = useAuth();
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
@@ -82,6 +158,11 @@ export function SettingsPage() {
               </p>
             </div>
           </div>
+
+          <DisplayNameForm
+            current={user.displayName}
+            onSave={updateDisplayName}
+          />
 
           <div className="mt-6 grid gap-3 sm:grid-cols-2">
             <ActionCard
