@@ -446,8 +446,11 @@ function AddThemeForm({ mode }: { mode: "mine" | "shared" }) {
         </p>
       )}
       {mine && createMine.isSuccess && (
-        <p className="mt-1.5 text-[11px] text-blue-400">
-          Saved. A ticker with no price history yet is listed under “Excluded” until its data loads.
+        <p className="mt-1.5 text-[11px] text-emerald-400">
+          Saved.{" "}
+          {createMine.data?.loading?.length
+            ? `Loading price history for ${createMine.data.loading.join(", ")} — the theme appears on the chart in a moment.`
+            : "It is on the chart now."}
         </p>
       )}
       {!mine && !!createShared.data?.onboarded?.length && (
@@ -549,7 +552,12 @@ export function SectorsPage() {
           </div>
 
           {dash.excluded && dash.excluded.length > 0 && (
-            <p className="mt-2 text-xs text-fg-subtle">Excluded: {dash.excluded.map((e) => `${e.group_id} (${e.reason})`).join(", ")}</p>
+            <p className="mt-2 text-xs text-fg-subtle">
+              Not shown:{" "}
+              {dash.excluded
+                .map((e) => `${e.group_id.startsWith(PERSONAL_THEME_PREFIX) ? e.group_id.slice(PERSONAL_THEME_PREFIX.length) : e.group_id} (${e.reason})`)
+                .join(", ")}
+            </p>
           )}
         </>
       )}

@@ -237,6 +237,13 @@ def _release(symbol: str) -> None:
         _inflight.discard(symbol)
 
 
+def is_fetching(symbol: str) -> bool:
+    """True while a fetch for ``symbol`` is running in this process (used to tell a
+    user "loading history" instead of "no data")."""
+    with _inflight_lock:
+        return (symbol or "").upper() in _inflight
+
+
 async def ensure_daily_history(
     symbols: Sequence[str],
     *,

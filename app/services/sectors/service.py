@@ -13,13 +13,15 @@ it runs per request with no caching layer.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Mapping, Sequence
 from datetime import date
 
 import pandas as pd
 
 from app.config import settings
 from app.services.sectors import definitions, rrg
-from app.services.sectors.resolver import GroupResolutionError, resolve
+from app.services.ingest.schwab_daily import is_fetching
+from app.services.sectors.resolver import GroupResolutionError, load_daily_closes, resolve
 from app.services.sectors.schemas import (
     ExcludedGroup,
     RotationDashboard,
@@ -43,7 +45,10 @@ class SectorRotationService:
         mom_window: int,
         tail_weeks: int,
         lookback_days: int,
+        closes_loader: Callable[[Sequence[str], int], Mapping[str, pd.Series]] | None = None,
     ) -> None:
+        # Resolved at call time (not bound as a default) so it can be replaced in tests.
+        self._load_closes = closes_loader or (lambda symbols, days: load_daily_closes(symbols, days))
         self.groups = groups
         self.benchmark = benchmark
         self.ratio_window = ratio_window
@@ -69,7 +74,7 @@ class SectorRotationService:
             lookback_days=settings.rrg_lookback_days,
         )
 
-    def _benchmark_close(self) -> pd.Series:
+    def _benchmark_close(self, closes: Mapping[str, pd.Series]) -> pd.Series:
         """Daily close series for the benchmark, resolved once per build."""
         bench_group = RotationGroup(
             id=self.benchmark,
@@ -78,13 +83,17 @@ class SectorRotationService:
             benchmark=self.benchmark,
             members=[self.benchmark],
         )
-        return resolve(bench_group, lookback_days=self.lookback_days)
+        return resolve(bench_group, closes)
 
     def build_dashboard(self, tail_weeks: int | None = None) -> RotationDashboard:
         tail = tail_weeks if tail_weeks is not None else self.tail_weeks
 
+        # ONE query for the benchmark and every member of every group.
+        symbols = {self.benchmark} | {m for g in self.groups for m in g.members}
+        closes = self._load_closes(sorted(symbols), self.lookback_days)
+
         try:
-            bench_close = self._benchmark_close()
+            bench_close = self._benchmark_close(closes)
         except GroupResolutionError as exc:
             # Without the benchmark nothing can be scored — fail loudly.
             raise GroupResolutionError(
@@ -98,10 +107,15 @@ class SectorRotationService:
 
         for group in self.groups:
             try:
-                group_close = resolve(group, lookback_days=self.lookback_days)
+                group_close = resolve(group, closes)
             except (GroupResolutionError, NotImplementedError) as exc:
-                logger.warning("rotation: excluding %s — %s", group.id, exc)
-                excluded.append(ExcludedGroup(group_id=group.id, reason=str(exc)))
+                reason = str(exc)
+                loading = [m for m in group.members if m not in closes and is_fetching(m)]
+                if group.personal and loading:
+                    # Not a failure: its history is being fetched right now.
+                    reason = f"loading price history for {', '.join(loading)}"
+                logger.warning("rotation: excluding %s — %s", group.id, reason)
+                excluded.append(ExcludedGroup(group_id=group.id, reason=reason))
                 continue
 
             result = rrg.score(

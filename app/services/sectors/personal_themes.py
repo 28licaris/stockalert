@@ -30,6 +30,7 @@ from app.services.sectors.schemas import RotationGroup
 
 MAX_THEMES_PER_USER = 10
 MAX_MEMBERS = 20
+MAX_DISTINCT_TICKERS_TOTAL = 500  # across ALL users: bounds how far on-demand fetching can grow the stores
 PERSONAL_ID_PREFIX = "my:"  # ':' can never appear in a shared theme id (slugify -> [a-z0-9-])
 
 _TICKER = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,9}$")
@@ -58,6 +59,10 @@ class PersonalTheme(BaseModel):
     name: str
     label: str
     members: list[str]
+    loading: list[str] = Field(
+        default_factory=list,
+        description="Tickers whose price history is being fetched right now (create response only).",
+    )
 
 
 # ── storage ───────────────────────────────────────────────────────────
@@ -136,6 +141,13 @@ class PersonalThemesRepository:
             db.commit()
             return _to_theme(row)
 
+    def all_tickers(self) -> set[str]:
+        """Every ticker used by any user's themes (the nightly refresh and the
+        capacity check both need the whole set, not one user's)."""
+        with self._session_factory() as db:
+            rows = db.scalars(select(UserSectorThemeModel.members)).all()
+        return {str(t) for members in rows for t in (members or [])}
+
     def delete(self, user_id: UUID, slug: str) -> bool:
         with self._session_factory() as db:
             row = db.scalars(
@@ -177,8 +189,16 @@ def normalize_tickers(raw: list[str]) -> list[str]:
 
 
 class PersonalThemesService:
-    def __init__(self, repository: PersonalThemesRepository) -> None:
+    def __init__(self, repository: PersonalThemesRepository, daily=None) -> None:
         self._repo = repository
+        self._daily = daily  # a DailyDemand; None -> the process-wide default (lazy)
+
+    def _demand(self):
+        if self._daily is None:
+            from app.services.ingest.daily_on_demand import default_demand
+
+            self._daily = default_demand()
+        return self._daily
 
     @classmethod
     def from_settings(cls) -> "PersonalThemesService":
@@ -196,9 +216,40 @@ class PersonalThemesService:
             raise PersonalThemeError("Give the theme a name with letters or digits.") from exc
         members = normalize_tickers(req.members)
         label = (req.label or "").strip() or default_label(req.name)
-        return self._repo.upsert(
+
+        known = self._repo.all_tickers()
+        brand_new = [m for m in members if m not in known]
+        if len(known) + len(brand_new) > MAX_DISTINCT_TICKERS_TOTAL:
+            raise PersonalThemeError(
+                "We are at capacity for custom tickers right now. Use tickers already "
+                "on the chart, or try again later."
+            )
+
+        # Before saving anything: is every ticker real, and can we get its history?
+        # Raises DailyDataUnavailable (source outage) / TooManyNewTickers (-> 400 below).
+        from app.services.ingest.daily_on_demand import TooManyNewTickers
+
+        demand = self._demand()
+        try:
+            check = demand.check(members)
+        except TooManyNewTickers as exc:
+            raise PersonalThemeError(str(exc)) from exc
+        if check.unknown:
+            raise PersonalThemeError(
+                f"Unknown ticker{'s' if len(check.unknown) > 1 else ''}: {', '.join(check.unknown)}. "
+                "Check the symbol. Only US-listed stocks and ETFs are supported."
+            )
+
+        theme = self._repo.upsert(
             user_id, slug=slug, name=req.name.strip(), label=label[:16], members=members
         )
+        # History for brand-new tickers is fetched in the background; the chart shows
+        # "loading price history" until it lands.
+        demand.schedule(check.to_fetch)
+        return theme.model_copy(update={"loading": list(check.to_fetch)})
+
+    def all_tickers(self) -> set[str]:
+        return self._repo.all_tickers()
 
     def delete(self, user_id: UUID, slug: str) -> bool:
         return self._repo.delete(user_id, slug)

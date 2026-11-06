@@ -15,6 +15,7 @@ Procedures that use these scripts live in
 | `schwab_history_backfill.py` | Schwab REST 1m → `equities.schwab_universe` |
 | `schwab_universe_backfill.py` | Schwab REST → the universe table |
 | `schwab_daily_refresh.py` | Schwab REST daily → `equities.schwab_daily_raw` |
+| `ensure_daily_history.py` | Fetch + store only the missing daily history for given symbols (lake first, then ClickHouse); `--dry-run` shows coverage. Per-symbol outcome table, exit 1 on any failure |
 | `run_corp_actions_backfill.py` | Polygon REST → `equities.market_corp_actions` |
 | `backfill_market_splits.py` | corp-actions → `equities.market_splits` |
 | `backfill_instrument_names.py` | Polygon reference → CH `instrument_names` |

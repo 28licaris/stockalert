@@ -9,6 +9,8 @@ session when AUTH_ENABLED, the fixed local dev principal otherwise.
 """
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from uuid import UUID
@@ -16,12 +18,15 @@ from uuid import UUID
 from app.api.auth_dependencies import DEV_USER_EMAIL, get_principal_or_dev
 from app.config import settings
 from app.services.identity.schemas import Principal
+from app.services.ingest.daily_on_demand import DailyDataUnavailable
 from app.services.sectors.personal_themes import (
     PersonalTheme,
     PersonalThemeCreateRequest,
     PersonalThemeError,
     PersonalThemesService,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/my/sector-themes", tags=["Sector Rotation"])
 
@@ -56,6 +61,13 @@ def create_my_theme(
         return _service().create(_user_id(principal), body)
     except PersonalThemeError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except DailyDataUnavailable as exc:
+        # A source outage is not the user's mistake and must not look like one.
+        logger.error("personal theme create: price source unavailable: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Price data is temporarily unavailable, so new tickers can't be checked. Try again shortly.",
+        )
 
 
 @router.delete("/{slug}", status_code=204)

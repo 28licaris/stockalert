@@ -4942,6 +4942,11 @@ export interface components {
             label: string;
             /** Members */
             members: string[];
+            /**
+             * Loading
+             * @description Tickers whose price history is being fetched right now (create response only).
+             */
+            loading?: string[];
         };
         /** PersonalThemeCreateRequest */
         PersonalThemeCreateRequest: {

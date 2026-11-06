@@ -1,118 +1,116 @@
-"""Resolver tests — ETF passthrough + the Phase-2 basket seam."""
+"""Resolver tests — daily closes in, one series per group out."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from types import SimpleNamespace
+from datetime import date
 
+import pandas as pd
 import pytest
 
 from app.services.sectors import resolver
-from app.services.sectors.resolver import GroupResolutionError, resolve
+from app.services.sectors.resolver import GroupResolutionError, load_daily_closes, resolve
 from app.services.sectors.schemas import RotationGroup
 
 
-def _bar(day: int, close: float):
-    return SimpleNamespace(
-        timestamp=datetime(2024, 1, day, tzinfo=timezone.utc), close=close
-    )
+def _s(values, day0=2) -> pd.Series:
+    idx = pd.Index([date(2024, 1, day0 + i) for i in range(len(values))], name="date")
+    return pd.Series(values, index=idx, dtype="float64")
 
 
-def test_etf_passthrough_returns_close_series(monkeypatch):
-    bars = [_bar(2, 10.0), _bar(3, 11.0), _bar(4, 12.0)]
-    monkeypatch.setattr(resolver, "get_chart_bars", lambda *a, **k: bars)
+def _etf(sym="XLK") -> RotationGroup:
+    return RotationGroup(id=sym, name=sym, benchmark="SPY", members=[sym])
 
-    g = RotationGroup(id="XLK", name="Technology", benchmark="SPY", members=["XLK"])
-    s = resolve(g, lookback_days=400)
 
+def _basket(members, weights=None) -> RotationGroup:
+    return RotationGroup(id="MINERS", name="Miners", kind="basket", benchmark="SPY",
+                         members=members, weights=weights)
+
+
+def test_etf_passthrough_returns_close_series():
+    s = resolve(_etf(), {"XLK": _s([10.0, 11.0, 12.0])})
     assert list(s.values) == [10.0, 11.0, 12.0]
-    assert s.is_monotonic_increasing  # sorted by date
+    assert s.is_monotonic_increasing
 
 
-def test_etf_dedupes_duplicate_days(monkeypatch):
-    # polygon∪schwab union can hand back the same day twice — keep last.
-    bars = [_bar(2, 10.0), _bar(2, 10.5), _bar(3, 11.0)]
-    monkeypatch.setattr(resolver, "get_chart_bars", lambda *a, **k: bars)
-
-    g = RotationGroup(id="XLK", name="Technology", benchmark="SPY", members=["XLK"])
-    s = resolve(g, lookback_days=400)
-
-    assert len(s) == 2
-    assert s.iloc[0] == 10.5  # kept the last of the duplicate day
+def test_missing_etf_names_the_symbol():
+    with pytest.raises(GroupResolutionError, match="no daily data for XLB"):
+        resolve(_etf("XLB"), {"XLK": _s([1.0, 2.0])})
 
 
-def test_empty_lake_raises(monkeypatch):
-    monkeypatch.setattr(resolver, "get_chart_bars", lambda *a, **k: [])
-    g = RotationGroup(id="XLB", name="Materials", benchmark="SPY", members=["XLB"])
-    with pytest.raises(GroupResolutionError):
-        resolve(g)
+def test_basket_equal_weight_composite():
+    closes = {"AAA": _s([100.0, 100.0, 100.0]), "BBB": _s([100.0, 150.0, 200.0])}
+    s = resolve(_basket(["AAA", "BBB"]), closes)
+    assert s.iloc[0] == pytest.approx(100.0)   # (1.0 + 1.0)/2 * 100
+    assert s.iloc[-1] == pytest.approx(150.0)  # (1.0 + 2.0)/2 * 100
 
 
-def test_despike_removes_reverting_spike(monkeypatch):
-    # 146 → 291 (2x) → 146: a bad after-hours tick that reverts. Despiked.
-    bars = [_bar(2, 146.0), _bar(3, 291.0), _bar(4, 146.0), _bar(5, 147.0)]
-    monkeypatch.setattr(resolver, "get_chart_bars", lambda *a, **k: bars)
-    g = RotationGroup(id="XLK", name="Technology", benchmark="SPY", members=["XLK"])
-    s = resolve(g)
-    assert s.iloc[1] == 146.0  # spike replaced by neighbour mean (146+146)/2
-    assert s.iloc[0] == 146.0 and s.iloc[2] == 146.0  # neighbours untouched
+def test_basket_drops_missing_members():
+    s = resolve(_basket(["AAA", "GHOST"]), {"AAA": _s([10.0, 11.0, 12.0])})
+    assert len(s) == 3 and s.iloc[0] == pytest.approx(100.0)
 
 
-def test_despike_preserves_genuine_step(monkeypatch):
-    # A real step that does NOT revert (100 → 160 → 162) must be kept.
-    bars = [_bar(2, 100.0), _bar(3, 160.0), _bar(4, 162.0), _bar(5, 161.0)]
-    monkeypatch.setattr(resolver, "get_chart_bars", lambda *a, **k: bars)
-    g = RotationGroup(id="XLK", name="Technology", benchmark="SPY", members=["XLK"])
-    s = resolve(g)
-    assert list(s.values) == [100.0, 160.0, 162.0, 161.0]  # nothing despiked
+def test_basket_all_missing_raises_with_reason():
+    with pytest.raises(GroupResolutionError, match="no daily data for any of 2 members"):
+        resolve(_basket(["X", "Y"]), {})
 
 
-def _series_bars(values, day0=2):
-    return [_bar(day0 + i, v) for i, v in enumerate(values)]
-
-
-def test_basket_equal_weight_composite(monkeypatch):
-    # Two members: one flat at 100, one doubling 100→200 over 3 days.
-    # Equal-weight rebased composite: day0=100, then avg(1.0, growth)*100.
-    data = {
-        "AAA": _series_bars([100.0, 100.0, 100.0]),
-        "BBB": _series_bars([100.0, 150.0, 200.0]),
-    }
-    monkeypatch.setattr(resolver, "get_chart_bars", lambda symbol, **k: data[symbol])
-    g = RotationGroup(id="MINERS", name="Miners", kind="basket", benchmark="SPY",
-                      members=["AAA", "BBB"])
-    s = resolve(g)
-    # day0: (1.0 + 1.0)/2 * 100 = 100
-    assert s.iloc[0] == pytest.approx(100.0)
-    # day2: (1.0 + 2.0)/2 * 100 = 150
-    assert s.iloc[-1] == pytest.approx(150.0)
-
-
-def test_basket_drops_missing_members(monkeypatch):
-    data = {"AAA": _series_bars([10.0, 11.0, 12.0]), "GHOST": []}
-    monkeypatch.setattr(resolver, "get_chart_bars", lambda symbol, **k: data.get(symbol, []))
-    g = RotationGroup(id="MINERS", name="Miners", kind="basket", benchmark="SPY",
-                      members=["AAA", "GHOST"])
-    s = resolve(g)  # GHOST dropped (no data); AAA carries the basket
-    assert len(s) == 3
-    assert s.iloc[0] == pytest.approx(100.0)  # rebased
-
-
-def test_basket_all_missing_raises(monkeypatch):
-    monkeypatch.setattr(resolver, "get_chart_bars", lambda symbol, **k: [])
-    g = RotationGroup(id="MINERS", name="Miners", kind="basket", benchmark="SPY",
-                      members=["X", "Y"])
-    with pytest.raises(GroupResolutionError):
-        resolve(g)
-
-
-def test_basket_weighted(monkeypatch):
-    # AAA flat, BBB doubles; weight BBB at 0.75 → day2 = 1.0*0.25 + 2.0*0.75 = 1.75
-    data = {
-        "AAA": _series_bars([100.0, 100.0, 100.0]),
-        "BBB": _series_bars([100.0, 150.0, 200.0]),
-    }
-    monkeypatch.setattr(resolver, "get_chart_bars", lambda symbol, **k: data[symbol])
-    g = RotationGroup(id="MINERS", name="Miners", kind="basket", benchmark="SPY",
-                      members=["AAA", "BBB"], weights={"AAA": 0.25, "BBB": 0.75})
-    s = resolve(g)
+def test_basket_weighted():
+    closes = {"AAA": _s([100.0, 100.0, 100.0]), "BBB": _s([100.0, 150.0, 200.0])}
+    s = resolve(_basket(["AAA", "BBB"], {"AAA": 0.25, "BBB": 0.75}), closes)
     assert s.iloc[-1] == pytest.approx(175.0)
+
+
+# ── load_daily_closes: one query, grouped, de-spiked ──────────────────
+
+
+class FakeCH:
+    def __init__(self, rows):
+        self.rows, self.queries = rows, []
+
+    def query(self, sql, parameters=None):
+        self.queries.append((sql, parameters))
+
+        class R:
+            result_rows = self.rows
+
+        return R()
+
+
+def _rows(sym, closes, day0=2):
+    return [(sym, date(2024, 1, day0 + i), c) for i, c in enumerate(closes)]
+
+
+def test_load_issues_exactly_one_query_for_many_symbols():
+    ch = FakeCH(_rows("SPY", [1, 2, 3]) + _rows("XLK", [4, 5, 6]) + _rows("XLE", [7, 8, 9]))
+    out = load_daily_closes(["XLK", "SPY", "XLE", "XLK"], 360, client=ch)
+    assert len(ch.queries) == 1, "one batched query, not one per symbol"
+    sql, params = ch.queries[0]
+    assert "ohlcv_daily" in sql and "FINAL" in sql
+    assert params["syms"] == ["SPY", "XLE", "XLK"]  # sorted, de-duplicated
+    assert set(out) == {"SPY", "XLK", "XLE"} and list(out["XLK"].values) == [4.0, 5.0, 6.0]
+
+
+def test_symbols_without_rows_are_absent_not_empty():
+    out = load_daily_closes(["SPY", "CCJ"], 360, client=FakeCH(_rows("SPY", [1, 2, 3])))
+    assert "CCJ" not in out
+
+
+def test_no_symbols_means_no_query():
+    ch = FakeCH([])
+    assert load_daily_closes([], 360, client=ch) == {} and ch.queries == []
+
+
+def test_despike_removes_reverting_spike():
+    ch = FakeCH(_rows("XLK", [146.0, 291.0, 146.0, 147.0]))
+    s = load_daily_closes(["XLK"], 360, client=ch)["XLK"]
+    assert s.iloc[1] == 146.0 and s.iloc[0] == 146.0 and s.iloc[2] == 146.0
+
+
+def test_despike_preserves_genuine_step():
+    ch = FakeCH(_rows("XLK", [100.0, 160.0, 162.0, 161.0]))
+    assert list(load_daily_closes(["XLK"], 360, client=ch)["XLK"].values) == [100.0, 160.0, 162.0, 161.0]
+
+
+def test_duplicate_days_keep_the_last():
+    ch = FakeCH([("XLK", date(2024, 1, 2), 10.0), ("XLK", date(2024, 1, 2), 10.5), ("XLK", date(2024, 1, 3), 11.0)])
+    s = load_daily_closes(["XLK"], 360, client=ch)["XLK"]
+    assert len(s) == 2 and s.iloc[0] == 10.5

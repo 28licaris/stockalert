@@ -1,28 +1,26 @@
 """Resolve a `RotationGroup` to a daily close series.
 
 This is the seam that decouples the RRG math from how a group's price is
-sourced. Phase 1 handles `kind="etf"` (single-symbol passthrough). The
-`kind="basket"` branch is the Phase-2 extension point — it is defined and
-tested now (it raises a clear error), never a silent stub.
+sourced. `kind="etf"` is a single-symbol passthrough; `kind="basket"` is a
+weighted index of its constituents.
 
-Daily, split-adjusted closes come from ClickHouse — the fast single-symbol
-hot tier — via `bars_gateway.get_chart_bars(..., source=AUTO, interval="1d")`,
-which resamples `stocks.ohlcv_1m` server-side (`toStartOfInterval`, ET
-trading day). RRG covers a fixed set of streamed symbols, so this is a
-single-symbol-read problem, not a whole-market lake scan: CH holds the
-history (one-time hot-load from the lake at setup; live stream keeps it
-current going forward). AUTO self-heals — if CH lacks the window it
-schedules a background lake→CH fill (windows ≤ 365d). The RRG lookback is
-kept under that cap so the cache stays self-warming.
+Daily, split-adjusted closes come from ClickHouse `ohlcv_daily` — the **daily**
+table, read in ONE query for every symbol the dashboard needs
+(:func:`load_daily_closes`). RRG is a daily/weekly technique, so it has no use for
+minute bars, and reading them was both slow (about 60 one-symbol reads per page
+load) and stale for any symbol past the 300-symbol Schwab streaming cap
+(`docs/ISSUES.md#schwab-stream-300-symbol-account-cap`). There is deliberately NO
+fallback to the minute path: a symbol without daily data is excluded with a named
+reason rather than silently served stale.
 """
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping, Sequence
+from datetime import date, timedelta
 
 import pandas as pd
 
-from app.config import settings
-from app.services.readers.bars_gateway import BarSource, get_chart_bars
 from app.services.sectors.schemas import RotationGroup
 
 logger = logging.getLogger(__name__)
@@ -32,27 +30,42 @@ class GroupResolutionError(RuntimeError):
     """A group's price series could not be built (no data, unknown kind…)."""
 
 
-def _daily_close_series(symbol: str, lookback_days: int) -> pd.Series:
-    """Date-indexed daily close series for one symbol from ClickHouse.
+def load_daily_closes(symbols: Sequence[str], lookback_days: int, *, client=None) -> dict[str, pd.Series]:
+    """Date-indexed daily close series for every symbol in ONE ClickHouse query.
 
-    Returns an empty Series (not an exception) when CH has no bars —
-    callers decide whether that's fatal for the group.
+    Symbols with no rows in the window are simply absent from the result (callers
+    decide whether that is fatal for a group). Each series is de-spiked.
     """
-    bars = get_chart_bars(
-        symbol,
-        interval="1d",
-        lookback_days=lookback_days,
-        source=BarSource.AUTO,
-    )
-    if not bars:
-        return pd.Series(dtype="float64")
-    # Index by calendar date (RRG is a daily/weekly technique; intraday tz
-    # nuance is irrelevant once we're on daily bars).
-    idx = pd.to_datetime([b.timestamp for b in bars]).date
-    s = pd.Series([b.close for b in bars], index=pd.Index(idx, name="date"), dtype="float64")
-    # Guard against any duplicate trading days from the polygon∪schwab union.
-    s = s[~s.index.duplicated(keep="last")].sort_index()
-    return _despike(s, symbol)
+    syms = sorted({s for s in symbols if s})
+    if not syms:
+        return {}
+    if client is None:
+        from app.db.client import get_client
+
+        client = get_client()
+    since = date.today() - timedelta(days=lookback_days)
+    rows = client.query(
+        "SELECT symbol, toDate(timestamp) AS d, close FROM ohlcv_daily FINAL "
+        "WHERE symbol IN {syms:Array(String)} AND toDate(timestamp) >= {since:Date} "
+        "ORDER BY symbol, d",
+        parameters={"syms": syms, "since": since},
+    ).result_rows
+    by_sym: dict[str, tuple[list, list]] = {}
+    for sym, d, close in rows:
+        idx, vals = by_sym.setdefault(sym, ([], []))
+        idx.append(d)
+        vals.append(float(close))
+    out: dict[str, pd.Series] = {}
+    for sym, (idx, vals) in by_sym.items():
+        ser = pd.Series(vals, index=pd.Index(idx, name="date"), dtype="float64")
+        ser = ser[~ser.index.duplicated(keep="last")].sort_index()
+        out[sym] = _despike(ser, sym)
+    return out
+
+
+def _series(closes: Mapping[str, pd.Series], symbol: str) -> pd.Series:
+    s = closes.get(symbol)
+    return s if s is not None else pd.Series(dtype="float64")
 
 
 def _despike(s: pd.Series, symbol: str, *, threshold: float = 0.4) -> pd.Series:
@@ -90,24 +103,21 @@ def _despike(s: pd.Series, symbol: str, *, threshold: float = 0.4) -> pd.Series:
     return pd.Series(vals, index=s.index, name=s.name)
 
 
-def resolve(group: RotationGroup, *, lookback_days: int | None = None) -> pd.Series:
-    """Return a date-indexed daily close series for `group`.
+def resolve(group: RotationGroup, closes: Mapping[str, pd.Series]) -> pd.Series:
+    """Return a date-indexed daily close series for `group`, from the pre-loaded
+    ``closes`` (see :func:`load_daily_closes`).
 
     Raises `GroupResolutionError` on an empty series or unknown kind.
     """
-    lookback = lookback_days if lookback_days is not None else settings.rrg_lookback_days
-
     if group.kind == "etf":
         symbol = group.members[0]
-        series = _daily_close_series(symbol, lookback)
+        series = _series(closes, symbol)
         if series.empty:
-            raise GroupResolutionError(
-                f"no ClickHouse bars for ETF {symbol!r} over {lookback}d"
-            )
+            raise GroupResolutionError(f"no daily data for {symbol}")
         return series
 
     if group.kind == "basket":
-        return _basket_close_series(group, lookback)
+        return _basket_close_series(group, closes)
 
     raise GroupResolutionError(f"unknown group kind {group.kind!r} for {group.id!r}")
 
@@ -125,20 +135,20 @@ def _normalize_weights(group: RotationGroup, available: list[str]) -> dict[str, 
     return {s: 1.0 / n for s in available}
 
 
-def _basket_close_series(group: RotationGroup, lookback_days: int) -> pd.Series:
+def _basket_close_series(group: RotationGroup, closes: Mapping[str, pd.Series]) -> pd.Series:
     """Composite index for a basket: normalize each constituent's daily
     close to its window-start value, then take the weighted average. The
     index level is arbitrary (RS-Ratio divides it out); only the *shape*
     vs the benchmark matters.
 
-    Members that have no lake/CH data are dropped (logged) rather than
+    Members that have no daily data are dropped (logged) rather than
     failing the whole basket. Dates are the intersection across resolved
     members, so the composite has no gaps from a single late lister.
     """
     series_by_sym: dict[str, pd.Series] = {}
     missing: list[str] = []
     for sym in group.members:
-        s = _daily_close_series(sym, lookback_days)
+        s = _series(closes, sym)
         if s.empty:
             missing.append(sym)
         else:
@@ -146,7 +156,7 @@ def _basket_close_series(group: RotationGroup, lookback_days: int) -> pd.Series:
 
     if not series_by_sym:
         raise GroupResolutionError(
-            f"basket {group.id!r}: no data for any of {len(group.members)} members"
+            f"basket {group.id!r}: no daily data for any of {len(group.members)} members"
         )
 
     df = pd.DataFrame(series_by_sym).sort_index().dropna()
