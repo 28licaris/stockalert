@@ -52,10 +52,16 @@ class SectorRotationService:
         self.lookback_days = lookback_days
 
     @classmethod
-    def from_settings(cls, benchmark: str | None = None) -> "SectorRotationService":
+    def from_settings(
+        cls,
+        benchmark: str | None = None,
+        extra_groups: list[RotationGroup] | None = None,
+    ) -> "SectorRotationService":
+        """``extra_groups`` are appended after the shared groups (e.g. the
+        signed-in user's personal themes)."""
         bench = benchmark or definitions.benchmark_symbol()
         return cls(
-            groups=definitions.default_groups(bench),
+            groups=[*definitions.default_groups(bench), *(extra_groups or [])],
             benchmark=bench,
             ratio_window=settings.rrg_ratio_window,
             mom_window=settings.rrg_mom_window,
@@ -117,6 +123,7 @@ class SectorRotationService:
                     name=group.name,
                     label=group.label or group.id,
                     kind=group.kind,
+                    personal=group.personal,
                     members=group.members,
                     current=result.current,
                     tail=result.tail,

@@ -41,6 +41,9 @@ class RotationGroup(BaseModel):
         description="Per-member weights for a basket. None ⇒ equal weight. "
         "Unused for kind='etf'.",
     )
+    personal: bool = Field(
+        False, description="True for the signed-in user's own theme (not shared)."
+    )
 
 
 class RotationPoint(BaseModel):
@@ -59,6 +62,9 @@ class SectorRotationState(BaseModel):
     name: str
     label: str = ""
     kind: GroupKind = "etf"
+    personal: bool = Field(
+        False, description="True when this is the signed-in user's own theme."
+    )
     members: list[str] = Field(
         default_factory=list,
         description="Constituent tickers (the ETF itself for kind='etf'; the "

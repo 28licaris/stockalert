@@ -1417,6 +1417,60 @@ export function useDeleteTheme() {
   });
 }
 
+// ── My themes (per-user, Postgres) ───────────────────────────────────
+// Personal sector-rotation baskets. Only the signed-in user sees them; they are
+// not added to the shared streaming universe. Group id on the chart: "my:<slug>".
+
+export interface PersonalTheme {
+  theme_id: string;
+  slug: string;
+  name: string;
+  label: string;
+  members: string[];
+}
+
+export interface PersonalThemeCreate {
+  name: string;
+  members: string[];
+  label?: string | null;
+}
+
+export const PERSONAL_THEME_PREFIX = "my:";
+
+async function sendMyTheme(url: string, method: "POST" | "DELETE", body?: unknown): Promise<Response> {
+  const res = await fetch(url, {
+    method,
+    credentials: "include",
+    headers: body !== undefined ? { "Content-Type": "application/json", Accept: "application/json" } : { Accept: "application/json" },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    throw new ApiError(await readErrorEnvelope(res.clone()), res.status);
+  }
+  return res;
+}
+
+export function useCreateMyTheme() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (req: PersonalThemeCreate): Promise<PersonalTheme> => {
+      const res = await sendMyTheme("/api/v1/my/sector-themes", "POST", req);
+      return (await res.json()) as PersonalTheme;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["sectors"] }),
+  });
+}
+
+export function useDeleteMyTheme() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (slug: string): Promise<void> => {
+      await sendMyTheme(`/api/v1/my/sector-themes/${encodeURIComponent(slug)}`, "DELETE");
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["sectors"] }),
+  });
+}
+
 // ── My watchlists (per-user, Postgres) ────────────────────────────────
 
 export type MyWatchlist = {

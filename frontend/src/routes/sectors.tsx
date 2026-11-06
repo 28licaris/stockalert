@@ -1,7 +1,10 @@
 import { useMemo, useState } from "react";
 import { ChevronDown, Layers, Plus, Trash2, X } from "lucide-react";
 import {
+  PERSONAL_THEME_PREFIX,
+  useCreateMyTheme,
   useCreateTheme,
+  useDeleteMyTheme,
   useDeleteTheme,
   useSectorRotation,
   type RotationDashboard,
@@ -266,13 +269,15 @@ function RotationTable({
   onHover,
   onToggle,
   onDelete,
+  canDelete,
 }: {
   sectors: SectorRotationState[];
   active: Set<string>;
   onHover: (id: string | null) => void;
   onToggle: (id: string) => void;
-  /** Operator-only: themes are shared, so customers get no remove control. */
-  onDelete?: (id: string, name: string) => void;
+  onDelete: (id: string, name: string) => void;
+  /** Own themes: always. Shared themes: operator only (they affect everyone). */
+  canDelete: (s: SectorRotationState) => boolean;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggleExpand = (id: string) =>
@@ -316,6 +321,9 @@ function RotationTable({
                 <span className="flex items-baseline gap-2">
                   <span className="font-mono text-sm font-semibold text-fg-base">{s.label || s.group_id}</span>
                   {s.name !== (s.label || s.group_id) && <span className="truncate text-xs text-fg-subtle">{s.name}</span>}
+                  {s.personal && (
+                    <span className="rounded border border-accent/40 px-1 text-[10px] font-medium uppercase tracking-wide text-accent">mine</span>
+                  )}
                 </span>
                 {isBasket && (
                   <button type="button"
@@ -346,7 +354,7 @@ function RotationTable({
                 {members.map((m) => (
                   <span key={m} className="rounded border border-border bg-bg-subtle px-1.5 py-0.5 font-mono text-[11px] text-fg-muted">{m}</span>
                 ))}
-                {onDelete && (
+                {canDelete(s) && (
                   <button type="button"
                     onClick={() => onDelete(s.group_id, s.name)}
                     className="ml-auto flex items-center gap-1 rounded border border-rose-500/30 px-1.5 py-0.5 text-[11px] text-rose-400 hover:bg-rose-500/10">
@@ -362,45 +370,63 @@ function RotationTable({
   );
 }
 
-/** Create a theme inline — name + tickers → a live thematic basket (data op). */
-function AddThemeForm() {
+/**
+ * Create a theme inline — name + tickers → a thematic basket.
+ * `mine`: only the signed-in user sees it; stored on their account, never added
+ * to the shared live universe. `shared`: operator-only; visible to everyone and
+ * onboards its tickers into the streaming universe.
+ */
+function AddThemeForm({ mode }: { mode: "mine" | "shared" }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [label, setLabel] = useState("");
   const [tickers, setTickers] = useState("");
-  const create = useCreateTheme();
+  const createShared = useCreateTheme();
+  const createMine = useCreateMyTheme();
+  const active = mode === "mine" ? createMine : createShared;
 
   const members = tickers.split(/[\s,]+/).map((t) => t.trim().toUpperCase()).filter(Boolean);
-  const canSubmit = name.trim().length > 0 && members.length > 0 && !create.isPending;
+  const canSubmit = name.trim().length > 0 && members.length > 0 && !active.isPending;
+  const reset = () => { setName(""); setLabel(""); setTickers(""); };
   const submit = () => {
     if (!canSubmit) return;
-    create.mutate(
-      { name: name.trim(), label: label.trim() || null, members, benchmark: "SPY" },
-      { onSuccess: () => { setName(""); setLabel(""); setTickers(""); } },
-    );
+    if (mode === "mine") {
+      createMine.mutate({ name: name.trim(), label: label.trim() || null, members }, { onSuccess: reset });
+    } else {
+      createShared.mutate(
+        { name: name.trim(), label: label.trim() || null, members, benchmark: "SPY" },
+        { onSuccess: reset },
+      );
+    }
   };
 
+  const mine = mode === "mine";
   if (!open) {
     return (
       <button type="button" onClick={() => setOpen(true)}
         className="flex items-center gap-1.5 rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 text-sm text-fg-muted hover:bg-bg-muted">
-        <Plus className="h-4 w-4" /> Add theme
+        <Plus className="h-4 w-4" /> {mine ? "Add my theme" : "Add shared theme"}
       </button>
     );
   }
   return (
     <div className="w-full rounded-lg border border-border bg-bg-subtle p-3">
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-sm font-medium text-fg-base">New theme</span>
+        <span className="text-sm font-medium text-fg-base">
+          {mine ? "New personal theme" : "New shared theme"}
+          <span className="ml-2 text-[11px] font-normal text-fg-subtle">
+            {mine ? "only you see it" : "visible to everyone; adds its tickers to the live universe"}
+          </span>
+        </span>
         <button type="button" onClick={() => setOpen(false)} className="text-fg-subtle hover:text-fg-base"><X className="h-4 w-4" /></button>
       </div>
       <div className="flex flex-wrap items-end gap-2">
         <label className="flex flex-col gap-1 text-[11px] text-fg-subtle">Name
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Uranium Miners"
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Uranium Miners" maxLength={60}
             className="w-44 rounded border border-border bg-bg-base px-2 py-1 text-sm text-fg-base" />
         </label>
         <label className="flex flex-col gap-1 text-[11px] text-fg-subtle">Chart label
-          <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Uranium"
+          <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Uranium" maxLength={16}
             className="w-28 rounded border border-border bg-bg-base px-2 py-1 text-sm text-fg-base" />
         </label>
         <label className="flex flex-1 flex-col gap-1 text-[11px] text-fg-subtle">Tickers
@@ -410,14 +436,23 @@ function AddThemeForm() {
         </label>
         <button type="button" onClick={submit} disabled={!canSubmit}
           className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg disabled:opacity-50">
-          {create.isPending ? "Creating…" : "Create"}
+          {active.isPending ? "Creating…" : "Create"}
         </button>
       </div>
       {members.length > 0 && <p className="mt-1.5 text-[11px] text-fg-subtle">{members.length} holdings: {members.join(" ")}</p>}
-      {create.isError && <p className="mt-1.5 text-[11px] text-rose-400">Failed to create theme.</p>}
-      {!!create.data?.onboarded?.length && (
+      {active.isError && (
+        <p className="mt-1.5 text-[11px] text-rose-400">
+          {active.error instanceof Error && active.error.message ? active.error.message : "Failed to create theme."}
+        </p>
+      )}
+      {mine && createMine.isSuccess && (
         <p className="mt-1.5 text-[11px] text-blue-400">
-          Onboarding {create.data.onboarded.length} new symbol(s): {create.data.onboarded.join(" ")} — appears once data loads.
+          Saved. A ticker with no price history yet is listed under “Excluded” until its data loads.
+        </p>
+      )}
+      {!mine && !!createShared.data?.onboarded?.length && (
+        <p className="mt-1.5 text-[11px] text-blue-400">
+          Onboarding {createShared.data.onboarded.length} new symbol(s): {createShared.data.onboarded.join(" ")} — appears once data loads.
         </p>
       )}
     </div>
@@ -426,18 +461,24 @@ function AddThemeForm() {
 
 export function SectorsPage() {
   const { data, isLoading, error } = useSectorRotation();
-  // Themes are shared across all users: only the operator may add/remove them
-  // (the API enforces this; hiding the controls just avoids dead buttons).
+  // Shared themes affect everyone: only the operator adds/removes them (the API
+  // enforces it). Everyone can keep personal themes, stored on their own account.
   const isOperator = useCurrentUser().permissions.includes("operator.access");
   const deleteTheme = useDeleteTheme();
+  const deleteMyTheme = useDeleteMyTheme();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [hovered, setHovered] = useState<string | null>(null);
 
   const onDelete = (id: string, name: string) => {
-    if (window.confirm(`Remove the "${name}" theme? Its tickers stay in the universe.`)) {
+    if (id.startsWith(PERSONAL_THEME_PREFIX)) {
+      if (window.confirm(`Remove your "${name}" theme?`)) {
+        deleteMyTheme.mutate(id.slice(PERSONAL_THEME_PREFIX.length));
+      }
+    } else if (window.confirm(`Remove the "${name}" theme? Its tickers stay in the universe.`)) {
       deleteTheme.mutate(id);
     }
   };
+  const canDelete = (s: SectorRotationState) => s.personal || isOperator;
 
   const dash = data as RotationDashboard | undefined;
   const sectors = useMemo<SectorRotationState[]>(() => {
@@ -499,9 +540,12 @@ export function SectorsPage() {
           <div className="mt-4">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-fg-base">Sectors &amp; themes</h2>
-              {isOperator && <AddThemeForm />}
+              <div className="flex flex-wrap items-center gap-2">
+                <AddThemeForm mode="mine" />
+                {isOperator && <AddThemeForm mode="shared" />}
+              </div>
             </div>
-            <RotationTable sectors={sectors} active={active} onHover={setHovered} onToggle={toggle} onDelete={isOperator ? onDelete : undefined} />
+            <RotationTable sectors={sectors} active={active} onHover={setHovered} onToggle={toggle} onDelete={onDelete} canDelete={canDelete} />
           </div>
 
           {dash.excluded && dash.excluded.length > 0 && (
