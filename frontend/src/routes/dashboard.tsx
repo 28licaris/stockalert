@@ -13,8 +13,8 @@ import {
   useMyWatchlistDetail,
   useMyWatchlists,
   useNewsDigest,
-  useStrategyLeaderboard,
 } from "@/api/queries";
+import { useLibrary } from "@/api/library";
 import { useChatStore } from "@/stores/chat";
 import { useUserSetting } from "@/lib/storage";
 import { useCurrentUser } from "@/auth/useCurrentUser";
@@ -254,9 +254,12 @@ function WatchlistCard() {
 // ── strategy track-record card ───────────────────────────────────────
 
 function StrategyCard() {
-  const q = useStrategyLeaderboard();
+  // Customer-safe source: the redacted library cards (forward track record only).
+  // The owner leaderboard (/strategies/leaderboard) carries backtest stats and is
+  // operator-only, so a customer's home page must not call it.
+  const q = useLibrary();
   const rows = [...(q.data ?? [])]
-    .sort((a, b) => (b.paper_return ?? 0) - (a.paper_return ?? 0))
+    .sort((a, b) => (b.forward_return ?? 0) - (a.forward_return ?? 0))
     .slice(0, 5);
 
   return (
@@ -268,19 +271,19 @@ function StrategyCard() {
       ) : (
         <ul className="space-y-2">
           {rows.map((s) => {
-            const up = (s.paper_return ?? 0) >= 0;
+            const up = (s.forward_return ?? 0) >= 0;
             return (
               <li key={s.name} className="flex items-center justify-between gap-3 text-sm">
                 <span className="min-w-0 truncate text-fg-base">{s.title}</span>
                 <span className="flex shrink-0 items-center gap-3 font-mono text-xs tabular-nums">
                   <span className={cn(up ? "text-up" : "text-down")}>
-                    {s.paper_return != null
-                      ? `${up ? "+" : ""}${(s.paper_return * 100).toFixed(1)}%`
+                    {s.forward_return != null
+                      ? `${up ? "+" : ""}${(s.forward_return * 100).toFixed(1)}%`
                       : "—"}
                   </span>
                   <span className="text-fg-subtle">
-                    {s.paper_win_rate != null
-                      ? `${(s.paper_win_rate * 100).toFixed(0)}% win`
+                    {s.forward_win_rate != null
+                      ? `${(s.forward_win_rate * 100).toFixed(0)}% win`
                       : ""}
                   </span>
                 </span>

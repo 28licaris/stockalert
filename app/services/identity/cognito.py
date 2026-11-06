@@ -27,6 +27,27 @@ from app.services.identity.schemas import (
 from app.services.identity.provider_session import provider_source_from_id_claims
 
 
+def display_name_from_claims(claims: dict) -> str:
+    """Human-readable name for a new account, from the ID-token claims.
+
+    Order: ``name`` (Google, or a pool that collects it) → ``given_name`` +
+    ``family_name`` → the email's local part. ``cognito:username`` is
+    deliberately NOT used: this pool uses email as the username, so that claim
+    is the opaque user ID (a UUID), which is not a name and used to end up in
+    the user menu, the greeting and the tenant name for email/password
+    sign-ups.
+    """
+    name = str(claims.get("name") or "").strip()
+    if name:
+        return name
+    parts = [str(claims.get(k) or "").strip() for k in ("given_name", "family_name")]
+    joined = " ".join(p for p in parts if p)
+    if joined:
+        return joined
+    local = str(claims.get("email") or "").partition("@")[0].strip()
+    return local or "Trader"
+
+
 class CognitoIdentityProvider:
     def __init__(
         self,
@@ -154,11 +175,7 @@ class CognitoIdentityProvider:
         verified_raw = claims.get("email_verified", False)
         email_verified = verified_raw is True or str(verified_raw).lower() == "true"
         email = str(claims.get("email") or "")
-        display_name = str(
-            claims.get("name")
-            or claims.get("cognito:username")
-            or email.partition("@")[0]
-        )
+        display_name = display_name_from_claims(claims)
         try:
             identity = ExternalIdentityClaim(
                 provider="cognito",

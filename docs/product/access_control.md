@@ -41,8 +41,8 @@ Derived in `app/services/identity/permissions.py::permissions_for`. When
    prompt and again at tool execution. Every registered MCP tool must be classified
    (test).
 4. **Frontend hides + guards.** Nav items carry `adminOnly`; admin routes are
-   wrapped in `AdminOnly`; the Library "Owner view" and the Sectors add/remove
-   theme controls render for operators only. **UI hiding is convenience, not
+   wrapped in `AdminOnly`; the Library "Owner view" and the Sectors *shared*-theme
+   controls render for operators only (everyone gets "Add my theme"). **UI hiding is convenience, not
    security — the API is the boundary.**
 
 ### Customer-allowed API (summary; the code is authoritative)
@@ -50,7 +50,7 @@ Derived in `app/services/identity/permissions.py::permissions_for`. When
 Read: bars, signals, instruments search/lookup, market banner, calendar, news,
 economic, options hot tier + GEX, Elliott Wave, sector rotation + themes,
 research rankings, paper status/export, library. Compute: `POST indicators/chart-data`,
-backtest catalog/run/runs. Per-user: `/customer/*`, `/my/watchlists*`.
+backtest catalog/run/runs. Per-user: `/customer/*`, `/my/watchlists*`, `/my/sector-themes*`.
 Assistant: `/cockpit/assistant/*`.
 
 Operator-only: stream, backfill, jobs, ClickHouse console, health, lake browser,
@@ -74,7 +74,7 @@ their own tenant-scoped rows · 🔒 = subscription-entitlement gated (future).
 | Calendar | `/calendar` | read | session + customer rule | — |
 | News | `/news` | read | session + customer rule | — |
 | Economic | `/economic` | read | session + customer rule | — |
-| Sectors (RRG) | `/sectors` | read; theme add/remove is operator-only | read: customer rule; theme writes operator-only | — |
+| Sectors (RRG) | `/sectors` | read the shared sectors/themes; add/remove **own** themes (stored on their account, never in the shared live universe) | rotation read: customer rule; `/my/sector-themes` per-user; shared theme writes operator-only | — |
 | Screener | `/screener` (flag off) | read + run screens | operator-only until the page ships | 🔒 |
 | Backtest | `/backtest` | run backtests | session + customer rule (**run registry is shared**) | 🔒, tenant-scope runs |
 | Strategy Library | `/library` | read redacted cards + alerts; owner view operator-only | `/library` customer rule; `/strategies*` operator-only | 🔒 subscriber view |

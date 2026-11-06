@@ -68,6 +68,7 @@ from app.api import (
     routes_wave,
     routes_watchlist,
     routes_my_watchlists,
+    routes_my_sector_themes,
 )
 from app.services.journal.journal_sync import journal_sync_service
 
@@ -998,6 +999,7 @@ app.include_router(routes_options.router, prefix=_V1, tags=["Options"])
 app.include_router(routes_monitors.router, prefix=_V1, tags=["Monitors"])
 app.include_router(routes_watchlist.router, prefix=_V1, tags=["Watchlist"])
 app.include_router(routes_my_watchlists.router)  # prefix baked in (/api/v1/my/watchlists)
+app.include_router(routes_my_sector_themes.router)  # prefix baked in (/api/v1/my/sector-themes)
 app.include_router(routes_stream.router, prefix=_V1, tags=["Stream"])
 app.include_router(
     routes_jobs.router,
