@@ -137,6 +137,13 @@ def _scan_futures_lake(
     # Sort combined table by timestamp; for ties the Schwab rows come second
     # (appended last) and we keep_first=False so the LAST occurrence (Schwab)
     # is retained after dedup. Then sort ascending for the CH insert.
+    # The two Iceberg tables are written by different jobs and come back with
+    # different Arrow flavours of the same column (``symbol`` is ``string`` in
+    # polygon_continuous but ``large_string`` in schwab_futures), which makes
+    # ``concat_tables`` raise ArrowInvalid. Align to the Schwab schema first;
+    # both scans select the same columns in the same order.
+    if poly_arr.schema != schwab_arr.schema:
+        poly_arr = poly_arr.cast(schwab_arr.schema)
     combined = pa.concat_tables([poly_arr, schwab_arr])
     ts_col = combined.column("timestamp")
     sort_idx = pa.compute.sort_indices(ts_col)
