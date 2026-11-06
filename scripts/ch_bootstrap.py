@@ -86,7 +86,7 @@ def step_bars(args, ctx) -> str:
         for seg_start, seg_end in split_window(since, until, args.max_years):
             cmd = [sys.executable, "scripts/rebuild_ch_from_lake.py", "--symbols", ",".join(symbols),
                    "--since", seg_start.isoformat(), "--until", seg_end.isoformat(),
-                   "--parallelism", str(args.parallelism)]
+                   "--parallelism", str(args.parallelism), "--batch-symbols", str(args.batch_symbols)]
             log.info("bars: segment_start=%s segment_end=%s symbols=%d", seg_start, seg_end, len(symbols))
             if _run(cmd) != 0:
                 failures += 1
@@ -162,7 +162,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--state-mode", choices=["empty_only", "replace"], default="empty_only")
     ap.add_argument("--files", action="store_true", help="also restore the paper-trading files into data/paper")
     ap.add_argument("--parallelism", type=int, default=2, help="symbols loaded at once (memory-bound: keep small)")
-    ap.add_argument("--max-years", type=int, default=3, help="longest window loaded in one call (bounds memory)")
+    ap.add_argument("--max-years", type=int, default=6, help="longest window loaded in one call (bounds memory)")
+    ap.add_argument("--batch-symbols", type=int, default=8,
+                    help="symbols per lake read (bulk path: one read + Arrow inserts per batch; 1 = original per-symbol path)")
     ap.add_argument("--dry-run", action="store_true", help="print the plan, change nothing")
     ap.add_argument("--out-json", type=Path)
     args = ap.parse_args(argv)
