@@ -60,6 +60,7 @@ Non-negotiable. Read before writing code.
 
 | Doc | Covers |
 |---|---|
+| [dev_environment.md](operations/dev_environment.md) | **Start here for the AWS dev box**: log in (Session Manager), deploy, logs, secrets |
 | [runbook.md](operations/runbook.md) | Restart, backfill, monitoring, disaster recovery |
 | [startup_flow.md](operations/startup_flow.md) | What boot does; verifying each subsystem is alive |
 | [commands.md](operations/commands.md) | Command cheatsheet |
