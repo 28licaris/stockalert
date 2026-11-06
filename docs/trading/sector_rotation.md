@@ -74,7 +74,8 @@ about), **result objects over raises**, **`from_settings()` construction**, and
 
 ## 4. Data plan (step 0 — prerequisite)
 
-RRG needs ~1 year of **daily** bars for each ETF and the benchmark. The read
+RRG needs ~1 year of **daily** bars for each ETF and the benchmark. *(This section describes the original minute-bar design; the read path is now the
+daily table, see §5.3.)* The read
 path is **ClickHouse** — the fast single-symbol hot tier — not the cold lake.
 RRG covers a fixed set of *streamed* symbols, so this is a single-symbol-read
 problem (the lake is the whole-market path and is ~20–40s/symbol; reading the
@@ -243,10 +244,12 @@ samples of `(rs_ratio, rs_momentum)`. Functions are total: insufficient history
 
 ### 5.3 Resolver (`resolver.py`)
 - `resolve(group) -> pd.Series` (daily close, date-indexed).
-- `kind == "etf"` → `get_chart_bars(group.members[0], interval="1d",
-  lookback_days=RRG_LOOKBACK_DAYS, source=AUTO)` → close series. **AUTO = read
-  from ClickHouse** (fast, single-symbol), self-healing from the lake on a
-  cold window. *Not* the cold lake source — that's the whole-market path.
+- `kind == "etf"` → the symbol's series from `load_daily_closes()`, which reads
+  **every** symbol the dashboard needs from ClickHouse `ohlcv_daily` (split-adjusted
+  daily bars) in **one query**. *(Superseded 2026-11-06: the original design resampled
+  `ohlcv_1m` per symbol, about 60 sequential reads and stale for any symbol past the
+  300-symbol streaming cap. See the sectors README "Data".)* There is no fallback to
+  minute bars: a symbol with no daily data is excluded with a named reason.
 - `kind == "basket"` → `BasketGroup` seam: normalize each constituent to a base
   date, weight, sum → index series. **Phase 1 raises `NotImplementedError`
   with a clear message** (the seam exists and is tested; it is not silently

@@ -1374,6 +1374,13 @@ export function useSectorRotation(benchmark = "SPY", tailWeeks = 12) {
     },
     staleTime: 5 * 60_000,
     refetchOnWindowFocus: false,
+    // While a personal theme's price history is being fetched, poll until it lands.
+    refetchInterval: (query) =>
+      (query.state.data as RotationDashboard | undefined)?.excluded?.some((e) =>
+        e.reason.startsWith("loading price history"),
+      )
+        ? 4_000
+        : false,
   });
 }
 
@@ -1427,6 +1434,8 @@ export interface PersonalTheme {
   name: string;
   label: string;
   members: string[];
+  /** Tickers whose history is being fetched right now (create response only). */
+  loading?: string[];
 }
 
 export interface PersonalThemeCreate {

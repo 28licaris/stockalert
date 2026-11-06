@@ -16,6 +16,7 @@ from sqlalchemy.pool import StaticPool
 from app.services.identity.models import IdentityBase, UserModel
 from app.services.sectors import service as service_mod
 from app.services.sectors.personal_themes import (
+    MAX_DISTINCT_TICKERS_TOTAL,
     MAX_MEMBERS,
     MAX_THEMES_PER_USER,
     PERSONAL_ID_PREFIX,
@@ -46,9 +47,33 @@ def _user(factory, email: str):
         return u.id
 
 
+class FakeDemand:
+    """Stands in for DailyDemand: no ClickHouse, no Schwab, no threads."""
+
+    def __init__(self, unknown=(), raises=None):
+        self.unknown, self.raises = set(unknown), raises
+        self.scheduled: list[list[str]] = []
+
+    def check(self, symbols):
+        from app.services.ingest.daily_on_demand import DemandCheck
+
+        if self.raises:
+            raise self.raises
+        bad = [s for s in symbols if s in self.unknown]
+        return DemandCheck(to_fetch=tuple(s for s in symbols if s not in self.unknown), unknown=tuple(bad))
+
+    def schedule(self, symbols):
+        self.scheduled.append(list(symbols))
+
+
 @pytest.fixture
-def svc(factory):
-    return PersonalThemesService(PersonalThemesRepository(factory))
+def demand():
+    return FakeDemand()
+
+
+@pytest.fixture
+def svc(factory, demand):
+    return PersonalThemesService(PersonalThemesRepository(factory), daily=demand)
 
 
 def _req(name="Copper Miners", members=("fcx", "SCCO"), label=None):
@@ -168,7 +193,7 @@ def test_dashboard_includes_personal_groups_flagged_and_surfaces_missing_data(mo
                       members=["ZZZZ"], personal=True),
     ]
 
-    def fake_resolve(group, *, lookback_days=None):
+    def fake_resolve(group, closes=None):
         if group.id == "SPY":
             return bench
         if group.id in ("XLK", "my:hot"):
@@ -176,6 +201,7 @@ def test_dashboard_includes_personal_groups_flagged_and_surfaces_missing_data(mo
         raise GroupResolutionError("no daily bars for ZZZZ yet")
 
     monkeypatch.setattr(service_mod, "resolve", fake_resolve)
+    monkeypatch.setattr(service_mod, "load_daily_closes", lambda symbols, days: {})
     monkeypatch.setattr(service_mod.definitions, "default_groups", lambda bench=None: shared)
 
     svc = SectorRotationService.from_settings(benchmark="SPY", extra_groups=mine)
@@ -187,3 +213,69 @@ def test_dashboard_includes_personal_groups_flagged_and_surfaces_missing_data(mo
     assert by_id["my:hot"].personal is True
     assert [e.group_id for e in dash.excluded] == ["my:nodata"]
     assert "no daily bars" in dash.excluded[0].reason
+
+
+# ── on-demand history: validate before saving, fetch after ────────────
+
+
+def test_unknown_ticker_is_rejected_and_nothing_is_saved(factory):
+    demand = FakeDemand(unknown=["ZZZZ"])
+    svc = PersonalThemesService(PersonalThemesRepository(factory), daily=demand)
+    uid = _user(factory, "a@x.com")
+    with pytest.raises(PersonalThemeError, match="Unknown ticker: ZZZZ"):
+        svc.create(uid, _req(members=["FCX", "zzzz"]))
+    assert svc.list(uid) == [] and demand.scheduled == []
+
+
+def test_known_tickers_are_saved_then_scheduled_for_fetch(svc, demand, factory):
+    uid = _user(factory, "a@x.com")
+    svc.create(uid, _req(members=["fcx", "scco"]))
+    assert demand.scheduled == [["FCX", "SCCO"]]
+
+
+def test_source_outage_propagates_and_saves_nothing(factory):
+    from app.services.ingest.daily_on_demand import DailyDataUnavailable
+
+    demand = FakeDemand(raises=DailyDataUnavailable("token expired"))
+    svc = PersonalThemesService(PersonalThemesRepository(factory), daily=demand)
+    uid = _user(factory, "a@x.com")
+    with pytest.raises(DailyDataUnavailable):
+        svc.create(uid, _req())
+    assert svc.list(uid) == []
+
+
+def test_too_many_new_tickers_becomes_a_user_error(factory):
+    from app.services.ingest.daily_on_demand import TooManyNewTickers
+
+    svc = PersonalThemesService(
+        PersonalThemesRepository(factory), daily=FakeDemand(raises=TooManyNewTickers("Add at most 8"))
+    )
+    with pytest.raises(PersonalThemeError, match="Add at most 8"):
+        svc.create(_user(factory, "a@x.com"), _req())
+
+
+def test_global_capacity_blocks_new_tickers_but_not_existing_ones(factory, monkeypatch):
+    from app.services.sectors import personal_themes as pt
+
+    monkeypatch.setattr(pt, "MAX_DISTINCT_TICKERS_TOTAL", 3)
+    svc = PersonalThemesService(PersonalThemesRepository(factory), daily=FakeDemand())
+    a, b = _user(factory, "a@x.com"), _user(factory, "b@x.com")
+    svc.create(a, _req(name="One", members=["AAA", "BBB", "CCC"]))
+    with pytest.raises(PersonalThemeError, match="capacity"):
+        svc.create(b, _req(name="Two", members=["DDD"]))
+    svc.create(b, _req(name="Two", members=["AAA", "BBB"]))  # already tracked: no new load
+    assert svc.all_tickers() == {"AAA", "BBB", "CCC"}
+
+
+def test_all_tickers_spans_every_user(svc, factory):
+    a, b = _user(factory, "a@x.com"), _user(factory, "b@x.com")
+    svc.create(a, _req(name="One", members=["AAA", "BBB"]))
+    svc.create(b, _req(name="Two", members=["BBB", "CCC"]))
+    assert svc.all_tickers() == {"AAA", "BBB", "CCC"}
+
+
+def test_create_response_names_the_tickers_being_fetched(svc, factory):
+    uid = _user(factory, "a@x.com")
+    created = svc.create(uid, _req(members=["fcx", "scco"]))
+    assert created.loading == ["FCX", "SCCO"]
+    assert svc.list(uid)[0].loading == [], "listing never claims a fetch is running"

@@ -23,12 +23,31 @@ from app.services.identity.schemas import Principal, Role
 from app.services.sectors.personal_themes import PersonalThemesRepository, PersonalThemesService
 
 
+class FakeDemand:
+    """Stands in for DailyDemand: no ClickHouse, no Schwab, no threads."""
+
+    def __init__(self, unknown=(), raises=None):
+        self.unknown, self.raises = set(unknown), raises
+        self.scheduled: list[list[str]] = []
+
+    def check(self, symbols):
+        from app.services.ingest.daily_on_demand import DemandCheck
+
+        if self.raises:
+            raise self.raises
+        bad = [s for s in symbols if s in self.unknown]
+        return DemandCheck(to_fetch=tuple(s for s in symbols if s not in self.unknown), unknown=tuple(bad))
+
+    def schedule(self, symbols):
+        self.scheduled.append(list(symbols))
+
+
 @pytest.fixture
 def world(monkeypatch):
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     IdentityBase.metadata.create_all(engine)
     factory = sessionmaker(engine, expire_on_commit=False)
-    service = PersonalThemesService(PersonalThemesRepository(factory))
+    service = PersonalThemesService(PersonalThemesRepository(factory), daily=FakeDemand(unknown=["ZZZZ"]))
     monkeypatch.setattr(routes, "_service", lambda: service)
     monkeypatch.setattr(settings, "auth_enabled", False)  # no session gate; principal is overridden below
     monkeypatch.setattr(routes, "_user_id", lambda principal: principal.user_id)  # skip dev-user ensure
@@ -193,3 +212,23 @@ def test_rotation_with_auth_off_has_no_personal_themes(monkeypatch):
     monkeypatch.setattr(rot.SectorRotationService, "from_settings", _fake_dashboard_service(captured))
     assert TestClient(app).get("/api/v1/sectors/rotation").status_code == 200
     assert captured["extra"] == []
+
+
+def test_unknown_ticker_is_a_400_with_a_clear_message(world):
+    make_user, current, service = world
+    current["p"] = make_user("a@x.com")
+    r = TestClient(app).post("/api/v1/my/sector-themes", json={"name": "Typo", "members": ["AAPL", "ZZZZ"]})
+    assert r.status_code == 400 and "Unknown ticker: ZZZZ" in r.json()["message"]
+    assert service.list(current["p"].user_id) == []
+
+
+def test_price_source_outage_is_a_503_not_a_400(world, monkeypatch):
+    from app.services.ingest.daily_on_demand import DailyDataUnavailable
+
+    make_user, current, service = world
+    current["p"] = make_user("a@x.com")
+    monkeypatch.setattr(service, "_daily", FakeDemand(raises=DailyDataUnavailable("token expired")))
+    r = TestClient(app).post("/api/v1/my/sector-themes", json={"name": "Any", "members": ["AAPL"]})
+    assert r.status_code == 503 and "temporarily unavailable" in r.json()["message"]
+    assert "token" not in r.text, "internal reason must not leak to the user"
+    assert service.list(current["p"].user_id) == []

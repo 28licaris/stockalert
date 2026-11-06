@@ -34,7 +34,17 @@ DB = settings.iceberg_equities_glue_database
 
 
 def _universe() -> list[str]:
-    return [s for s in Path("configs/liquid_universe.txt").read_text().split(",") if s]
+    base = [s for s in Path("configs/liquid_universe.txt").read_text().split(",") if s]
+    # Also keep current: the active stream universe (shared sector themes) and users'
+    # personal-theme tickers, or the Sector Rotation page goes stale after a backfill.
+    from app.services.ingest.daily_universe import extra_daily_symbols
+
+    extra, warnings = extra_daily_symbols()
+    for w in warnings:
+        print(f"WARNING: {w}")
+    merged = list(dict.fromkeys([*base, *extra]))
+    print(f"daily universe: {len(base)} liquid + {len(merged) - len(base)} tracked extras = {len(merged)}")
+    return merged
 
 
 def _ch_max_date():
