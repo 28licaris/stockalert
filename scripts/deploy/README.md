@@ -21,7 +21,9 @@ suffix (`stockalert-<env>`); stack outputs (`InstanceId`, `OpsBucketName`,
 `EcrRepositoryUri`, `DevHost`) are the only place names come from — nothing is
 hard-coded on the Mac side.
 
-Typical day:
+Typical day: build from the merged commit, then release it. The full checklist (CI and
+branch-protection gotchas, verification, rollback) is in
+[`docs/operations/dev_environment.md`](../../docs/operations/dev_environment.md#release-a-change-to-the-dev-box).
 
 ```bash
 scripts/deploy/build_push.sh dev          # prints the sha

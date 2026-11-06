@@ -256,7 +256,7 @@ in the image. Non-root user. `HEALTHCHECK` on `/health`. A `.dockerignore`
 keeps `data/`, `ewt/`, `docs/`, `.git` out of the context. Tag = git SHA, plus
 a moving `dev` tag.
 
-Release flow (Mac side, `scripts/deploy/`):
+Release flow (Mac side, `scripts/deploy/`; the step-by-step checklist is in [`dev_environment.md`](dev_environment.md#release-a-change-to-the-dev-box)):
 
 | Script | Does |
 |---|---|

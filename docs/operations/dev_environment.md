@@ -52,17 +52,60 @@ df -h / ; free -m                                  # disk and memory
 Use `docker compose run`, never `docker run --env-file`: the rendered `.env` single-quotes its
 values and plain docker keeps the quotes, so passwords fail.
 
-## From the laptop (repo root)
+## Release a change to the dev box
 
-```bash
-scripts/deploy/build_push.sh dev                   # builds arm64, pushes to ECR, prints the <sha>
-scripts/deploy/release.sh dev <sha>                # syncs config, migrates, restarts, checks /health
-printf '%s' 'value' | scripts/deploy/put_param.sh dev <name>   # store a secret (SSM), then release
-scripts/deploy/push_schwab_token.sh dev            # Schwab refresh token: every 7 days
-```
+Code reaches the box as an arm64 image tagged with the merge commit's 12-character SHA.
+Nothing changes on the box until step 4.
 
-Details: [`scripts/deploy/README.md`](../../scripts/deploy/README.md). Rebuild or restore the
-ClickHouse data: [`runbook.md`](runbook.md) ("Rebuild ClickHouse from the lake").
+1. **CI green and up to date.** A PR needs `backend`, `frontend` and `image` green *and* to be up to
+   date with `main`. After any merge, every other open PR is behind: `gh pr update-branch <n>` and wait
+   about 3 minutes for CI again. If two open PRs both change `frontend/src/api/types.gen.ts`, the second
+   one merges `main`, then regenerates the file (command in the docstring of
+   `tests/contract/test_openapi_types_in_sync.py`) and checks it is unchanged.
+2. **Merge** with the operator's explicit approval (merge commit, as every PR so far).
+3. **Build from the merged commit**, clean tree (the tag must mean what it says):
+
+   ```bash
+   git fetch && git checkout --detach origin/main
+   scripts/deploy/build_push.sh dev        # prints the <sha>; verifies the tag is in ECR
+   ```
+
+4. **Release.** Note the running tag first, it is your rollback target
+   (`grep APP_IMAGE /opt/stockalert/release.env` on the box), then release:
+
+   ```bash
+   scripts/deploy/release.sh dev <sha>
+   ```
+
+   On the box this syncs `infra/dev/`, re-renders `.env` from SSM, pulls, runs
+   `alembic upgrade head` in a one-off container **before** anything restarts, then recreates `api`
+   and `worker` and checks `/health`. If the migration fails, nothing restarts. Expect the site and the
+   Schwab streamer to be down for 1 to 2 minutes, so release in the quiet window, 01:00 to 09:00 UTC
+   (no equity session; the equity stream runs 09:00 to 01:00 UTC, regular hours 14:30 to 21:00 UTC).
+   It does not touch a running `ch-bootstrap2` rebuild. Caddy and Postgres can recreate if their floating tags moved.
+5. **Verify** (about a minute):
+
+   ```bash
+   H=https://app.54-82-165-71.sslip.io
+   curl -s $H/health                                                    # {"status":"ok","clickhouse":true}
+   curl -s -o /dev/null -w '%{http_code}\n' "$H/api/v1/bars?symbol=SPY"  # 401 (no cookie)
+   curl -s -o /dev/null -w '%{http_code}\n' $H/mcp                       # 403 (Caddy)
+   ```
+
+   On the box (`sudo -i; cd /opt/stockalert`): `docker compose ps` (all healthy, `api` and `worker` on the
+   new tag), `docker compose exec -T api alembic current` (the new head), and
+   `docker compose logs --since 5m worker | grep "streamer LOGIN success"`. Then sign in and open a page
+   you changed. A non-operator test account catches missing customer routes: the route-policy test
+   covers the API, not what the pages call.
+6. **Roll back** by releasing the previous tag: `scripts/deploy/release.sh dev <previous-sha>`.
+   Migrations are not undone; downgrade by hand (`docker compose run --rm --no-deps api alembic downgrade -1`)
+   only if the old code cannot run on the new schema.
+
+Other deploy actions: `printf '%s' 'value' | scripts/deploy/put_param.sh dev <name>` stores a secret in
+SSM (then release to re-render `.env`), and `scripts/deploy/push_schwab_token.sh dev` renews the Schwab
+refresh token every 7 days. Script details: [`scripts/deploy/README.md`](../../scripts/deploy/README.md).
+Rebuild or restore the ClickHouse data: [`runbook.md`](runbook.md) ("Rebuild ClickHouse from the lake").
+Cognito and other CloudFormation changes are not releases: the operator runs those change sets.
 
 ## Rules that keep it safe
 
