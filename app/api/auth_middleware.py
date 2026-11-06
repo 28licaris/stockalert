@@ -159,6 +159,7 @@ CUSTOMER_RULES: tuple[PolicyRule, ...] = (
     # Per-user data (Principal-scoped in the route)
     PolicyRule("/api/v1/customer"),
     PolicyRule("/api/v1/my/watchlists"),
+    PolicyRule("/api/v1/my/sector-themes"),
     # Assistant (conversations are scoped to the caller's tenant; tool set is
     # restricted for non-operators in app/services/assistant/policy.py)
     PolicyRule("/cockpit/assistant"),

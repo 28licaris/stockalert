@@ -984,7 +984,8 @@ export interface paths {
         };
         /**
          * Get Sector Rotation
-         * @description RRG dashboard for the sector universe vs `benchmark`.
+         * @description RRG dashboard for the sector universe vs `benchmark`, plus the signed-in
+         *     user's own themes (flagged ``personal``) when auth is on.
          */
         get: operations["get_sector_rotation_api_v1_sectors_rotation_get"];
         put?: never;
@@ -1662,6 +1663,44 @@ export interface paths {
         post?: never;
         /** Remove Member */
         delete: operations["remove_member_api_v1_my_watchlists__name__members__symbol__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/my/sector-themes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List My Themes */
+        get: operations["list_my_themes_api_v1_my_sector_themes_get"];
+        put?: never;
+        /**
+         * Create My Theme
+         * @description Create, or replace the caller's theme of the same name.
+         */
+        post: operations["create_my_theme_api_v1_my_sector_themes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/my/sector-themes/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete My Theme */
+        delete: operations["delete_my_theme_api_v1_my_sector_themes__slug__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4881,6 +4920,34 @@ export interface components {
              */
             count: number;
         };
+        /** PersonalTheme */
+        PersonalTheme: {
+            /**
+             * Theme Id
+             * @description Chart group id: 'my:<slug>'.
+             */
+            theme_id: string;
+            /**
+             * Slug
+             * @description Use this in DELETE /my/sector-themes/{slug}.
+             */
+            slug: string;
+            /** Name */
+            name: string;
+            /** Label */
+            label: string;
+            /** Members */
+            members: string[];
+        };
+        /** PersonalThemeCreateRequest */
+        PersonalThemeCreateRequest: {
+            /** Name */
+            name: string;
+            /** Members */
+            members: string[];
+            /** Label */
+            label?: string | null;
+        };
         /** PortalSessionResponse */
         PortalSessionResponse: {
             /** Url */
@@ -5564,6 +5631,12 @@ export interface components {
              * @enum {string}
              */
             kind: "etf" | "basket";
+            /**
+             * Personal
+             * @description True when this is the signed-in user's own theme.
+             * @default false
+             */
+            personal: boolean;
             /**
              * Members
              * @description Constituent tickers (the ETF itself for kind='etf'; the basket holdings for kind='basket') — lets the UI show what's inside.
@@ -9280,6 +9353,88 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["WatchlistDetail"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_my_themes_api_v1_my_sector_themes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonalTheme"][];
+                };
+            };
+        };
+    };
+    create_my_theme_api_v1_my_sector_themes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PersonalThemeCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonalTheme"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_my_theme_api_v1_my_sector_themes__slug__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

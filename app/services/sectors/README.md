@@ -24,6 +24,7 @@ and implement the basket branch in `resolver.py`. Nothing else changes.
 | `definitions.py` | Registry of groups (11 SPDR ETFs) + benchmark. Phase-2 seam. |
 | `resolver.py` | `RotationGroup → daily close series` via `bars_gateway` (lake, `1d`, split-adjusted). ETF passthrough; basket raises until Phase 2. |
 | `rrg.py` | Pure math: RS-Ratio, RS-Momentum, quadrant, weekly tail, rebased RS line. Total functions — thin data → typed `SectorScore(sufficient=False)`. |
+| `personal_themes.py` | A customer's **own** themes: model + user-scoped repository + service on the identity PostgreSQL (`user_sector_themes`, migration `20261106_06`). Ids are `my:<slug>`; flagged `personal` on the dashboard. **Never** onboarded into the shared streaming universe (daily closes only; a ticker without data shows up as `excluded`). Caps: 10 themes/user, 20 tickers/theme. |
 | `service.py` | `SectorRotationService.from_settings()` → `build_dashboard()`. Resolves benchmark once, scores each group, surfaces failures in `excluded`. |
 
 ## The math (our flavor of JdK RS-Ratio / RS-Momentum)

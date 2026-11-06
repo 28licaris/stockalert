@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Query
+from uuid import UUID
+
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.config import settings
 from app.services.sectors import RotationDashboard, SectorRotationService
 from app.services.sectors import service as sectors_service
+from app.services.sectors.personal_themes import PersonalThemesService
 from app.services.sectors.schemas import (
     ThemeCreateRequest,
     ThemeMutationResponse,
@@ -25,8 +28,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _session_user_id(request: Request) -> UUID | None:
+    """The signed-in user's id, or None when auth is off (local single-operator
+    dev has no per-user themes). With auth on the session gate has already
+    required a session; a missing one here is a 401, never a silent fallback."""
+    if not settings.auth_enabled:
+        return None
+    from app.api.auth_dependencies import get_principal_or_dev
+
+    return get_principal_or_dev(request).user_id
+
+
 @router.get("/sectors/rotation", response_model=RotationDashboard)
 def get_sector_rotation(
+    request: Request,
     benchmark: str = Query(
         default="", description="Benchmark symbol; defaults to the configured RRG benchmark (SPY)."
     ),
@@ -35,11 +50,19 @@ def get_sector_rotation(
         description="Weekly points in each sector's scatter tail; 0 ⇒ configured default.",
     ),
 ) -> RotationDashboard:
-    """RRG dashboard for the sector universe vs `benchmark`."""
+    """RRG dashboard for the sector universe vs `benchmark`, plus the signed-in
+    user's own themes (flagged ``personal``) when auth is on."""
     bench = benchmark.strip().upper() or settings.rrg_benchmark
     weeks = tail_weeks or None
+    user_id = _session_user_id(request)
     try:
-        service = SectorRotationService.from_settings(benchmark=bench)
+        extra = []
+        if user_id is not None:
+            try:
+                extra = PersonalThemesService.from_settings().groups_for(user_id, bench)
+            except Exception:  # noqa: BLE001 — personal themes must never break the shared chart
+                logger.exception("personal themes unavailable for user=%s; showing shared only", user_id)
+        service = SectorRotationService.from_settings(benchmark=bench, extra_groups=extra)
         return service.build_dashboard(tail_weeks=weeks)
     except Exception as exc:  # noqa: BLE001 — boundary; surface, don't mask
         logger.exception("get_sector_rotation failed (benchmark=%s)", bench)
