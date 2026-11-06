@@ -9,6 +9,7 @@ templates, not two copies.
 |---|---|---|
 | [`auth/`](auth/README.md) | Cognito user pool + app client per environment (`stockalert-auth-<env>`) | `aws cloudformation deploy … --template-file infra/auth/cognito.yaml` |
 | [`dev/`](dev/README.md) | The application box: one Graviton EC2 running Docker Compose (`caddy`, `api`, `worker`, `clickhouse`, `postgres`), plus ops bucket, ECR, logs, snapshots, alerts, health check | `stack.yaml` via CloudFormation; files via `scripts/deploy/release.sh` |
+| [`devbox/`](devbox/README.md) | Personal cloud dev machine (`stockalert-devbox`): VS Code Remote-SSH over SSM, lake read-only, auto-stop | `scripts/devbox/devbox.sh deploy` then `provision` |
 
 Spec and decisions: [`docs/operations/deployment_dev.md`](../docs/operations/deployment_dev.md).
 Mac-side tooling: [`scripts/deploy/`](../scripts/deploy/README.md).
