@@ -1954,7 +1954,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Update Current User
+         * @description Change the caller's own display name. Cookie-authenticated, so CSRF-checked.
+         */
+        patch: operations["update_current_user_api_v1_customer_me_patch"];
         trace?: never;
     };
     "/api/v1/customer/sessions": {
@@ -6237,6 +6241,18 @@ export interface components {
              */
             note: string;
         };
+        /**
+         * UpdateDisplayNameRequest
+         * @description Body of ``PATCH /customer/me``: the name shown in the UI (not the email).
+         *
+         *     Control characters are rejected with a ``pattern`` constraint rather than a
+         *     custom validator: a ``ValueError`` in the error context is not JSON
+         *     serialisable, which would turn a bad input into a 500 instead of a 422.
+         */
+        UpdateDisplayNameRequest: {
+            /** Display Name */
+            display_name: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -9688,6 +9704,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CurrentUserResponse"];
+                };
+            };
+        };
+    };
+    update_current_user_api_v1_customer_me_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateDisplayNameRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentUserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
