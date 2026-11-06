@@ -247,11 +247,29 @@ class ClickHouseStateClient:
         self._c().insert_arrow(table, data, database=database)
 
     def coverage(self, database: str, table: str) -> list[tuple[str, datetime, datetime, int]]:
-        rows = self._c().query(
-            f"SELECT symbol, min(timestamp), max(timestamp), count() FROM {database}.{table} "
+        """Per symbol: first bar, last bar and the number of DISTINCT minutes.
+
+        ``rows`` is distinct timestamps, not ``count()``: the bar tables are
+        ReplacingMergeTree, and until a merge runs a symbol holds duplicate rows (AAPL on
+        the laptop: 5.88M rows for fewer than 5.03M minutes that can exist), which made
+        the post-rebuild verify demand more rows than there are minutes. Counted one symbol
+        at a time: a single ``GROUP BY symbol`` with ``uniqExact`` exhausts ClickHouse's
+        memory on the dev box (measured: 2.7 GiB limit hit), while one symbol at a time
+        peaks around 0.5 GiB (about 160 s for 425 symbols).
+        """
+        c = self._c()
+        spans = c.query(
+            f"SELECT symbol, min(timestamp), max(timestamp) FROM {database}.{table} "
             "GROUP BY symbol ORDER BY symbol"
         ).result_rows
-        return [(r[0], _ensure_utc(r[1]), _ensure_utc(r[2]), int(r[3])) for r in rows]
+        out: list[tuple[str, datetime, datetime, int]] = []
+        for sym, first, last in spans:
+            n = c.query(
+                f"SELECT uniqExact(timestamp) FROM {database}.{table} WHERE symbol = {{s:String}}",
+                parameters={"s": sym},
+            ).result_rows[0][0]
+            out.append((sym, _ensure_utc(first), _ensure_utc(last), int(n)))
+        return out
 
     def command(self, sql: str) -> None:
         self._c().command(sql)

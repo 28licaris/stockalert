@@ -149,3 +149,68 @@ def test_uuid_columns_are_exported_as_strings_and_others_untouched():
     sel = select_list([("run_id", "UUID"), ("parent", "Nullable(UUID)"), ("name", "String"), ("ts", "DateTime64(3, 'UTC')")])
     assert sel == "toString(`run_id`) AS `run_id`, toString(`parent`) AS `parent`, `name`, `ts`"
     assert select_list([]) == "*"
+
+
+# ── coverage counts DISTINCT minutes, one symbol at a time ────────────
+
+
+class CoverageClient:
+    """Answers the two query shapes ``ClickHouseStateClient.coverage`` issues."""
+
+    def __init__(self, spans, distinct):
+        self.spans, self.distinct, self.calls = spans, distinct, []
+
+    def query(self, sql, parameters=None):
+        self.calls.append((sql, parameters))
+
+        class R:
+            pass
+
+        r = R()
+        if "uniqExact" in sql:
+            r.result_rows = [(self.distinct[parameters["s"]],)]
+        else:
+            r.result_rows = self.spans
+        return r
+
+
+def test_coverage_reports_distinct_minutes_not_raw_row_count():
+    from app.services.lake_integrity.adapters import ClickHouseStateClient
+
+    spans = [("AAPL", datetime(2006, 1, 3, 9, 20), datetime(2026, 11, 5, 23, 59)),
+             ("SPY", datetime(2006, 1, 3, 9, 20), datetime(2026, 11, 5, 23, 59))]
+    client = CoverageClient(spans, {"AAPL": 3_467_008, "SPY": 3_896_354})
+
+    rows = ClickHouseStateClient(client).coverage("stocks", "ohlcv_1m")
+
+    assert [(r[0], r[3]) for r in rows] == [("AAPL", 3_467_008), ("SPY", 3_896_354)]
+    assert all(r[1].tzinfo is not None and r[2].tzinfo is not None for r in rows)
+
+
+def test_coverage_never_issues_one_big_distinct_group_by():
+    """A single `GROUP BY symbol` with uniqExact exhausted the dev box's ClickHouse memory
+    (measured 2026-11-06). It must be one bounded query per symbol."""
+    from app.services.lake_integrity.adapters import ClickHouseStateClient
+
+    spans = [("AAA", datetime(2024, 1, 2), datetime(2024, 1, 3)), ("BBB", datetime(2024, 1, 2), datetime(2024, 1, 3))]
+    client = CoverageClient(spans, {"AAA": 5, "BBB": 6})
+    ClickHouseStateClient(client).coverage("stocks", "ohlcv_1m")
+
+    distinct_sql = [(sql, p) for sql, p in client.calls if "uniqExact" in sql]
+    assert [p["s"] for _, p in distinct_sql] == ["AAA", "BBB"]
+    assert all("WHERE symbol = {s:String}" in sql and "GROUP BY" not in sql for sql, _ in distinct_sql)
+    assert len(client.calls) == 3  # one span query + one per symbol
+
+
+def test_duplicate_heavy_source_no_longer_inflates_the_expected_row_count():
+    """The incident: the laptop's snapshot said AAPL had 5.88M rows (duplicates), more than
+    the 5.03M minutes in 20.8 years, so a complete rebuild failed verification."""
+    from app.services.lake_integrity.bootstrap import verify_coverage
+    from app.services.lake_integrity.schemas import CoverageRow
+
+    first, last = datetime(2006, 1, 3, tzinfo=timezone.utc), datetime(2026, 11, 5, tzinfo=timezone.utc)
+    expected_distinct = CoverageRow(symbol="AAPL", first=first, last=last, rows=3_467_000)
+    rebuilt = CoverageRow(symbol="AAPL", first=first, last=last, rows=3_467_008)
+    assert verify_coverage([expected_distinct], [rebuilt]) == []
+    inflated = CoverageRow(symbol="AAPL", first=first, last=last, rows=5_877_148)
+    assert [p.kind for p in verify_coverage([inflated], [rebuilt])] == ["too_few_rows"]  # the old false alarm
