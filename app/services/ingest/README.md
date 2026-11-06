@@ -11,6 +11,7 @@ Everything that **puts data into** the hot or cold tier. Multi-provider.
 | `corp_actions.py` | `PolygonCorpActionsIngest` — splits + dividends → `equities.market_corp_actions` (CV9). Driver: `scripts/run_corp_actions_backfill.py` (`--full` for one-shot history, `--nightly` for incremental cron). |
 | `live_lake_writer.py` | Per-cycle micro-batch writer: live stream → `equities.schwab_universe` so the universe table stays fresh between nightly Schwab refreshes (CV7.5). Idempotent via `ensure_equities_table` on cold-start. |
 | `schwab_tip_fill.py` | Stream-warmup gap-fill: Schwab REST → recent bars for newly-added universe members; reads the lake watermark to know where to resume. |
+| `schwab_daily.py` | Schwab REST **daily** history → lake (`schwab_daily_raw`) then ClickHouse (`ohlcv_daily`). `ensure_daily_history(symbols)` fetches and stores only what is missing (never re-fetches held days: lake appends are not deduped), reports a per-symbol outcome, and is the shared core of `scripts/schwab_daily_refresh.py`. Not subject to the 300-symbol streaming cap. |
 | `lake_to_ch_backfill.py` | Lake → ClickHouse warmup: reads `equities.polygon_adjusted` to hot-load history for symbols entering the live universe. |
 | `backfill_service.py` | On-demand REST backfill into ClickHouse (gap-fill for dashboard symbols). |
 | `flatfiles_backfill.py` | Polygon flat-files → fan-out sinks (CH + equities lake). Drives the nightly Polygon job. |

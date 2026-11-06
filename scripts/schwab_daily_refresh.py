@@ -49,21 +49,14 @@ import argparse
 import asyncio
 import sys
 from collections import defaultdict
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.config import settings  # noqa: E402
-from app.providers.schwab_provider import SchwabProvider  # noqa: E402
-
-ET = ZoneInfo("America/New_York")
-TABLE = "ohlcv_daily"
-# ohlcv_daily stores the ET trading day stamped at 14:30 UTC — same convention
-# as polygon_grouped_daily, so downstream date bucketing stays identical.
-DAY_HOUR_UTC, DAY_MIN_UTC = 14, 30
-COLS = ["symbol", "timestamp", "open", "high", "low", "close", "volume", "version"]
+from app.services.ingest.schwab_daily import (  # noqa: E402
+    COLS, ET, TABLE, build_schwab_provider, fetch_daily_bars as _fetch, write_lake,
+)
 
 
 def _universe(client) -> list[str]:
@@ -74,48 +67,11 @@ def _universe(client) -> list[str]:
     return [r[0] for r in rows]
 
 
-def _provider() -> SchwabProvider:
-    token = settings.get_schwab_refresh_token()
-    if not token:
-        raise SystemExit(
-            "No Schwab refresh token. Run scripts/schwab_get_refresh_token.py, and "
-            "note SCHWAB_REFRESH_TOKEN in .env overrides SCHWAB_REFRESH_TOKEN_FILE."
-        )
-    return SchwabProvider(
-        client_id=settings.schwab_client_id,
-        client_secret=settings.schwab_client_secret,
-        refresh_token=token,
-        callback_url=settings.schwab_callback_url or None,
-        base_url=settings.schwab_base_url,
-        refresh_token_file=settings.schwab_refresh_token_file or None,
-    )
-
-
-def _day_ts(d: date) -> datetime:
-    return datetime.combine(d, time(DAY_HOUR_UTC, DAY_MIN_UTC), tzinfo=timezone.utc)
-
-
-async def _fetch(p: SchwabProvider, sym: str, start: date, end: date):
-    """Daily bars for one symbol. Returns (rows, status)."""
-    df = await p.historical_df(
-        sym,
-        datetime.combine(start, time(0, 0), tzinfo=timezone.utc),
-        datetime.combine(end + timedelta(days=1), time(0, 0), tzinfo=timezone.utc),
-        timeframe="1d",
-    )
-    if df is None or len(df) == 0:
-        # Schwab answered 200 with empty candles. Distinct from an error, and
-        # distinct from "the window had no trading days" — the caller decides.
-        return [], "empty"
-
-    out = []
-    for ts, r in df.iterrows():
-        d = ts.astimezone(ET).date() if getattr(ts, "tzinfo", None) else ts.date()
-        if not (start <= d <= end):
-            continue
-        out.append([sym, _day_ts(d), float(r["open"]), float(r["high"]),
-                    float(r["low"]), float(r["close"]), float(r.get("volume") or 0)])
-    return out, ("ok" if out else "out_of_range")
+def _provider():
+    try:
+        return build_schwab_provider()
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 async def run(symbols, start: date, end: date, dry_run: bool, sleep_s: float,
@@ -207,38 +163,16 @@ async def run(symbols, start: date, end: date, dry_run: bool, sleep_s: float,
 async def _write_lake(batch: list[list], version: int) -> int:
     """Append the fetched bars to `equities.schwab_daily_raw`, one day at a time.
 
-    One append per trading day matches the partitioning (month) and the
-    existing nightly writers, and keeps a failure scoped to a single day
-    rather than the whole run.
+    One append per trading day matches the partitioning (month) and the existing
+    nightly writers, and keeps a failure scoped to a single day rather than the
+    whole run. The logic lives in ``app.services.ingest.schwab_daily.write_lake``.
     """
-    import pandas as pd
-
-    from app.services.equities.sink import EquitiesIcebergSink
-
-    sink = EquitiesIcebergSink.for_schwab_daily_raw()
-    # The sink requires the full canonical OHLCV shape. Schwab's daily
-    # pricehistory carries no vwap or trade count, so those are NULL rather
-    # than zero — a fabricated 0.0 would read as a real value downstream.
-    df = pd.DataFrame(
-        [{"symbol": r[0], "timestamp": r[1], "open": r[2], "high": r[3],
-          "low": r[4], "close": r[5], "volume": r[6],
-          "vwap": None, "trade_count": None, "source": "schwab-rest"}
-         for r in batch]
-    )
-    written = failed = 0
-    for day, chunk in df.groupby(df["timestamp"].dt.date):
-        res = await sink.write(chunk, file_date=day, kind="day", provider="schwab-rest")
-        if res.status in ("ok", "written", "success"):
-            written += res.bars_written or len(chunk)
-        elif res.status == "skipped":
-            print(f"  lake {day}: SKIPPED — {res.metadata}")
-            failed += 1
-        else:
-            print(f"  lake {day}: {res.status} — {res.metadata}")
-            failed += 1
-    print(f"  lake: {written:,} rows appended to equities.schwab_daily_raw"
-          + (f" · {failed} day(s) FAILED" if failed else ""))
-    return 1 if failed else 0
+    res = await write_lake(batch, version, per_day=True)
+    for m in res.messages:
+        print(f"  {m}")
+    print(f"  lake: {res.written:,} rows appended to equities.schwab_daily_raw"
+          + (f" · {res.failed_units} day(s) FAILED" if res.failed_units else ""))
+    return 1 if res.failed_units else 0
 
 
 def main(argv=None) -> int:
