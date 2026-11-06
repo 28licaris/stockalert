@@ -101,6 +101,9 @@ class RunResult:
     ch_rows_delta: int = 0
     rows_inserted_total: int = 0
     failed_symbols: list[str] = field(default_factory=list)
+    # Symbols that loaded 0 rows WITHOUT an error: the lake holds nothing for them in
+    # this window (e.g. a ticker that did not exist yet). A warning, not a failure.
+    empty_symbols: list[str] = field(default_factory=list)
     per_symbol: list[dict] = field(default_factory=list)
     status: str = "in_progress"
     mismatch_warning: Optional[str] = None
@@ -161,6 +164,27 @@ def _wipe_ch_ohlcv() -> None:
             f"TRUNCATE ran but row count is {post} (expected 0). "
             "Refusing to proceed — investigate before re-running."
         )
+
+
+# A slice that exists in the lake forever (polygon history). Reading it proves the lake,
+# catalog and credentials work, independent of the window being rebuilt.
+_SENTINEL = ("SPY", datetime(2024, 1, 2, tzinfo=timezone.utc), datetime(2024, 1, 9, tzinfo=timezone.utc))
+
+
+def _lake_reachable() -> tuple[bool, str]:
+    """Can the lake be read at all? Used to tell "this window is genuinely empty" from
+    "the lake is broken": ``fill_ch_from_lake_sync`` turns read errors into 0 rows (it
+    logs them), so a 0-row preflight alone is ambiguous."""
+    from app.services.readers.read_arrow import read_arrow
+
+    sym, a, b = _SENTINEL
+    try:
+        arr = read_arrow(sym, a, b)
+    except Exception as exc:  # noqa: BLE001 — reported to the caller
+        return False, f"sentinel read of {sym} failed: {type(exc).__name__}: {exc}"
+    if arr.num_rows == 0:
+        return False, f"sentinel read of {sym} {a.date()}..{b.date()} returned 0 rows"
+    return True, f"sentinel read of {sym} returned {arr.num_rows} rows"
 
 
 def _fill_one(symbol: str, start: datetime, end: datetime) -> SymbolResult:
@@ -292,15 +316,25 @@ def main() -> int:
         report.mismatch_warning = f"preflight failed: {pf.error}"
         return _finalize_and_print(args, report, started)
     if pf.rows_inserted == 0:
-        logger.error(
-            "Preflight loaded 0 rows for %s — the lake read may be broken "
-            "(creds / catalog / empty window). Aborting before the full run.",
-            symbols[0],
+        reachable, why = _lake_reachable()
+        if not reachable:
+            logger.error(
+                "Preflight loaded 0 rows for %s and the lake itself is not readable (%s) — "
+                "creds / catalog problem. Aborting before the full run.",
+                symbols[0], why,
+            )
+            report.status = "fail"
+            report.mismatch_warning = f"preflight returned 0 rows and the lake is not readable: {why}"
+            return _finalize_and_print(args, report, started)
+        # The lake works; it simply holds nothing for this symbol in this window (a
+        # ticker that did not exist yet, a rename). Not a reason to abandon the window.
+        logger.warning(
+            "Preflight: the lake has no rows for %s in %s..%s (%s). Treating it as an empty "
+            "symbol and continuing with the rest.", symbols[0], args.since, args.until, why,
         )
-        report.status = "fail"
-        report.mismatch_warning = "preflight returned 0 rows"
-        return _finalize_and_print(args, report, started)
-    logger.info("Preflight OK: %s → %d rows in %.1fs", symbols[0], pf.rows_inserted, pf.duration_seconds)
+        report.mismatch_warning = f"no lake rows in this window for: {symbols[0]}"
+    else:
+        logger.info("Preflight OK: %s → %d rows in %.1fs", symbols[0], pf.rows_inserted, pf.duration_seconds)
 
     # Pre-state. NOTE: the preflight already inserted symbols[0]; capture the
     # baseline AFTER it (and after an optional wipe) so the delta tracks the
@@ -343,6 +377,18 @@ def main() -> int:
                 else:
                     logger.info("rebuild_ch_from_lake: [%d/%d] %s rows=%d duration=%.1fs",
                                 done, len(symbols), res.symbol, res.rows_inserted, res.duration_seconds)
+
+    # Symbols that loaded nothing and did not error: the lake has no rows for them here.
+    # Listed (not silent); the final verify step is the judge of whether that matters.
+    report.empty_symbols = [
+        r["symbol"] for r in report.per_symbol if not r.get("error") and not r.get("rows_inserted")
+    ]
+    if report.empty_symbols:
+        shown = ", ".join(report.empty_symbols[:10]) + (" …" if len(report.empty_symbols) > 10 else "")
+        report.mismatch_warning = (
+            f"{len(report.empty_symbols)} symbol(s) have no lake rows in this window: {shown}"
+        )
+        logger.warning(report.mismatch_warning)
 
     # Post-state: verify the mutation took effect (rule 1E, cross-side).
     report.ch_rows_after = _ch_ohlcv_row_count()
@@ -392,6 +438,7 @@ def _finalize_and_print(args, report: RunResult, started: datetime) -> int:
     print(f"  ch_rows_after:     {report.ch_rows_after:,}")
     print(f"  ch_rows_delta:     {report.ch_rows_delta:+,}")
     print(f"  rows_inserted:     {report.rows_inserted_total:,}")
+    print(f"  empty_symbols:     {len(report.empty_symbols)}")
     print(f"  failed_symbols:    {len(report.failed_symbols)}")
     if report.failed_symbols:
         for sym in report.failed_symbols[:10]:
