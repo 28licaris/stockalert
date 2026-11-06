@@ -60,6 +60,9 @@ app/services/        Domain modules (see standards/service_modules.md)
   readers/           Lake → consumer Pydantic shapes
                      (AdjustedOhlcvReader, BronzeReader, CorpActionsReader);
                      bars_gateway routes /-prefix symbols to futures tables
+  lake_integrity/    Keeps the lake a complete source of truth for ClickHouse: archives
+                     CH-only Schwab bars to the lake, nightly state snapshot to S3,
+                     ch_bootstrap planning/verification (README there)
   live/              Live-tier orchestration (stream, watchlist)
   sim/               Backtest (see standards/trading_subsystem.md)
   ppl/               Posterior predictive levels: GJR-GARCH(1,1) + filtered
@@ -88,6 +91,9 @@ scripts/             Ops scripts:
                          futures.schwab_futures (continuous roots)
                        run_corp_actions_backfill.py — Polygon REST →
                          equities.market_corp_actions
+                       lake_archive_ch.py — archive bars only ClickHouse holds into the lake
+                       ch_state_snapshot.py — export/restore non-rebuildable CH state (S3)
+                       ch_bootstrap.py — build a ClickHouse from S3: schema→state→bars→verify
                        rebuild_ch_from_lake.py — bulk lake → CH
                          (canonical; per-symbol via fill_ch_from_lake /
                           read_arrow union, schwab tip included)

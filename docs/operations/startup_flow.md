@@ -119,6 +119,8 @@ you which gate to check.
 | `backfill_service` deep path | on demand via API | provider REST → CH |
 | Backfill gap sweeper | daily 06:00 UTC | scans for CH holes, enqueues fixes |
 | `journal_sync_service` | every 5 minutes | Schwab API → CH `account_snapshots`, `trades` |
+| `lake_completeness_guard` | daily 23:00 UTC (`LAKE_GUARD_RUN_HOUR_UTC`) | CH Schwab-origin bars missing from the lake (last 14 days) → `schwab_universe` / `schwab_futures`; fails if a write does not verify |
+| `ch_state_snapshot` | daily 01:00 UTC (`CH_STATE_SNAPSHOT_RUN_HOUR_UTC`) | every non-rebuildable CH table + `data/paper` → `s3://<lake>/ch_state/` (shrink-guarded, keeps 14) |
 | `nightly_equities_polygon_refresh` | daily 07:00 UTC (midnight Arizona) | Polygon REST grouped-daily → `equities.polygon_daily_raw` |
 | `nightly_schwab_refresh` | daily 22:00 UTC (3 PM Arizona) | Schwab pricehistory → `equities.schwab_universe` |
 

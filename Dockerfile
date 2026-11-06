@@ -76,7 +76,10 @@ COPY --from=frontend /build/app/static/dist ./app/static/dist
 
 # The Schwab provider may rewrite data/.schwab_refresh_token on rotation and
 # the parquet cache (off by default) lives under data/ — the app user owns it.
-RUN chown -R app:app /app
+# data/paper holds the forward paper-trading files (state mirrors + alert history).
+# Created here, owned by app, so a named volume mounted on it inherits that
+# ownership instead of arriving root-owned and unwritable.
+RUN mkdir -p /app/data/paper && chown -R app:app /app
 USER app
 
 EXPOSE 8000

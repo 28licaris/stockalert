@@ -161,6 +161,27 @@ class Settings(BaseModel):
     # "seed" forces the static FUTURES_SEED_ROOTS list.
     futures_nightly_enabled: bool = os.getenv("FUTURES_NIGHTLY_ENABLED", "true").lower() == "true"
     futures_nightly_run_hour_utc: int = int(os.getenv("FUTURES_NIGHTLY_RUN_HOUR_UTC", "22"))
+
+    # Lake completeness guard (app/services/lake_integrity). Nightly: every minute
+    # bar this process's ClickHouse holds from a Schwab source (live stream, REST
+    # tip-fill) must also be in the lake, because Schwab's ~48-day minute history
+    # cannot re-fetch it. The guard appends whatever is missing for the last
+    # `lookback` days and fails loudly if a write does not verify. Default ON:
+    # gated by STOCK_LAKE_BUCKET like the other lake writers. 23:00 UTC runs after
+    # the 22:00 nightlies.
+    lake_guard_enabled: bool = os.getenv("LAKE_GUARD_ENABLED", "true").lower() == "true"
+    lake_guard_run_hour_utc: int = int(os.getenv("LAKE_GUARD_RUN_HOUR_UTC", "23"))
+    lake_guard_lookback_days: int = int(os.getenv("LAKE_GUARD_LOOKBACK_DAYS", "14"))
+
+    # ClickHouse state snapshot -> s3://$STOCK_LAKE_BUCKET/ch_state/. Nightly export
+    # of every table the lake cannot rebuild (see scripts/ch_state_snapshot.py).
+    # 01:00 UTC captures the previous evening's paper-trading run.
+    ch_state_snapshot_enabled: bool = os.getenv("CH_STATE_SNAPSHOT_ENABLED", "true").lower() == "true"
+    ch_state_snapshot_run_hour_utc: int = int(os.getenv("CH_STATE_SNAPSHOT_RUN_HOUR_UTC", "1"))
+    ch_state_snapshot_keep: int = int(os.getenv("CH_STATE_SNAPSHOT_KEEP", "14"))
+    # Directory of the forward paper-trading files (state mirrors + alert history). The
+    # paper service defaults to <cwd>/data/paper; the snapshot must look in the same place.
+    stockalert_paper_dir: str = os.getenv("STOCKALERT_PAPER_DIR", "")
     futures_nightly_symbols: str = os.getenv("FUTURES_NIGHTLY_SYMBOLS", "active")
 
     # Daily re-fetch of instrument company names from Polygon reference into the

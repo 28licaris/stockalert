@@ -74,6 +74,40 @@ increase, etc.) and note what's blocking.
 
 ## Open
 
+### `futures-stream-bars-stamped-at-arrival`
+
+- **Area:** provider:schwab, live, db
+- **Filed:** 2026-11-05
+- **Status:** open (worked around in the lake archive; provider not changed)
+- **Symptom:** ClickHouse `futures_ohlcv_1m` rows with `source='schwab-stream'` carry
+  timestamps like `15:01:03.228`, while the REST-backed lake labels the same bar
+  `15:00:00`. Measured 2026-11-05: 98% of stream bars price-match the lake bar at
+  -1 minute. In ClickHouse the stream row and the `lake-reconcile` row for one bar
+  therefore have different keys, so a futures chart can show near-duplicate bars.
+- **Root cause:** `SchwabProvider._chart_content_to_bar` uses CHART_TIME (field 7).
+  For CHART_EQUITY it is the minute start; for CHART_FUTURES it is bar end plus
+  1-3 s. Equities are unaffected.
+- **Suggested fix:** normalise futures stream timestamps to `floor_minute(ts) - 1min`
+  in the provider (the lake archive already does, `BarFamily.bar_minute_offset`),
+  then re-key the existing CH rows. Needs a spec: it changes stored data.
+
+### `live-stream-silent-stall-reports-healthy`
+
+- **Area:** live, provider:schwab, api
+- **Filed:** 2026-11-05
+- **Status:** open
+- **Symptom:** on 2026-11-05 the laptop streamer delivered nothing after 16:07 UTC
+  (mid-session) while `/api/v1/stream/status` reported `started=true`,
+  `provider_ready=true`, `streaming_count=431`, and the freshness page labelled the
+  6-hour-old live bars "outside expected window (normal)". The lake archive audit
+  showed the same pattern on 2026-11-03 (2,766 stream rows vs ~127k expected).
+- **Root cause:** unknown, needs investigation. Status counts subscriptions, not
+  delivered bars (same blind spot as `schwab-stream-300-symbol-account-cap`).
+- **Suggested fix:** health check that compares bars delivered in the last N minutes
+  with subscribed symbols during market hours, and alert; make the freshness
+  "expected window" aware of the session calendar.
+
+
 ### `schwab-stream-300-symbol-account-cap`
 
 - **Area:** provider:schwab, live, ingest

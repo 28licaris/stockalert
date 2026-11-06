@@ -206,6 +206,7 @@ Resources:
                   - glue:GetTable
                   - glue:GetTables
                   - glue:SearchTables
+                  - glue:CreateDatabase   # the lake writers create-if-missing the namespace before every write
                   - glue:CreateTable
                   - glue:UpdateTable
                   - glue:DeleteTable

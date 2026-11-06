@@ -450,6 +450,16 @@ async def lifespan(app: FastAPI):
                 exc,
             )
 
+    # Lake completeness guard + ClickHouse state snapshot (app/services/lake_integrity).
+    # Self-registering with the job registry; gated by their own flags + STOCK_LAKE_BUCKET.
+    try:
+        from app.services.lake_integrity.jobs import start_jobs as _start_lake_integrity_jobs
+
+        app.state.lake_integrity_tasks = _start_lake_integrity_jobs()
+    except Exception as exc:  # noqa: BLE001 - never break startup
+        logger.exception("✗ lake integrity jobs failed to start: %s — continuing without them", exc)
+        app.state.lake_integrity_tasks = []
+
     nightly_futures_task: asyncio.Task | None = None
     if _settings.futures_nightly_enabled and (_settings.stock_lake_bucket or "").strip():
         try:
@@ -767,6 +777,16 @@ async def lifespan(app: FastAPI):
             pass
         except Exception as e:
             logger.warning("nightly_futures_refresh task shutdown: %s", e)
+
+    for lt_ in getattr(app.state, "lake_integrity_tasks", []):
+        if not lt_.done():
+            lt_.cancel()
+            try:
+                await lt_
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.warning("lake integrity task shutdown: %s", e)
 
     ot = getattr(app.state, "options_snapshot_task", None)
     if ot is not None and not ot.done():
