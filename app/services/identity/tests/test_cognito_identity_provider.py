@@ -201,3 +201,33 @@ async def test_exchange_code_rejects_nonce_mismatch() -> None:
                 expected_nonce="expected-nonce",
             )
     assert exc_info.value.code == "invalid_nonce"
+
+
+# ── display name from claims ──────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("claims", "expected"),
+    [
+        # Google: has a real name
+        ({"name": "Shane Licari", "email": "s@x.com", "cognito:username": "google_123"}, "Shane Licari"),
+        # Email/password sign-up: no name claim; username is the opaque sub (this was the bug)
+        (
+            {"email": "geartickgarage@gmail.com", "cognito:username": "e428d408-b0d1-7002-c1a2-000000000000"},
+            "geartickgarage",
+        ),
+        ({"given_name": "Ada", "family_name": "Lovelace", "email": "a@x.com"}, "Ada Lovelace"),
+        ({"given_name": "Ada", "email": "a@x.com"}, "Ada"),
+        ({"family_name": "Lovelace", "email": "a@x.com"}, "Lovelace"),
+        ({"name": "   ", "email": "pat@example.com"}, "pat"),
+        # plus-addressing keeps the tag; that is the user's own address
+        ({"email": "shane+friend@gmail.com"}, "shane+friend"),
+        # nothing usable: never the UUID, never empty (display_name is min_length=1)
+        ({"cognito:username": "e428d408-b0d1-7002-c1a2-000000000000"}, "Trader"),
+        ({}, "Trader"),
+    ],
+)
+def test_display_name_from_claims(claims: dict, expected: str) -> None:
+    from app.services.identity.cognito import display_name_from_claims
+
+    assert display_name_from_claims(claims) == expected
