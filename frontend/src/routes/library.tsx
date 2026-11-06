@@ -4,6 +4,7 @@ import {
   useLeaderboard, useLibrary, useStrategyAlerts, useStrategyOwnerStats,
   type StrategyAlert, type StrategyOwnerStats, type StrategyPublic,
 } from "@/api/library";
+import { useCurrentUser } from "@/auth/useCurrentUser";
 import { cn } from "@/lib/utils";
 
 /**
@@ -13,7 +14,11 @@ import { cn } from "@/lib/utils";
  */
 export function LibraryPage() {
   const q = useLibrary();
-  const [owner, setOwner] = useState(false);
+  // Owner view reads operator-only endpoints (/strategies/*): only offer it
+  // to operators; a customer toggling it would just get 403s.
+  const isOperator = useCurrentUser().permissions.includes("operator.access");
+  const [ownerChecked, setOwner] = useState(false);
+  const owner = isOperator && ownerChecked;
   const leaderboard = useLeaderboard(owner);
 
   return (
@@ -30,10 +35,12 @@ export function LibraryPage() {
               plus a verified track record. The strategy's recipe stays private.
             </p>
           </div>
-          <label className="flex shrink-0 items-center gap-2 text-xs text-fg-muted">
-            <input type="checkbox" checked={owner} onChange={(e) => setOwner(e.target.checked)} />
-            Owner view
-          </label>
+          {isOperator && (
+            <label className="flex shrink-0 items-center gap-2 text-xs text-fg-muted">
+              <input type="checkbox" checked={owner} onChange={(e) => setOwner(e.target.checked)} />
+              Owner view
+            </label>
+          )}
         </div>
       </header>
 

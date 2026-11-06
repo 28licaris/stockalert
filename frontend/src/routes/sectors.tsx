@@ -9,6 +9,7 @@ import {
   type SectorRotationState,
 } from "@/api/queries";
 import { ApiErrorAlert } from "@/components/ApiErrorAlert";
+import { useCurrentUser } from "@/auth/useCurrentUser";
 import { cn } from "@/lib/utils";
 
 /**
@@ -270,7 +271,8 @@ function RotationTable({
   active: Set<string>;
   onHover: (id: string | null) => void;
   onToggle: (id: string) => void;
-  onDelete: (id: string, name: string) => void;
+  /** Operator-only: themes are shared, so customers get no remove control. */
+  onDelete?: (id: string, name: string) => void;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggleExpand = (id: string) =>
@@ -344,11 +346,13 @@ function RotationTable({
                 {members.map((m) => (
                   <span key={m} className="rounded border border-border bg-bg-subtle px-1.5 py-0.5 font-mono text-[11px] text-fg-muted">{m}</span>
                 ))}
-                <button type="button"
-                  onClick={() => onDelete(s.group_id, s.name)}
-                  className="ml-auto flex items-center gap-1 rounded border border-rose-500/30 px-1.5 py-0.5 text-[11px] text-rose-400 hover:bg-rose-500/10">
-                  <Trash2 className="h-3 w-3" /> Remove theme
-                </button>
+                {onDelete && (
+                  <button type="button"
+                    onClick={() => onDelete(s.group_id, s.name)}
+                    className="ml-auto flex items-center gap-1 rounded border border-rose-500/30 px-1.5 py-0.5 text-[11px] text-rose-400 hover:bg-rose-500/10">
+                    <Trash2 className="h-3 w-3" /> Remove theme
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -422,6 +426,9 @@ function AddThemeForm() {
 
 export function SectorsPage() {
   const { data, isLoading, error } = useSectorRotation();
+  // Themes are shared across all users: only the operator may add/remove them
+  // (the API enforces this; hiding the controls just avoids dead buttons).
+  const isOperator = useCurrentUser().permissions.includes("operator.access");
   const deleteTheme = useDeleteTheme();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [hovered, setHovered] = useState<string | null>(null);
@@ -492,9 +499,9 @@ export function SectorsPage() {
           <div className="mt-4">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-fg-base">Sectors &amp; themes</h2>
-              <AddThemeForm />
+              {isOperator && <AddThemeForm />}
             </div>
-            <RotationTable sectors={sectors} active={active} onHover={setHovered} onToggle={toggle} onDelete={onDelete} />
+            <RotationTable sectors={sectors} active={active} onHover={setHovered} onToggle={toggle} onDelete={isOperator ? onDelete : undefined} />
           </div>
 
           {dash.excluded && dash.excluded.length > 0 && (
