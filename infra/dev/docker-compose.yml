@@ -107,6 +107,25 @@ services:
     volumes:
       - paperdata:/app/data/paper   # paper-trading files survive container recreation
 
+  # One-off operator tools (not started by `up`). Run through compose, NEVER `docker run
+  # --env-file`: the rendered .env single-quotes its values and docker keeps the quotes.
+  #   docker compose --profile tools run -d --no-deps --name ch-bootstrap bootstrap \
+  #     python -u scripts/ch_bootstrap.py --state-mode replace --files --parallelism 2
+  # Own limits (the worker's 1 CPU / 2.5 GiB is too small for a bulk rebuild); every
+  # writer and the streamer stay off so a tool run can never become a second owner.
+  bootstrap:
+    <<: *app
+    profiles: ["tools"]
+    restart: "no"
+    environment:
+      STREAM_PROVIDER: none
+      LAKE_GUARD_ENABLED: "false"
+      CH_STATE_SNAPSHOT_ENABLED: "false"
+    cpus: "2.0"
+    mem_limit: 5000m   # measured: 3 parallel 20-year symbols exceeded 3.5 GiB; bootstrap now windows to 3 years
+    volumes:
+      - paperdata:/app/data/paper
+
   clickhouse:
     image: clickhouse/clickhouse-server:24.8
     restart: unless-stopped

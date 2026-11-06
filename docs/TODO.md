@@ -265,21 +265,18 @@ risk to take on the eve of a deploy. Land it early in the next cycle instead.
 - Keep `fetchJson` only for endpoints genuinely absent from the schema, with a
   comment saying why.
 
-## Scheduled tasks hardcode a laptop path (AWS deployment)
-`daily-paper-trade-momentum` runs
-`cd /Users/licaris/dev/stockalert && poetry run python scripts/paper_daily_pipeline.py`.
-The absolute path breaks on any other machine, and this task is what advances
-the **forward paper-trading record** — the only honest track record the
-project has.
+## Scheduled tasks and the laptop (AWS deployment) - mostly resolved 2026-11-06
+`daily-paper-trade-momentum` is **retired**: the dev box's cron (`infra/dev/cron/stockalert`,
+23:30 UTC Mon-Fri) runs `scripts/paper_daily_pipeline.py` in the `worker` image against the box's
+ClickHouse, and the laptop task was disabled in the same change. Never enable both: two runs
+double-advance the forward paper record. The paper files live on the `paperdata` volume and the
+nightly state snapshot carries them to S3. The versioned copy in
+[`.claude/scheduled-tasks/`](../.claude/scheduled-tasks/README.md) is kept for history.
 
-- Versioned copies now live in
-  [`.claude/scheduled-tasks/`](../.claude/scheduled-tasks/README.md); before
-  2026-11-05 each existed only as one unversioned file on one laptop.
-- Deployment needs to decide where this runs (it is a ~30-minute daily job
-  touching ClickHouse, the lake and Polygon REST) and parameterise the repo
-  root rather than hardcoding it.
-- Same question for `ewt-email-scan`, which needs inbox access — that may be
-  a reason to keep it local rather than move it.
+- **Still open: `ewt-email-scan`** needs access to the operator's inbox, so it stays on the
+  laptop. It writes only `ewt/` (committed), nothing in the lake or ClickHouse.
+- **Still open: alerting** when the box's cron does not run or the pipeline exits non-zero (the
+  pipeline logs to `/var/log/stockalert-paper.log`; nothing watches it yet).
 
 ## Public marketing landing page (AWS deployment)
 Not built. Decided 2026-07-05 and still the plan of record:

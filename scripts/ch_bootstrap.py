@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app.config import settings  # noqa: E402
-from app.services.lake_integrity.bootstrap import rebuild_windows, verify_coverage  # noqa: E402
+from app.services.lake_integrity.bootstrap import rebuild_windows, split_window, verify_coverage  # noqa: E402
 from app.services.lake_integrity.snapshot import StateSnapshot  # noqa: E402
 
 log = logging.getLogger("ch_bootstrap")
@@ -81,12 +81,16 @@ def step_bars(args, ctx) -> str:
     failures = 0
     total = 0
     for since, symbols in rebuild_windows(cov, _lake_history_start()).items():
-        cmd = [sys.executable, "scripts/rebuild_ch_from_lake.py", "--symbols", ",".join(symbols),
-               "--since", since.isoformat(), "--until", until.isoformat(), "--parallelism", str(args.parallelism)]
         total += len(symbols)
-        if _run(cmd) != 0:
-            failures += 1
-            log.error("bars: the loader reported failures for the window starting %s", since)
+        # Bounded segments keep per-worker memory small (a 20-year symbol in one call is ~3.5 GB).
+        for seg_start, seg_end in split_window(since, until, args.max_years):
+            cmd = [sys.executable, "scripts/rebuild_ch_from_lake.py", "--symbols", ",".join(symbols),
+                   "--since", seg_start.isoformat(), "--until", seg_end.isoformat(),
+                   "--parallelism", str(args.parallelism)]
+            log.info("bars: segment_start=%s segment_end=%s symbols=%d", seg_start, seg_end, len(symbols))
+            if _run(cmd) != 0:
+                failures += 1
+                log.error("bars: the loader reported failures for %s..%s", seg_start, seg_end)
     if failures:
         raise RuntimeError(f"{failures} rebuild window(s) failed (see the loader output above)")
     return f"{total} symbol(s) rebuilt through {until}"
@@ -157,7 +161,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--snapshot", default="latest")
     ap.add_argument("--state-mode", choices=["empty_only", "replace"], default="empty_only")
     ap.add_argument("--files", action="store_true", help="also restore the paper-trading files into data/paper")
-    ap.add_argument("--parallelism", type=int, default=8)
+    ap.add_argument("--parallelism", type=int, default=2, help="symbols loaded at once (memory-bound: keep small)")
+    ap.add_argument("--max-years", type=int, default=3, help="longest window loaded in one call (bounds memory)")
     ap.add_argument("--dry-run", action="store_true", help="print the plan, change nothing")
     ap.add_argument("--out-json", type=Path)
     args = ap.parse_args(argv)
