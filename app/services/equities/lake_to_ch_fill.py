@@ -172,6 +172,84 @@ def _fill_sync(symbol: str, start: datetime, end: datetime, source_tag: str) -> 
     return len(rows)
 
 
+# Rows per ClickHouse insert in the bulk path (one HTTP request each).
+_BATCH_INSERT_ROWS = 1_000_000
+
+
+def _arrow_to_ch_table(arr: pa.Table, source_tag: str) -> pa.Table:
+    """Arrow-native twin of ``_arrow_to_ch_rows``: same columns, same null rules,
+    no per-row Python. Parity with the row converter is pinned by a test.
+
+    The row converter costs ~10k rows/s (a Python loop with float()/round() per
+    cell); a full rebuild of ~150M rows spent hours there while ClickHouse idled.
+    """
+    import pyarrow.compute as pc
+
+    n = arr.num_rows
+
+    def f64(col: str):
+        return pc.cast(arr.column(col), pa.float64())
+
+    return pa.table(
+        {
+            "symbol": pc.cast(arr.column("symbol"), pa.string()),
+            "timestamp": pc.cast(arr.column("timestamp"), pa.timestamp("ms", tz="UTC")),
+            "open": f64("open"),
+            "high": f64("high"),
+            "low": f64("low"),
+            "close": f64("close"),
+            "volume": pc.fill_null(f64("volume"), 0.0),
+            "vwap": pc.fill_null(f64("vwap"), 0.0),
+            # Python round() is half-to-even, as is pc.round's default.
+            "trade_count": pc.fill_null(pc.cast(pc.round(f64("trade_count")), pa.int64()), 0),
+            "source": pa.repeat(source_tag, n),
+            "version": pa.repeat(1, n),  # ReplacingMergeTree version
+        }
+    )
+
+
+def fill_ch_from_lake_batch_sync(
+    symbols: list[str],
+    start: datetime,
+    end: datetime,
+    *,
+    source_tag: str = "lake-fill",
+) -> dict[str, int]:
+    """Bulk variant of ``_fill_sync`` for many symbols.
+
+    ONE lake read (``read_arrow`` accepts a symbol list), so the ~30 s per-call
+    planning overhead is paid once per batch instead of once per symbol, then Arrow
+    inserts of up to ``_BATCH_INSERT_ROWS`` rows. Returns rows inserted per symbol
+    (0 for a symbol with no data in the window).
+
+    Unlike ``_fill_sync`` this RAISES on a lake or insert failure, so a caller
+    that needs a result (the bulk rebuild) can fall back per symbol instead of
+    silently recording zeros.
+    """
+    from app.services.readers.read_arrow import read_arrow
+
+    syms = sorted({s.upper() for s in symbols})
+    arr = read_arrow(syms, start, end)
+    if arr.num_rows == 0:
+        logger.info("lake_fill_batch: %d symbols [%s, %s) -> 0 rows in lake", len(syms), start, end)
+        return {s: 0 for s in syms}
+
+    table = _arrow_to_ch_table(arr, source_tag)
+    ch = get_client()
+    for offset in range(0, table.num_rows, _BATCH_INSERT_ROWS):
+        ch.insert_arrow("stocks.ohlcv_1m", table.slice(offset, _BATCH_INSERT_ROWS))
+
+    import pyarrow.compute as pc
+
+    counts = {r["values"]: r["counts"] for r in pc.value_counts(table.column("symbol")).to_pylist()}
+    result = {s: int(counts.get(s, 0)) for s in syms}
+    logger.info(
+        "lake_fill_batch: %d symbols [%s, %s) -> %d rows inserted (source=%s)",
+        len(syms), start, end, table.num_rows, source_tag,
+    )
+    return result
+
+
 def _arrow_to_ch_rows(arr: pa.Table, symbol: str, source_tag: str) -> list[list]:
     """Convert PyArrow Table → list-of-lists for clickhouse-connect insert.
 
