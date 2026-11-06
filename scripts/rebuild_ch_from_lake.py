@@ -65,7 +65,10 @@ sys.path.insert(0, str(_HERE.parent))
 
 from app.config import settings  # noqa: E402
 from app.db.client import get_client  # noqa: E402
-from app.services.equities.lake_to_ch_fill import fill_ch_from_lake_sync  # noqa: E402
+from app.services.equities.lake_to_ch_fill import (  # noqa: E402
+    fill_ch_from_lake_batch_sync,
+    fill_ch_from_lake_sync,
+)
 from app.services.universe import resolve_universe_spec  # noqa: E402
 
 logger = logging.getLogger("rebuild_ch_from_lake")
@@ -173,6 +176,25 @@ def _fill_one(symbol: str, start: datetime, end: datetime) -> SymbolResult:
     return res
 
 
+def _fill_batch(symbols: list[str], start: datetime, end: datetime) -> list[SymbolResult]:
+    """Load several symbols with ONE lake read (the bulk path). Never raises.
+
+    On any batch failure each symbol falls back to the per-symbol path, so a bad
+    batch costs time, not data, and the failure is logged, not swallowed.
+    """
+    started = datetime.now(timezone.utc)
+    try:
+        counts = fill_ch_from_lake_batch_sync(symbols, start, end, source_tag="lake-rebuild")
+    except Exception as e:  # noqa: BLE001 - fall back per symbol
+        logger.exception("batch of %d symbols failed (%s: %s); falling back per symbol", len(symbols), type(e).__name__, e)
+        return [_fill_one(sym, start, end) for sym in symbols]
+    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+    return [
+        SymbolResult(symbol=sym, rows_inserted=counts.get(sym.upper(), 0), duration_seconds=elapsed / max(1, len(symbols)))
+        for sym in symbols
+    ]
+
+
 # ─────────────────────────────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────────────────────────────
@@ -200,6 +222,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--parallelism", type=int, default=8,
         help="Concurrent per-symbol fills (default 8). Each fill is an independent lake read.",
+    )
+    p.add_argument(
+        "--batch-symbols", type=int, default=1,
+        help="Symbols per lake read (default 1 = the original per-symbol path). >1 uses the bulk path: "
+             "one read + Arrow inserts per batch, which removes the ~30 s per-call overhead and the Python row loop.",
     )
     p.add_argument(
         "--wipe", action="store_true",
@@ -296,21 +323,26 @@ def main() -> int:
 
     # Per-symbol loop (parallel). Each fill is an independent lake read; the
     # fill path serializes same-symbol work internally.
+    batch = max(1, args.batch_symbols)
+    groups = [remaining[i : i + batch] for i in range(0, len(remaining), batch)]
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.parallelism)) as pool:
-        futures = {pool.submit(_fill_one, sym, start, end): sym for sym in remaining}
+        if batch > 1:
+            futures = {pool.submit(_fill_batch, g, start, end): g for g in groups}
+        else:
+            futures = {pool.submit(lambda s=sym: [_fill_one(s, start, end)], ): [sym] for sym in remaining}
         done = 1  # preflight symbol already counted
         for fut in concurrent.futures.as_completed(futures):
-            done += 1
-            res = fut.result()
-            report.per_symbol.append(asdict(res))
-            report.rows_inserted_total += res.rows_inserted
-            if not res.succeeded:
-                report.failed_symbols.append(res.symbol)
-                logger.error("rebuild_ch_from_lake: [%d/%d] %s FAILED: %s",
-                             done, len(symbols), res.symbol, res.error)
-            else:
-                logger.info("rebuild_ch_from_lake: [%d/%d] %s rows=%d duration=%.1fs",
-                            done, len(symbols), res.symbol, res.rows_inserted, res.duration_seconds)
+            for res in fut.result():
+                done += 1
+                report.per_symbol.append(asdict(res))
+                report.rows_inserted_total += res.rows_inserted
+                if not res.succeeded:
+                    report.failed_symbols.append(res.symbol)
+                    logger.error("rebuild_ch_from_lake: [%d/%d] %s FAILED: %s",
+                                 done, len(symbols), res.symbol, res.error)
+                else:
+                    logger.info("rebuild_ch_from_lake: [%d/%d] %s rows=%d duration=%.1fs",
+                                done, len(symbols), res.symbol, res.rows_inserted, res.duration_seconds)
 
     # Post-state: verify the mutation took effect (rule 1E, cross-side).
     report.ch_rows_after = _ch_ohlcv_row_count()
