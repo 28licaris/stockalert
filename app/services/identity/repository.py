@@ -417,6 +417,37 @@ class PostgresIdentityRepository:
                 entitlements=principal.entitlements,
             )
 
+    def update_display_name(
+        self, principal: Principal, display_name: str
+    ) -> CurrentUserResponse | None:
+        """Set the caller's display name. The row is selected by the session's
+        user id only, so a user can never rename anyone else."""
+        with self._session_factory() as db:
+            user = db.scalar(
+                select(UserModel).where(
+                    UserModel.id == principal.user_id,
+                    UserModel.status == "active",
+                )
+            )
+            if user is None:
+                return None
+            user.display_name = display_name
+            try:
+                db.commit()
+            except SQLAlchemyError:
+                db.rollback()
+                logger.exception("identity display name update database error")
+                raise
+            return CurrentUserResponse(
+                user_id=principal.user_id,
+                tenant_id=principal.tenant_id,
+                email=user.email,
+                display_name=user.display_name,
+                roles=principal.roles,
+                permissions=principal.permissions,
+                entitlements=principal.entitlements,
+            )
+
     def get_provider_session_ciphertext(self, principal: Principal) -> bytes | None:
         with self._session_factory() as db:
             return db.scalar(

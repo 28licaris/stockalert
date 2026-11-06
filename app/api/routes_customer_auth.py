@@ -20,6 +20,7 @@ from app.services.identity.schemas import (
     SessionListResponse,
     SessionRevocationResponse,
     SecurityEventListResponse,
+    UpdateDisplayNameRequest,
     MfaEnrollmentResponse,
     MfaStatusResponse,
     MfaVerificationResponse,
@@ -39,6 +40,23 @@ async def current_user(
     if current is None:
         raise HTTPException(status_code=401, detail="Authentication required.")
     return current
+
+
+@router.patch("/me", response_model=CurrentUserResponse)
+async def update_current_user(
+    payload: UpdateDisplayNameRequest,
+    request: Request,
+    principal: Principal = Depends(get_principal),
+    identity_service: IdentityService = Depends(get_identity_service),
+) -> CurrentUserResponse:
+    """Change the caller's own display name. Cookie-authenticated, so CSRF-checked."""
+    require_csrf(request, principal, identity_service)
+    updated = await asyncio.to_thread(
+        identity_service.update_display_name, principal, payload.display_name
+    )
+    if updated is None:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    return updated
 
 
 @router.get("/sessions", response_model=SessionListResponse)
