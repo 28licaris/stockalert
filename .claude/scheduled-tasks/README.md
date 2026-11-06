@@ -18,6 +18,11 @@ unversioned, while the repo depends on what they produce.
 > here in the same change — a backup that has silently drifted is worse
 > than none, because it reads as authoritative.
 
+> **2026-11-06: `daily-paper-trade-momentum` is retired.** The dev box's cron now runs the
+> pipeline (`infra/dev/cron/stockalert`) and this laptop task was disabled in the same change.
+> Do not re-enable it while the box runs the pipeline: two runs double-advance the record.
+> `ewt-email-scan` is unaffected and stays here.
+
 ## The tasks
 
 | Task | Produces | Why losing it would hurt |
