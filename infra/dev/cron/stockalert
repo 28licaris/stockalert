@@ -7,8 +7,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # 04:00 UTC — identity PostgreSQL dump → s3://<ops-bucket>/pg_dump/ (30-day lifecycle)
 0 4 * * * root /opt/stockalert/bin/pg_backup.sh >> /var/log/stockalert-pg_backup.log 2>&1
 
-# 23:30 UTC — paper-trading daily pipeline (resolves the laptop path in docs/TODO.md).
-# DISABLED until cutover step M4: the laptop's scheduled task still owns this
-# run, and two writers would double-advance paper state. Uncomment at M4 and
-# disable the laptop task in the same change.
-#30 23 * * * root cd /opt/stockalert && docker compose run --rm --no-deps worker python scripts/paper_daily_pipeline.py >> /var/log/stockalert-paper.log 2>&1
+# 23:30 UTC - paper-trading daily pipeline (resolves the laptop path in docs/TODO.md).
+# ENABLED at the 2026-11-05 cutover: this box is the only machine that runs the
+# nightly jobs, and the laptop's scheduled task was disabled in the same change.
+# Two writers would double-advance the paper record, so never enable both.
+30 23 * * * root cd /opt/stockalert && docker compose run --rm --no-deps worker python scripts/paper_daily_pipeline.py >> /var/log/stockalert-paper.log 2>&1
