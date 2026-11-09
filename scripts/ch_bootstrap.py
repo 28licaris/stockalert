@@ -155,6 +155,40 @@ STEPS = {"schema": step_schema, "state": step_state, "bars": step_bars,
          "futures": step_futures, "daily": step_daily, "verify": step_verify}
 
 
+# A step is skipped only when a step it genuinely needs has failed. bars, futures and daily
+# are independent loads that all need only the schema: one failed equity window (an empty
+# RTX window cancelled both on 2026-11-06) must not cancel the futures history or the daily
+# table. ``verify`` always runs and is the judge of the final state.
+NEEDS = {
+    "state": ("schema",),
+    "bars": ("schema",),
+    "futures": ("schema",),
+    "daily": ("schema",),
+}
+
+
+def run_steps(steps, fns, args, ctx) -> tuple[list[dict], bool]:
+    """Run ``steps`` in order. Returns ``(results, any_failed)``; never raises for a step."""
+    results: list[dict] = []
+    not_ok: set[str] = set()
+    for name in steps:
+        blockers = [d for d in NEEDS.get(name, ()) if d in not_ok]
+        if blockers and name != "verify":
+            not_ok.add(name)
+            results.append({"step": name, "ok": False, "detail": f"skipped: needs {', '.join(blockers)}, which failed"})
+            log.warning("STEP %-8s SKIPPED (needs %s, which failed)", name, ", ".join(blockers))
+            continue
+        try:
+            detail = fns[name](args, ctx)
+            results.append({"step": name, "ok": True, "detail": detail})
+            log.info("STEP %-8s OK  %s", name, detail)
+        except Exception as exc:  # noqa: BLE001 - reported; verify still runs
+            not_ok.add(name)
+            results.append({"step": name, "ok": False, "detail": f"{type(exc).__name__}: {exc}"})
+            log.exception("STEP %-8s FAILED  %s", name, exc)
+    return results, bool(not_ok)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--steps", default=",".join(ALL_STEPS), help=f"comma-separated subset of {ALL_STEPS}")
@@ -191,20 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         return 0
 
-    results, failed = [], False
-    for name in steps:
-        if failed and name != "verify":
-            results.append({"step": name, "ok": False, "detail": "skipped: an earlier step failed"})
-            log.warning("STEP %-8s SKIPPED (an earlier step failed)", name)
-            continue
-        try:
-            detail = STEPS[name](args, ctx)
-            results.append({"step": name, "ok": True, "detail": detail})
-            log.info("STEP %-8s OK  %s", name, detail)
-        except Exception as exc:  # noqa: BLE001 - reported; later steps are skipped, verify still runs
-            failed = True
-            results.append({"step": name, "ok": False, "detail": f"{type(exc).__name__}: {exc}"})
-            log.exception("STEP %-8s FAILED  %s", name, exc)
+    results, failed = run_steps(steps, STEPS, args, ctx)
     print("\nSUMMARY")
     for r in results:
         print(f"  {'OK    ' if r['ok'] else 'FAILED'} {r['step']:<8} {r['detail']}")

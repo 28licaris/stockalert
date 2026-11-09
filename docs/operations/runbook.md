@@ -224,6 +224,15 @@ poetry run python scripts/ch_bootstrap.py --state-mode replace  # schema -> stat
   history needs (the 2006-era names start before the loader's 2021 default).
 - **Verify** compares the result with the coverage recorded in the snapshot and
   exits 2 on any shortfall. The lake may hold more than the source ClickHouse did.
+  Rows are counted as **distinct minutes**, not `count()` (duplicates inflated a laptop
+  snapshot: AAPL "expected" 5.88M rows, more than the 5.03M minutes that exist). A snapshot
+  taken *before* that change still carries inflated counts and can report false shortfalls;
+  the next nightly snapshot replaces it. Counting is one query per symbol (about 160 s
+  for 425 symbols); one `GROUP BY` exhausted ClickHouse's memory on the dev box.
+- **Steps are independent.** `bars`, `futures` and `daily` need only the schema: a failed
+  equity window no longer cancels the other loads (it did on 2026-11-06). A symbol with no
+  lake rows in a window (a ticker that did not exist yet) is a *warning* when a sentinel
+  read proves the lake is healthy; an unreadable lake still aborts the window.
 - Wall-clock is dominated by the bar rebuild: ~76 s per heavy symbol on a
   2-vCPU box (AAPL, 1.07M rows). Measure the first batch before estimating.
 - Do the same restore as a **rehearsal** into a scratch database:
