@@ -441,6 +441,40 @@ Resources:
       AlarmActions: [!Ref AlertsTopic]
       OKActions: [!Ref AlertsTopic]
 
+  # -- Live-stream watchdog ---------------------------------------------------
+  # The worker's StreamService logs `STREAM_STALE` at ERROR when no bar has been
+  # delivered for STREAM_STALE_SECONDS during the equities regular session, and
+  # repeats it every 10 minutes while stale. One match in any of the last three
+  # 5-minute periods keeps the alarm in ALARM; it returns to OK ~15 minutes after
+  # bars resume. Spec: docs/operations/runbook.md ("Check bar flow").
+  StreamStaleFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroup
+      FilterPattern: '"STREAM_STALE"'
+      MetricTransformations:
+        - MetricNamespace: !Sub StockAlert/${EnvironmentName}
+          MetricName: StreamStale
+          MetricValue: "1"
+          DefaultValue: 0
+
+  StreamStaleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub stockalert-${EnvironmentName}-stream-stale
+      AlarmDescription: No live bars for 5+ minutes during the equities session (worker logged STREAM_STALE). See runbook "Check bar flow".
+      Namespace: !Sub StockAlert/${EnvironmentName}
+      MetricName: StreamStale
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching   # the filter publishes nothing when healthy
+      AlarmActions: [!Ref AlertsTopic]
+      OKActions: [!Ref AlertsTopic]
+
 Outputs:
   InstanceId:
     Value: !Ref Instance

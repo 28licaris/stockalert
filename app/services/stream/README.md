@@ -41,6 +41,7 @@ routes should call:
 | `start()` | Captures the main event loop, seeds `futures_universe` if empty, reads `stream_universe` ∪ `futures_universe` and subscribes everything. Then starts the re-sync loop (below). |
 | `add()` / `remove()` / `add_futures()` / `remove_futures()` | Write the CH row **and** apply the subscribe/unsubscribe in-process, immediately. |
 | re-sync loop | Every `STREAM_UNIVERSE_RESYNC_SECONDS` (default 60; `0` disables) `resync_universe()` re-reads the active universe and applies the diff against `_subscribed` with the same `_apply_subscription_diff` the CRUD paths use. |
+| watchdog | Each re-sync cycle also calls `check_stream_health()`. During the equities regular session (XNYS calendar, 5-minute grace at each end), if the provider has delivered no bar for `STREAM_STALE_SECONDS` (default 300; `0` disables) it logs `STREAM_STALE` at ERROR (repeats every 10 min; a CloudWatch alarm emails on it) and asks the provider to reconnect; `STREAM_RECOVERED` is logged when bars resume. Providers without `stream_health()` are skipped (state `unsupported`). Runs inside the resync loop, so it is off when `STREAM_UNIVERSE_RESYNC_SECONDS=0`. |
 | `stop()` | Cancels the re-sync loop, unsubscribes everything, stops the provider stream. |
 
 ### Why the re-sync loop exists (deployment spec C2)

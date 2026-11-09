@@ -121,6 +121,19 @@ GROUP BY source ORDER BY bars DESC
 
 During market hours expect 100+ symbols on `source = "schwab-live"`.
 
+**`STREAM_STALE` in the worker log** (and the `stockalert-<env>-stream-stale` email)
+means no bar was delivered for `STREAM_STALE_SECONDS` during the regular session. The
+streamer reconnects on its own, so first read what happened:
+
+```bash
+docker compose logs --since 30m worker | grep -E "Schwab streamer|STREAM_(STALE|RECOVERED)"
+```
+
+`session ended reason=...` says why each connection ended (`ws_close`, `idle_timeout`,
+`token_failed`, `login_failed`, ...). `token_failed` / `login_failed` repeating means the
+Schwab refresh token is dead: re-authorize (next section). If reconnects keep failing for
+another reason, `docker compose restart worker` is the fallback.
+
 ### Exactly one process may own the options snapshot loop
 
 `OPTIONS_SNAPSHOT_ENABLED` must be true in **one** process only. Measured

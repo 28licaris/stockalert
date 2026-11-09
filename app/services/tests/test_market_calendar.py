@@ -79,3 +79,51 @@ def test_unknown_asset_class_raises():
 
 def test_empty_range_is_empty():
     assert mc.equities_sessions(date(2026, 6, 20), date(2026, 6, 18)) == []
+
+
+# ---- is_equities_regular_hours (the stale-stream watchdog's session test) ----
+
+from datetime import datetime, timezone  # noqa: E402
+
+
+def _utc(y, m, d, hh, mm):
+    return datetime(y, m, d, hh, mm, tzinfo=timezone.utc)
+
+
+def test_regular_hours_boundaries_est():
+    # Mon 2026-11-09, EST (UTC-5): 09:30 ET = 14:30 UTC, 16:00 ET = 21:00 UTC.
+    assert mc.is_equities_regular_hours(_utc(2026, 11, 9, 14, 29)) is False
+    assert mc.is_equities_regular_hours(_utc(2026, 11, 9, 14, 30)) is True
+    assert mc.is_equities_regular_hours(_utc(2026, 11, 9, 20, 59)) is True
+    assert mc.is_equities_regular_hours(_utc(2026, 11, 9, 21, 0)) is False
+
+
+def test_regular_hours_boundaries_edt():
+    # Wed 2026-06-17, EDT (UTC-4): open 13:30 UTC, close 20:00 UTC.
+    assert mc.is_equities_regular_hours(_utc(2026, 6, 17, 13, 29)) is False
+    assert mc.is_equities_regular_hours(_utc(2026, 6, 17, 13, 30)) is True
+    assert mc.is_equities_regular_hours(_utc(2026, 6, 17, 19, 59)) is True
+    assert mc.is_equities_regular_hours(_utc(2026, 6, 17, 20, 0)) is False
+
+
+def test_regular_hours_grace_shrinks_both_ends():
+    assert mc.is_equities_regular_hours(_utc(2026, 11, 9, 14, 34), open_grace_min=5) is False
+    assert mc.is_equities_regular_hours(_utc(2026, 11, 9, 14, 35), open_grace_min=5) is True
+    assert mc.is_equities_regular_hours(_utc(2026, 11, 9, 20, 55), close_grace_min=5) is False
+    assert mc.is_equities_regular_hours(_utc(2026, 11, 9, 20, 54), close_grace_min=5) is True
+
+
+def test_regular_hours_closed_on_weekend_and_holiday():
+    assert mc.is_equities_regular_hours(_utc(2026, 11, 7, 16, 0)) is False   # Saturday
+    assert mc.is_equities_regular_hours(_utc(2026, 11, 26, 16, 0)) is False  # Thanksgiving
+
+
+def test_regular_hours_honours_early_close():
+    # Fri 2026-11-27 closes 13:00 ET = 18:00 UTC.
+    assert mc.is_equities_regular_hours(_utc(2026, 11, 27, 17, 59)) is True
+    assert mc.is_equities_regular_hours(_utc(2026, 11, 27, 18, 0)) is False
+
+
+def test_regular_hours_rejects_naive_datetime():
+    with pytest.raises(ValueError):
+        mc.is_equities_regular_hours(datetime(2026, 11, 9, 15, 0))

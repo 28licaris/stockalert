@@ -16,7 +16,7 @@ cached — construction is ~100 ms).
 """
 from __future__ import annotations
 
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 from functools import lru_cache
 from typing import Literal, Optional
 from zoneinfo import ZoneInfo
@@ -76,6 +76,28 @@ def is_equities_session(d: date) -> bool:
 
 def is_futures_session(d: date) -> bool:
     return is_session("futures", d)
+
+
+def is_equities_regular_hours(
+    now: datetime, *, open_grace_min: int = 0, close_grace_min: int = 0
+) -> bool:
+    """True if `now` (tz-aware) falls inside the equities regular session.
+
+    Uses the XNYS calendar, so holidays are closed and early-close days end at
+    the early close (13:00 ET). ``open_grace_min`` / ``close_grace_min`` shrink
+    the window at each end (e.g. a watchdog should not alarm in the first
+    minutes after the open).
+    """
+    if now.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    et = now.astimezone(_ET)
+    d = et.date()
+    if not is_equities_session(d):
+        return False
+    close = early_close_et("equities", d) or time(16, 0)
+    start = datetime.combine(d, time(9, 30), tzinfo=_ET) + timedelta(minutes=open_grace_min)
+    end = datetime.combine(d, close, tzinfo=_ET) - timedelta(minutes=close_grace_min)
+    return start <= et < end
 
 
 def equities_sessions(start: date, end: date) -> list[date]:

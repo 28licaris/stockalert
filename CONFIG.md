@@ -26,6 +26,10 @@ Store these in `.env` only; never commit.
 - **`SCHWAB_REFRESH_TOKEN_FILE`** – Optional; path to file where the refresh token is read/written (default `data/.schwab_refresh_token`). The app uses the token from env first, then from this file. Running `scripts/schwab_get_refresh_token.py` writes the token here so you don’t have to edit `.env`. Refresh tokens last about 7 days; re-run the script when it expires.
 - **`SCHWAB_CALLBACK_URL`** – HTTPS callback for the one-time OAuth script. Either (A) a local URL (e.g. `https://127.0.0.1:8080/oauth/callback`) — then you paste the redirect URL after sign-in — or (B) your ngrok URL + `/callback` with `ngrok http 8765` running so the script receives the redirect automatically.
 - **`SCHWAB_BASE_URL`** – Optional; default `https://api.schwabapi.com`.
+- **`SCHWAB_STREAMER_RECONNECT_BASE_S`** / **`SCHWAB_STREAMER_RECONNECT_CAP_S`** – Streamer reconnect backoff, seconds (defaults `2` and `300`).
+- **`SCHWAB_STREAMER_HEALTHY_AFTER_S`** – A session that stays up this long resets the backoff (default `60`).
+- **`SCHWAB_STREAMER_IDLE_TIMEOUT_S`** – No frame (heartbeats included) for this long marks the socket dead and reconnects (default `120`).
+- **`STREAM_STALE_SECONDS`** – Stale-stream watchdog: no bar for this long during the equities regular session logs `STREAM_STALE` and forces a reconnect (default `300`; `0` disables).
 
 **`GET /trader/v1/userPreference`** supplies **Streamer (WebSocket) connection info** for live `subscribe_bars` only. **REST market data** (e.g. **`/marketdata/v1/pricehistory`** for historical OHLCV, **`/quotes`**) needs **only a valid access token**, not user preference.
 

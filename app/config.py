@@ -90,6 +90,29 @@ class Settings(BaseModel):
     stream_universe_resync_seconds: int = int(
         os.getenv("STREAM_UNIVERSE_RESYNC_SECONDS", "60")
     )
+    # Schwab streamer resilience. The websocket is supervised: when it closes,
+    # errors, or goes silent it is re-established with exponential backoff
+    # (base → cap seconds, ±20% jitter; the attempt counter resets once a
+    # session has stayed up `healthy_after` seconds). `idle_timeout` is how
+    # long without ANY frame (Schwab sends a heartbeat roughly every 10 s)
+    # before the socket is declared dead.
+    schwab_streamer_reconnect_base_s: float = float(
+        os.getenv("SCHWAB_STREAMER_RECONNECT_BASE_S", "2")
+    )
+    schwab_streamer_reconnect_cap_s: float = float(
+        os.getenv("SCHWAB_STREAMER_RECONNECT_CAP_S", "300")
+    )
+    schwab_streamer_healthy_after_s: float = float(
+        os.getenv("SCHWAB_STREAMER_HEALTHY_AFTER_S", "60")
+    )
+    schwab_streamer_idle_timeout_s: float = float(
+        os.getenv("SCHWAB_STREAMER_IDLE_TIMEOUT_S", "120")
+    )
+    # Stale-stream watchdog (StreamService, runs in the resync loop): during
+    # the equities regular session, this many seconds with no bar delivered
+    # logs `STREAM_STALE` at ERROR (a CloudWatch alarm emails on it) and forces
+    # a reconnect. 0 disables the watchdog.
+    stream_stale_seconds: float = float(os.getenv("STREAM_STALE_SECONDS", "300"))
     history_provider: str = os.getenv("HISTORY_PROVIDER", "")
 
     # ─────────────────────────────────────────────────────────

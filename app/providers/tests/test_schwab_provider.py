@@ -626,3 +626,278 @@ class TestDataProviderContract:
         assert getattr(bar, "timestamp", None) or getattr(bar, "ts", None) is not None
         assert bar.open == 1.0 and bar.high == 1.0 and bar.low == 1.0 and bar.close == 1.0
         assert getattr(bar, "volume", 0) == 0
+
+
+# ---- Streamer supervision (reconnect, idle timeout, close logging) ----
+
+import json  # noqa: E402
+import logging  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+import aiohttp  # noqa: E402
+
+from app.providers import schwab_provider as sp  # noqa: E402
+from app.providers.schwab_provider import reconnect_delay  # noqa: E402
+
+
+def _tunables(**over):
+    base = {"base": 0.01, "cap": 0.02, "healthy_after": 999.0, "idle": 0.05}
+    base.update(over)
+    return staticmethod(lambda: dict(base))
+
+
+def _wait_for(cond, timeout=5.0):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if cond():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+class TestReconnectDelay:
+    def test_doubles_then_caps(self):
+        mid = lambda: 0.5  # noqa: E731 — jitter factor exactly 1.0
+        got = [reconnect_delay(a, base=2, cap=300, rand=mid) for a in range(10)]
+        assert got[:4] == [2, 4, 8, 16]
+        assert got[-1] == 300
+        assert all(0 <= d <= 300 for d in got)
+
+    def test_jitter_is_bounded_and_never_exceeds_cap(self):
+        lo = reconnect_delay(3, base=2, cap=300, jitter=0.2, rand=lambda: 0.0)
+        hi = reconnect_delay(3, base=2, cap=300, jitter=0.2, rand=lambda: 1.0)
+        assert lo == pytest.approx(16 * 0.8)
+        assert hi == pytest.approx(16 * 1.2)
+        # at the cap, +jitter is clamped back to the cap
+        assert reconnect_delay(20, base=2, cap=300, jitter=0.2, rand=lambda: 1.0) == 300
+
+    def test_negative_attempt_is_treated_as_first(self):
+        assert reconnect_delay(-5, base=2, cap=300, rand=lambda: 0.5) == 2
+
+
+class TestStreamerSupervisor:
+    """The thread target reconnects after a session ends; only stop_stream stops it."""
+
+    def test_reconnects_after_each_session_ends(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        run = AsyncMock(side_effect=["ws_close", "idle_timeout", "ws_close", "ws_close", "ws_close"])
+        with patch.object(SchwabProvider, "_stream_tunables", _tunables()), \
+                patch.object(p, "_run_streamer_loop", run):
+            p.start_stream()
+            assert _wait_for(lambda: run.await_count >= 3), "supervisor did not reconnect"
+            assert p._streamer_started is True  # desired state survives session ends
+            assert p._reconnect_count >= 2
+            assert p._last_exit_reason in {"ws_close", "idle_timeout"}
+            p.stop_stream()
+
+    def test_a_crashing_session_does_not_kill_the_supervisor(self, caplog):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        run = AsyncMock(side_effect=[RuntimeError("boom"), "ws_close", "ws_close", "ws_close"])
+        with patch.object(SchwabProvider, "_stream_tunables", _tunables()), \
+                patch.object(p, "_run_streamer_loop", run), \
+                caplog.at_level(logging.WARNING, logger=sp.logger.name):
+            p.start_stream()
+            assert _wait_for(lambda: run.await_count >= 2)
+            p.stop_stream()
+        assert any("session crashed" in r.getMessage() for r in caplog.records)
+        assert any("reason=crash" in r.getMessage() for r in caplog.records)
+
+    def test_stop_during_backoff_exits_promptly(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        run = AsyncMock(return_value="ws_close")
+        # 30 s backoff: a stop must not wait for it.
+        with patch.object(SchwabProvider, "_stream_tunables", _tunables(base=30.0, cap=30.0)), \
+                patch.object(p, "_run_streamer_loop", run):
+            p.start_stream()
+            thread = p._streamer_thread
+            assert _wait_for(lambda: run.await_count >= 1)
+            time.sleep(0.05)  # now inside the backoff wait
+            t0 = time.monotonic()
+            p.stop_stream()
+            thread.join(timeout=2.0)
+        assert not thread.is_alive()
+        assert time.monotonic() - t0 < 2.0
+        assert run.await_count == 1  # no reconnect after stop
+
+    def test_start_stream_restarts_a_dead_supervisor(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        dead = MagicMock()
+        dead.is_alive.return_value = False
+        p._streamer_started = True
+        p._streamer_thread = dead
+        run = AsyncMock(return_value="ws_close")
+        with patch.object(SchwabProvider, "_stream_tunables", _tunables(base=30.0, cap=30.0)), \
+                patch.object(p, "_run_streamer_loop", run):
+            p.start_stream()
+            assert p._streamer_thread is not dead
+            assert _wait_for(lambda: run.await_count >= 1)
+            p.stop_stream()
+
+    def test_stream_health_reports_state(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        assert p.stream_health()["bar_silence_s"] is None
+        assert p.stream_health()["running"] is False
+        run = AsyncMock(return_value="ws_close")
+        with patch.object(SchwabProvider, "_stream_tunables", _tunables(base=30.0, cap=30.0)), \
+                patch.object(p, "_run_streamer_loop", run):
+            p.start_stream()
+            assert _wait_for(lambda: run.await_count >= 1)
+            h = p.stream_health()
+            p.stop_stream()
+        assert h["running"] is True
+        assert h["bar_silence_s"] is not None and h["bar_silence_s"] >= 0
+        assert h["last_bar_age_s"] is None
+
+
+class FakeWS:
+    """Scripted aiohttp websocket: pops frames; with none left it stays silent."""
+
+    def __init__(self, frames):
+        self._frames = list(frames)
+        self.closed = False
+        self.close_code = None
+        self.sent: list[str] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        self.closed = True
+
+    async def send_str(self, s):
+        self.sent.append(s)
+
+    async def receive(self):
+        if self._frames:
+            return self._frames.pop(0)
+        await asyncio.sleep(3600)  # silence: only the idle timeout can end this
+
+    async def close(self):
+        self.closed = True
+
+    def exception(self):
+        return None
+
+
+def _text(payload) -> SimpleNamespace:
+    return SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data=json.dumps(payload))
+
+
+def _close(data=1006) -> SimpleNamespace:
+    return SimpleNamespace(type=aiohttp.WSMsgType.CLOSE, data=data)
+
+
+LOGIN_OK = {"response": [{"service": "ADMIN", "command": "LOGIN", "content": {"code": 0}}]}
+
+
+def _bar_frame(sym="AAPL"):
+    return {"data": [{"service": "CHART_EQUITY", "content": [
+        {"key": sym, 2: 1.0, 3: 2.0, 4: 0.5, 5: 1.5, 6: 100, 7: 1700000000000}]}]}
+
+
+def _fake_session_patch(ws):
+    """Patch aiohttp.ClientSession so `ws_connect` yields the scripted `ws`."""
+    fake_session = MagicMock()
+    fake_session.__aenter__ = AsyncMock(return_value=fake_session)
+    fake_session.__aexit__ = AsyncMock(return_value=None)
+    fake_session.ws_connect = MagicMock(return_value=ws)
+    return patch.object(sp.aiohttp, "ClientSession", MagicMock(return_value=fake_session))
+
+
+def _provider_with_fake_ws(ws):
+    p = SchwabProvider("cid", "secret", refresh_token="rt")
+    p._user_prefs = {"streamerSubscriptionKeys": {"schwabClientCustomerId": "c", "schwabClientCorrelId": "r"}}
+    p._streamer_url = "wss://example/ws"
+    p._ensure_token = AsyncMock(return_value="tok")
+    p._get_user_principals = AsyncMock()
+    p._streamer_started = True
+    return p, _fake_session_patch(ws)
+
+
+@pytest.mark.asyncio
+class TestStreamerSession:
+    """`_run_streamer_loop` returns WHY a session ended and logs every close."""
+
+    async def test_close_after_login_returns_ws_close_and_dispatches_bars(self, caplog):
+        got = []
+
+        async def cb(bar):
+            got.append(bar)
+
+        ws = FakeWS([_text(LOGIN_OK), _text({"notify": [{"heartbeat": "1"}]}), _text(_bar_frame()), _close()])
+        p, session_patch = _provider_with_fake_ws(ws)
+        p._bar_callback = cb
+        p._main_loop = asyncio.get_running_loop()
+        with session_patch, patch.object(SchwabProvider, "_stream_tunables", _tunables(idle=5.0)), \
+                caplog.at_level(logging.INFO, logger=sp.logger.name):
+            reason = await p._run_streamer_loop()
+            await asyncio.sleep(0)  # let the scheduled bar callback run
+        assert reason == "ws_close"
+        assert [b.symbol for b in got] == ["AAPL"]
+        assert p._last_bar_mono is not None
+        assert p._streamer_ready.is_set() is False  # per-session state cleaned up
+        assert p._streamer_started is True          # desired state untouched
+        assert any("websocket ended reason=ws_close" in r.getMessage() for r in caplog.records)
+        assert any("close_code" in r.getMessage() for r in caplog.records)
+
+    async def test_silent_socket_is_declared_dead_by_idle_timeout(self, caplog):
+        ws = FakeWS([_text(LOGIN_OK)])  # then total silence (no heartbeat either)
+        p, session_patch = _provider_with_fake_ws(ws)
+        with session_patch, patch.object(SchwabProvider, "_stream_tunables", _tunables(idle=0.05)), \
+                caplog.at_level(logging.WARNING, logger=sp.logger.name):
+            reason = await p._run_streamer_loop()
+        assert reason == "idle_timeout"
+        assert any("treating the socket as dead" in r.getMessage() for r in caplog.records)
+
+    async def test_close_before_login_is_reported(self):
+        ws = FakeWS([_close()])
+        p, session_patch = _provider_with_fake_ws(ws)
+        with session_patch, patch.object(SchwabProvider, "_stream_tunables", _tunables(idle=5.0)):
+            assert await p._run_streamer_loop() == "closed_before_login"
+
+    async def test_login_denied_returns_login_failed(self):
+        denied = {"response": [{"service": "ADMIN", "command": "LOGIN", "content": {"code": 3, "msg": "denied"}}]}
+        ws = FakeWS([_text(denied)])
+        p, session_patch = _provider_with_fake_ws(ws)
+        with session_patch, patch.object(SchwabProvider, "_stream_tunables", _tunables(idle=5.0)):
+            assert await p._run_streamer_loop() == "login_failed"
+
+    async def test_token_failure_is_a_reason_not_a_silent_return(self):
+        p = SchwabProvider("cid", "secret", refresh_token="rt")
+        p._ensure_token = AsyncMock(side_effect=RuntimeError("invalid_grant"))
+        assert await p._run_streamer_loop() == "token_failed"
+
+    async def test_forced_reconnect_reason_is_reported(self):
+        ws = FakeWS([_text(LOGIN_OK), _close()])
+        p, session_patch = _provider_with_fake_ws(ws)
+        p._forced_reason = "stale_no_bars"
+        with session_patch, patch.object(SchwabProvider, "_stream_tunables", _tunables(idle=5.0)):
+            assert await p._run_streamer_loop() == "stale_no_bars"
+        assert p._forced_reason is None  # consumed
+
+    async def test_non_zero_ack_is_logged_with_its_meaning(self, caplog):
+        ack = {"response": [{"service": "CHART_EQUITY", "command": "ADD",
+                             "content": {"code": 19, "msg": "limit"}}]}
+        ws = FakeWS([_text(LOGIN_OK), _text(ack), _close()])
+        p, session_patch = _provider_with_fake_ws(ws)
+        with session_patch, patch.object(SchwabProvider, "_stream_tunables", _tunables(idle=5.0)), \
+                caplog.at_level(logging.WARNING, logger=sp.logger.name):
+            await p._run_streamer_loop()
+        assert any("REACHED_SYMBOL_LIMIT" in r.getMessage() and "code=19" in r.getMessage()
+                   for r in caplog.records)
+
+    async def test_resubscribes_full_set_on_every_session(self):
+        """A reconnect must replay the whole subscription, not start empty."""
+        async def cb(bar):  # pragma: no cover - never called
+            pass
+
+        p, _ = _provider_with_fake_ws(FakeWS([]))
+        p._bar_callback = cb
+        p._subscribed_tickers = ["AAPL", "MSFT", "/ES"]
+        for _session in range(2):  # two sessions on the same provider
+            ws = FakeWS([_text(LOGIN_OK), _close()])
+            with _fake_session_patch(ws), patch.object(SchwabProvider, "_stream_tunables", _tunables(idle=5.0)):
+                await p._run_streamer_loop()
+            subs = [json.loads(x) for x in ws.sent[1:]]  # ws.sent[0] is LOGIN
+            keys = {r["service"]: r["parameters"]["keys"] for batch in subs for r in batch["requests"]}
+            assert keys == {"CHART_EQUITY": "AAPL,MSFT", "CHART_FUTURES": "/ES"}

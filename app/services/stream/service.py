@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Optional
 
@@ -89,6 +90,13 @@ class StreamService:
     # add()/remove() on route threads) before giving up and reporting the
     # cycle as skipped. Class attribute so tests can shorten it.
     RESYNC_LOCK_WAIT_SECONDS: float = 5.0
+    # While the stream stays stale, repeat the STREAM_STALE error this often
+    # (so the CloudWatch alarm keeps firing instead of going quiet).
+    STALE_RELOG_SECONDS: float = 600.0
+    # The watchdog ignores the first/last minutes of the session, when a
+    # quiet tape is normal.
+    STALE_OPEN_GRACE_MIN: int = 5
+    STALE_CLOSE_GRACE_MIN: int = 5
 
     def __init__(
         self,
@@ -96,6 +104,8 @@ class StreamService:
         bar_batcher_factory=None,
         universe_resync_seconds: Optional[float] = None,
         audit_factory: Optional[Callable[[str], Any]] = None,
+        stale_seconds: Optional[float] = None,
+        session_open: Optional[Callable[[datetime], bool]] = None,
     ) -> None:
         self._lock = threading.Lock()
         self._provider: Optional[DataProvider] = None
@@ -112,6 +122,16 @@ class StreamService:
         )
         self._audit_factory: Callable[[str], Any] = audit_factory or _default_audit
         self._resync_task: Optional[asyncio.Task] = None
+        # Stale-stream watchdog (see check_stream_health). `stale_seconds`
+        # None → STREAM_STALE_SECONDS; 0 disables. `session_open` is injected
+        # in tests; production uses the XNYS calendar.
+        self._stale_seconds: float = (
+            float(settings.stream_stale_seconds) if stale_seconds is None else float(stale_seconds)
+        )
+        self._session_open: Callable[[datetime], bool] = session_open or self._default_session_open
+        self._stale_flagged = False
+        self._stale_last_log: float = 0.0
+        self._stale_last_reconnect: float = 0.0
         # The asyncio event loop captured at `start()` time. API routes
         # call `add` / `remove` via `asyncio.to_thread`, which strips the
         # loop from the worker thread; we use `run_coroutine_threadsafe`
@@ -710,10 +730,75 @@ class StreamService:
                     "Stream resync: cycle %d failed: %s — next attempt in %ss",
                     cycle, e, interval, exc_info=True,
                 )
+            try:
+                self.check_stream_health()
+            except Exception:  # noqa: BLE001 — a watchdog bug must never end the resync loop
+                logger.exception("Stream watchdog: health check failed")
         logger.info(
             "Stream resync: loop exited (service stopped) after %d cycle(s)",
             cycle,
         )
+
+    @classmethod
+    def _default_session_open(cls, now: datetime) -> bool:
+        from app.services.market_calendar import is_equities_regular_hours
+
+        return is_equities_regular_hours(
+            now,
+            open_grace_min=cls.STALE_OPEN_GRACE_MIN,
+            close_grace_min=cls.STALE_CLOSE_GRACE_MIN,
+        )
+
+    def check_stream_health(self, now: Optional[datetime] = None) -> str:
+        """Stale-stream watchdog; one call per resync cycle.
+
+        During the equities regular session, if the provider has delivered no
+        bar for ``stale_seconds`` it (1) logs ``STREAM_STALE`` at ERROR (a
+        CloudWatch metric filter + alarm emails on that token; it repeats every
+        STALE_RELOG_SECONDS while stale, which keeps the alarm in ALARM) and (2) asks the provider to drop and
+        re-establish the connection. ``STREAM_RECOVERED`` is logged when bars
+        resume. Returns the state: ``disabled | unsupported | off_hours |
+        no_data | ok | stale``.
+        """
+        if self._stale_seconds <= 0:
+            return "disabled"
+        provider = self._provider
+        health_fn = getattr(provider, "stream_health", None)
+        if provider is None or health_fn is None:
+            return "unsupported"
+        now = now or datetime.now(timezone.utc)
+        if not self._session_open(now):
+            if self._stale_flagged:
+                logger.info("Stream watchdog: stale flag cleared (equities session ended)")
+                self._stale_flagged = False
+            return "off_hours"
+        health = health_fn()
+        silence = health.get("bar_silence_s")
+        if silence is None:
+            return "no_data"
+        if silence < self._stale_seconds:
+            if self._stale_flagged:
+                logger.info("STREAM_RECOVERED bars flowing again (silence_s=%.0f)", silence)
+                self._stale_flagged = False
+            return "ok"
+        first = not self._stale_flagged
+        mono = time.monotonic()
+        if first or mono - self._stale_last_log >= self.STALE_RELOG_SECONDS:
+            logger.error(
+                "STREAM_STALE no bars for %.0fs during the equities session "
+                "(running=%s connected=%s last_frame_age_s=%s reconnects=%s last_exit=%s)",
+                silence, health.get("running"), health.get("connected"),
+                health.get("last_frame_age_s"), health.get("reconnect_count"),
+                health.get("last_exit_reason"),
+            )
+            self._stale_last_log = mono
+        if first or mono - self._stale_last_reconnect >= self._stale_seconds:
+            request = getattr(provider, "request_reconnect", None)
+            if request is not None:
+                request("stale_no_bars")
+            self._stale_last_reconnect = mono
+        self._stale_flagged = True
+        return "stale"
 
     async def resync_universe(self) -> dict:
         """One re-sync cycle, on the main loop, under `_lock`.
