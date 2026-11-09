@@ -64,6 +64,9 @@ Non-negotiable. Read before writing code.
 | [runbook.md](operations/runbook.md) | Restart, backfill, monitoring, disaster recovery |
 | [startup_flow.md](operations/startup_flow.md) | What boot does; verifying each subsystem is alive |
 | [commands.md](operations/commands.md) | Command cheatsheet |
+| [spec_unstreamed_tickers.md](operations/spec_unstreamed_tickers.md) | **Spec — approved, not built** — un-streamed/stale tickers: validate on add, freshness labels, REST quote fallback, stream priority + diagnostics |
+| [spec_auth_token_automation.md](operations/spec_auth_token_automation.md) | **Spec — approved, not built** — one-click weekly Schwab renewal, runtime token store, email expiry alerts, Stripe/Cognito/secrets |
+| [spec_per_user_schwab_linking.md](operations/spec_per_user_schwab_linking.md) | **Spec — approved, blocked on Schwab's answer** — per-user Schwab OAuth, KMS-encrypted tokens, tenant-scoped Postgres journal |
 | [deployment_dev.md](operations/deployment_dev.md) | **Spec — approved; C1–C3 built, not yet deployed** — the AWS dev environment: one Graviton box, `api`/`worker` split, Cognito + Stripe test mode, cost. Built pieces: [`infra/dev/`](../infra/dev/README.md), [`scripts/deploy/`](../scripts/deploy/README.md) |
 
 ## [`data/`](data/) — the data platform
