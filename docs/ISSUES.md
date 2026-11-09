@@ -95,7 +95,15 @@ increase, etc.) and note what's blocking.
 
 - **Area:** live, provider:schwab, api
 - **Filed:** 2026-11-05
-- **Status:** open
+- **Status:** fix in review (`fix/streamer-reconnect-watchdog`): reconnect + watchdog;
+  move to Resolved on merge and confirm on the box (below)
+- **Update 2026-11-09:** reproduced on the AWS box — all bars froze at Fri 2026-11-06
+  19:59 ET until a manual `docker compose restart worker`; Schwab REST was healthy the
+  whole time. **Root cause found:** `SchwabProvider._run_streamer_loop` treated a
+  websocket CLOSE/ERROR as a silent, permanent stop (`break`, then `finally` cleared
+  `_streamer_started`), and nothing ever called `start_stream()` again (the 60 s resync
+  only diffs symbols). The fix supervises the socket (reconnect with backoff, idle
+  timeout, logged close reason) and adds a `STREAM_STALE` watchdog + email alarm.
 - **Symptom:** on 2026-11-05 the laptop streamer delivered nothing after 16:07 UTC
   (mid-session) while `/api/v1/stream/status` reported `started=true`,
   `provider_ready=true`, `streaming_count=431`, and the freshness page labelled the

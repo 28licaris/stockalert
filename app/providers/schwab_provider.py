@@ -9,7 +9,9 @@ import base64
 import json
 import logging
 import os
+import random
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -53,6 +55,34 @@ def _debug_ndjson(message: str, data: dict, hypothesis_id: str = "H1") -> None:
 _HTTP_TIMEOUT = aiohttp.ClientTimeout(total=90, connect=20, sock_connect=20, sock_read=60)
 # WebSocket: handshake + long gaps between frames during quiet markets.
 _WS_HANDSHAKE_TIMEOUT = aiohttp.ClientWSTimeout(ws_close=60, ws_receive=600)
+
+
+# Frame types that mean the websocket is over (CLOSING/CLOSED follow a CLOSE).
+_WS_END_TYPES = (
+    aiohttp.WSMsgType.CLOSE,
+    aiohttp.WSMsgType.CLOSING,
+    aiohttp.WSMsgType.CLOSED,
+    aiohttp.WSMsgType.ERROR,
+)
+
+
+def reconnect_delay(
+    attempt: int,
+    *,
+    base: float,
+    cap: float,
+    jitter: float = 0.2,
+    rand: Callable[[], float] = random.random,
+) -> float:
+    """Seconds to wait before streamer reconnect number ``attempt`` (0-based).
+
+    Exponential from ``base`` and capped at ``cap``, with +/-``jitter``
+    (fraction) so a fleet of reconnects does not synchronise. Never exceeds
+    ``cap`` and never negative. ``rand`` is injectable for tests.
+    """
+    raw = min(cap, base * (2 ** max(0, attempt)))
+    delay = raw * (1.0 + jitter * (2.0 * rand() - 1.0))
+    return max(0.0, min(cap, delay))
 
 # Trader API (auth + user preference, accounts, orders, transactions). Base per api_docs/account_access_api.md.
 TOKEN_PATH = "/v1/oauth/token"
@@ -198,6 +228,18 @@ class SchwabProvider(DataProvider):
         self._streamer_ws: Optional[aiohttp.ClientWebSocketResponse] = None
         self._streamer_loop: Optional[asyncio.AbstractEventLoop] = None
         self._streamer_ready = threading.Event()
+        # Supervision state. `_streamer_started` is the DESIRED state (set by
+        # start_stream, cleared only by stop_stream); `_stop_evt` interrupts a
+        # reconnect backoff sleep. Everything below is observability.
+        self._stop_evt = threading.Event()
+        self._started_mono: Optional[float] = None       # supervisor start
+        self._login_mono: Optional[float] = None         # latest successful LOGIN
+        self._last_frame_mono: Optional[float] = None    # any frame, incl. heartbeat
+        self._last_bar_mono: Optional[float] = None      # latest bar dispatched
+        self._reconnect_count = 0
+        self._last_exit_reason: Optional[str] = None
+        self._last_exit_at: Optional[datetime] = None
+        self._forced_reason: Optional[str] = None        # set by request_reconnect
 
     def _token_lock_for_running_loop(self) -> asyncio.Lock:
         loop = asyncio.get_running_loop()
@@ -557,17 +599,86 @@ class SchwabProvider(DataProvider):
             except Exception:
                 logger.warning("Schwab streamer: send command failed", exc_info=True)
 
-    async def _run_streamer_loop(self) -> None:
-        """Run in streamer thread: connect, LOGIN, SUBS, then receive and dispatch bars."""
+    # ------------------------------------------------------------------
+    # Streamer supervision
+    #
+    # `_streamer_started` is the DESIRED state (start_stream sets it, only
+    # stop_stream clears it). One *session* = connect, LOGIN, SUBS, receive;
+    # when a session ends for any reason other than a requested stop, the
+    # supervisor (`_streamer_thread_target`) logs why and reconnects with
+    # backoff. Before this existed a websocket close was a silent, permanent
+    # stop (2026-11-09: bars froze at Friday's close until a manual restart).
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _stream_tunables() -> dict:
+        from app.config import settings
+
+        return {
+            "base": float(getattr(settings, "schwab_streamer_reconnect_base_s", 2.0)),
+            "cap": float(getattr(settings, "schwab_streamer_reconnect_cap_s", 300.0)),
+            "healthy_after": float(getattr(settings, "schwab_streamer_healthy_after_s", 60.0)),
+            "idle": float(getattr(settings, "schwab_streamer_idle_timeout_s", 120.0)),
+        }
+
+    @staticmethod
+    def _ws_close_detail(ws, msg) -> str:
+        """One line describing how/why a websocket ended (for the close log)."""
+        try:
+            exc = ws.exception() if msg.type == aiohttp.WSMsgType.ERROR else None
+        except Exception:  # noqa: BLE001 — diagnostics must not raise
+            exc = None
+        data = str(getattr(msg, "data", "") or "")[:160]
+        return (
+            f"frame={msg.type.name} close_code={getattr(ws, 'close_code', None)} "
+            f"data={data!r} exc={exc!r}"
+        )
+
+    @staticmethod
+    def _log_response_frames(responses: list) -> None:
+        """Log every post-login response frame (SUBS/ADD/... acks). A non-zero
+        code is a WARNING with its meaning; code 19 (symbol limit) and 12/30
+        (connection closed / streaming stopped) were previously invisible."""
+        names = {12: "CLOSE_CONNECTION", 19: "REACHED_SYMBOL_LIMIT", 30: "STOP_STREAMING"}
+        for r in responses or []:
+            content = r.get("content") or {}
+            code = content.get("code")
+            svc, cmd = r.get("service"), r.get("command")
+            if code in (None, 0):
+                logger.info("Schwab streamer ack: %s %s ok", svc, cmd)
+            else:
+                logger.warning(
+                    "Schwab streamer ack: %s %s code=%s (%s) msg=%s",
+                    svc, cmd, code, names.get(code, "unknown"),
+                    str(content.get("msg"))[:200],
+                )
+
+    @staticmethod
+    def _log_notify_frames(notifies: list) -> None:
+        """Heartbeats are expected and silent; any other notify is logged."""
+        for n in notifies or []:
+            if isinstance(n, dict) and "heartbeat" in n:
+                continue
+            logger.warning("Schwab streamer notify: %s", str(n)[:300])
+
+    async def _run_streamer_loop(self) -> str:
+        """Run ONE streamer session in the streamer thread: connect, LOGIN,
+        SUBS, then receive and dispatch bars until it ends.
+
+        Returns a short reason string for why the session ended; the
+        supervisor logs it and decides whether to reconnect. This never
+        changes `_streamer_started` (the desired state).
+        """
         try:
             await self._ensure_token()
             await self._get_user_principals()
         except Exception as e:
             logger.error("Schwab streamer: token/principals failed: %s", e, exc_info=True)
-            return
+            return "token_failed"
         if not self._streamer_url:
             logger.error("Schwab streamer: no streamer URL in user principals")
-            return
+            return "no_streamer_url"
+        tun = self._stream_tunables()
         ids = self._streamer_ids()
         ch_fun = self._channel_function_ids()
         token = await self._ensure_token()
@@ -589,6 +700,8 @@ class SchwabProvider(DataProvider):
                 }
             ]
         }
+        reason = "ended"
+        cmd_task: Optional[asyncio.Task] = None
         try:
             async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
                 async with session.ws_connect(
@@ -598,45 +711,55 @@ class SchwabProvider(DataProvider):
                     self._streamer_ws = ws
                     await ws.send_str(json.dumps(login_req))
                     login_ok = False
-                    while True:
-                        msg = await ws.receive()
-                        if msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
-                            break
+                    login_answered = False
+                    while not login_answered:
+                        try:
+                            msg = await asyncio.wait_for(ws.receive(), timeout=tun["idle"])
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                "Schwab streamer: no LOGIN reply in %.0fs", tun["idle"],
+                            )
+                            return "login_timeout"
+                        if msg.type in _WS_END_TYPES:
+                            logger.warning(
+                                "Schwab streamer: closed before LOGIN completed (%s)",
+                                self._ws_close_detail(ws, msg),
+                            )
+                            return "closed_before_login"
                         if msg.type != aiohttp.WSMsgType.TEXT:
                             continue
                         try:
                             data = json.loads(msg.data)
                         except json.JSONDecodeError:
                             continue
-                        if "response" in data:
-                            for r in data["response"]:
-                                content = r.get("content") or {}
-                                code = content.get("code")
-                                if r.get("service") == SERVICE_ADMIN and r.get("command") == "LOGIN":
-                                    if code == 0:
-                                        login_ok = True
-                                        logger.info("Schwab streamer LOGIN success")
-                                    elif code == 3:
-                                        logger.error("Schwab streamer LOGIN_DENIED (token invalid/expired): %s", content)
-                                    else:
-                                        logger.error("Schwab streamer LOGIN failed code=%s: %s", code, content)
-                                    break
-                                if code == 30:
-                                    logger.warning("Schwab streamer STOP_STREAMING (inactivity/admin)")
-                                elif code == 19:
-                                    logger.warning("Schwab streamer REACHED_SYMBOL_LIMIT")
-                                elif code == 12:
-                                    logger.warning("Schwab streamer CLOSE_CONNECTION (max connections)")
-                            if login_ok:
+                        for r in data.get("response") or []:
+                            content = r.get("content") or {}
+                            code = content.get("code")
+                            if r.get("service") == SERVICE_ADMIN and r.get("command") == "LOGIN":
+                                login_answered = True
+                                if code == 0:
+                                    login_ok = True
+                                    logger.info("Schwab streamer LOGIN success")
+                                elif code == 3:
+                                    logger.error("Schwab streamer LOGIN_DENIED (token invalid/expired): %s", content)
+                                else:
+                                    logger.error("Schwab streamer LOGIN failed code=%s: %s", code, content)
                                 break
-                        if "notify" in data:
-                            continue
+                            if code == 30:
+                                logger.warning("Schwab streamer STOP_STREAMING (inactivity/admin)")
+                            elif code == 19:
+                                logger.warning("Schwab streamer REACHED_SYMBOL_LIMIT")
+                            elif code == 12:
+                                logger.warning("Schwab streamer CLOSE_CONNECTION (max connections)")
                     if not login_ok:
-                        return
+                        return "login_failed"
+                    now_m = time.monotonic()
+                    self._login_mono = now_m
+                    self._last_frame_mono = now_m
                     self._streamer_ready.set()
                     cmd_task = asyncio.create_task(self._streamer_cmd_loop(ids))
 
-                    # Initial subscription snapshot (if already requested before the socket was ready)
+                    # Initial subscription snapshot (replayed in full on every reconnect)
                     tickers = list(self._subscribed_tickers)
                     if tickers and self._bar_callback:
                         eq_keys, fut_keys = self.partition_chart_stream_keys(tickers)
@@ -664,19 +787,45 @@ class SchwabProvider(DataProvider):
                             logger.info("Schwab CHART_EQUITY SUBS sent for %s", eq_keys)
                         if fut_keys:
                             logger.info("Schwab CHART_FUTURES SUBS sent for %s", fut_keys)
-                    # Receive loop
-                    while self._streamer_started:
-                        msg = await ws.receive()
-                        if msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
+
+                    # Receive loop. Every exit path sets a reason that the
+                    # supervisor logs; a dead-silent socket is caught by the
+                    # idle timeout (Schwab heartbeats ~every 10 s).
+                    reason = "stopped"
+                    while self._streamer_started and not self._stop_evt.is_set():
+                        try:
+                            msg = await asyncio.wait_for(ws.receive(), timeout=tun["idle"])
+                        except asyncio.TimeoutError:
+                            reason = "idle_timeout"
+                            logger.warning(
+                                "Schwab streamer: no frame (not even a heartbeat) in %.0fs; "
+                                "treating the socket as dead",
+                                tun["idle"],
+                            )
+                            break
+                        if msg.type in _WS_END_TYPES:
+                            forced, self._forced_reason = self._forced_reason, None
+                            reason = forced or f"ws_{msg.type.name.lower()}"
+                            logger.warning(
+                                "Schwab streamer: websocket ended reason=%s (%s)",
+                                reason, self._ws_close_detail(ws, msg),
+                            )
                             break
                         if msg.type != aiohttp.WSMsgType.TEXT:
                             continue
+                        self._last_frame_mono = time.monotonic()
                         try:
                             data = json.loads(msg.data)
                         except json.JSONDecodeError:
+                            logger.warning("Schwab streamer: undecodable frame %r", str(msg.data)[:120])
                             continue
+                        if "response" in data:
+                            self._log_response_frames(data["response"])
+                        if "notify" in data:
+                            self._log_notify_frames(data["notify"])
                         if "data" not in data or not self._bar_callback or not self._main_loop:
                             continue
+                        dispatched = 0
                         for block in data["data"]:
                             svc = block.get("service")
                             if svc not in (SERVICE_CHART_EQUITY, SERVICE_CHART_FUTURES):
@@ -688,43 +837,135 @@ class SchwabProvider(DataProvider):
                                         self._bar_callback(bar),
                                         self._main_loop,
                                     )
-                    if not cmd_task.done():
-                        cmd_task.cancel()
+                                    dispatched += 1
+                        if dispatched:
+                            self._last_bar_mono = time.monotonic()
         except asyncio.CancelledError:
-            pass
-        except Exception as e:
+            reason = "cancelled"
+        except Exception as e:  # noqa: BLE001 — boundary; supervisor reconnects
             logger.error("Schwab streamer loop error: %s", e, exc_info=True)
+            reason = f"error:{type(e).__name__}"
         finally:
-            self._streamer_started = False
+            if cmd_task is not None and not cmd_task.done():
+                cmd_task.cancel()
+                await asyncio.gather(cmd_task, return_exceptions=True)
             self._streamer_ready.clear()
             self._streamer_ws = None
             self._streamer_cmd_q = None
             self._streamer_loop = None
+        return reason
 
     def _streamer_thread_target(self) -> None:
-        """Entry point for streamer daemon thread: run async loop."""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        """Supervisor (streamer daemon thread): run a session, and when it
+        ends for any reason but a requested stop, log why and reconnect with
+        exponential backoff. The attempt counter resets once a session stayed
+        up `healthy_after` seconds, so a flapping link backs off while a
+        nightly Schwab-side close reconnects in ~2 s."""
+        tun = self._stream_tunables()
+        attempt = 0
+        while self._streamer_started and not self._stop_evt.is_set():
+            self._login_mono = None
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                reason = loop.run_until_complete(self._run_streamer_loop()) or "ended"
+            except Exception:  # noqa: BLE001 — the supervisor must outlive a bad session
+                logger.exception("Schwab streamer: session crashed")
+                reason = "crash"
+            finally:
+                loop.close()
+            if not self._streamer_started or self._stop_evt.is_set():
+                break
+            login = self._login_mono
+            healthy = login is not None and (time.monotonic() - login) >= tun["healthy_after"]
+            attempt = 0 if healthy else attempt + 1
+            delay = reconnect_delay(attempt, base=tun["base"], cap=tun["cap"])
+            self._reconnect_count += 1
+            self._last_exit_reason = reason
+            self._last_exit_at = datetime.now(timezone.utc)
+            logger.warning(
+                "Schwab streamer: session ended reason=%s up=%s; reconnect #%d in %.1fs (attempt %d)",
+                reason,
+                "never" if login is None else f"{time.monotonic() - login:.0f}s",
+                self._reconnect_count, delay, attempt,
+            )
+            if self._stop_evt.wait(delay):
+                break
+        logger.info("Schwab streamer: supervisor exiting")
+
+    def _close_streamer_ws(self) -> bool:
+        """Close the live websocket from any thread (wakes a pending receive)."""
+        loop, ws = self._streamer_loop, self._streamer_ws
+        if loop is None or ws is None or ws.closed:
+            return False
         try:
-            loop.run_until_complete(self._run_streamer_loop())
-        finally:
-            loop.close()
+            asyncio.run_coroutine_threadsafe(ws.close(), loop)
+            return True
+        except Exception:  # noqa: BLE001 — best effort; the idle timeout is the backstop
+            logger.warning("Schwab streamer: could not close websocket", exc_info=True)
+            return False
+
+    def request_reconnect(self, reason: str) -> bool:
+        """Ask the supervisor to drop and re-establish the connection (used by
+        the stale-stream watchdog). False when there is no live socket to
+        close (already reconnecting)."""
+        self._forced_reason = reason
+        closed = self._close_streamer_ws()
+        logger.warning(
+            "Schwab streamer: reconnect requested reason=%s socket_closed=%s",
+            reason, closed,
+        )
+        return closed
+
+    def stream_health(self) -> dict:
+        """Cheap, lock-free snapshot for the watchdog and operators.
+
+        ``bar_silence_s`` is seconds since the newest of: supervisor start,
+        latest LOGIN, latest delivered bar — so a socket that is up but
+        delivering nothing, or a stream that never reconnects, both grow it.
+        """
+        now = time.monotonic()
+
+        def age(t: Optional[float]) -> Optional[float]:
+            return None if t is None else round(now - t, 1)
+
+        anchors = [t for t in (self._started_mono, self._login_mono, self._last_bar_mono) if t is not None]
+        thread = self._streamer_thread
+        return {
+            "running": bool(self._streamer_started and thread is not None and thread.is_alive()),
+            "connected": self._streamer_ready.is_set(),
+            "bar_silence_s": age(max(anchors)) if anchors else None,
+            "last_frame_age_s": age(self._last_frame_mono),
+            "last_bar_age_s": age(self._last_bar_mono),
+            "reconnect_count": self._reconnect_count,
+            "last_exit_reason": self._last_exit_reason,
+            "last_exit_at": self._last_exit_at.isoformat() if self._last_exit_at else None,
+        }
 
     def start_stream(self) -> None:
-        """Start the Schwab Streamer WebSocket (connect, LOGIN). Called after subscribe_bars or explicitly."""
-        if self._streamer_started:
+        """Start the supervised Schwab Streamer WebSocket (connect, LOGIN, reconnect). Called after subscribe_bars or explicitly."""
+        thread = self._streamer_thread
+        if self._streamer_started and thread is not None and thread.is_alive():
             logger.debug("Schwab stream already started")
             return
+        if self._streamer_started:
+            logger.error("Schwab streamer: supervisor thread is not alive while started; restarting it")
+        self._stop_evt.clear()
         self._streamer_ready.clear()
         self._streamer_started = True
-        self._streamer_thread = threading.Thread(target=self._streamer_thread_target, daemon=True)
+        self._started_mono = time.monotonic()
+        self._streamer_thread = threading.Thread(
+            target=self._streamer_thread_target, name="schwab-streamer", daemon=True,
+        )
         self._streamer_thread.start()
         logger.info("Schwab streamer thread started")
 
     def stop_stream(self) -> None:
-        """Stop the Streamer connection."""
+        """Stop the Streamer connection and its supervisor (no reconnect)."""
         self._streamer_started = False
+        self._stop_evt.set()
         self._enqueue_streamer_cmd({"_type": "STOP"})
+        self._close_streamer_ws()
         self._streamer_thread = None
         logger.info("Schwab stream stopped")
 

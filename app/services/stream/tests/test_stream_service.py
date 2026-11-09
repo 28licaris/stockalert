@@ -659,3 +659,131 @@ async def test_stop_cancels_resync_loop(make_svc) -> None:
     assert s._resync_task is None
     assert task.done()
     assert s.universe_resync_active is False
+
+
+# ----- stale-stream watchdog (check_stream_health) -----
+
+from datetime import datetime, timezone  # noqa: E402
+
+
+class FakeHealthProvider(FakeDataProvider):
+    """FakeDataProvider that also exposes the SchwabProvider health surface."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.health: dict = {
+            "running": True, "connected": True, "bar_silence_s": 5.0,
+            "last_frame_age_s": 2.0, "last_bar_age_s": 5.0,
+            "reconnect_count": 0, "last_exit_reason": None,
+        }
+        self.reconnect_requests: list[str] = []
+
+    def stream_health(self) -> dict:
+        return dict(self.health)
+
+    def request_reconnect(self, reason: str) -> bool:
+        self.reconnect_requests.append(reason)
+        return True
+
+
+_NOW = datetime(2026, 11, 9, 18, 0, tzinfo=timezone.utc)  # Mon 13:00 ET, mid-session
+
+
+def _watchdog(*, session_open=True, stale_seconds=300.0):
+    s = StreamService(
+        universe_resync_seconds=0,
+        stale_seconds=stale_seconds,
+        session_open=lambda now: session_open,
+    )
+    prov = FakeHealthProvider()
+    s._provider = prov
+    return s, prov
+
+
+def test_watchdog_ok_when_bars_flow(caplog) -> None:
+    s, prov = _watchdog()
+    with caplog.at_level(logging.INFO, logger=stream_module.logger.name):
+        assert s.check_stream_health(_NOW) == "ok"
+    assert prov.reconnect_requests == []
+    assert not any("STREAM_STALE" in r.getMessage() for r in caplog.records)
+
+
+def test_watchdog_stale_logs_error_and_forces_reconnect_once(caplog) -> None:
+    s, prov = _watchdog()
+    prov.health.update(bar_silence_s=900.0, last_exit_reason="ws_close", reconnect_count=3)
+    with caplog.at_level(logging.INFO, logger=stream_module.logger.name):
+        assert s.check_stream_health(_NOW) == "stale"
+        assert s.check_stream_health(_NOW) == "stale"  # next cycle, still stale
+    stale = [r for r in caplog.records if "STREAM_STALE" in r.getMessage()]
+    assert len(stale) == 1 and stale[0].levelno == logging.ERROR  # not once per 60 s cycle
+    assert "last_exit=ws_close" in stale[0].getMessage()
+    assert prov.reconnect_requests == ["stale_no_bars"]  # one forced reconnect, not a storm
+
+
+def test_watchdog_relogs_and_retries_reconnect_after_the_intervals(caplog, monkeypatch) -> None:
+    s, prov = _watchdog(stale_seconds=300.0)
+    prov.health.update(bar_silence_s=900.0)
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(stream_module.time, "monotonic", lambda: clock["t"])
+    with caplog.at_level(logging.INFO, logger=stream_module.logger.name):
+        s.check_stream_health(_NOW)
+        clock["t"] += 301          # past stale_seconds: retry the reconnect, no re-log yet
+        s.check_stream_health(_NOW)
+        assert len(prov.reconnect_requests) == 2
+        assert len([r for r in caplog.records if "STREAM_STALE" in r.getMessage()]) == 1
+        clock["t"] += StreamService.STALE_RELOG_SECONDS   # alarm must keep firing
+        s.check_stream_health(_NOW)
+    assert len([r for r in caplog.records if "STREAM_STALE" in r.getMessage()]) == 2
+
+
+def test_watchdog_logs_recovery_once(caplog) -> None:
+    s, prov = _watchdog()
+    prov.health.update(bar_silence_s=900.0)
+    s.check_stream_health(_NOW)
+    prov.health.update(bar_silence_s=3.0)
+    with caplog.at_level(logging.INFO, logger=stream_module.logger.name):
+        assert s.check_stream_health(_NOW) == "ok"
+        assert s.check_stream_health(_NOW) == "ok"
+    recovered = [r for r in caplog.records if "STREAM_RECOVERED" in r.getMessage()]
+    assert len(recovered) == 1
+
+
+def test_watchdog_silent_outside_the_session(caplog) -> None:
+    s, prov = _watchdog(session_open=False)
+    prov.health.update(bar_silence_s=99999.0)  # overnight silence is normal
+    with caplog.at_level(logging.INFO, logger=stream_module.logger.name):
+        assert s.check_stream_health(_NOW) == "off_hours"
+    assert prov.reconnect_requests == []
+    assert not any("STREAM_STALE" in r.getMessage() for r in caplog.records)
+
+
+def test_watchdog_disabled_and_unsupported_states() -> None:
+    s, _ = _watchdog(stale_seconds=0)
+    assert s.check_stream_health(_NOW) == "disabled"
+    s2 = StreamService(universe_resync_seconds=0, stale_seconds=300, session_open=lambda n: True)
+    s2._provider = FakeDataProvider()  # no stream_health()
+    assert s2.check_stream_health(_NOW) == "unsupported"
+    s3 = StreamService(universe_resync_seconds=0, stale_seconds=300, session_open=lambda n: True)
+    assert s3.check_stream_health(_NOW) == "unsupported"  # provider not initialised
+
+
+def test_watchdog_no_data_before_the_supervisor_starts() -> None:
+    s, prov = _watchdog()
+    prov.health.update(bar_silence_s=None)
+    assert s.check_stream_health(_NOW) == "no_data"
+
+
+@pytest.mark.asyncio
+async def test_resync_loop_runs_the_watchdog_and_survives_its_failure(make_svc) -> None:
+    s = make_svc(universe_resync_seconds=0.02, audit=FakeAudit())
+    calls = {"n": 0}
+
+    def _boom(now=None):
+        calls["n"] += 1
+        raise RuntimeError("watchdog bug")
+
+    s.check_stream_health = _boom  # type: ignore[method-assign]
+    await s.start()
+    await _wait_until(lambda: calls["n"] >= 3)  # kept looping despite the raise
+    assert s.universe_resync_active is True
+    await s.stop()
