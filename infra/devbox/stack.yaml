@@ -1,0 +1,214 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  StockAlert devbox (docs/operations/devbox.md): one Graviton EC2 you open from
+  VS Code Remote-SSH, tunnelled through SSM Session Manager. Lake READ-ONLY by
+  IAM (it can never write the lake or become a second Schwab owner). No inbound
+  ports, no key pairs. Stops itself when nobody is connected (on-box timer) with
+  a CloudWatch low-CPU alarm as the backstop.
+
+# Deploy / update: scripts/devbox/devbox.sh deploy
+#   (wraps `aws cloudformation deploy --stack-name stockalert-devbox ...`)
+# Then:            scripts/devbox/devbox.sh provision
+
+Parameters:
+  LakeBucket:
+    Type: String
+    Default: stock-lake-562741918372-us-east-1-an
+    AllowedPattern: "[a-z0-9.-]+"
+    Description: STOCK_LAKE_BUCKET. Read-only, except Athena query results under athena-results/.
+  CognitoUserPoolId:
+    Type: String
+    Default: us-east-1_NxTarvrk4
+    AllowedPattern: "[a-z0-9-]+_[A-Za-z0-9]+"
+    Description: Dev user pool; DescribeUserPoolClient only, so scripts/dev/run_auth_api.sh works on the devbox.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: The default VPC (devbox.sh deploy looks it up).
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: A public subnet in VpcId (outbound only; the security group has no ingress).
+  InstanceType:
+    Type: String
+    Default: t4g.xlarge
+    AllowedValues: [t4g.large, t4g.xlarge, t4g.2xlarge]
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: Amazon Linux 2023 arm64, same family as the dev box.
+  RootVolumeSizeGiB:
+    Type: Number
+    Default: 100
+    MinValue: 50
+  EcrRepositoryName:
+    Type: String
+    Default: stockalert/app
+  BackstopIdlePeriods:
+    Type: Number
+    Default: 36
+    MinValue: 12
+    MaxValue: 288
+    Description: Backstop only - stop after this many consecutive 5-minute periods (36 = 3 h) of average CPU under 2%. The on-box timer is the primary stop.
+
+Resources:
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: stockalert-devbox
+      GroupDescription: StockAlert devbox - no ingress at all (access is SSM Session Manager)
+      VpcId: !Ref VpcId
+      Tags:
+        - { Key: application, Value: stockalert }
+        - { Key: environment, Value: devbox }
+
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: stockalert-devbox
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: stockalert-devbox-lake-readonly
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: LakeList
+                Effect: Allow
+                Action: [s3:ListBucket, s3:GetBucketLocation]
+                Resource: !Sub arn:aws:s3:::${LakeBucket}
+              - Sid: LakeRead
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub arn:aws:s3:::${LakeBucket}/*
+              - Sid: AthenaResultsOnly          # the ONLY lake prefix the devbox may write
+                Effect: Allow
+                Action: [s3:PutObject, s3:AbortMultipartUpload, s3:ListMultipartUploadParts]
+                Resource: !Sub arn:aws:s3:::${LakeBucket}/athena-results/*
+              - Sid: GlueCatalogRead            # no Create/Update/Delete: Iceberg commits fail loudly
+                Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetDatabases
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:GetTableVersion
+                  - glue:GetTableVersions
+                  - glue:SearchTables
+                  - glue:GetPartition
+                  - glue:GetPartitions
+                  - glue:BatchGetPartition
+                Resource:
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/equities
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/futures
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/options
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/stock_lake
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/equities/*
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/futures/*
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/options/*
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/stock_lake/*
+              - Sid: AthenaQueries
+                Effect: Allow
+                Action: [athena:StartQueryExecution, athena:GetQueryExecution, athena:GetQueryResults, athena:StopQueryExecution, athena:GetWorkGroup]
+                Resource: !Sub arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/primary
+              - Sid: EcrLogin                   # run the real release image on the devbox
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: EcrPull
+                Effect: Allow
+                Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer, ecr:BatchCheckLayerAvailability, ecr:DescribeImages, ecr:ListImages]
+                Resource: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepositoryName}
+              - Sid: CognitoClientSecretForAuthApi
+                Effect: Allow
+                Action: cognito-idp:DescribeUserPoolClient
+                Resource: !Sub arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${CognitoUserPoolId}
+      Tags:
+        - { Key: application, Value: stockalert }
+        - { Key: environment, Value: devbox }
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: stockalert-devbox
+      Roles: [!Ref Role]
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: stockalert-devbox
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt InstanceProfile.Arn
+        InstanceInitiatedShutdownBehavior: stop   # `poweroff` on the box = stop, never terminate
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: true        # outbound to SSM/S3/GitHub; released while stopped
+            SubnetId: !Ref SubnetId
+            Groups: [!Ref SecurityGroup]
+        MetadataOptions:
+          HttpEndpoint: enabled
+          HttpTokens: required                    # IMDSv2 only
+          HttpPutResponseHopLimit: 2              # docker containers reach the instance role
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeType: gp3
+              VolumeSize: !Ref RootVolumeSizeGiB
+              Encrypted: true
+              DeleteOnTermination: true
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - { Key: Name, Value: stockalert-devbox }
+              - { Key: application, Value: stockalert }
+              - { Key: environment, Value: devbox }
+          - ResourceType: volume
+            Tags:
+              - { Key: Name, Value: stockalert-devbox-root }
+              - { Key: application, Value: stockalert }
+              - { Key: environment, Value: devbox }
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+
+  IdleBackstopAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: stockalert-devbox-idle-backstop
+      AlarmDescription: >-
+        Backstop for the on-box devbox-idle-stop timer: stops the devbox when
+        average CPU stays under 2% for BackstopIdlePeriods x 5 min. If this fires, check
+        `journalctl -u devbox-idle-stop` - the timer should have stopped it first.
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - { Name: InstanceId, Value: !Ref Instance }
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: !Ref BackstopIdlePeriods
+      DatapointsToAlarm: !Ref BackstopIdlePeriods
+      ComparisonOperator: LessThanThreshold
+      Threshold: 2
+      TreatMissingData: notBreaching             # stopped = no data = not idle-running
+      AlarmActions:
+        - !Sub arn:aws:automate:${AWS::Region}:ec2:stop
+
+Outputs:
+  InstanceId:
+    Value: !Ref Instance
+  RoleArn:
+    Value: !GetAtt Role.Arn
+  SecurityGroupId:
+    Value: !Ref SecurityGroup

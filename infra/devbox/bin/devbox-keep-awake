@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# devbox-keep-awake <hours> | off | status
+# Hold off the idle stop AND the nightly cap, e.g. for a long job in tmux after
+# you disconnect. Max 24 h; it expires on its own.
+set -euo pipefail
+F=/var/lib/devbox/keep-awake-until
+case "${1:-status}" in
+  off)    sudo rm -f "$F"; echo "keep-awake cleared" ;;
+  status) if [[ -f "$F" ]] && (( $(cat "$F") > $(date +%s) )); then
+            echo "keep-awake until $(date -u -d "@$(cat "$F")" +%FT%TZ)"
+          else echo "keep-awake: off"; fi ;;
+  *)      [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 24 )) || { echo "usage: devbox-keep-awake <1-24 hours> | off | status" >&2; exit 2; }
+          until=$(( $(date +%s) + $1 * 3600 ))
+          echo "$until" | sudo tee "$F" >/dev/null
+          echo "keep-awake until $(date -u -d "@$until" +%FT%TZ)" ;;
+esac

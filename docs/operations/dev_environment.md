@@ -3,6 +3,7 @@
 The dev server is one AWS box (`t4g.large`, us-east-1) running Docker Compose: `caddy`
 (HTTPS), `api`, `worker` (streamer and every nightly job), `clickhouse`, `postgres`.
 There is **no SSH**. You reach it with AWS Session Manager. Design: [`deployment_dev.md`](deployment_dev.md).
+To **develop** in AWS (VS Code, fast lake reads) use the separate devbox: [`devbox.md`](devbox.md).
 
 | | |
 |---|---|

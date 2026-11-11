@@ -1,0 +1,6 @@
+[Unit]
+Description=StockAlert devbox: stop the instance when nobody is connected (docs/operations/devbox.md)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/devbox-idle-stop.sh
